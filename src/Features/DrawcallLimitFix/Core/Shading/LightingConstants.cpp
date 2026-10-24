@@ -20,14 +20,14 @@ namespace DCLF
 	namespace
 	{
 		// The land blend's globals (SampleExtrasFrame): BSShaderManager::State's (AE 0x142033060, SE 0x141e0ded0) and AE's 0.2.
-		constexpr Engine::Offset kStateTimer{ 0x2033080, 0x1e0def0 };             // State+0x20: timerValues[0]
-		constexpr Engine::Offset kStateLandFadeSeconds{ 0x20330f8, 0x1e0df68 };   // State+0x98: landLOFadeSeconds
-		constexpr Engine::Offset kStateOldGridCenterX{ 0x2033108, 0x1e0df78 };    // State+0xa8: oldGridArrayCenter
-		constexpr Engine::Offset kStateOldGridCenterY{ 0x203310c, 0x1e0df7c };
-		constexpr Engine::Offset kStateGridCenterX{ 0x2033110, 0x1e0df80 };       // State+0xb0: gridArrayCenter
-		constexpr Engine::Offset kStateGridCenterY{ 0x2033114, 0x1e0df84 };
-		constexpr Engine::Offset kStateGridLerpStart{ 0x2033118, 0x1e0df88 };     // State+0xb8: gridArrayLerpStart
-		constexpr Engine::Offset kLandFadeFraction{ 0x1ad2840, 0 };               // float 0.2, AE only (SE's code divides by 5)
+		constexpr Engine::Offset kStateTimer{ { 390953 }, { 513213 } };             // State+0x20: timerValues[0]
+		constexpr Engine::Offset kStateLandFadeSeconds{ { 390972 }, { 513232 } };   // State+0x98: landLOFadeSeconds
+		constexpr Engine::Offset kStateOldGridCenterX{ { 390976 }, { 513236 } };    // State+0xa8: oldGridArrayCenter
+		constexpr Engine::Offset kStateOldGridCenterY{ { 390977 }, { 513237 } };
+		constexpr Engine::Offset kStateGridCenterX{ { 390978 }, { 513238 } };       // State+0xb0: gridArrayCenter
+		constexpr Engine::Offset kStateGridCenterY{ { 390979 }, { 513238, 0x4 } };
+		constexpr Engine::Offset kStateGridLerpStart{ { 390980 }, { 513239 } };     // State+0xb8: gridArrayLerpStart
+		constexpr Engine::Offset kLandFadeFraction{ { 470010 }, {} };               // float 0.2, AE only (SE's code divides by 5)
 
 		void StoreRelative(float* a_out, const float (&a_world)[12], const RE::NiPoint3& a_posAdjust)
 		{

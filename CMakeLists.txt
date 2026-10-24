@@ -1006,7 +1006,10 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
 
     set(_runtime_paths_file "${CMAKE_CURRENT_BINARY_DIR}/runtime_paths.txt")
     file(WRITE "${_runtime_paths_file}" "")
-    foreach(_runtime_file IN LISTS _DXVK_RUNTIME_DLLS _SL_FORK_DLLS)
+    # Every runtime PREPARE_AIO stages into bin (DXC and NvPerf too): the cleanup removes what is not listed, and the staging
+    # then copies it again with a fresh timestamp each build, which changes the render graph's compiler fingerprint (the
+    # DLL's write time) and so every ORG shader cache key.
+    foreach(_runtime_file IN LISTS _DXVK_RUNTIME_DLLS _SL_FORK_DLLS CS_DXC_RUNTIME_DLLS CS_NVPERF_DLL)
         get_filename_component(_runtime_name "${_runtime_file}" NAME)
         file(APPEND "${_runtime_paths_file}" "SKSE/Plugins/CommunityShaders/bin/${_runtime_name}\n")
     endforeach()
@@ -1296,7 +1299,8 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 "Git HEAD changed (${_prev_git_head} -> ${_git_head}): clearing AIO shaders and deploy stamps for full redeploy"
             )
             # Delete the entire AIO directory so PREPARE_AIO re-copies everything
-            # with fresh timestamps. Without this, copy_if_different skips
+            # with fresh timestamps (the deployed shaders come from their sources
+            # with theirs, so this recompiles nothing: see _direct_shader_cmds). Without this, copy_if_different skips
             # content-identical files (shaders, textures, configs, etc.) and
             # leaves them with old timestamps that previously-deployed files
             # (e.g. from a manual package install) can beat on timestamp delta.
@@ -1384,6 +1388,26 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 VERBATIM
             )
 
+            # The shaders straight from their sources, for every shader deploy (DEPLOY_SHADERS, the shader-only and full ones
+            # below): the same tree as AIO/Shaders (package/Shaders, then every feature's Shaders, less Tests), with the
+            # sources' timestamps. The AIO staging restamps its copies (a git HEAD change recreates it), and the shader cache
+            # takes a source newer than its entry as changed: a deploy from it would recompile every shader.
+            set(_direct_shader_cmds)
+            foreach(_shader_source IN ITEMS "${CMAKE_SOURCE_DIR}/package/Shaders" ${FEATURE_PATHS})
+                if(NOT _shader_source MATCHES "/Shaders$")
+                    set(_shader_source "${_shader_source}/Shaders")
+                endif()
+                if(EXISTS "${_shader_source}")
+                    list(
+                        APPEND _direct_shader_cmds
+                        COMMAND
+                            ${ROBOCOPY_WRAPPER} "${_shader_source}"
+                            "${DEPLOY_TARGET}/Shaders" "/E" "/XD" "Tests"
+                            "/COPY:DAT" "/R:1" "/W:1" "/NFL" "/NDL" "/NJH" "/NJS"
+                    )
+                endif()
+            endforeach()
+
             # Incremental shader-only copy for fast dev iteration
             # Depends ONLY on copy_shaders.stamp (no DLL, no PREPARE_AIO)
             add_custom_command(
@@ -1392,10 +1416,7 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     ${CMAKE_COMMAND} -E make_directory
                     "${DEPLOY_TARGET}/Shaders"
                 # See /XO rationale above on the main deploy block.
-                COMMAND
-                    ${ROBOCOPY_WRAPPER} "${AIO_DIR}/Shaders"
-                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/R:1" "/W:1"
-                    "/NFL" "/NDL" "/NJH" "/NJS"
+                ${_direct_shader_cmds}
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
                     ${DEPLOY_TARGET_HASH}_shaders_only.stamp
@@ -1416,10 +1437,7 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     ${CMAKE_COMMAND} -E make_directory
                     "${DEPLOY_TARGET}/Shaders"
                 # See /XO rationale above on the main deploy block.
-                COMMAND
-                    ${ROBOCOPY_WRAPPER} "${AIO_DIR}/Shaders"
-                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/R:1" "/W:1"
-                    "/NFL" "/NDL" "/NJH" "/NJS"
+                ${_direct_shader_cmds}
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
                     ${DEPLOY_TARGET_HASH}_shaders_full.stamp
@@ -1430,24 +1448,6 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     "Full shader deploy to ${DEPLOY_TARGET}/Shaders (with PREPARE_AIO)"
             )
 
-            # The shaders straight from their sources, for the plugin's own build (DEPLOY_SHADERS, below): the same tree as
-            # AIO/Shaders (package/Shaders, then every feature's Shaders, less Tests), without going through the AIO
-            # staging, whose rules depend on the plugin.
-            set(_direct_shader_cmds)
-            foreach(_shader_source IN ITEMS "${CMAKE_SOURCE_DIR}/package/Shaders" ${FEATURE_PATHS})
-                if(NOT _shader_source MATCHES "/Shaders$")
-                    set(_shader_source "${_shader_source}/Shaders")
-                endif()
-                if(EXISTS "${_shader_source}")
-                    list(
-                        APPEND _direct_shader_cmds
-                        COMMAND
-                            ${ROBOCOPY_WRAPPER} "${_shader_source}"
-                            "${DEPLOY_TARGET}/Shaders" "/E" "/XD" "Tests"
-                            "/COPY:DAT" "/R:1" "/W:1" "/NFL" "/NDL" "/NJH" "/NJS"
-                    )
-                endif()
-            endforeach()
             add_custom_command(
                 OUTPUT ${DEPLOY_TARGET_HASH}_shaders_direct.stamp
                 COMMAND

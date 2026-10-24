@@ -33,7 +33,7 @@ namespace DCLF
 
 	void EngineReadWindow::Suspend()
 	{
-		const std::uint32_t before = state.fetch_or(kSuspended, std::memory_order_acq_rel);
+		const std::uint32_t before = state.fetch_add(kSuspendUnit, std::memory_order_acq_rel);
 		suspends.fetch_add(1, std::memory_order_relaxed);
 		if (!(before & kLeases))
 			return;
@@ -45,7 +45,7 @@ namespace DCLF
 
 	void EngineReadWindow::Resume()
 	{
-		state.fetch_and(~kSuspended, std::memory_order_release);
+		state.fetch_sub(kSuspendUnit, std::memory_order_release);
 	}
 
 	double EngineReadWindow::DrainLeases()

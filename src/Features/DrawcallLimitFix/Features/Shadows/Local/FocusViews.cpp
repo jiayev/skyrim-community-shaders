@@ -17,9 +17,9 @@ namespace DCLF::Features::Shadows::Local
 {
 	namespace
 	{
-		// Module offsets, AE 1.6.1170 and SE 1.5.97.
-		constexpr DCLF::Engine::Offset kFocusCameras{ 0x14f0480, 0x1304da0 };  // BSShadowDirectionalLight::sub: the focus cameras, any host
-		constexpr DCLF::Engine::Offset kFocusTargets{ 0x332a488, 0x31d0fa8 };  // the focus targets: {float distance; NiAVObject* node} x count
+		// Engine::Offsets (Address Library ids).
+		constexpr DCLF::Engine::Offset kFocusCameras{ { 107601 }, { 100817 } };  // BSShadowDirectionalLight::sub: the focus cameras, any host
+		constexpr DCLF::Engine::Offset kFocusTargets{ { 414623 }, { 527701 } };  // the focus targets: {float distance; NiAVObject* node} x count
 	}
 
 	std::uint32_t EngineFocusTargetCount()

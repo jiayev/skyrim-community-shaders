@@ -16,9 +16,9 @@ namespace DCLF::Features::Portals
 {
 	namespace
 	{
-		// AE 1.6.1170 and SE 1.5.97 (module offsets).
-		constexpr Engine::Offset kPortalWalkCallSite{ 0x64685f, 0x5b3cdb };  // Main::Update -> FUN_1401a43c0, the main camera's portal walk
-		constexpr Engine::Offset kPortalWalk{ 0x1a43c0, 0x15a6e0 };
+		// Engine::Offsets (Address Library ids).
+		constexpr Engine::Offset kPortalWalkCallSite{ { 36564, 0x9bf }, { 35571, 0xdb }, { 36564, 0x9d1 } };  // Main::Update -> FUN_1401a43c0, the main camera's portal walk
+		constexpr Engine::Offset kPortalWalk{ { 13408 }, { 13257 } };
 
 		// The main cull input's programWords (parity only): the walk's programs as encoded now, which a fade log window saves.
 		std::span<const std::uint32_t> ProgramWords()

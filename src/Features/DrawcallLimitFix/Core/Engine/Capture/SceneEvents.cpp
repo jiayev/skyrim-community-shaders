@@ -431,12 +431,12 @@ namespace DCLF::Scene
 
 		// SceneWriterFramework's movers (SWF_EVENT_MOVED), counted under Core's writer slots: the animation graph's placement
 		// (FUN_14066afa0) 0, TESObjectREFR::Update3DPosition 1, a reference's graph animation (FUN_1402f75a0) 5, the cells' update
-		// passes (UpdateSelectedDownwardPass, its reference or the node as the key) 6. Slots 2-4 (actor 3D position, sky cell skin,
-		// ragdoll) are Features/Actors' reserved writers (its early hooks).
+		// passes (UpdateSelectedDownwardPass, its reference or the node as the key) 6, a projectile's world update (Projectile::Update3D,
+		// every frame) 9. Slots 2-4 (actor 3D position, sky cell skin, ragdoll) are Features/Actors' reserved writers (its early hooks).
 		void OnMoved(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 		{
 			const auto& event = *reinterpret_cast<const SWF_MovedEvent*>(a_event);
-			static constexpr std::size_t kSlots[] = { 0, 1, 5, 6 };
+			static constexpr std::size_t kSlots[] = { 0, 1, 5, 6, 9 };
 			PushMoved(event.key);
 			if (event.writer < std::size(kSlots))
 				CountMove(kSlots[event.writer]);
@@ -565,7 +565,7 @@ namespace DCLF::Scene
 		moveEventsInstalled = true;
 		// The actors' 3D position, sky cell skin and ragdoll writers follow at Features/Actors' early hooks (only when these are in);
 		// the line names every writer, as before they moved.
-		logger::info("[DCLF] move events installed (animation, 3D positions, ragdolls, the cells' update passes)");
+		logger::info("[DCLF] move events installed (animation, 3D positions, ragdolls, the cells' update passes, projectiles)");
 	}
 
 	void InstallSceneEvents()
@@ -672,8 +672,9 @@ namespace DCLF::Extensions
 
 	void PushReservedMove(Api::MoveWriterId a_writer, const void* a_key, Api::MoveReach a_reach)
 	{
-		Scene::PushMove(a_key);
-		if (a_reach == Api::MoveReach::WithPlacements)
+		if (a_reach != Api::MoveReach::Placements)
+			Scene::PushMove(a_key);
+		if (a_reach != Api::MoveReach::ScenePass)
 			FrameValueMoves::PushKey(a_key);
 		Scene::CountMove(a_writer.index);
 	}

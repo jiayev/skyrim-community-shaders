@@ -428,7 +428,7 @@ namespace DCLF::Features::TreeWind
 			TreeAnimation::Install();
 		// The tree manager's list loop: the stood-in trees' multibound results from DCLF's verdicts (TreeAnimation).
 		TreeList::Install();
-		// SE 1.5.97: the animation walk's update pass as a move writer (the walked trees' sun entries; nothing on AE: TreeWalk.h).
+		// The tree manager walk's update pass as a move writer (the walked trees' sun entries, palettes and bounds: TreeWalk.h).
 		TreeWalk::Install(a_context);
 	}
 }

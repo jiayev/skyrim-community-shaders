@@ -276,6 +276,39 @@ namespace DCLF::MirrorWatch
 							  Slot{ entity ? entity + 0x160 : nullptr, "motion type" }, Slot{ base + 0xF4, "flags", 0x0C404000u } });
 	}
 
+	bool MovedFromParity()
+	{
+		static const bool moved = Enabled() && Value() == "moved";
+		return moved;
+	}
+
+	void ArmMoved(const RE::NiAVObject* a_geometry)
+	{
+		if (!a_geometry || !MovedFromParity() || armed.load(std::memory_order_acquire))
+			return;
+		std::array<const RE::NiAVObject*, kSlots> nodes{ a_geometry, a_geometry->parent, a_geometry->parent ? a_geometry->parent->parent : nullptr, nullptr };
+		if (auto* reference = a_geometry->GetUserData(); reference && reference->Get3D() != nodes[0] && reference->Get3D() != nodes[1] && reference->Get3D() != nodes[2])
+			nodes[3] = reference->Get3D();
+		std::array<std::string, kSlots> names;
+		std::array<Slot, kSlots> slots{};
+		for (std::uint32_t s = 0; s < kSlots; ++s) {
+			if (!nodes[s])
+				continue;
+			names[s] = fmt::format("local x of '{}'", nodes[s]->name.c_str() ? nodes[s]->name.c_str() : "");
+			slots[s] = Slot{ reinterpret_cast<const std::byte*>(nodes[s]) + 0x6C, names[s].c_str() };
+		}
+		ArmSlots(*a_geometry, slots);
+	}
+
+	void ArmMovedBound(const RE::NiAVObject* a_root)
+	{
+		if (!a_root || !MovedFromParity() || armed.load(std::memory_order_acquire))
+			return;
+		const auto* base = reinterpret_cast<const std::byte*>(a_root);
+		ArmSlots(*a_root, { Slot{ base + 0xE4, "world bound x" }, Slot{ base + 0xE8, "world bound y" }, Slot{ base + 0xEC, "world bound z" },
+							  Slot{ base + 0xF0, "world bound radius" } });
+	}
+
 	void Arm(const RE::NiAVObject* a_node)
 	{
 		// "1" or a name: every prefixed mode (a name holds no ':') arms elsewhere.

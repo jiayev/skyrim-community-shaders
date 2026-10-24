@@ -39,6 +39,14 @@ namespace DCLF::MirrorWatch
 	 */
 	std::uint32_t MissedFields(std::uint8_t a_type);
 	void ArmMissed(const void* a_object, std::uint8_t a_type, std::uint32_t a_fields);
+	/**
+	 * @brief moved: a geometry the frame values' moved-only parity found moved while not due (FrameValues::CheckEveryMover), the local
+	 * translation's x of it, its parent, its grandparent and its reference's root. Any thread. ArmMovedBound: a root whose world bound
+	 * (the sun entry, the fade node) it found changed, that bound.
+	 */
+	void ArmMoved(const RE::NiAVObject* a_geometry);
+	void ArmMovedBound(const RE::NiAVObject* a_root);
+	bool MovedFromParity();
 	/** @brief Whether a watch is armed now (one object at a time). */
 	bool Armed();
 	/** @brief parity:current: a fade node the mirror parity found stale in its currentFade (+0x130, and +0x154). Render thread. */

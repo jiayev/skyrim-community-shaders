@@ -21,7 +21,7 @@ namespace DCLF::Features::Billboards
 
 		// NiBillboardNode's vtable slot OnVisible and what it holds (AE 0x140d3f720, SE 0x140c78d90).
 		constexpr std::size_t kOnVisibleSlot = 0x34;
-		constexpr DCLF::Engine::Offset kOnVisible{ 0xd3f720, 0xc78d90 };
+		constexpr DCLF::Engine::Offset kOnVisible{ { 71063 }, { 69683 } };
 		// The observer's tolerance: a leaf whose world differs from the engine's by more than this (a rotation entry over its scale, a
 		// translation in units) is counted as differing. The port multiplies in a different order (R0 * M * relative against the
 		// engine's (R0 * M) then each child's local), so a few ulps are expected.

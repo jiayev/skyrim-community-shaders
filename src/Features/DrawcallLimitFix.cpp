@@ -57,12 +57,12 @@
 
 namespace
 {
-	// Every engine hook and offset DCLF uses is an Engine::Offset with AE 1.6.1170's and SE 1.5.97's values (most are raw module offsets,
-	// not Address Library IDs), so any other build would patch the wrong code. SceneWriterFramework has tables for the same two.
+	// Every engine hook and offset DCLF uses is an Engine::Offset: Address Library ids, with the positions of the sites inside functions
+	// checked against SE 1.5.97, AE 1.6.1170 and AE 1.7.104 only (another build may move them, or renumber an id). SceneWriterFramework
+	// has tables for the same three.
 	bool SupportedGame()
 	{
-		const auto game = REL::Module::get().version();
-		return game == REL::Version{ 1, 6, 1170, 0 } || game == REL::Version{ 1, 5, 97, 0 };
+		return DCLF::Engine::Supported();
 	}
 }
 
@@ -110,7 +110,7 @@ void DrawcallLimitFix::PostPostLoad()
 {
 	if (!SupportedGame()) {
 		const auto game = REL::Module::get().version();
-		unavailableReason = fmt::format("DCLF supports Skyrim AE 1.6.1170 and SE 1.5.97 only (this game is {})", game.string("."));
+		unavailableReason = fmt::format("DCLF supports Skyrim SE 1.5.97, AE 1.6.1170 and AE 1.7.104 only (this game is {})", game.string("."));
 		logger::info("[DCLF] {}; the game renders natively", unavailableReason);
 		return;
 	}

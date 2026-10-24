@@ -225,6 +225,9 @@ namespace DCLF::Diagnostics
 			// Resident slots whose shading row no producer sampled (written 0) at two checks running.
 			std::uint64_t shadingChecks = 0, shadingUnsampled = 0;
 			std::string first, paletteFirst, shadingFirst;
+			// The differing rows by field and owner (the geometry's name, its reference's and base's form types, its fade node's): the
+			// writers to find. One example each.
+			ankerl::unordered_dense::map<std::string, std::pair<std::uint64_t, std::string>> causes;
 		} frameValues;
 		// The resident slots unsampled at the last check (kept across the report's reset of frameValues).
 		std::vector<std::uint8_t> shadingUnsampledBefore;

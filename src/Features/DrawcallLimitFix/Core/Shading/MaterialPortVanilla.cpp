@@ -57,22 +57,24 @@ namespace DCLF::MaterialPort
 		constexpr std::uint16_t kTextureClampMode = 0x70;
 
 		// The module globals SampleVanillaFrame reads (AE 1.6.1170, SE 1.5.97); VanillaFrame's comments name each by its AE address.
-		constexpr Engine::Offset kTechniqueByte12{ 0x2032fdb, 0x1e0de39 };
-		constexpr Engine::Offset kTechniqueByte7{ 0x2035500, 0x1e102a0 };
-		constexpr Engine::Offset kTextureTransformBuffer{ 0x2033180, 0x1e0dff0 };  // BSShaderManager::State+0x120
-		constexpr Engine::Offset kLodTexParamsZ{ 0x2032fda, 0x1e0de38 };
-		constexpr Engine::Offset kLandSnowZ{ 0x2035548, 0x1e102e8 };
-		constexpr Engine::Offset kLandSnowDivisor{ 0x20355f0, 0x1e10390 };
-		constexpr Engine::Offset kAmbientSpecularGlobal{ 0x203315c, 0x1e0dfcc };  // BSShaderManager::State+0xfc
-		constexpr Engine::Offset kSnowRim0{ 0x2035590, 0x1e10330 };
-		constexpr Engine::Offset kSnowRim1{ 0x20355a8, 0x1e10348 };
-		constexpr Engine::Offset kSnowRim2{ 0x20355c0, 0x1e10360 };
-		constexpr Engine::Offset kSnowRimW{ 0x20355d8, 0x1e10378 };
-		constexpr Engine::Offset kCharacterLightGlobal{ 0x203316c, 0x1e0dfdc };  // BSShaderManager::State+0x10c
-		constexpr Engine::Offset kFullBright{ 0x20330a6, 0x1e0df16 };  // BSShaderManager::State+0x46
-		constexpr Engine::Offset kCharacterLightTarget{ 0x2033db0, 0x1e0eb50 };  // the character light's ImageSpaceTexture (ID 513464) +8
-		constexpr Engine::Offset kEnvMaskDefault{ 0x328ccb8, 0x302c920 };
-		constexpr Engine::Offset kRenderTargetViews{ 0x3289230, 0x3028f00 };  // the renderer's render targets' SRVs, 0x30 apart
+		constexpr Engine::Offset kTechniqueByte12{ { 390937 }, { 513196 } };
+		// SetupMaterial's AmbientSpecular write as Engine Fixes computes it (its ID and offset: the same 0x20-byte write on each runtime).
+		constexpr Engine::Offset kAmbientSpecularWrite{ { 107298, 0x8cf }, { 100563, 0x713 } };
+		constexpr Engine::Offset kTechniqueByte7{ { 391632 }, { 513692 } };
+		constexpr Engine::Offset kTextureTransformBuffer{ { 391006 }, { 513265 } };  // BSShaderManager::State+0x120
+		constexpr Engine::Offset kLodTexParamsZ{ { 390936 }, { 513195 } };
+		constexpr Engine::Offset kLandSnowZ{ { 391641 }, { 513698 } };
+		constexpr Engine::Offset kLandSnowDivisor{ { 391662 }, { 513712 } };
+		constexpr Engine::Offset kAmbientSpecularGlobal{ { 390997 }, { 513256 } };  // BSShaderManager::State+0xfc
+		constexpr Engine::Offset kSnowRim0{ { 391650 }, { 513704 } };
+		constexpr Engine::Offset kSnowRim1{ { 391653 }, { 513706 } };
+		constexpr Engine::Offset kSnowRim2{ { 391656 }, { 513708 } };
+		constexpr Engine::Offset kSnowRimW{ { 391659 }, { 513710 } };
+		constexpr Engine::Offset kCharacterLightGlobal{ { 391001 }, { 513260 } };  // BSShaderManager::State+0x10c
+		constexpr Engine::Offset kFullBright{ { 390964 }, { 513224 } };  // BSShaderManager::State+0x46
+		constexpr Engine::Offset kCharacterLightTarget{ { 391303 }, { 513465 } };  // the character light's ImageSpaceTexture (ID 513464) +8
+		constexpr Engine::Offset kEnvMaskDefault{ { 411503 }, { 525021 } };
+		constexpr Engine::Offset kRenderTargetViews{ { 411399 }, { 524913 } };  // the renderer's render targets' SRVs, 0x30 apart
 
 		constexpr std::uint32_t kOneBits = 0x3f800000u;  // gFloatOne, 0x141ad2870
 		constexpr std::uint32_t kZeroBits = 0u;
@@ -496,8 +498,7 @@ namespace DCLF::MaterialPort
 		readBytes(&frame.landSnowDivisor, kLandSnowDivisor, sizeof(std::int32_t));
 		readBytes(frame.ambientSpecular.data(), kAmbientSpecularGlobal, sizeof(float) * 4);
 		static const bool ambientSpecularRemoved = [] {
-			// The site as the fix computes it (its ID and offset: +0x8cf in AE, +0x713 in SE, the same 0x20-byte AmbientSpecular write).
-			const auto* code = reinterpret_cast<const std::uint8_t*>(REL::RelocationID(100563, 107298).address() + (REL::Module::IsSE() ? 0x713 : 0x8cf));
+			const auto* code = reinterpret_cast<const std::uint8_t*>(REL::Offset(kAmbientSpecularWrite).address());
 			return std::all_of(code, code + 0x20, [](std::uint8_t a_byte) { return a_byte == 0x90; });
 		}();
 		frame.ambientSpecularWritten = !ambientSpecularRemoved;

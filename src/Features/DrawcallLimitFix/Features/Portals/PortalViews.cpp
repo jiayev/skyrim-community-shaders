@@ -33,7 +33,7 @@ namespace DCLF
 		using namespace PortalShapes;
 
 		// BSParabolicCullingProcess::TestBaseVisibility2: a shadow light room process's portal test (vfunc 0xD8).
-		constexpr Engine::Offset kParabolicPortalTest{ 0x151a120, 0x132c890 };
+		constexpr Engine::Offset kParabolicPortalTest{ { 108607 }, { 101604 } };
 
 		/** @brief The ceiling as the box silhouette takes it: cvttss2si, then up by one unless exact or negative (INT_MIN saturates). */
 		std::int32_t Ceil(float a_value)

@@ -230,6 +230,15 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     ('leftarm:0', not due): sunEntry, lodFadeNode`); in vp2 and vp6 one row a window, always a small loose clutter item not due
     (`'CoinBagMid:1'`, `'Basket04:0'`) with `sunEntry, lodFadeNode` differing: likely an item moved (Havok) without a move event, whose
     sun entry and fade node the sampling kept. The sun entry only selects its shadow cull, so a frame's stale entry is not visible.
+    The line after a differing check (`not due yet changed, by owner`) names them: on 1.7.104 (2026-10-23) `BloodyBone`, `skull`,
+    `LeftFoot` (MovableStatic, Misc), 0.01-0.1 units, in 2 of 23 windows. (The far larger counts moving runs showed on SE and AE,
+    80-85% of windows, were the near trees' update pass: fixed, TreeWalk.h.) The Havok node transforms behind most of them ran inside
+    the window ("Animated cell object update", skyrim-engine-notes.md): its update now waits for the sampling (WindowWriters). What is
+    left (2026-10-24, 1-6 roots in a window or two a run, and `<- DIFFER` of the rows against the engine in one window of 31) is the
+    root's world bound alone (sun entry, fade node; no geometry's world changed), 0.02-0.04 units: a one-off settle, since a watch on
+    the bound armed at the difference (`CS_DCLF_MIRROR_WATCH=moved`) saw no write in the next 600 frames. **Next:** a bound watch armed
+    at the body part's capture (`Bloody*`, the arms and legs) to name the writer.
+
 -   **Stand-in walk parity: three snow geometries missed at frame 868.** About one full parity run in three reports, in one
     window only, `3 geometries handed to the registration from entries the stand-in would not walk <- STAND-IN WALK`, always at
     `[frame 868]` of the fixed `CS_DCLF_TEST_MOVE` path, and always 'objHD-LargeRef', 'objsnow' and 'objsnowHD-LargeRef'. It is
@@ -268,10 +277,9 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     checks a window). The table rewrites an entry only when its verdict or signature changes (`UpdateLightCandidates`). Before
     the change, every load rebuilt the tables from nothing. The run before the change was not repeated. Nothing else failed in
     that run, and the death-reload run (die3) showed no such failure.
--   **Tree wind parity: TreeParams of zeros (`<- TREE WIND`).** One window in most SE runs (4-18 of 64 members; TreeParams (0, 0, 0, 0),
-    once a reused slot's other values). The check reads the buffer the frame before wrote (the one this frame's draws read) for the
-    current members: likely members whose entry that dispatch did not write yet (a tree joined or its slot reused this frame), drawn
-    with no sway for a frame. Not confirmed.
+-   **`<- COMMIT` at a run's first frames** (`set commit parity at frame 4: 48 slots differ ...`, waiting false kept, true now) and
+    **`<- GATE COVERAGE`** (`2 outgoing still claimed` at a gate's release): intermittent, in 6 and 2 of 66 runs' logs (1.7.104,
+    2026-10-23/24). Not attributed.
 -   **Long-standing flags**, each seen in some runs: `<- CUT`, the PS25 `<- MATERIAL PORT` race and `<- FADE`. (NO CASCADES fired in
     every interior window, where the sun does not accumulate: it now counts exterior frames only. Not seen on the tree-forest route.)
 -   **Seen once, watch for a repeat:** capture parity's "2 tracked but excluded" while NPCs crowded the view (the report now breaks

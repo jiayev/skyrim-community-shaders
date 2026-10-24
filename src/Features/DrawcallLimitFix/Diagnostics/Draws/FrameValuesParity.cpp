@@ -7,6 +7,73 @@
 
 namespace DCLF::Diagnostics
 {
+	namespace
+	{
+		// The first of a row's fields that differs.
+		const char* DifferingField(const BindlessPlacement& a_expected, const BindlessPlacement& a_got)
+		{
+			const auto differs = [](const auto& a_a, const auto& a_b) { return std::memcmp(a_a, a_b, sizeof(a_a)) != 0; };
+			return differs(a_expected.world, a_got.world)                 ? "world" :
+			       differs(a_expected.previousWorld, a_got.previousWorld) ? "previous world" :
+			       differs(a_expected.bound, a_got.bound)                 ? "bound" :
+			       differs(a_expected.sunEntry, a_got.sunEntry)           ? "sun entry" :
+			       differs(a_expected.lodFadeNode, a_got.lodFadeNode)     ? "fade node" :
+			                                                                "forward sort";
+		}
+
+		// A differing row's cause key: the first field that differs, the geometry's name and owner, and its fade node's name and kind.
+		void NoteCause(DrawsState::FrameValuesParity& a_s, std::uint32_t a_slot, const RE::BSGeometry* a_geometry, const BindlessPlacement& a_expected,
+			const BindlessPlacement& a_got)
+		{
+			if (!a_geometry)
+				return;
+			const char* what = DifferingField(a_expected, a_got);
+			const auto* ref = a_geometry->GetUserData();
+			const auto* base = ref ? ref->GetBaseObject() : nullptr;
+			const auto* property = a_geometry->GetGeometryRuntimeData().shaderProperty.get();
+			const auto* fadeNode = property ? property->fadeNode : nullptr;
+			// The chain up to the nearest BSOrderedNode: the node classes on it (a billboard rotates in the cull), and the ordered node's.
+			std::string chain;
+			const RE::NiAVObject* ordered = nullptr;
+			for (const RE::NiAVObject* at = a_geometry->parent; at; at = at->parent) {
+				const auto* rtti = at->GetRTTI();
+				const std::string_view name = rtti ? rtti->GetName() : "?";
+				if (name != "NiNode")
+					chain += fmt::format("{}{}", chain.empty() ? "" : "<", name);
+				if (name == "BSOrderedNode")
+					ordered = at;
+				if (name == "BSOrderedNode" || at == fadeNode)
+					break;
+			}
+			// Whether the ordered node holds a billboard anywhere below it (the cull turns it: the node's bound follows the camera).
+			const auto holdsBillboard = [](const auto& a_self, const RE::NiAVObject* a_object, int a_depth) -> bool {
+				const auto* node = a_object && a_depth < 12 ? const_cast<RE::NiAVObject*>(a_object)->AsNode() : nullptr;
+				if (!node)
+					return false;
+				if (const auto* rtti = node->GetRTTI(); rtti && std::string_view(rtti->GetName()) == "NiBillboardNode")
+					return true;
+				for (const auto& child : node->GetChildren())
+					if (a_self(a_self, child.get(), a_depth + 1))
+						return true;
+				return false;
+			};
+			if (ordered)
+				chain += holdsBillboard(holdsBillboard, ordered, 0) ? " holding a billboard" : " holding no billboard";
+			auto key = fmt::format("{} of '{}' {}/{} (property {}, fade node '{}' {}, up: {})", what, a_geometry->name.c_str(),
+				ref ? magic_enum::enum_name(ref->GetFormType()) : "no ref", base ? magic_enum::enum_name(base->GetFormType()) : "no base",
+				property ? property->GetRTTI()->GetName() : "none", fadeNode ? fadeNode->name.c_str() : "", fadeNode ? fadeNode->GetRTTI()->GetName() : "none", chain);
+			auto& cause = a_s.causes[std::move(key)];
+			if (cause.first++ == 0) {
+				const auto& e = a_expected;
+				const auto& g = a_got;
+				cause.second = fmt::format("slot {} ref {:08x}: engine world t ({} {} {}) sort ({} {} {} {:#x}), rows world t ({} {} {}) sort ({} {} {} {:#x})", a_slot,
+					ref ? ref->GetFormID() : 0u, e.world[3], e.world[7], e.world[11], e.forwardSort[0], e.forwardSort[1], e.forwardSort[2],
+					std::bit_cast<std::uint32_t>(e.forwardSort[3]), g.world[3], g.world[7], g.world[11], g.forwardSort[0], g.forwardSort[1], g.forwardSort[2],
+					std::bit_cast<std::uint32_t>(g.forwardSort[3]));
+			}
+		}
+	}
+
 	void CheckFrameValues(const SceneTables& a_tables, const PlacementPlan* a_fresh)
 	{
 		// A diagnostics frame: the render thread waits for the frame's producer.
@@ -42,13 +109,11 @@ namespace DCLF::Diagnostics
 				++s.fresh;
 				continue;
 			}
+			if (std::memcmp(&expected, &rows[slot], sizeof(expected)) != 0)
+				NoteCause(s, slot, a_tables.objectGeometry[slot], expected, rows[slot]);
 			if (std::memcmp(&expected, &rows[slot], sizeof(expected)) != 0 && s.differs++ == 0) {
 				const auto& got = rows[slot];
-				const char* what = std::memcmp(expected.world, got.world, sizeof(expected.world)) ? "world" :
-				                   std::memcmp(expected.previousWorld, got.previousWorld, sizeof(expected.previousWorld)) ? "previous world" :
-				                   std::memcmp(expected.bound, got.bound, sizeof(expected.bound)) ? "bound" :
-				                   std::memcmp(expected.sunEntry, got.sunEntry, sizeof(expected.sunEntry)) ? "sun entry" :
-				                                                                                               "fade node";
+				const char* what = DifferingField(expected, got);
 				const auto* geometry = a_tables.objectGeometry[slot];
 				s.first = fmt::format("slot {} '{}': {} (engine x {:.2f} r {:.2f}, rows x {:.2f} r {:.2f})", slot, geometry->name.c_str() ? geometry->name.c_str() : "?",
 					what, expected.world[3], expected.bound[3], got.world[3], got.bound[3]);

@@ -40,7 +40,7 @@ namespace DCLF::Features::Shadows::Local
 		 */
 		void CheckParabolic(const ShadowCameras::Camera& a_view, VolumeParity& a_parity)
 		{
-			constexpr DCLF::Engine::Offset kProcess{ 0x335bfa0, 0x3202ae0 };
+			constexpr DCLF::Engine::Offset kProcess{ { 414845 }, { 527898 } };
 			constexpr std::size_t kCamera = 0x18, kBackAccumulator = 0x30200, kPlane = 0x30208, kCentre = 0x30218;
 			const auto* process = reinterpret_cast<const std::byte*>(REL::Module::get().base() + kProcess);
 			const auto* camera = DCLF::Engine::At<const RE::NiAVObject*>(process, kCamera);

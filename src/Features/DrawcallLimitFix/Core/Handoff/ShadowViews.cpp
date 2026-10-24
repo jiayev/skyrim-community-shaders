@@ -19,10 +19,10 @@ namespace DCLF
 {
 	namespace
 	{
-		// PredictTargets' engine state (module offsets, AE 1.6.1170 and SE 1.5.97).
-		constexpr Engine::Offset kShadowFreeMask{ 0x2035798, 0x1e10538 };   // std::uint32_t: RenderShadowmap's free target slices
-		constexpr Engine::Offset kVolumetricCopy{ 0x2033498, 0x1e0e2e8 };   // std::uint32_t: 2 when the cascades take a volumetric lighting copy
-		constexpr Engine::Offset kFocusTargetBase{ 0x1ac07b0, 0x1867188 };  // std::uint32_t: the focus views' first slice in target 4
+		// PredictTargets' engine state (Engine::Offset: Address Library ids).
+		constexpr Engine::Offset kShadowFreeMask{ { 391715 }, { 513748 } };   // std::uint32_t: RenderShadowmap's free target slices
+		constexpr Engine::Offset kVolumetricCopy{ { 391108 }, { 513334 } };   // std::uint32_t: 2 when the cascades take a volumetric lighting copy
+		constexpr Engine::Offset kFocusTargetBase{ { 255253 }, { 305513 } };  // std::uint32_t: the focus views' first slice in target 4
 
 		constexpr std::uint64_t Bit(std::uint32_t a_bit)
 		{

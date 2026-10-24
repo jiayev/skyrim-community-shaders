@@ -25,9 +25,12 @@ namespace DCLF::Reports
 		std::string writers;
 		if (WindowWriters::Installed()) {
 			const auto w = WindowWriters::Take();
-			writers = fmt::format("; cell animations {} updates, {} waited for the frame values' sampling ({} us in all, max {} us), {} suspensions, {} of them waited for "
-								  "items in flight ({:.0f} us in all, max {:.0f} us)",
-				w.runs, w.waited, w.waitedUs, w.waitedMaxUs, c.suspends, c.suspendsWaited, c.suspendWaitedUs, c.suspendWaitedMaxUs);
+			const auto job = [](const char* a_name, const WindowWriters::Counters::Job& a_job) {
+				return fmt::format("{} {} updates, {} waited for the frame values' sampling ({} us in all, max {} us)", a_name, a_job.runs, a_job.waited, a_job.waitedUs,
+					a_job.waitedMaxUs);
+			};
+			writers = fmt::format("; {}; {}; {} suspensions, {} of them waited for items in flight ({:.0f} us in all, max {:.0f} us)", job("cell animations", w.cellAnimations),
+				job("animated cell objects", w.animatedObjects), c.suspends, c.suspendsWaited, c.suspendWaitedUs, c.suspendWaitedMaxUs);
 		}
 		return fmt::format("[DCLF] engine-read window: {} closes, {} of them waited for items in flight ({:.1f} us in all, max {:.1f} us){}; {} leases refused (work left for the "
 						   "next window); scene work engine accesses without a lease {}{}{}",

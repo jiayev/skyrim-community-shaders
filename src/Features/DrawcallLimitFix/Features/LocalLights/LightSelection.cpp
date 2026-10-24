@@ -22,10 +22,10 @@ namespace DCLF
 		using Engine::At;
 		using Engine::Global;
 
-		// Module offsets, AE 1.6.1170 and SE 1.5.97.
-		constexpr Engine::Offset kCalculateActive{ 0x14cc570, 0x12e2f60 };  // CalculateActiveShadowCasterLights
-		constexpr Engine::Offset kLodFadeCutoff{ 0x33dcfac, 0x3283b88 };    // UpdateCamera's lodFade cutoff
-		constexpr Engine::Offset kFocusShadows{ 0x2032fd0, 0x1e0de43 };     // the focus shadows' setting byte
+		// Engine::Offsets (Address Library ids).
+		constexpr Engine::Offset kCalculateActive{ { 107137 }, { 100419 } };  // CalculateActiveShadowCasterLights
+		constexpr Engine::Offset kLodFadeCutoff{ { 415264 }, { 528316 } };    // UpdateCamera's lodFade cutoff
+		constexpr Engine::Offset kFocusShadows{ { 390932 }, { 513201 } };     // the focus shadows' setting byte
 		constexpr std::size_t kPortalEntry = 0x30190;           // a culling process's portal-graph entry
 		constexpr std::size_t kShadowMapCount = 0x140;          // BSShadowLight: its descriptors in use
 		constexpr std::uint32_t kMaxLights = 4;

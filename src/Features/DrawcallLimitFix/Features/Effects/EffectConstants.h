@@ -140,11 +140,11 @@ namespace DCLF::Features::Effects
 	inline constexpr std::uint32_t kEffectHasSourcePath = 1u << 0;
 	inline constexpr std::uint32_t kEffectHasGreyscalePath = 1u << 1;
 
-	// AE 1.6.1170 and SE 1.5.97 (module offsets) of BSEffectShader's state the port reads (EffectPrograms.cpp, EffectFrame.cpp).
+	// Engine::Offsets (Address Library ids) of BSEffectShader's state the port reads (EffectPrograms.cpp, EffectFrame.cpp).
 	namespace Address
 	{
-		inline constexpr Engine::Offset kEffectShader{ 0x33dcce8, 0x32838b8 };  // BSEffectShader*: the instance GetRenderPasses makes passes of
-		inline constexpr Engine::Offset kEffectCamera{ 0x332a328, 0x31d0e68 };  // NiCamera*: BSEffectShader's camera (its near and far at +0x160, +0x164)
-		inline constexpr Engine::Offset kEffectBlood{ 0x33dccf0, 0x32838c0 };   // float[2]: BSEffectShader's blood globals
+		inline constexpr Engine::Offset kEffectShader{ { 415166 }, { 528216 } };  // BSEffectShader*: the instance GetRenderPasses makes passes of
+		inline constexpr Engine::Offset kEffectCamera{ { 414580 }, { 527667 } };  // NiCamera*: BSEffectShader's camera (its near and far at +0x160, +0x164)
+		inline constexpr Engine::Offset kEffectBlood{ { 415167 }, { 528217 } };   // float[2]: BSEffectShader's blood globals
 	}
 }

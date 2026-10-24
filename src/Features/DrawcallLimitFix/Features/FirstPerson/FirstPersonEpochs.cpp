@@ -26,10 +26,10 @@ namespace DCLF::Features::FirstPerson
 		// The first-person camera (an NiCamera*), set up by FUN_1414cb020 (FUN_140d2cda0: FOV firstPersonFOV + 0x14338c628, near the float at
 		// 0x14202a928, far the world scene graph's GetFarDistance, the screen's aspect; the world camera's rotation), translated into the
 		// root's space (its position minus the root's).
-		constexpr Engine::Offset kFirstPersonCamera{ 0x338c820, 0x32333f0 };
+		constexpr Engine::Offset kFirstPersonCamera{ { 415007 }, { 528062 } };
 		// The viewport depth range both first-person passes set (FUN_140e57cb0(state, 0, max)): f1stPersonFarDepthRange, or
 		// f1stPersonFarDepthRangeControlDriven with RenderDepth's and FUN_1414cb6d0's second argument (the movement controller's vfunc 0x78).
-		constexpr Engine::Offset kFarDepthRange{ 0x202b2d0, 0x1e07270 }, kFarDepthRangeControlDriven{ 0x202b2e8, 0x1e07288 };
+		constexpr Engine::Offset kFarDepthRange{ { 388994 }, { 512174 } }, kFarDepthRangeControlDriven{ { 388997 }, { 512176 } };
 
 		using ViewSubmit = IndirectDraws::ViewSubmit;
 

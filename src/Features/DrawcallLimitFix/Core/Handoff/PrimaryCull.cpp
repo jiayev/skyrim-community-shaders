@@ -42,22 +42,22 @@ namespace DCLF
 	{
 		using namespace Engine;
 
-		// AE 1.6.1170 and SE 1.5.97 (module offsets).
-		constexpr Engine::Offset kAfterFullFrustumCallSite{ 0x14cbcea, 0x12e26ab };  // CalculateAndDrawShadowCasterLights -> FUN_1414a0840, after either branch
-		constexpr Engine::Offset kAfterFullFrustum{ 0x14a0840, 0x12b9200 };
-		constexpr Engine::Offset kListJobsFinishCallSite{ 0x14cbf4d, 0x12e293d };  // ... -> JobList::Finish(scene list culling)
-		constexpr Engine::Offset kProcess1{ 0xe28390, 0xd50c80 };  // BSCullingProcess::Process1, the list processes' vtable slot 0x16
+		// Engine::Offsets (Address Library ids).
+		constexpr Engine::Offset kAfterFullFrustumCallSite{ { 107132, 0x15a }, { 100414, 0x4b } };  // CalculateAndDrawShadowCasterLights -> FUN_1414a0840, after either branch
+		constexpr Engine::Offset kAfterFullFrustum{ { 106323 }, { 99689 } };
+		constexpr Engine::Offset kListJobsFinishCallSite{ { 107132, 0x3bd }, { 100414, 0x2dd } };  // ... -> JobList::Finish(scene list culling)
+		constexpr Engine::Offset kProcess1{ { 76553 }, { 74804 } };  // BSCullingProcess::Process1, the list processes' vtable slot 0x16
 		constexpr std::size_t kAccumulatorDeferredShadow = 0x178;  // byte: the accumulator draws the deferred shadow mask
 		// The main camera: the world scene graph's (+0x128), carried by the list processes.
 		constexpr std::size_t kSceneGraphCamera = 0x128;
 		// BSTreeNode::OnVisible (AE 0x14147d3c0): the height test (the stand-in's, TreeAboveLimit) and the LOD fix-up.
 		constexpr std::size_t kProcessTreeHeightTest = 0x121;     // byte on the culling process
-		constexpr Engine::Offset kTreeHeightTestOn{ 0x2032fb8, 0x1e0de18 };   // byte
-		constexpr Engine::Offset kTreeHeightBase{ 0x332a2f0, 0x31d0df8 };     // float
-		constexpr Engine::Offset kTreeHeightLimit{ 0x2032fa0, 0x1e0de00 };    // float
+		constexpr Engine::Offset kTreeHeightTestOn{ { 390930 }, { 513192 } };   // byte
+		constexpr Engine::Offset kTreeHeightBase{ { 414568 }, { 527639 } };     // float
+		constexpr Engine::Offset kTreeHeightLimit{ { 390927 }, { 513190 } };    // float
 		constexpr std::size_t kTreeLodData = 0x180;               // pointer; its +0x12C count
 		// The NiNode OnVisible BSFadeNode's ends in (its children's cull).
-		constexpr Engine::Offset kNodeOnVisible{ 0xd1e2c0, 0xc58c70 };       // NiNode::OnVisible
+		constexpr Engine::Offset kNodeOnVisible{ { 70307 }, { 68956 } };       // NiNode::OnVisible
 		// The camera cut: a move past any locomotion (a sprinting horse ~20 units/frame at 60 fps), or a turn past 30 degrees (a
 		// fast mouse flick ~15).
 		constexpr float kCutDistance = 256.0f;

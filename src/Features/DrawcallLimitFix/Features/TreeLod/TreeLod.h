@@ -25,11 +25,11 @@
 
 namespace DCLF::Features::TreeLod
 {
-	// AE 1.6.1170 and SE 1.5.97 (module offsets) of the engine state this feature alone reads.
+	// Engine::Offsets (Address Library ids) of the engine state this feature alone reads.
 	namespace Address
 	{
-		inline constexpr Engine::Offset kTreeLodAtlas{ 0x33dcd18, 0x32838e8 };  // NiSourceTexture*: tree LOD's atlas
-		inline constexpr Engine::Offset kDistantTreeShader{ 0x33dcd10, 0x32838e0 };  // BSDistantTreeShader*: the singleton
+		inline constexpr Engine::Offset kTreeLodAtlas{ { 415172 }, { 528222 } };  // NiSourceTexture*: tree LOD's atlas
+		inline constexpr Engine::Offset kDistantTreeShader{ { 415171 }, { 528221 } };  // BSDistantTreeShader*: the singleton
 	}
 
 	// The engine root a trees view's faces draw in the engine's place while they draw the family (Api::DrawFamilyContribution::faces.root;

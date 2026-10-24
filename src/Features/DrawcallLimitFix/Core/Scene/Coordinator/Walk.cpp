@@ -1388,9 +1388,13 @@ namespace DCLF::Scene
 			traits |= kTraitAnimatedShading;
 		if (leaf.alpha && leaf.alpha->controllers)
 			traits |= kTraitAnimatedShading;
+		// A blended leaf under an ordered node: its forward sort reads the node's live bound, which the node's other children move (a
+		// particle system's update, a billboard's turn) with the leaf still. A mover, sampled when its keys name it: the node (Features/
+		// Particles' snapshot), its reference (the update passes).
+		const bool orderedLeaf = Eligibility::OrderedLeaf(leaf);
 		const void* key = &a_geometry;
 		for (const auto* record = leaf.node; record; key = record->parent, record = record->parent ? mirror.Node(record->parent) : nullptr) {
-			if (record->controllers || record->body) {
+			if (record->controllers || record->body || (orderedLeaf && (record->kind & SceneCapture::kKindOrdered))) {
 				traits |= kTraitMoves;
 				break;
 			}

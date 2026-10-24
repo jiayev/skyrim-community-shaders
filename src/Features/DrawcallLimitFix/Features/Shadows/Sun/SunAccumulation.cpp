@@ -34,20 +34,20 @@ namespace DCLF::Features::Shadows::Sun
 	{
 		using namespace Engine;
 
-		// Module offsets, AE 1.6.1170 and SE 1.5.97.
+		// Engine::Offsets (Address Library ids).
 		// CalculateAndDrawShadowCasterLights -> FUN_141511f30. AE: a CALL. SE: a tail JMP (SE 0x1412e2f32), at the end of the sun part SE
 		// keeps out of line (FUN_1412e2e10, which CalculateAndDrawShadowCasterLights calls first).
-		constexpr DCLF::Engine::Offset kFullFrustumCallSite{ 0x14cbcb6, 0x12e2f32 };
-		constexpr DCLF::Engine::Offset kFullFrustumCull{ 0x1511f30, 0x1324e00 };
-		constexpr DCLF::Engine::Offset kRegisterCallSites[2] = { { 0xe28bc3, 0xd512f3 }, { 0xe28c89, 0xd513d9 } };  // FUN_140e28af0 -> FUN_1414b2140
-		constexpr DCLF::Engine::Offset kRegister{ 0x14b2140, 0x12ca110 };
-		constexpr DCLF::Engine::Offset kCascadeCallSite{ 0x1511d28, 0x1324bf2 };  // Accumulate -> FUN_1414f0920, once per cascade
-		constexpr DCLF::Engine::Offset kCascade{ 0x14f0920, 0x1305240 };
-		constexpr DCLF::Engine::Offset kCascadeCullCallSite{ 0x14bf41e, 0x12d6d16 };  // FUN_1414bf320 (mode 2) -> FUN_140e305c0, once per full-frustum process
-		constexpr DCLF::Engine::Offset kCascadeCull{ 0xe305c0, 0xd588a0 };
-		constexpr DCLF::Engine::Offset kMaskClearCallSite{ 0x644d7e, 0x5b211e };  // Main::Draw -> FUN_1414cb640, the activeLightMask clear
-		constexpr DCLF::Engine::Offset kMaskClear{ 0x14cb640, 0x12e2110 };
-		constexpr DCLF::Engine::Offset kAppendNonAccum{ 0xe30520, 0xd58850 };  // BSGeometryListCullingProcess::AppendNonAccum, vtable slot 0x19
+		constexpr DCLF::Engine::Offset kFullFrustumCallSite{ { 107132, 0x126 }, { 100418, 0x122 } };
+		constexpr DCLF::Engine::Offset kFullFrustumCull{ { 108492 }, { 101498 } };
+		constexpr DCLF::Engine::Offset kRegisterCallSites[2] = { { { 76558, 0xd3 }, { 74809, 0x73 } }, { { 76558, 0x199 }, { 74809, 0x159 } } };  // FUN_140e28af0 -> FUN_1414b2140
+		constexpr DCLF::Engine::Offset kRegister{ { 106567 }, { 99923 } };
+		constexpr DCLF::Engine::Offset kCascadeCallSite{ { 108488, 0xa8 }, { 101494, 0xb2 } };  // Accumulate -> FUN_1414f0920, once per cascade
+		constexpr DCLF::Engine::Offset kCascade{ { 107602 }, { 100818 } };
+		constexpr DCLF::Engine::Offset kCascadeCullCallSite{ { 106921, 0xfe }, { 100213, 0x166 } };  // FUN_1414bf320 (mode 2) -> FUN_140e305c0, once per full-frustum process
+		constexpr DCLF::Engine::Offset kCascadeCull{ { 76773 }, { 75010 } };
+		constexpr DCLF::Engine::Offset kMaskClearCallSite{ { 36559, 0x8ce }, { 35560, 0x8be }, { 36559, 0x8eb } };  // Main::Draw -> FUN_1414cb640, the activeLightMask clear
+		constexpr DCLF::Engine::Offset kMaskClear{ { 107128 }, { 100410 } };
+		constexpr DCLF::Engine::Offset kAppendNonAccum{ { 76772 }, { 75009 } };  // BSGeometryListCullingProcess::AppendNonAccum, vtable slot 0x19
 
 		/** @brief Whether the instruction at a_address is a JMP rel32 to a_target (CallsTo's check for a tail-call site). */
 		bool JumpsTo(std::uintptr_t a_address, std::uintptr_t a_target)

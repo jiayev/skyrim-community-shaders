@@ -162,12 +162,14 @@ namespace DCLF::Api
 
 	/**
 	 * @brief Whom a reserved writer's move event reaches: ScenePass, the scene pass's light path alone (MoveEvents); WithPlacements, also
-	 * FrameValues' placement producer (FrameValueMoves), as Core's own writers push.
+	 * FrameValues' placement producer (FrameValueMoves), as Core's own writers push; Placements, the producer alone (a key only its
+	 * index knows, such as a BSOrderedNode whose bound a leaf's forward sort reads).
 	 */
 	enum class MoveReach : std::uint8_t
 	{
 		ScenePass,
 		WithPlacements,
+		Placements,
 	};
 }
 

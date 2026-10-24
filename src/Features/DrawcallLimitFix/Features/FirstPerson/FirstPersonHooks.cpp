@@ -18,13 +18,13 @@ namespace DCLF::Features::FirstPerson
 {
 	namespace
 	{
-		// AE 1.6.1170 and SE 1.5.97 (module offsets) of the accumulator render's calls the view's hooks take, each checked with CallsTo
+		// Engine::Offsets (Address Library ids) of the accumulator render's calls the view's hooks take, each checked with CallsTo
 		// before it is patched. SE's accumulator render calls StartAccumulating rather than inlining it; both sites call it (E8) alike.
 		namespace Address
 		{
-			inline constexpr Engine::Offset kDepthFirstPersonDraw{ 0x14cd47e, 0x12e3947 };  // its call at RenderDepth's first-person draw
-			inline constexpr Engine::Offset kFirstPersonViewDraw{ 0x14cb7d1, 0x12e22a3 };   // its call in FUN_1414cb6d0 (the first-person view)
-			inline constexpr Engine::Offset kAccumulatorRender{ 0x14a90f0, 0x12c15c0 };     // the accumulator render (FUN_1414a90f0)
+			inline constexpr Engine::Offset kDepthFirstPersonDraw{ { 107139, 0x94e }, { 100421, 0x427 } };  // its call at RenderDepth's first-person draw
+			inline constexpr Engine::Offset kFirstPersonViewDraw{ { 107129, 0x101 }, { 100411, 0x103 } };   // its call in FUN_1414cb6d0 (the first-person view)
+			inline constexpr Engine::Offset kAccumulatorRender{ { 106436 }, { 99789 } };     // the accumulator render (FUN_1414a90f0)
 		}
 
 		// The colour epoch's trigger (fp.colour-render), found at install, before any frame.
