@@ -2247,7 +2247,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float puddleWetness = SharedData::wetnessEffectsSettings.PuddleWetness * minWetnessAngle;
 	float puddle = wetness;
 
-#		if !defined(SKINNED) && !(defined(SKIN) && defined(CS_SKIN))
+#		if !defined(SKINNED) && !defined(SKIN)
 	if (wetness > 0.0 || puddleWetness > 0.0) {
 		float3 puddleCoords = ((input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz) * 0.5 + 0.5) * 0.01 / SharedData::wetnessEffectsSettings.PuddleRadius;
 		puddle = Random::perlinNoise(puddleCoords) * 0.5 + 0.5;
