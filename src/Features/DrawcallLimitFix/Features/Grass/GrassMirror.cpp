@@ -1,5 +1,5 @@
-// Grass: the sink's channel's render-thread end - the Mirror (Drain in seq order, shape slots, the instance table's ranges, buckets
-// and their visible bases, mesh leases) the depth commit uploads from.
+// Grass: the sink's channel's render-thread end - the Mirror (Drain in seq order per group, shape slots, the instance table's ranges,
+// buckets and their visible bases, mesh leases, the shared library's LOD meshes) the depth commit uploads from.
 
 #include "Features/DrawcallLimitFix/Features/Grass/GrassMirror.h"
 #include "Features/DrawcallLimitFix/Features/Grass/Diagnostics/GrassEvents.h"
@@ -63,6 +63,11 @@ namespace DCLF::Features::Grass
 		return Mix(hash, bits | (std::uint64_t(std::bit_cast<std::uint32_t>(a_key.alphaRef)) << 32));
 	}
 
+	std::uint64_t GroupKeyHash::operator()(const GroupKey& a_key) const noexcept
+	{
+		return Mix(reinterpret_cast<std::uintptr_t>(a_key.shape), a_key.group);
+	}
+
 	Mirror& RenderMirror()
 	{
 		static Mirror mirror;
@@ -77,50 +82,71 @@ namespace DCLF::Features::Grass
 			fadeClock += state->timerValues[1];
 		events.Drain([&](Event&& a_event) {
 			Diagnostics::Notify(GrassEventDrained{ a_event.shape });
-			if (Stale(a_event.shape, a_event.seq)) {
+			if (Stale(a_event)) {
 				++stats.stale;
 				return;
 			}
 			Apply(std::move(a_event));
 		});
+		ResolveLods();
 		PruneTombstones();
 		Diagnostics::Notify(GrassDrained{ *this, a_frame });
 	}
 
-	bool Mirror::Stale(const void* a_shape, std::uint64_t a_seq)
+	bool Mirror::Stale(const Event& a_event) const
 	{
-		if (const auto it = shapes.find(a_shape); it != shapes.end() && a_seq < it->second.seq)
+		// Older than the shape's removal: the event is the destroyed shape's (an address reused by a new shape has later seqs).
+		if (const auto tomb = tombstones.find(a_event.shape); tomb != tombstones.end() && a_event.seq < tomb->second.first)
 			return true;
-		const auto tomb = tombstones.find(a_shape);
-		return tomb != tombstones.end() && a_seq < tomb->second.first;
+		if (a_event.kind == Event::Kind::Remove)
+			return false;
+		// Older than what the group holds, or than the group's removal.
+		if (const auto it = shapes.find(a_event.shape); it != shapes.end()) {
+			if (const auto group = it->second.slots.find(a_event.group); group != it->second.slots.end() && a_event.seq < group->second.seq)
+				return true;
+		}
+		const auto tomb = groupTombstones.find(GroupKey{ a_event.shape, a_event.group });
+		return tomb != groupTombstones.end() && a_event.seq < tomb->second.first;
 	}
 
 	void Mirror::Apply(Event&& a_event)
 	{
-		if (a_event.kind != Event::Kind::Add) {
-			// A removal or a rejection: the mirror's records of the shape (if any) are not what the engine draws any more. A rejected shape
-			// keeps the family the engine's while it lives (RejectedLive).
-			if (a_event.kind == Event::Kind::Rejected) {
-				++stats.rejected;
-				rejected.insert(a_event.shape);
-			} else if (rejected.erase(a_event.shape) || shapes.contains(a_event.shape)) {
-				++stats.removes;
-			}
-			Remove(a_event.shape);
+		if (a_event.kind == Event::Kind::Remove) {
+			RemoveShape(a_event.shape, a_event.seq);
 			tombstones[a_event.shape] = { a_event.seq, drains };
 			return;
 		}
-		++stats.adds;
-		rejected.erase(a_event.shape);
-		tombstones.erase(a_event.shape);
-		// Each add is one more group of the shape (its own slot and range); its removal takes them all.
+		const GroupKey key{ a_event.shape, a_event.group };
+		if (a_event.kind == Event::Kind::RemoveGroup) {
+			// The cell's records are not what the engine draws any more; a later add may reuse the group's index.
+			if (const auto it = shapes.find(a_event.shape); it != shapes.end() && it->second.slots.contains(a_event.group)) {
+				++stats.groupRemoves;
+				RemoveGroup(it->second, a_event.group);
+				if (it->second.slots.empty())
+					shapes.erase(it);
+			}
+			groupTombstones[key] = { a_event.seq, drains };
+			return;
+		}
+		groupTombstones.erase(key);
 		auto& shape = shapes[a_event.shape];
+		// An add or a rejection replaces what the group held.
+		if (shape.slots.contains(a_event.group))
+			RemoveGroup(shape, a_event.group);
+		if (a_event.kind == Event::Kind::Rejected) {
+			// The engine draws the group, so the family stays the engine's while it lives (RejectedLive).
+			++stats.rejected;
+			++rejectedGroups;
+			shape.slots[a_event.group] = { Shape::kRejected, a_event.seq };
+			return;
+		}
+		++stats.adds;
+		// Each group has its own slot and range.
 		const std::uint32_t slot = AcquireSlot();
 		slotShapes[slot] = a_event.shape;
 		auto& group = groups[slot];
 		const auto count = static_cast<std::uint32_t>(a_event.instances.size());
-		shape.seq = a_event.seq;
-		shape.slots.push_back(slot);
+		shape.slots[a_event.group] = { slot, a_event.seq };
 		shape.records += count;
 		group.first = AllocateRange(count);
 		group.bucket = AddBucketUser(a_event).slot;
@@ -136,18 +162,40 @@ namespace DCLF::Features::Grass
 		MarkSlot(slot);
 	}
 
-	void Mirror::Remove(const void* a_shape)
+	void Mirror::RemoveShape(const void* a_shape, std::uint64_t a_seq)
 	{
 		const auto it = shapes.find(a_shape);
 		if (it == shapes.end())
 			return;
-		for (const std::uint32_t slot : it->second.slots) {
-			ReleaseGroup(groups[slot]);
-			slotShapes[slot] = nullptr;
-			freeSlots.push_back(slot);
-			MarkSlot(slot);  // its row's count 0
+		// Its groups older than the removal: a later one is a new shape's at the same address.
+		std::vector<std::uint32_t> removed;
+		for (const auto& [index, group] : it->second.slots)
+			if (group.seq < a_seq)
+				removed.push_back(index);
+		if (!removed.empty())
+			++stats.removes;
+		for (const std::uint32_t index : removed)
+			RemoveGroup(it->second, index);
+		if (it->second.slots.empty())
+			shapes.erase(it);
+	}
+
+	void Mirror::RemoveGroup(Shape& a_shape, std::uint32_t a_group)
+	{
+		const auto it = a_shape.slots.find(a_group);
+		if (it == a_shape.slots.end())
+			return;
+		const std::uint32_t slot = it->second.slot;
+		a_shape.slots.erase(it);
+		if (slot == Shape::kRejected) {
+			--rejectedGroups;
+			return;
 		}
-		shapes.erase(it);
+		a_shape.records -= static_cast<std::uint32_t>(groups[slot].instances.size());
+		ReleaseGroup(groups[slot]);
+		slotShapes[slot] = nullptr;
+		freeSlots.push_back(slot);
+		MarkSlot(slot);  // its row's count 0
 	}
 
 	void Mirror::ReleaseGroup(Group& a_group)
@@ -246,9 +294,12 @@ namespace DCLF::Features::Grass
 			auto& bucket = buckets[slot];
 			bucket = Bucket{ .key = a_event.key, .source = std::move(a_event.source), .slot = slot, .live = true };
 			FillBucketRow(bucket.row.Plain(), bucket.key, bucket.source);
-			ResolveTiers(bucket, a_event.shape, std::move(a_event.mesh));
+			bucket.meshes[0] = AddMeshUser(std::move(a_event.mesh));
 		}
 		auto& bucket = buckets[slot];
+		// A bucket made before LoadGrassType named its shapes' mesh takes it from a later group.
+		if (!bucket.lodMesh && a_event.lodMesh)
+			AdoptLodMesh(bucket, a_event.lodMesh);
 		++bucket.shapes;
 		bucket.total += static_cast<std::uint32_t>(a_event.instances.size());
 		totalsChanged = true;
@@ -264,35 +315,62 @@ namespace DCLF::Features::Grass
 		MarkBucket(a_slot);
 		if (--bucket.shapes)
 			return;
-		// Its meshes' users go; its slot's row is sent zero, which releases its bindings (the bucket table's content owners).
+		// Its meshes' users go, then its hold on the library's LOD meshes; its slot's row is sent zero, which releases its bindings (the
+		// bucket table's content owners).
 		for (const void* mesh : bucket.meshes)
 			RemoveMeshUser(mesh);
+		if (auto* record = static_cast<::GrassMeshLibrary::MeshRecord*>(bucket.lodMesh))
+			::GrassMeshLibrary::ReleaseMesh(*record);
+		if (bucket.lodPending)
+			--lodPending;
 		bucketIndex.erase(bucket.key);
 		bucket = Bucket{ .slot = a_slot };
 		freeBuckets.push_back(a_slot);
 	}
 
-	void Mirror::ResolveTiers(Bucket& a_bucket, const void* a_shape, MeshSource&& a_mesh)
+	void Mirror::AdoptLodMesh(Bucket& a_bucket, void* a_lodMesh)
 	{
-		a_bucket.meshes[0] = AddMeshUser(std::move(a_mesh));
-		// Grass Optimizations' LOD meshes (meshes\LOD\Grass\<stem>_LOD0.nif and _LOD1.nif), by the shape's source mesh: the shape is a
-		// key only (it may be dead, then no LOD). The far tier falls back to the middle mesh (GetLODMesh).
-		if (!GrassShared::Settings().EnableMeshLOD)
+		// Held while the bucket lives, so the library keeps the record's LOD meshes (CommitLoadedLODMeshes drops a load no bucket holds,
+		// ReleaseMesh evicts them at zero), as Grass Optimizations' buckets hold it.
+		++static_cast<::GrassMeshLibrary::MeshRecord*>(a_lodMesh)->activeBuckets;
+		a_bucket.lodMesh = a_lodMesh;
+		a_bucket.lodPending = true;
+		++lodPending;
+	}
+
+	void Mirror::ResolveLods()
+	{
+		// Grass Optimizations' LOD meshes (meshes\LOD\Grass\<stem>_LOD0.nif and _LOD1.nif), by the buckets' source meshes, loaded off
+		// the render thread by the shared library: a bucket's tiers resolve once both of its loads settle (the far tier falls back to the
+		// middle mesh, GetLODMesh). A tier's new mesh is leased by the next TakeChanges, which lays the visible bases out again.
+		if (!lodPending || !GrassShared::Settings().EnableMeshLOD)
 			return;
 		auto& library = GrassShared::MeshLibrary();
-		const auto meshId = library.ResolveMeshId(static_cast<RE::BSMultiStreamInstanceTriShape*>(const_cast<void*>(a_shape)));
-		if (!meshId)
-			return;
-		library.EnsureLODMeshes(meshId);
-		using Tier = GrassShared::GrassMeshLibrary::LODTier;
-		for (std::uint32_t tier = 1; tier < kTiers; ++tier) {
-			const auto* lod = library.GetLODMesh(meshId, tier == 1 ? Tier::kMiddle : Tier::kFar);
-			if (!lod)
+		library.CommitLoadedLODMeshes();
+		using LoadState = ::GrassMeshLibrary::LoadState;
+		using Tier = ::GrassMeshLibrary::LODTier;
+		for (auto& bucket : buckets) {
+			if (!bucket.live || !bucket.lodPending)
 				continue;
-			MeshSource source{ .key = lod, .vertexDesc = lod->descVal, .indexCount = lod->indexCount };
-			source.vertexBuffer.copy_from(lod->vertexBuffer);
-			source.indexBuffer.copy_from(lod->indexBuffer);
-			a_bucket.meshes[tier] = AddMeshUser(std::move(source));
+			auto& record = *static_cast<::GrassMeshLibrary::MeshRecord*>(bucket.lodMesh);
+			library.EnsureLODMeshes(record);
+			const bool settled = std::ranges::all_of(record.lodMeshes, [](const ::GrassMeshLibrary::LODMesh& a_lod) {
+				return a_lod.state == LoadState::kReady || a_lod.state == LoadState::kUnavailable;
+			});
+			if (!settled)
+				continue;
+			for (std::uint32_t tier = 1; tier < kTiers; ++tier) {
+				const auto* lod = ::GrassMeshLibrary::GetLODMesh(record, tier == 1 ? Tier::kMiddle : Tier::kFar);
+				if (!lod)
+					continue;
+				MeshSource source{ .key = lod, .vertexDesc = lod->descVal, .indexCount = lod->indexCount };
+				source.vertexBuffer.copy_from(lod->vertexBuffer);
+				source.indexBuffer.copy_from(lod->indexBuffer);
+				bucket.meshes[tier] = AddMeshUser(std::move(source));
+			}
+			bucket.lodPending = false;
+			--lodPending;
+			MarkBucket(bucket.slot);
 		}
 	}
 
@@ -363,6 +441,12 @@ namespace DCLF::Features::Grass
 		for (auto it = tombstones.begin(); it != tombstones.end();) {
 			if (drains - it->second.second >= kTombstoneDrains)
 				it = tombstones.erase(it);
+			else
+				++it;
+		}
+		for (auto it = groupTombstones.begin(); it != groupTombstones.end();) {
+			if (drains - it->second.second >= kTombstoneDrains)
+				it = groupTombstones.erase(it);
 			else
 				++it;
 		}

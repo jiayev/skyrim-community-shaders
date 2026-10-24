@@ -3,8 +3,8 @@
 // Grass (CS_DCLF_GRASS): the engine's grass (the BSGrassShaderProperty instance shapes) drawn in the engine's place, from the mirrored
 // instance records, as the Grass draw family (Api/DrawFamilies.h). The feature registers its switch (CS_DCLF_GRASS), its live toggle
 // and the grass class's contribution (Api::ObjectClass::Grass, which gates the family), registers its sink on GrassShared's capture at
-// its early hooks (GrassHooks.cpp: the shapes' records, removals and rejections, pushed onto events; the capture is shared with Grass
-// Optimizations, src/GrassShared) and keeps the render thread's mirror (GrassMirror.h, drained by the family's serve). It draws it: the
+// its early hooks (GrassHooks.cpp: the shapes' groups' records, the groups' and shapes' removals and rejections, pushed onto events; the
+// capture, and the LOD meshes' library, are shared with Grass Optimizations, src/GrassShared) and keeps the render thread's mirror (GrassMirror.h, drained by the family's serve). It draws it: the
 // tables as scene resources, with what they post with the revision's inputs and latch in the depth commit, and the depth commit's uploads
 // as a commit hook (GrassTables.cpp); GrassCullCS and GrassArgsCS (their HLSL in the feature's shader folder, Features/Grass/) in the
 // depth segment's two phases, the colour draws' arguments and the counts' readback as its passes (GrassPasses.cpp); the family - its
@@ -13,8 +13,9 @@
 // parity (Diagnostics/GrassParity.cpp) are its own.
 //
 // While the family is DCLF's the engine's grass passes are withheld, so nothing hooked on BSGrassShader::SetupGeometry runs: the
-// decision tells GrassShared (SetDclfOwned) and runs its stood-down callbacks (Grass Optimizations' pending captures, Grass Collision's
-// update and publish), whose products the depth commit reads (GrassShared::Settings, LatestCollision).
+// decision tells GrassShared (SetDclfOwned) and runs its stood-down callbacks (Grass Collision's update and publish), whose products the
+// depth commit reads (GrassShared::Settings, LatestCollision). Grass Optimizations stands down by the flag alone: it keeps its buckets on
+// the CPU at Present (Reset) and leaves the engine's grass culling and setup alone while it is set.
 //
 // Core keeps the family's slot (Core/Render/DrawFamilies/FamilySlots.h): its pipelines on the lane (DrawPipelines' grass family: a
 // depth program and two colour programs) from the program source, the ownership it publishes from the decision (PassCapture's

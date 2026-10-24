@@ -16,8 +16,9 @@ namespace DCLF::GrassInstances
 {
 	/*
 	 * The engine's grass (AE 1.6.1170): each cell's grass types become BSMultiStreamInstanceTriShapes with a BSGrassShaderProperty,
-	 * each drawn instanced from its records - 32 bytes, 16 halfs an instance - which GrassShared's capture hands DCLF when the shape
-	 * gets them (src/GrassShared/GrassCapture.h). The mirror (GrassMirror.h) keeps them in a flat instance table, a range per shape.
+	 * each drawn instanced from its records - 32 bytes, 16 halfs an instance - in a group per cell, which GrassShared's capture hands
+	 * DCLF when the shape gets them (src/GrassShared/GrassCapture.h). The mirror (GrassMirror.h) keeps them in a flat instance table, a
+	 * range per group.
 	 */
 	inline constexpr std::uint32_t kInstanceShorts = 16;
 

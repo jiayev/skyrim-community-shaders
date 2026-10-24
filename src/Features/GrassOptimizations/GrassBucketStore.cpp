@@ -139,15 +139,9 @@ void GrassBucketStore::CaptureEngineGroup(const std::shared_ptr<GrassShape>& reg
 	QueueEvent(std::move(*capture));
 }
 
-void GrassBucketStore::RemoveEngineGroup(RE::BSMultiStreamInstanceTriShape* shape, uint32_t engineGroup,
-	void (*remove)(RE::BSMultiStreamInstanceTriShape*, uint32_t))
+void GrassBucketStore::RemoveEngineGroup(RE::BSMultiStreamInstanceTriShape* shape, uint32_t engineGroup)
 {
 	std::scoped_lock lock(pendingMutex);
-	remove(shape, engineGroup);
-
-	if (engineGroup == UINT32_MAX)
-		return;
-
 	if (auto entry = shapes.find(shape); entry != shapes.end())
 		QueueEvent(Removal{ entry->second, engineGroup });
 }

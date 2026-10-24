@@ -4,6 +4,8 @@
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "Utils/VersionedRelocation.h"
 
+#include <thread>
+
 namespace GrassShared
 {
 	namespace
@@ -14,24 +16,51 @@ namespace GrassShared
 		std::array<Sink, kMaxSinks> sinks{};
 		std::atomic<uint32_t> sinkCount{ 0 };
 
+		// Every hook hands its event to the sinks under this lock, so each sink sees one order of a shape's lifecycle: a group's
+		// removal is handed on before a later group can reuse its index. Recursive, in case an engine call made under it reaches
+		// another hook.
+		std::recursive_mutex lifecycleMutex;
+
+		// The grass shapes LoadGrassType named, with the groups handed on of each (under lifecycleMutex): the attach scan's, which
+		// finds the groups the engine attached from its queue without AddGroup.
+		std::unordered_map<RE::BSMultiStreamInstanceTriShape*, std::unordered_set<uint32_t>> namedShapes;
+		// Set by the queued producers (DoneAddingInstances' queued chunks, the queued GID buffer and file adds), taken by the attach.
+		std::atomic<bool> pendingAttach{ false };
+
 		std::atomic<uint64_t> nextSeq{ 1 };
 		std::atomic<RE::BSShader*> grassShader{ nullptr };
 
 		uint64_t TakeSeq() { return nextSeq.fetch_add(1, std::memory_order_relaxed); }
+
+		template <class F>
+		void ForEachSink(F&& f)
+		{
+			const uint32_t n = sinkCount.load(std::memory_order_acquire);
+			for (uint32_t i = 0; i < n; ++i)
+				f(sinks[i]);
+		}
 
 		bool IsGrassProperty(const RE::BSShaderProperty* prop)
 		{
 			return prop && prop->GetRTTI() == globals::rtti::BSGrassShaderPropertyRTTI.get();
 		}
 
-		void Reject(RE::BSMultiStreamInstanceTriShape* shape)
+		/** @brief The engine's lock over a shape's instance groups, as Grass Optimizations' store takes it. */
+		class EngineGroupLock
 		{
-			const uint64_t seq = TakeSeq();
-			const uint32_t n = sinkCount.load(std::memory_order_acquire);
-			for (uint32_t i = 0; i < n; ++i)
-				if (sinks[i].rejected)
-					sinks[i].rejected(shape, seq);
-		}
+		public:
+			EngineGroupLock()
+			{
+				while (_InterlockedCompareExchange(word.get(), 1, 0))
+					std::this_thread::yield();
+			}
+			~EngineGroupLock() { _InterlockedExchange(word.get(), 0); }
+			EngineGroupLock(const EngineGroupLock&) = delete;
+			EngineGroupLock& operator=(const EngineGroupLock&) = delete;
+
+		private:
+			inline static REL::Relocation<volatile long*> word{ REL::RelocationID(524610, 411250) };
+		};
 
 		/** @brief Reads TruePBR's grass material, which SetupGrassMaterial interned when it set kMenuScreen. */
 		void ReadPbr(AddEvent::Pbr& out, RE::BSShaderMaterial* material)
@@ -59,49 +88,59 @@ namespace GrassShared
 			out.subsurface[3] = pbr->GetSubsurfaceOpacity();
 		}
 
-		/** @brief Builds one shape's event from its records and the shape's state now, and hands it to every sink. */
-		void Capture(RE::BSMultiStreamInstanceTriShape* shape, const void* src, uint32_t count, uint32_t stride, AddEvent::Source source)
+		/**
+		 * @brief Reads one group's records and the shape's state now, under the engine's group lock, and hands it to the add sinks
+		 * (or the rejected ones, when the engine draws a group this cannot read).
+		 */
+		void CaptureGroup(RE::BSMultiStreamInstanceTriShape* shape, uint32_t index, AddEvent::Source source)
 		{
+			bool wanted = false;
+			ForEachSink([&](const Sink& sink) { wanted |= sink.add || sink.rejected; });
+			if (!wanted)
+				return;
+
 			auto& geometry = shape->GetGeometryRuntimeData();
 			auto* prop = static_cast<RE::BSGrassShaderProperty*>(geometry.shaderProperty.get());
 			const uint64_t descVal = *reinterpret_cast<const uint64_t*>(&geometry.vertexDesc);
 
-			// Without a texture the engine's own path draws the shape; nothing to capture.
-			RE::NiSourceTexture* tex = prop->GetBaseTexture();
-			if (!tex) {
-				Reject(shape);
+			EngineGroupLock engineLock;
+			const auto& groups = shape->GetMultiStreamTrishapeRuntimeData().instanceGroups;
+			const auto* group = index < groups.size() ? groups[index] : nullptr;
+			if (!group || !group->instanceCount)
 				return;
-			}
+			const auto* vertexBuffer = group->vertexBuffer;
+			const uint32_t count = group->instanceCount;
+			// The engine writes the width's low 32 bits only (the field is 64): the rest can be anything.
+			const uint32_t stride = vertexBuffer ? static_cast<uint32_t>(vertexBuffer->byteWidth) / count : 0;
 
-			if (!src || !count || stride != kGrassStride) {
-				logger::debug("[GRASS OPTIMIZATIONS] capture rejected: count={} stride={} desc={:016X} shape={:p}", count, stride, descVal, (void*)shape);
-				// An empty shape draws nothing either way; only a record layout this cannot read is a rejection.
-				if (count && stride != kGrassStride)
-					Reject(shape);
-				return;
-			}
-
+			auto* tex = prop->GetBaseTexture();
 			auto* material = prop->material;
-			if (!material) {
-				Reject(shape);
+			auto* rendererData = geometry.rendererData;
+			if (!vertexBuffer || !vertexBuffer->m_data || stride != kGrassStride || !tex || !material ||
+				material->GetType() != RE::BSShaderMaterial::Type::kLighting || !rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer) {
+				logger::debug("[GRASS SHARED] group rejected: count={} stride={} desc={:016X} shape={:p} group={}", count, stride, descVal, (void*)shape, index);
+				const uint64_t seq = TakeSeq();
+				ForEachSink([&](const Sink& sink) {
+					if (sink.rejected)
+						sink.rejected(shape, index, seq);
+				});
 				return;
 			}
 
 			AddEvent e;
 			e.seq = TakeSeq();
 			e.shape = shape;
-			e.records = static_cast<const uint8_t*>(src);
+			e.group = index;
+			e.records = static_cast<const uint8_t*>(vertexBuffer->m_data);
 			e.count = count;
 			e.vertexDesc = descVal;
 			e.origin = shape->world.translate;
 			e.property = prop;
 			e.material = material;
 			e.diffuse = tex;
-			if (auto* rendererData = geometry.rendererData) {
-				e.meshKey = rendererData;
-				e.vertexBuffer = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-				e.indexBuffer = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-			}
+			e.meshKey = rendererData;
+			e.vertexBuffer = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+			e.indexBuffer = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
 			e.triangleCount = (uint32_t)shape->GetTrishapeRuntimeData().triangleCount;
 			e.modelBound = shape->GetModelData().modelBound;
 			e.wavePeriod = prop->wavePeriod;
@@ -116,39 +155,55 @@ namespace GrassShared
 				ReadPbr(e.pbrData, material);
 			e.source = source;
 
-			const uint32_t n = sinkCount.load(std::memory_order_acquire);
-			for (uint32_t i = 0; i < n; ++i)
-				if (sinks[i].add)
-					sinks[i].add(e);
+			ForEachSink([&](const Sink& sink) {
+				if (sink.add)
+					sink.add(e);
+			});
 		}
 
-		size_t GIDGroupBytes(const RE::BSMultiStreamInstanceTriShape::GroupHeader* header)
+		/** @brief Hands a group the engine added to every sink: by index, then read. */
+		void AddedGroup(RE::BSMultiStreamInstanceTriShape* shape, uint32_t index, AddEvent::Source source)
 		{
-			if (!header || !header->numShortsPerInstance)
-				return 0;
-			return (size_t)header->groupInstanceCount * header->numShortsPerInstance * sizeof(std::uint16_t);
-		}
-
-		/** @brief Captures one GID group's instance records from the cell-load hooks. */
-		void CaptureGIDGroup(RE::BSMultiStreamInstanceTriShape* shape, RE::BSMultiStreamInstanceTriShape::GroupHeader* header, const uint16_t* instanceData, size_t dataBytes, AddEvent::Source source)
-		{
-			if (!shape || !header || !instanceData)
+			if (!shape || index == UINT32_MAX || !IsGrassProperty(shape->GetGeometryRuntimeData().shaderProperty.get()))
 				return;
 
-			if (!IsGrassProperty(shape->GetGeometryRuntimeData().shaderProperty.get()))
-				return;
-
-			uint32_t count = header->groupInstanceCount;
-			if (dataBytes / kGrassStride < count)
-				count = (uint32_t)(dataBytes / kGrassStride);
-
-			Capture(shape, instanceData, count, kGrassStride, source);
+			std::scoped_lock lock(lifecycleMutex);
+			if (const auto it = namedShapes.find(shape); it != namedShapes.end())
+				it->second.insert(index);
+			ForEachSink([&](const Sink& sink) {
+				if (sink.group)
+					sink.group(shape, index);
+			});
+			CaptureGroup(shape, index, source);
 		}
 
-		// The .cgid readers fill these while AddGroup(Queued)GIDFile runs; the file thunks capture them after it returns.
-		thread_local RE::BSMultiStreamInstanceTriShape::GroupHeader tl_lastFileGroupHeader{};
-		thread_local std::vector<uint16_t> tl_lastFileInstanceData;
-		thread_local bool tl_haveFileGroup = false;
+		/**
+		 * @brief After the engine attached its queued groups: the index sinks scan for theirs; the add sinks get every named shape's
+		 * group not handed on yet, read.
+		 */
+		void AttachedGroups()
+		{
+			std::scoped_lock lock(lifecycleMutex);
+			ForEachSink([&](const Sink& sink) {
+				if (sink.attached)
+					sink.attached();
+			});
+
+			std::vector<std::pair<RE::BSMultiStreamInstanceTriShape*, uint32_t>> attached;
+			{
+				EngineGroupLock engineLock;
+				for (auto& [shape, known] : namedShapes) {
+					const auto& data = shape->GetMultiStreamTrishapeRuntimeData();
+					if (known.size() == data.activeGroupCount)
+						continue;
+					for (uint32_t index = 0; index < data.instanceGroups.size(); ++index)
+						if (data.instanceGroups[index] && known.insert(index).second)
+							attached.emplace_back(shape, index);
+				}
+			}
+			for (const auto& [shape, index] : attached)
+				CaptureGroup(shape, index, AddEvent::Source::Queued);
+		}
 
 		struct Hooks
 		{
@@ -156,37 +211,63 @@ namespace GrassShared
 			{
 				static void thunk(RE::BSMultiStreamInstanceTriShape* This)
 				{
-					const uint64_t seq = TakeSeq();
-					const uint32_t n = sinkCount.load(std::memory_order_acquire);
-					for (uint32_t i = 0; i < n; ++i)
-						if (sinks[i].remove)
-							sinks[i].remove(This, seq);
-
-					// Forgotten here, before the address can be reused, so a later shape at it resolves its own mesh.
-					MeshLibrary().ForgetShape(This);
+					{
+						std::scoped_lock lock(lifecycleMutex);
+						const uint64_t seq = TakeSeq();
+						ForEachSink([&](const Sink& sink) {
+							if (sink.remove)
+								sink.remove(This, seq);
+						});
+						// Forgotten here, before the address can be reused, so a later shape at it resolves its own mesh.
+						ForgetMesh(This);
+						namedShapes.erase(This);
+					}
 					func(This);
 				}
 				static inline REL::Relocation<decltype(thunk)> func;
 			};
 
-			struct DoneAddingInstances
+			// DoneAddingInstances adds each chunk of generated instances through this virtual, which returns the group index.
+			struct AddGroup
 			{
-				static void thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSTArray<std::uint32_t>& a_instances)
+				static std::uint32_t thunk(RE::BSMultiStreamInstanceTriShape* shape, std::uint32_t count, std::uint16_t* instanceData, std::uint32_t instanceShorts, float boundPadding)
 				{
-					auto& rt = shape->GetMultiStreamTrishapeRuntimeData();
-					if (rt.groupAlloc && IsGrassProperty(shape->GetGeometryRuntimeData().shaderProperty.get()))
-						Capture(shape, rt.groupAlloc, rt.instanceCount, 2u * rt.instanceSize, AddEvent::Source::Runtime);
-					func(shape, a_instances);
+					const auto index = func(shape, count, instanceData, instanceShorts, boundPadding);
+					AddedGroup(shape, index, AddEvent::Source::Runtime);
+					return index;
 				}
 				static inline REL::Relocation<decltype(thunk)> func;
 			};
 
-			struct AddQueuedGroupGIDBuffer
+			// Generated grass: each chunk through AddGroup, or (while the engine queues, outside grass cache generation) onto the attach
+			// queue, which AttachQueuedGroups drains.
+			struct DoneAddingInstances
 			{
-				static std::uint32_t thunk(RE::BSMultiStreamInstanceTriShape* a1, RE::BSMultiStreamInstanceTriShape::GroupHeader* a2, std::uint16_t* a3, RE::BSTArray<std::uint32_t>& a4)
+				static void thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSTArray<std::uint32_t>& groupIndices)
 				{
-					CaptureGIDGroup(a1, a2, a3, GIDGroupBytes(a2), AddEvent::Source::GidBuffer);
-					return func(a1, a2, a3, a4);
+					pendingAttach.store(true, std::memory_order_release);
+					func(shape, groupIndices);
+					pendingAttach.store(true, std::memory_order_release);
+				}
+				static inline REL::Relocation<decltype(thunk)> func;
+			};
+
+			// Vanilla grass shapes are shared by every cell in a 12x12 block, so a cell unload removes its groups here.
+			struct RemoveGroup
+			{
+				static void thunk(RE::BSMultiStreamInstanceTriShape* shape, std::uint32_t index)
+				{
+					std::scoped_lock lock(lifecycleMutex);
+					func(shape, index);
+					if (index == UINT32_MAX)
+						return;
+					if (const auto it = namedShapes.find(shape); it != namedShapes.end())
+						it->second.erase(index);
+					const uint64_t seq = TakeSeq();
+					ForEachSink([&](const Sink& sink) {
+						if (sink.removeGroup)
+							sink.removeGroup(shape, index, seq);
+					});
 				}
 				static inline REL::Relocation<decltype(thunk)> func;
 			};
@@ -195,51 +276,45 @@ namespace GrassShared
 			{
 				static std::uint32_t thunk(RE::BSMultiStreamInstanceTriShape* a1, RE::BSMultiStreamInstanceTriShape::GroupHeader* a2, std::uint16_t* a3)
 				{
-					CaptureGIDGroup(a1, a2, a3, GIDGroupBytes(a2), AddEvent::Source::GidBuffer);
-					return func(a1, a2, a3);
+					const auto index = func(a1, a2, a3);
+					AddedGroup(a1, index, AddEvent::Source::GidBuffer);
+					return index;
 				}
 				static inline REL::Relocation<decltype(thunk)> func;
 			};
 
-			struct ReadGroupHeaderStreamTraits
+			struct AddQueuedGroupGIDBuffer
 			{
-				static void thunk(RE::BSStreamHeader* streamHeader, RE::BSMultiStreamInstanceTriShape::GroupHeader* groupHeader, uint32_t size)
+				static void thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSMultiStreamInstanceTriShape::GroupHeader* header, std::uint16_t* instanceData, RE::BSTArray<std::uint32_t>& groupIndices)
 				{
-					func(streamHeader, groupHeader, size);
-					std::memcpy(&tl_lastFileGroupHeader, groupHeader, std::min<uint32_t>(size, sizeof(tl_lastFileGroupHeader)));
+					pendingAttach.store(true, std::memory_order_release);
+					func(shape, header, instanceData, groupIndices);
+					pendingAttach.store(true, std::memory_order_release);
 				}
 				static inline REL::Relocation<decltype(thunk)> func;
 			};
 
-			struct ReadInstanceGroupStreamTraits
+			struct AddQueuedGroupGIDFile
 			{
-				static void thunk(RE::BSStreamHeader* streamHeader, uint16_t* instanceData, uint32_t size)
+				static void thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSStream* stream, RE::BSTArray<std::uint32_t>& groupIndices)
 				{
-					func(streamHeader, instanceData, size);
-					tl_lastFileInstanceData.resize((size + sizeof(uint16_t) - 1) / sizeof(uint16_t));
-					std::memcpy(tl_lastFileInstanceData.data(), instanceData, size);
-					tl_haveFileGroup = true;
+					pendingAttach.store(true, std::memory_order_release);
+					func(shape, stream, groupIndices);
+					pendingAttach.store(true, std::memory_order_release);
 				}
 				static inline REL::Relocation<decltype(thunk)> func;
 			};
 
-			/** @brief Captures the group the .cgid readers stashed while a file thunk's call ran. */
-			static void CaptureFileGroup(RE::BSMultiStreamInstanceTriShape* shape)
+			// The engine's drain of its attach queue: each queued group into a free slot of its shape's groups, without AddGroup.
+			struct AttachQueuedGroups
 			{
-				if (tl_haveFileGroup) {
-					CaptureGIDGroup(shape, &tl_lastFileGroupHeader,
-						tl_lastFileInstanceData.data(), tl_lastFileInstanceData.size() * sizeof(uint16_t), AddEvent::Source::GidFile);
-					tl_haveFileGroup = false;
-				}
-			}
-
-			struct AddGroupQueuedGIDFile
-			{
-				static void thunk(RE::BSMultiStreamInstanceTriShape* a1, RE::BSStream* a2, RE::BSTArray<std::uint32_t>& a3)
+				static void thunk()
 				{
-					tl_haveFileGroup = false;
-					func(a1, a2, a3);
-					CaptureFileGroup(a1);
+					const bool pending = pendingAttach.exchange(false, std::memory_order_acq_rel);
+					func();
+					// Work queued during the attach stays pending for the next one as well.
+					if (pending || pendingAttach.load(std::memory_order_acquire))
+						AttachedGroups();
 				}
 				static inline REL::Relocation<decltype(thunk)> func;
 			};
@@ -248,9 +323,19 @@ namespace GrassShared
 			{
 				static void thunk(RE::BSMultiStreamInstanceTriShape* a1, RE::BSStream* a2)
 				{
-					tl_haveFileGroup = false;
+					// The file loader does not return a group index, so identify the first changed slot.
+					static thread_local std::vector<void*> groupsBefore;
+					const auto& groups = a1->GetMultiStreamTrishapeRuntimeData().instanceGroups;
+					groupsBefore.assign(groups.begin(), groups.end());
+
 					func(a1, a2);
-					CaptureFileGroup(a1);
+
+					uint32_t index = 0;
+					while (index < groups.size() && (!groups[index] || (index < groupsBefore.size() && groups[index] == groupsBefore[index])))
+						++index;
+
+					if (index < groups.size())
+						AddedGroup(a1, index, AddEvent::Source::GidFile);
 				}
 				static inline REL::Relocation<decltype(thunk)> func;
 			};
@@ -261,8 +346,30 @@ namespace GrassShared
 				{
 					auto* shape = func(grassManager, a_param, CellXDivided, CellYDivided, typeKey, modelPath);
 
-					if (shape && modelPath)
-						MeshLibrary().RecordModelPath(shape, modelPath->c_str());
+					if (shape && modelPath && modelPath->c_str() && *modelPath->c_str()) {
+						std::scoped_lock lock(lifecycleMutex);
+						// The engine hands every cell of a 12x12 block the same shape: only its first naming is news.
+						const bool named = RecordMesh(shape, &MeshLibrary().RegisterMesh(modelPath->c_str()));
+						ForEachSink([&](const Sink& sink) {
+							if (sink.model)
+								sink.model(shape, modelPath->c_str());
+						});
+						// The groups it holds at its first naming, read again for the add sinks (as the store's RegisterModel does for
+						// its own), in case one was added before the shape was a grass shape; from here on the attach scan knows it.
+						if (named && IsGrassProperty(shape->GetGeometryRuntimeData().shaderProperty.get())) {
+							std::vector<uint32_t> indices;
+							{
+								EngineGroupLock engineLock;
+								const auto& groups = shape->GetMultiStreamTrishapeRuntimeData().instanceGroups;
+								for (uint32_t i = 0; i < groups.size(); ++i)
+									if (groups[i])
+										indices.push_back(i);
+							}
+							namedShapes[shape].insert(indices.begin(), indices.end());
+							for (const uint32_t index : indices)
+								CaptureGroup(shape, index, AddEvent::Source::Runtime);
+						}
+					}
 
 					return shape;
 				}
@@ -292,15 +399,17 @@ namespace GrassShared
 			{
 				stl::write_vfunc<0x0, BSMultiStreamInstanceTriShape_dtor>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
 				stl::write_vfunc<0x3A, DoneAddingInstances>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
+				stl::write_vfunc<0x3C, AddGroup>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
+				stl::write_vfunc<0x3D, RemoveGroup>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
 				stl::write_vfunc<0x2A, BSGrassShaderProperty_GetRenderPasses>(RE::VTABLE_BSGrassShaderProperty[0]);
 
-				// Capture raw instance data for cached grass.
+				// Queued groups (generated grass, queued cache groups) get their slots when the engine drains its attach queue.
 				stl::write_thunk_call<AddQueuedGroupGIDBuffer>(REL::RelocationID(15205, 15373).address() + Util::VersionedRelocation::Select(0x7FF, 0x756, 0x768));
+				stl::write_thunk_call<AddQueuedGroupGIDFile>(REL::RelocationID(15206, 15374).address() + REL::Relocate(0x394, 0x384));
+				stl::detour_thunk<AttachQueuedGroups>(REL::RelocationID(74603, 76335));
+
+				// Loaded cache groups.
 				stl::write_thunk_call<AddGroupGIDBuffer>(REL::RelocationID(15205, 15373).address() + Util::VersionedRelocation::Select(0x806, 0x75D, 0x76F));
-				stl::write_thunk_call<ReadGroupHeaderStreamTraits>(REL::RelocationID(74599, 76327).address() + Util::VersionedRelocation::Select(0x36, 0x36, 0x45));
-				stl::write_thunk_call<ReadGroupHeaderStreamTraits>(REL::RelocationID(74596, 76324).address() + Util::VersionedRelocation::Select(0x2F, 0x33, 0x42));
-				stl::write_thunk_call<ReadInstanceGroupStreamTraits>(REL::RelocationID(74607, 76339).address() + REL::Relocate(0xCF, 0xCF));
-				stl::write_thunk_call<AddGroupQueuedGIDFile>(REL::RelocationID(15206, 15374).address() + REL::Relocate(0x394, 0x384));
 				stl::write_thunk_call<AddGroupGIDFile>(REL::RelocationID(15206, 15374).address() + REL::Relocate(0x39B, 0x38B));
 
 				// Record each grass type's source .nif path alongside its shape.
