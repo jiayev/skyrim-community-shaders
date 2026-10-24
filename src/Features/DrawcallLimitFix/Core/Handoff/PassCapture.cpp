@@ -589,16 +589,16 @@ namespace DCLF
 	{
 		// The main modes' registration's (FUN_1414b2330) group insertions and its hint 1 list insertion, by call site.
 		// (SE FUN_1412ca300, the same code; the occlusion maps' FUN_1414b2c20 is SE FUN_1412cab70.)
-		constexpr Engine::Offset kInsertGroup{ 0x14f5090, 0x1309230 }, kInsertList{ 0x14f50b0, 0x1309250 };
+		constexpr Engine::Offset kInsertGroup{ { 107668 }, { 100872 } }, kInsertList{ { 107669 }, { 100873 } };
 		constexpr std::array<std::pair<Engine::Offset, Engine::Offset>, 16> kMainGroupSites{ {
-			{ Engine::Offset{ 0x14b24a2, 0x12ca472 }, kInsertGroup }, { Engine::Offset{ 0x14b24bd, 0x12ca48d }, kInsertGroup },
-			{ Engine::Offset{ 0x14b24d8, 0x12ca4a8 }, kInsertGroup }, { Engine::Offset{ 0x14b24f3, 0x12ca4c3 }, kInsertGroup },
-			{ Engine::Offset{ 0x14b250d, 0x12ca4dd }, kInsertGroup }, { Engine::Offset{ 0x14b2528, 0x12ca4f8 }, kInsertGroup },
-			{ Engine::Offset{ 0x14b2543, 0x12ca513 }, kInsertGroup }, { Engine::Offset{ 0x14b255e, 0x12ca52e }, kInsertGroup },
-			{ Engine::Offset{ 0x14b2579, 0x12ca549 }, kInsertGroup }, { Engine::Offset{ 0x14b2591, 0x12ca561 }, kInsertGroup },
-			{ Engine::Offset{ 0x14b25a9, 0x12ca579 }, kInsertGroup }, { Engine::Offset{ 0x14b25c1, 0x12ca591 }, kInsertGroup },
-			{ Engine::Offset{ 0x14b25db, 0x12ca5ab }, kInsertGroup }, { Engine::Offset{ 0x14b2667, 0x12ca637 }, kInsertGroup },
-			{ Engine::Offset{ 0x14b2478, 0x12ca448 }, kInsertList }, { Engine::Offset{ 0x14b2c71, 0x12cabb4 }, kInsertGroup },
+			{ Engine::Offset{ { 106570, 0x172 }, { 99926, 0x172 } }, kInsertGroup }, { Engine::Offset{ { 106570, 0x18d }, { 99926, 0x18d } }, kInsertGroup },
+			{ Engine::Offset{ { 106570, 0x1a8 }, { 99926, 0x1a8 } }, kInsertGroup }, { Engine::Offset{ { 106570, 0x1c3 }, { 99926, 0x1c3 } }, kInsertGroup },
+			{ Engine::Offset{ { 106570, 0x1dd }, { 99926, 0x1dd } }, kInsertGroup }, { Engine::Offset{ { 106570, 0x1f8 }, { 99926, 0x1f8 } }, kInsertGroup },
+			{ Engine::Offset{ { 106570, 0x213 }, { 99926, 0x213 } }, kInsertGroup }, { Engine::Offset{ { 106570, 0x22e }, { 99926, 0x22e } }, kInsertGroup },
+			{ Engine::Offset{ { 106570, 0x249 }, { 99926, 0x249 } }, kInsertGroup }, { Engine::Offset{ { 106570, 0x261 }, { 99926, 0x261 } }, kInsertGroup },
+			{ Engine::Offset{ { 106570, 0x279 }, { 99926, 0x279 } }, kInsertGroup }, { Engine::Offset{ { 106570, 0x291 }, { 99926, 0x291 } }, kInsertGroup },
+			{ Engine::Offset{ { 106570, 0x2ab }, { 99926, 0x2ab } }, kInsertGroup }, { Engine::Offset{ { 106570, 0x337 }, { 99926, 0x337 } }, kInsertGroup },
+			{ Engine::Offset{ { 106570, 0x148 }, { 99926, 0x148 } }, kInsertList }, { Engine::Offset{ { 106578, 0x51 }, { 99934, 0x44 } }, kInsertGroup },
 		} };
 
 		template <class Hook>
@@ -625,8 +625,8 @@ namespace DCLF
 		stl::write_vfunc<0x2, Hook>(RE::VTABLE_BSBatchRenderer[0]);
 		// The registration's (FUN_1414b2a60) group insertions: the volumetric copy's, and the direct hints 11, 7 and 3.
 		// (SE FUN_1412ca9c0, the same code.)
-		constexpr Engine::Offset kVolumetricGroupCall{ 0x14b2b5f, 0x12caabf };
-		constexpr Engine::Offset kDirectGroupCalls[3] = { { 0x14b2b29, 0x12caa89 }, { 0x14b2b3b, 0x12caa9b }, { 0x14b2b4d, 0x12caaad } };
+		constexpr Engine::Offset kVolumetricGroupCall{ { 106576, 0xff }, { 99932, 0xff } };
+		constexpr Engine::Offset kDirectGroupCalls[3] = { { { 106576, 0xc9 }, { 99932, 0xc9 } }, { { 106576, 0xdb }, { 99932, 0xdb } }, { { 106576, 0xed }, { 99932, 0xed } } };
 		const auto insertsGroup = [](std::uintptr_t a_site) { return Engine::CallsTo(REL::Offset(a_site).address(), REL::Offset(kInsertGroup).address()); };
 		if (insertsGroup(kVolumetricGroupCall) && insertsGroup(kDirectGroupCalls[0]) && insertsGroup(kDirectGroupCalls[1]) && insertsGroup(kDirectGroupCalls[2])) {
 			stl::write_thunk_call<VolumetricGroupHook>(REL::Offset(kVolumetricGroupCall).address());

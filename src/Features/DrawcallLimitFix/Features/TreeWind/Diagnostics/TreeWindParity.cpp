@@ -1,5 +1,6 @@
 // CS_DCLF_PERSISTENT_PARITY: tree wind parity. Every 120th colour epoch the records of up to 64 tree members are read back (3 frames
-// later) and checked against the engine's formulas and clocks; and both wind buffers whole, every listed tree's entry.
+// later) and checked against the engine's formulas and clocks; and both wind buffers whole, every listed tree's entry. A member whose
+// entry holds another generation than its listing's draws with its record's values (DCLFTreeWindEntry), and is counted, not checked.
 
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindTables.h"
@@ -43,6 +44,7 @@ namespace DCLF::Features::TreeWind
 			struct Sample
 			{
 				std::uint32_t object = 0, tree = 0;
+				std::uint32_t generation = 0;  // the listing's (kNodelessTree for the nodeless entry)
 				const void* node = nullptr;
 			};
 			std::vector<Sample> samples;
@@ -74,6 +76,9 @@ namespace DCLF::Features::TreeWind
 		struct MemberCheck
 		{
 			std::uint32_t checked = 0, paramsDiffer = 0, fadeDiffer = 0, gustDiffer = 0, gusts = 0;
+			// Members drawn with their records' values: their entry is not their listing's (TreeWindCS wrote none for it yet: its
+			// seed not ready, or a reused slot's earlier listing).
+			std::uint32_t fallbacks = 0;
 			float drift = 0.0f;
 			std::string first;
 			// The engine's clock rate against the GPU's, per node, since the last readback that saw it: by distance (within the
@@ -139,8 +144,15 @@ namespace DCLF::Features::TreeWind
 			const auto* bytes = static_cast<const std::byte*>(mapped.pData);
 			MemberCheck c;
 			for (std::size_t i = 0; i < a_readback.samples.size(); ++i) {
+				constexpr std::size_t entryBytes = kTreeWindEntryRows * 16;
 				float tree[8];
-				std::memcpy(tree, bytes + i * sizeof(tree), sizeof(tree));
+				std::memcpy(tree, bytes + i * entryBytes, sizeof(tree));
+				std::uint32_t generation;
+				std::memcpy(&generation, bytes + i * entryBytes + 32, sizeof(generation));
+				if (generation != a_readback.samples[i].generation) {
+					++c.fallbacks;
+					continue;
+				}
 				CheckMember(a_readback.samples[i], tree, a_readback.inputs, a_tables, c);
 			}
 			a_context->Unmap(a_readback.records.get(), 0);
@@ -149,8 +161,8 @@ namespace DCLF::Features::TreeWind
 			logger::info("[DCLF] tree wind clock rates (engine over GPU; ~0/~1/~2/other): far {}/{}/{}/{}, far with bones {}/{}/{}/{}, near {}/{}/{}/{}, near with bones {}/{}/{}/{}",
 				rates[0][0], rates[0][1], rates[0][2], rates[0][3], rates[1][0], rates[1][1], rates[1][2], rates[1][3], rates[2][0], rates[2][1], rates[2][2], rates[2][3],
 				rates[3][0], rates[3][1], rates[3][2], rates[3][3]);
-			logger::info("[DCLF] tree wind parity: {} members checked ({} gusts); {} TreeParams, {} fades, {} gusts differ; timers {:.3f} s from the engine's own clocks at most{}{}{}",
-				c.checked, c.gusts, c.paramsDiffer, c.fadeDiffer, c.gustDiffer, c.drift, c.paramsDiffer || c.fadeDiffer || c.gustDiffer ? " <- TREE WIND" : " <- OK",
+			logger::info("[DCLF] tree wind parity: {} members checked ({} gusts), {} drawn with their records' (no entry of their listing); {} TreeParams, {} fades, {} gusts differ; timers {:.3f} s from the engine's own clocks at most{}{}{}",
+				c.checked, c.gusts, c.fallbacks, c.paramsDiffer, c.fadeDiffer, c.gustDiffer, c.drift, c.paramsDiffer || c.fadeDiffer || c.gustDiffer ? " <- TREE WIND" : " <- OK",
 				c.first.empty() ? "" : "; first: ", c.first);
 		}
 
@@ -272,7 +284,7 @@ namespace DCLF::Features::TreeWind
 			whole = std::move(next);
 		}
 
-		// The first 64 members, each one's tree entry (TreeParams and WindTimers, 32 bytes) of the wind buffer this frame's draws
+		// The first 64 members, each one's tree entry (TreeParams, WindTimers and the generation) of the wind buffer this frame's draws
 		// read (the frame binding's): the one the frame before wrote, from its inputs.
 		void KickMembers(const TreeWindScene& a_wind, const Draws::NamedVersions& a_adopted, const TreeTables& a_tables, ID3D11DeviceContext* a_context)
 		{
@@ -288,7 +300,7 @@ namespace DCLF::Features::TreeWind
 			if (!source)
 				return;
 			D3D11_BUFFER_DESC desc{};
-			desc.ByteWidth = static_cast<UINT>(count * 32);
+			desc.ByteWidth = static_cast<UINT>(count * kTreeWindEntryRows * 16);
 			desc.Usage = D3D11_USAGE_STAGING;
 			desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 			if (FAILED(globals::d3d::device->CreateBuffer(&desc, nullptr, readback.records.put())))
@@ -298,9 +310,11 @@ namespace DCLF::Features::TreeWind
 				const auto& member = a_tables.treeObjects[i];
 				const std::uint32_t entry = member.tree == kNodelessTree ? 0u : member.tree + 1;
 				const auto offset = static_cast<UINT>(std::uint64_t(entry) * kTreeWindEntryRows * 16);
-				const D3D11_BOX box{ offset, 0, 0, offset + 32, 1, 1 };
-				a_context->CopySubresourceRegion(readback.records.get(), 0, static_cast<UINT>(i * 32), 0, 0, source.get(), 0, &box);
-				readback.samples.push_back({ member.object, member.tree, member.tree < a_tables.treeNode.size() ? a_tables.treeNode[member.tree] : nullptr });
+				const D3D11_BOX box{ offset, 0, 0, offset + kTreeWindEntryRows * 16, 1, 1 };
+				a_context->CopySubresourceRegion(readback.records.get(), 0, static_cast<UINT>(i * kTreeWindEntryRows * 16), 0, 0, source.get(), 0, &box);
+				const bool listed = member.tree < a_tables.trees.size();
+				readback.samples.push_back({ member.object, member.tree, member.tree == kNodelessTree ? kNodelessTree : listed ? a_tables.trees[member.tree].generation : 0u,
+					listed && member.tree < a_tables.treeNode.size() ? a_tables.treeNode[member.tree] : nullptr });
 			}
 			readback.inputs = a_wind.previousTreeInputs;
 			readback.framesLeft = 3;

@@ -163,6 +163,8 @@ namespace DCLF::Scene
 	 * - Other references: a cell's animated references' UpdateSelectedDownwardPass (from FUN_1402b41a0, only in a visible room
 	 *   or fading), the cell's dynamic node's (FUN_1402b3ae0, keyed by the node), graph-animated references' (FUN_1402f75a0,
 	 *   from UpdateAnimationJob).
+	 * - Projectiles: Projectile::Update3D (slot 0xAD; ArrowProjectile's tail-jumps into it), every frame after UpdateImpl placed the
+	 *   projectile's root (FlameProjectile's at its caster's hand: no other writer names it), keyed by the projectile.
 	 * - Node events (Havok writes, controller additions) name the reference above the node.
 	 * - Particle systems: Features/Particles' reserved writer, ParticleSnapshots' NiParticleSystem update thunks (vtable 0x2C, 0x2D),
 	 *   keyed by the system (the geometry), when a capture took a new snapshot of a followed system (the particles toggle on).
@@ -174,7 +176,7 @@ namespace DCLF::Scene
 	inline std::array<std::atomic<std::uint64_t>, Extensions::kMoveWriterSlots> moveWriterCalls{};
 	// Core's writers at their slots; the free ones (empty) are the reserved writers', named at their reservation (main thread, PostPostLoad).
 	inline std::array<std::string_view, Extensions::kMoveWriterSlots> moveWriterNames{ "animation", "reference 3D position", {}, {}, {}, "graph animation",
-		"update pass" };
+		"update pass", {}, {}, "projectile 3D" };
 	inline void CountMove(std::size_t a_writer) { moveWriterCalls[a_writer].fetch_add(1, std::memory_order_relaxed); }
 
 	/**

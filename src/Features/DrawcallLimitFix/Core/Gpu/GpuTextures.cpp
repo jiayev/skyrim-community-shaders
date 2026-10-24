@@ -35,7 +35,7 @@ namespace DCLF
 		// SE 1.5.97 alike (the renderer's release loops); DCLF takes the first four address modes.
 		constexpr std::uint32_t kAddressModes = 4;
 		constexpr std::uint32_t kFilterModes = 5;
-		constexpr Engine::Offset kSamplerTable{ 0x3288210, 0x3027910 };
+		constexpr Engine::Offset kSamplerTable{ { 411366 }, { 524751 } };
 
 		// VkComponentMapping as D3D12's shader 4-component mapping (0: identity).
 		rhi::ComponentMapping MappingOf(const VkComponentMapping& a_components)

@@ -29,13 +29,13 @@ namespace DCLF::Features::Particles
 		constexpr std::size_t kSceneGraphCamera = 0x128;
 		// The renderer's particle quads (FUN_140e4d280, at its initialisation): the quad index list (R16, 0x800 quads of 0,1,2 0,2,3) and
 		// the texture-coordinate stream (half2, the corners (0,1) (1,1) (1,0) (0,0) of each quad), both immutable from then on.
-		constexpr Engine::Offset kQuadIndices{ 0x3286a40, 0x3025f38 };
-		constexpr Engine::Offset kQuadTexcoords{ 0x3286a48, 0x3025f40 };
+		constexpr Engine::Offset kQuadIndices{ { 411353 }, { 524734 } };
+		constexpr Engine::Offset kQuadTexcoords{ { 411354 }, { 524735 } };
 		// NiParticleSystem's vtable slots UpdateDownwardPass and UpdateSelectedDownwardPass, and what they hold (AE 0x140dd48a0, 0x140dd4910).
 		constexpr std::size_t kUpdateDownwardSlot = 0x2C;
 		constexpr std::size_t kUpdateSelectedSlot = 0x2D;
-		constexpr Engine::Offset kUpdateDownward{ 0xdd48a0, 0xd034a0 };
-		constexpr Engine::Offset kUpdateSelected{ 0xdd4910, 0xd03510 };
+		constexpr Engine::Offset kUpdateDownward{ { 74501 }, { 72801 } };
+		constexpr Engine::Offset kUpdateSelected{ { 74502 }, { 72802 } };
 		// NiParticles +0x160: four distances (ushort) of the draw's per-particle fade by the camera's distance (FUN_140d40ba0).
 		constexpr std::size_t kParticlesFadeDistances = 0x160;
 		// FUN_140e51320's constants: a rotated particle whose faded alpha is at most this is drawn with no size (DAT_1417743ec); the colour
@@ -403,6 +403,14 @@ namespace DCLF::Features::Particles
 				if (Extensions::GeometryTypeOn(SceneToggles(), static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles))) {
 					Extensions::PushReservedMove(moveWriter, &a_system, Api::MoveReach::ScenePass);
 				}
+				// The system's update moves its nearest BSOrderedNode's bound (exact type, as FrameValues' StoreForwardSort finds it), which
+				// the blended leaves beside it sort by: the node keys them (FrameValues alone). Fires' and waterfalls' effects.
+				static const REL::Relocation<const RE::NiRTTI*> orderedRtti{ RE::BSOrderedNode::Ni_RTTI };
+				for (const auto* node = a_system.parent; node; node = node->parent)
+					if (node->GetRTTI() == orderedRtti.get()) {
+						Extensions::PushReservedMove(moveWriter, node, Api::MoveReach::Placements);
+						break;
+					}
 			}
 		}
 		writersInside.fetch_sub(1, std::memory_order_seq_cst);

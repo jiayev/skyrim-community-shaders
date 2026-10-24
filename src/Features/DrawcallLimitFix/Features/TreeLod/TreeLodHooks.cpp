@@ -21,11 +21,11 @@ namespace DCLF::Features::TreeLod
 
 		// The refill (FUN_140504a40(block, group), at the block's attach and its visibility update) and the instance shape's AddGroup and
 		// RemoveGroup (vfuncs 0x1E0, 0x1E8) are SceneWriterFramework's tree LOD calls.
-		constexpr Engine::Offset kBlockUpdate{ 0x503f70, 0x4a8010 };      // FUN_140503f70(block): refills the groups not up to date
-		constexpr Engine::Offset kBlockUpdateSite{ 0x5108ff, 0x4b482f };  // its one call, in the node update (FUN_140510730)
+		constexpr Engine::Offset kBlockUpdate{ { 31659 }, { 30838 } };      // FUN_140503f70(block): refills the groups not up to date
+		constexpr Engine::Offset kBlockUpdateSite{ { 31838, 0x1cf }, { 31051, 0x1df } };  // its one call, in the node update (FUN_140510730)
 		// The tree types (the attach's and the refill's): an array of 0x28-byte entries (width +4, height +8, base shape +0x20)
 		// and their count; a group's type past the count takes the first entry.
-		constexpr Engine::Offset kTreeTypes{ 0x314d170, 0x2f15780 }, kTreeTypeCount{ 0x314d180, 0x2f15790 };
+		constexpr Engine::Offset kTreeTypes{ { 402201 }, { 516088 } }, kTreeTypeCount{ { 402203 }, { 516090 } };
 		constexpr std::size_t kTreeTypeBytes = 0x28;
 
 		// The block and group the refill on this thread is packing, for AddGroup.

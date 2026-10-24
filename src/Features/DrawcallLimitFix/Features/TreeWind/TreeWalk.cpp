@@ -1,4 +1,4 @@
-// TreeWalk: SE 1.5.97's tree manager walk, its listed trees' update pass followed by a move event (main thread, Main::Update).
+// TreeWalk: the tree manager's walk, its trees' update pass followed by a move event (main thread, Main::Update).
 // TreeWalk.h describes it.
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWalk.h"
 
@@ -13,8 +13,9 @@ namespace DCLF::Features::TreeWind::TreeWalk
 {
 	namespace
 	{
-		// SE 1.5.97 alone (module offset; Ghidra): AE's walk (FUN_140438ed0) makes no such call.
-		constexpr Engine::Offset kWalkUpdateCall{ 0, 0x3df8de };  // `call [rax + 0x168]` in FUN_1403df7d0
+		// `call [rax + 0x168]`: SE's in its walk (FUN_1403df7d0); AE's (1.6 and 1.7 alike) in the manager's update FUN_1404381e0, the near
+		// list's loop, right after the bones' wind (FUN_140438ed0).
+		constexpr Engine::Offset kWalkUpdateCall{ { 27095, 0x315 }, { 26517, 0x10e } };
 		constexpr std::array<std::uint8_t, 6> kWalkUpdateBytes{ 0xFF, 0x90, 0x68, 0x01, 0x00, 0x00 };
 		constexpr std::size_t kUpdateSelectedSlot = 0x2D;  // NiAVObject::UpdateSelectedDownwardPass (vtable +0x168)
 
@@ -47,7 +48,7 @@ namespace DCLF::Features::TreeWind::TreeWalk
 		REL::safe_write(site + 5, std::uint8_t{ 0x90 });
 		Extensions::MoveWriterInstalled(moveWriter);
 		installed = true;
-		logger::info("[DCLF] tree manager walk: its trees' update pass followed by a move event (SE 1.5.97)");
+		logger::info("[DCLF] tree manager walk: its trees' update pass followed by a move event");
 	}
 
 	bool Installed() { return installed; }

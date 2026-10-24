@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/Engine/WindowWriters.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
 #include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
@@ -89,14 +90,22 @@ namespace DCLF::Diagnostics
 			Subscribe<MainEpochOutcome>(&TraceMainEpoch);
 			Subscribe<AdoptedBound>(&TraceAdoptedBound);
 		}
-		// The frame values' rows and palettes against the engine's now.
-		if (o.scene)
+		// The frame values' rows and palettes against the engine's now. The cell animations job's update (inside Main::Draw, after the
+		// sampling: WindowWriters.h) is held from before the culls until the check is done: the rows are the engine's before it, by design.
+		if (o.scene) {
+			Subscribe<FramePoint::ClaimsInstalled>([](const On<FramePoint::ClaimsInstalled>&) {
+				if (ParityDue(Scene::FrameView::Get().GetFrame()))
+					WindowWriters::Hold();
+			});
 			Subscribe<FramePoint::ShadowViewsBegin>([](const On<FramePoint::ShadowViewsBegin>&) {
 				if (ParityDue(Scene::FrameView::Get().GetFrame())) {
 					auto& store = Scene::Coordinator::Get();
 					CheckFrameValues(Scene::FrameView::Get().GetTables(), store.PeekPlacementPlan());
 				}
+				WindowWriters::Release();
 			});
+			Subscribe<FramePoint::Present>([](const On<FramePoint::Present>&) { WindowWriters::Release(); });
+		}
 		// The frame's constant tables against the game's shader objects', for every entry the installed lookups resolved.
 		if (o.scene)
 			Subscribe<FramePoint::LookupsInstalled>([](const On<FramePoint::LookupsInstalled>&) {

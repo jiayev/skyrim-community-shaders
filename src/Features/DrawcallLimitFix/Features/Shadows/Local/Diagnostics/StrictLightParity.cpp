@@ -34,9 +34,9 @@ namespace DCLF::Features::Shadows::Local::StrictLightParity
 		using Engine::At;
 
 		// Offsets from the image base (AE 1.6.1170, SE 1.5.97). The process is Accumulate's static BSParabolicCullingProcess.
-		constexpr DCLF::Engine::Offset kProcess{ 0x335bfa0, 0x3202ae0 };
-		constexpr DCLF::Engine::Offset kAppendNonAccum{ 0x1519e60, 0x132c690 };  // vtable slot 0x19
-		constexpr DCLF::Engine::Offset kRoomFrustum{ 0xe14460, 0xd3deb0 };       // FUN_140e14460(entry, room): the entry's visibility map's frustum
+		constexpr DCLF::Engine::Offset kProcess{ { 414845 }, { 527898 } };
+		constexpr DCLF::Engine::Offset kAppendNonAccum{ { 108604 }, { 101601 } };  // vtable slot 0x19
+		constexpr DCLF::Engine::Offset kRoomFrustum{ { 76123 }, { 74399 } };       // FUN_140e14460(entry, room): the entry's visibility map's frustum
 		// OnVisible implementations (NiAVObject vtable slot 0x34), as kinds: a kind is the AE function's offset (the switches' labels),
 		// and kOnVisibleOffsets gives each kind's function on the running runtime.
 		constexpr std::uintptr_t kNodeOnVisible = 0xd1e2c0, kFadeOnVisible = 0x1479f50, kLeafOnVisible = 0x147c9c0, kTreeOnVisible = 0x147d3c0;
@@ -50,27 +50,29 @@ namespace DCLF::Features::Shadows::Local::StrictLightParity
 			DCLF::Engine::Offset function;
 		};
 		constexpr std::array<OnVisibleOffset, 13> kOnVisibleOffsets{ {
-			{ kNodeOnVisible, { kNodeOnVisible, 0xc58c70 } },
-			{ kFadeOnVisible, { kFadeOnVisible, 0x128fe30 } },
-			{ kLeafOnVisible, { kLeafOnVisible, 0x1292760 } },
-			{ kTreeOnVisible, { kTreeOnVisible, 0x1293170 } },
-			{ kMultiBoundOnVisible, { kMultiBoundOnVisible, 0xd56260 } },
-			{ kRoomOnVisible, { kRoomOnVisible, 0xd33c70 } },
-			{ kSwitchOnVisible, { kSwitchOnVisible, 0xc63ae0 } },
-			{ kSharedOnVisible, { kSharedOnVisible, 0xd4cfe0 } },
-			{ kGeometryOnVisible, { kGeometryOnVisible, 0xc71820 } },
-			{ kSubIndexOnVisible, { kSubIndexOnVisible, 0xd59580 } },
-			{ kSegmentedOnVisible, { kSegmentedOnVisible, 0xc90620 } },
-			{ kNoOnVisible, { kNoOnVisible, 0xc57170 } },
-			{ kBillboardOnVisible, { kBillboardOnVisible, 0xc78d90 } },
+			{ kNodeOnVisible, { { 70307 }, { 68956 } } },
+			{ kFadeOnVisible, { { 105485 }, { 98848 } } },
+			{ kLeafOnVisible, { { 105588 }, { 98937 } } },
+			{ kTreeOnVisible, { { 105604 }, { 98953 } } },
+			{ kMultiBoundOnVisible, { { 76690 }, { 74931 } } },
+			{ kRoomOnVisible, { { 75886 }, { 74147 } } },
+			{ kSwitchOnVisible, { { 70590 }, { 69227 } } },
+			{ kSharedOnVisible, { { 76448 }, { 74713 } } },
+			{ kGeometryOnVisible, { { 70926 }, { 69542 } } },
+			// Address Library's 1.7.104 database gives AE's sub-index id (76792) to the segmented shape's OnVisible (the vtables' slot
+			// 0x34: BSSegmentedTriShape's tests +0x144, BSSubIndexTriShape's +0x16c), and the sub-index one a new id.
+			{ kSubIndexOnVisible, { { 76792 }, { 75030 }, { 524249 } } },
+			{ kSegmentedOnVisible, { { 71790 }, { 70303 }, { 76792 } } },
+			{ kNoOnVisible, { { 70268 }, { 68917 } } },
+			{ kBillboardOnVisible, { { 71063 }, { 69683 } } },
 		} };
 		// A function no kind names: its own offset, marked so that it never equals a kind (an SE function may sit at an AE kind's offset).
 		constexpr std::uintptr_t kUnnamedOnVisible = std::uintptr_t(1) << 63;
 		// Globals the node types read.
-		constexpr DCLF::Engine::Offset kFadeGate{ 0x2032dfd, 0x1e0dc5d };   // byte: BSFadeNode::OnVisible's fades on
-		constexpr DCLF::Engine::Offset kTreeGate{ 0x2032fb8, 0x1e0de18 };   // byte: BSTreeNode::OnVisible's height test on
-		constexpr DCLF::Engine::Offset kTreeBase{ 0x332a2f0, 0x31d0df8 };   // float: the height test's base
-		constexpr DCLF::Engine::Offset kTreeLimit{ 0x2032fa0, 0x1e0de00 };  // float: and its limit
+		constexpr DCLF::Engine::Offset kFadeGate{ { 390866 }, { 513142 } };   // byte: BSFadeNode::OnVisible's fades on
+		constexpr DCLF::Engine::Offset kTreeGate{ { 390930 }, { 513192 } };   // byte: BSTreeNode::OnVisible's height test on
+		constexpr DCLF::Engine::Offset kTreeBase{ { 414568 }, { 527639 } };   // float: the height test's base
+		constexpr DCLF::Engine::Offset kTreeLimit{ { 390927 }, { 513190 } };  // float: and its limit
 		// The process's fields (BSCullingProcess / BSParabolicCullingProcess).
 		constexpr std::size_t kIgnorePreprocess = 0x11e, kTreeTest = 0x121;
 		constexpr std::size_t kGraphEntry = 0x30190, kCullMode = 0x30198, kCompound = 0x301a0;

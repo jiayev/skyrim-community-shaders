@@ -13,8 +13,9 @@ present only.
 -   The engine behaviour DCLF depends on is in [skyrim-engine-notes.md](./skyrim-engine-notes.md); the render graph on DXVK
     is [render-graph.md](./render-graph.md).
 
-DCLF runs on Skyrim AE 1.6.1170 only (`DrawcallLimitFix.cpp`: it does not install on another runtime). Every engine address in
-the code and below is that runtime's.
+DCLF runs on Skyrim SE 1.5.97, AE 1.6.1170 and AE 1.7.104 (`DrawcallLimitFix.cpp`: it does not install on another runtime). Every
+engine address in the code is an `Engine::Offset` (Address Library ids; [skyrim-engine-notes.md](./skyrim-engine-notes.md#game-versions-and-addresses));
+the addresses in comments and below are AE 1.6.1170's.
 
 ## Contents
 
@@ -1780,7 +1781,9 @@ common cases.
 `BSOrderedNode` (exact type) and stores its live world bound centre, with w the leaf's ordinal (1 + its index among the node's
 geometries, depth first in child order); 0 otherwise. BuildDrawsCS sorts such a draw at its node's centre and stages a group hash
 of the centre's bits and the ordinal in the unexecuted `instanceCount` and `vertexOffset` words. A billboard under an ordered node
-is a billboard.
+is a billboard. The centre moves when the node's other children do (a fire's or waterfall's particle systems update every frame)
+with the leaf still, so a blended leaf under an ordered node is a mover (`PerFrameTraitsOf`'s `kTraitMoves`), keyed by its ordered
+node too (`KeysOf`): Features/Particles' snapshot names the system's nearest ordered node to FrameValues alone (`MoveReach::Placements`).
 
 ### The forward epoch
 

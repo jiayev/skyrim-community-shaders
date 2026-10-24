@@ -34,7 +34,8 @@ namespace DCLF
 		static bool IsOpen() { return (state.load(std::memory_order_acquire) & kOpen) != 0; }
 		/**
 		 * @brief An engine writer's thread, inside the window (WindowWriters): no new lease until Resume; returns once the leases in flight
-		 * are released. One writer at a time. A Close meanwhile closes the window as usual: Resume leaves it closed.
+		 * are released. Writers may overlap: the window resumes at the last one's Resume. A Close meanwhile closes the window as usual:
+		 * Resume leaves it closed.
 		 */
 		static void Suspend();
 		static void Resume();
@@ -84,10 +85,12 @@ namespace DCLF
 		/** @brief Spins until no lease is in flight (no new one can be taken); the microseconds it waited, 0 for none. */
 		static double DrainLeases();
 
-		// The word: the open bit, the suspended bit and the leases in flight below them. A lease is taken only while open and not suspended.
+		// The word: the open bit, the writers suspending it (a count) and the leases in flight below them. A lease is taken only while open
+		// and not suspended.
 		static constexpr std::uint32_t kOpen = 1u << 31;
-		static constexpr std::uint32_t kSuspended = 1u << 30;
-		static constexpr std::uint32_t kLeases = kSuspended - 1;
+		static constexpr std::uint32_t kSuspendUnit = 1u << 24;
+		static constexpr std::uint32_t kSuspended = kOpen - kSuspendUnit;
+		static constexpr std::uint32_t kLeases = kSuspendUnit - 1;
 		static inline thread_local std::uint32_t heldHere = 0;  // the leases this thread holds
 		static inline std::atomic<std::uint64_t> unleased{ 0 };
 		static inline std::atomic<const char*> unleasedFirst{ nullptr };

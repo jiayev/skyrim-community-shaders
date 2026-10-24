@@ -5,6 +5,28 @@ Fix. Addresses are AE runtime addresses with image base `0x140000000`. Address L
 `SE/AE` where known. Decompiled names such as `FUN_…` and `DAT_…` are Ghidra's; the meanings given are
 inferred and should be re-checked before being relied on elsewhere.
 
+## Game versions and addresses
+
+DCLF and SceneWriterFramework run on SE 1.5.97, AE 1.6.1170 and AE 1.7.104. Their engine addresses are Address Library ids (DCLF's
+`Engine::Offset`, SWF's hook tables), one id for SE and one for AE, plus the position inside the function for a site within one.
+AE 1.7.104 shares AE's id space (its database, format 5, extends it). It is a recompile: about 97% of functions keep their size, but
+code inside a function moves (`Main::Draw`'s sites from about +0x2EC on sit 0x1D to 0x1E bytes later), so a site's position is
+checked per version, and a 1.7.104 position or id is given where it differs (`Engine::Offset::ae17`, `Ae_1_7_104_Hooks.cpp`).
+
+- **Every id in use is cross-checked**, independently of Address Library: on 1.7.104 the functions that call or reference an id's
+  address should be, by id, the ones that did on 1.6.1170, and a virtual's vtable slot should hold it. Each site inside a function
+  was matched by its instruction (calls and RIP operands normalized to the ids they reach) and the three instructions either side.
+- **Address Library is not always right.** 1.7.104's database gives AE id 76792 (`BSSubIndexTriShape::OnVisible` on 1.6.1170) to
+  `BSSegmentedTriShape`'s OnVisible (vtable slot 0x34 of each: the segmented one tests +0x144, the sub-index one +0x16C), and the
+  sub-index one id 524249. Ids 1.7.104 renumbered are dropped, not reused (31846 and 31847, the object LOD grids' segment updates,
+  are 523588 and 523589).
+- **Layouts 1.7.104 changed** (CommonLibSSE-NG's accessors): `BSGraphics::State`'s runtime data at +0x70 (+0x60 before),
+  PlayerCharacter's members past +0x2D8 8 bytes later, bhkWorld. DCLF reads these through CommonLib, not raw offsets.
+- **Renderer differences**: Community Shaders writes its shaders to 1.7.99's conventions and adapts older runtimes
+  (`ShaderTools/LegacyGraphicsCompatibility`: the shadow-mask utility descriptors' filter selector, the grass per-geometry buffer on
+  the pixel shader, the image-space blur selectors, the shadow-mask scissor and alpha-blend extents under dynamic resolution, the
+  camera projection snapshot, ShadowSceneNode's initialization). On 1.7.104 the engine does these itself.
+
 ## Lighting shader: from property flags to shader descriptors
 
 ### `BSLightingShaderProperty::GetRenderPasses` (AE `0x1414adfb0`)
@@ -2352,6 +2374,19 @@ never the main thread, in motion).
     engine-read window. It signals stage 0xe at its end, which no direct stage wait reads. DCLF's `WindowWriters` hook makes the
     update wait for the frame values' sampling and suspends the window around it (job tables: AE `0x142011a70..`, SE `0x141dee210..`,
     `{function, name}` pairs per list, `JobListEnd` closing each).
+-   **"Animated cell object update"** (AE `0x1406d3770`, SE `0x140640fc0`; the list after "Non render-safe AI", before "Cell update
+    signal/sync"): queues every animated cell object's update on a job group (AE `FUN_140659980`, SE `FUN_1405c92c0`, the call at
+    +0x32; each task `FUN_140659790`: the object's vtable `+0x188` update with flags 0x2000), starts the group and waits for it
+    (+0x52). Inside the update each collision object writes its node's transform from its rigid body (AE `FUN_140ea55a0`, the Havok
+    node transform DCLF hooks), on the group's job threads, and the subtree's world and bounds follow. Its list runs beside Main::Draw:
+    on 1.7.104 (2026-10-23) 84% of a run's Havok node transforms landed inside the engine-read window. DCLF's `WindowWriters` makes
+    the queuing call wait for the frame values' sampling and suspends the window from it to the end of the wait. The rest of the
+    node transforms come from 3D loads and attaches (the "IO" job `FUN_1406d3060`, reference attaches under `FUN_1402e3970`, the loader threads).
+-   **Projectiles' world update:** `Projectile::Update3D` (vtable slot 0xAD; AE id 44126 `0x1407e6310`, SE 42946 `0x14074cd50`) is its
+    3D root's `NiAVObject::Update` (time, flags 1), called every frame by the projectile's update (AE id 44122 `0x1407e5990`, after `UpdateImpl`,
+    slot 0xAB, placed the root). `ArrowProjectile`'s slot tail-jumps into it unless a flag at +0x1D4 bit 22 is set. `FlameProjectile::UpdateImpl`
+    writes its root's local translation inline (the caster's hand plus an offset, AE `0x1407d5760` +0x22e): no other writer names it, so
+    SceneWriterFramework's moves family detours `Update3D` (`SWF_MOVE_PROJECTILE_3D`).
 -   **Moving the rest off the main thread** meets Havok world edits, unsynchronised `ProcessLists`/`GarbageCollector`
     inserts, the per-reference owner lock (`+0x88`) and the grid controller's ordering; the main thread mostly waits on
     these jobs already.

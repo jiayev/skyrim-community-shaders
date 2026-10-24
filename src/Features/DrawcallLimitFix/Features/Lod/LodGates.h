@@ -86,7 +86,7 @@ namespace DCLF::Features::Lod::LodGates
 	 */
 	void NoteEngineHide(const void* a_object, std::uint32_t a_siteOffset);
 	/** @brief The engine's LOD hide stores NoteEngineHide is told of (the show veto's hideSites): object update, a terrain block's two nodes. */
-	inline constexpr std::array<Engine::Offset, 3> kEngineHideSites{ { { 0x5106a4, 0x4b4597 }, { 0x509b29, 0x4adec9 }, { 0x509b39, 0x4aded9 } } };
+	inline constexpr std::array<Engine::Offset, 3> kEngineHideSites{ { { { 31837, 0x2c4 }, { 31050, 0x1f7 } }, { { 31745, 0x9 }, { 30942, 0x9 } }, { { 31745, 0x19 }, { 30942, 0x19 } } } };
 	/** @brief kEngineHideSites as the running runtime's offsets (what the show veto's hideSites take). */
 	inline std::span<const std::uint32_t> EngineHideSites()
 	{

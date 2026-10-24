@@ -36,52 +36,52 @@ namespace DCLF::Features::Lod::LodGates
 		 */
 		using Engine::Offset;
 		// The Func2s' call sites: attaches (pre-hide) and the retirement that follows (steal, then the gate).
-		inline constexpr Offset kObjectUpgradeAttach{ 0x51339a, 0x4b6fc9 };     // BGSQueuedObjectUpgrade::Func2: FUN_1404fda90(child block), once per ready child
-		inline constexpr Offset kObjectUpgradeRetire{ 0x51340c, 0x4b701f };     // ...: FUN_140510a10(parent, 2)
-		inline constexpr Offset kTerrainUpgradeAttach{ 0x512ceb, 0x4b6972 };    // FUN_140512c90 (terrain upgrade Func2): FUN_140509550(child block)
-		inline constexpr Offset kTerrainUpgradeRetire{ 0x512d57, 0x4b69be };    // ...: FUN_140510a10(parent, 1)
-		inline constexpr Offset kObjectDowngradeAttach{ 0x513615, 0x4b71d5 };   // BGSQueuedObjectDowngrade::Func2: FUN_1404fda90(parent block)
-		inline constexpr Offset kObjectDowngradeRetire{ 0x513671, 0x4b7244 };   // ...: FUN_140510c20(child, 2), once per child
-		inline constexpr Offset kTerrainDowngradeAttach{ 0x512f55, 0x4b6b65 };  // BGSQueuedTerrainDowngrade::Func2: FUN_140509550(parent block)
-		inline constexpr Offset kTerrainDowngradeRetire{ 0x512fb1, 0x4b6bd1 };  // ...: FUN_140510c20(child, 1), once per child
+		inline constexpr Offset kObjectUpgradeAttach{ { 31895, 0x7a }, { 31093, 0x69 } };     // BGSQueuedObjectUpgrade::Func2: FUN_1404fda90(child block), once per ready child
+		inline constexpr Offset kObjectUpgradeRetire{ { 31895, 0xec }, { 31093, 0xbf } };     // ...: FUN_140510a10(parent, 2)
+		inline constexpr Offset kTerrainUpgradeAttach{ { 31875, 0x5b }, { 31083, 0x52 } };    // FUN_140512c90 (terrain upgrade Func2): FUN_140509550(child block)
+		inline constexpr Offset kTerrainUpgradeRetire{ { 31875, 0xc7 }, { 31083, 0x9e } };    // ...: FUN_140510a10(parent, 1)
+		inline constexpr Offset kObjectDowngradeAttach{ { 31904, 0x15 }, { 31097, 0x15 } };   // BGSQueuedObjectDowngrade::Func2: FUN_1404fda90(parent block)
+		inline constexpr Offset kObjectDowngradeRetire{ { 31904, 0x71 }, { 31097, 0x84 } };   // ...: FUN_140510c20(child, 2), once per child
+		inline constexpr Offset kTerrainDowngradeAttach{ { 31884, 0x15 }, { 31087, 0x15 } };  // BGSQueuedTerrainDowngrade::Func2: FUN_140509550(parent block)
+		inline constexpr Offset kTerrainDowngradeRetire{ { 31884, 0x71 }, { 31087, 0x81 } };  // ...: FUN_140510c20(child, 1), once per child
 		// The InitialLoad Func2s (vtables 0x1418690d8 objects, 0x141869030 terrain; queued by FUN_140513ea0 / FUN_1405139b0 for an
 		// unloaded node with no loaded block above it): attach only, nothing retired.
-		inline constexpr Offset kObjectInitialAttach{ 0x513789, 0x4b739c };   // BGSQueuedObjectInitialLoad::Func2 (0x140513740): FUN_1404fda90(node's block)
-		inline constexpr Offset kTerrainInitialAttach{ 0x513091, 0x4b6cd1 };  // BGSQueuedTerrainInitialLoad::Func2 (0x140513080): FUN_140509550(item's block)
+		inline constexpr Offset kObjectInitialAttach{ { 31908, 0x49 }, { 31100, 0x5c } };   // BGSQueuedObjectInitialLoad::Func2 (0x140513740): FUN_1404fda90(node's block)
+		inline constexpr Offset kTerrainInitialAttach{ { 31888, 0x11 }, { 31090, 0x11 } };  // BGSQueuedTerrainInitialLoad::Func2 (0x140513080): FUN_140509550(item's block)
 		// Forced releases: FUN_14050e430's early return with the LOD roots hidden (tail `jmp` to FUN_140509950) and its full rebuild.
-		inline constexpr Offset kRootsHiddenReturn{ 0x50e4e4, 0x4b2a14 };
+		inline constexpr Offset kRootsHiddenReturn{ { 31802, 0xb4 }, { 31017, 0xb4 } };
 		// AE: the call of FUN_14050f790(manager, root, .., .., 1). SE inlines that function into its caller: the site is the inlined
 		// body's first call, FUN_1404b3f60(root, pos, player cell, 0x27) (AE's FUN_14050fe10), the caches' updates after it (FullRebuildSE).
-		inline constexpr Offset kFullRebuild{ 0x50e7ae, 0x4b2ce1 };
+		inline constexpr Offset kFullRebuild{ { 31802, 0x37e }, { 31017, 0x381 } };
 		// The call sites' callees.
-		inline constexpr Offset kObjectAttach{ 0x4fda90, 0x4a18d0 };       // FUN_1404fda90(block)
-		inline constexpr Offset kTerrainAttach{ 0x509550, 0x4ad940 };      // FUN_140509550(block)
-		inline constexpr Offset kRetireRecurse{ 0x510c20, 0x4b4c20 };      // FUN_140510c20(node, bits): FUN_140510a10 on the node and its subtree
-		inline constexpr Offset kRootsHiddenTail{ 0x509950, 0x4add70 };    // FUN_140509950(0)
-		inline constexpr Offset kFullRebuildCallee{ 0x50f790, 0x4b3f60 };  // FUN_14050f790 (SE: FUN_1404b3f60, see kFullRebuild)
+		inline constexpr Offset kObjectAttach{ { 31581 }, { 30741 } };       // FUN_1404fda90(block)
+		inline constexpr Offset kTerrainAttach{ { 31737 }, { 30934 } };      // FUN_140509550(block)
+		inline constexpr Offset kRetireRecurse{ { 31840 }, { 31053 } };      // FUN_140510c20(node, bits): FUN_140510a10 on the node and its subtree
+		inline constexpr Offset kRootsHiddenTail{ { 31742 }, { 30939 } };    // FUN_140509950(0)
+		inline constexpr Offset kFullRebuildCallee{ { 31828 }, { 31048 } };  // FUN_14050f790 (SE: FUN_1404b3f60, see kFullRebuild)
 		// Detoured.
-		inline constexpr Offset kLodDrain{ 0x513840, 0x4b7450 };           // FUN_140513840: the swaps' drain (Func2s), from FUN_14050e430 under the manager's lock
-		inline constexpr Offset kRetire{ 0x510a10, 0x4b49b0 };             // FUN_140510a10(node, bits): a node's blocks detached and released (1 terrain, 2 objects)
-		inline constexpr Offset kDeactivate{ 0x50ed60, 0x4b3190 };         // FUN_14050ed60: manager deactivated (FUN_14050e250, a worldspace unload, calls it first)
-		inline constexpr Offset kMapHideAll{ 0x511b40, 0x4b5a30 };         // FUN_140511b40(node, show): the map's show or hide of every block
-		inline constexpr Offset kMapEnter{ 0x511680, 0x4b5560 };           // FUN_140511680: to the map's fixed levels
-		inline constexpr Offset kMapExit{ 0x511860, 0x4b5750 };            // FUN_140511860: back from them (also FUN_14050e430's LOD-off branch)
-		inline constexpr Offset kTerrainCacheFlush{ 0x5099a0, 0x4addf0 };  // FUN_1405099a0(0): the terrain block cache flushed (LOD off, the map)
-		inline constexpr Offset kObjectCacheFlush{ 0x4fdca0, 0x4a1b10 };   // FUN_1404fdca0(0): the object block cache flushed
+		inline constexpr Offset kLodDrain{ { 31915 }, { 31102 } };           // FUN_140513840: the swaps' drain (Func2s), from FUN_14050e430 under the manager's lock
+		inline constexpr Offset kRetire{ { 31839 }, { 31052 } };             // FUN_140510a10(node, bits): a node's blocks detached and released (1 terrain, 2 objects)
+		inline constexpr Offset kDeactivate{ { 31812 }, { 31026 } };         // FUN_14050ed60: manager deactivated (FUN_14050e250, a worldspace unload, calls it first)
+		inline constexpr Offset kMapHideAll{ { 31857 }, { 31065 } };         // FUN_140511b40(node, show): the map's show or hide of every block
+		inline constexpr Offset kMapEnter{ { 31853 }, { 31062 } };           // FUN_140511680: to the map's fixed levels
+		inline constexpr Offset kMapExit{ { 31854 }, { 31063 } };            // FUN_140511860: back from them (also FUN_14050e430's LOD-off branch)
+		inline constexpr Offset kTerrainCacheFlush{ { 31743 }, { 30940 } };  // FUN_1405099a0(0): the terrain block cache flushed (LOD off, the map)
+		inline constexpr Offset kObjectCacheFlush{ { 31586 }, { 30745 } };   // FUN_1404fdca0(0): the object block cache flushed
 		// The engine's own retirement, as FUN_140510a10 runs it.
-		inline constexpr Offset kDetachObject{ 0x4fd970, 0x4a17c0 };    // FUN_1404fd970(block)
-		inline constexpr Offset kDetachTerrain{ 0x509770, 0x4adb60 };   // FUN_140509770(block): unregisters its LOD water too
-		inline constexpr Offset kReleaseObject{ 0x501d00, 0x4a5f10 };   // FUN_140501d00(handle): one reference (SE: (cache, handle), Release)
-		inline constexpr Offset kReleaseTerrain{ 0x50d170, 0x4b1730 };  // FUN_14050d170(handle) (SE: (cache, handle))
-		inline constexpr Offset kLodVisibleTest{ 0x512160, 0x4b60b0 };  // FUN_140512160(node, cell, objects): the update's show test
+		inline constexpr Offset kDetachObject{ { 31577 }, { 30739 } };    // FUN_1404fd970(block)
+		inline constexpr Offset kDetachTerrain{ { 31739 }, { 30936 } };   // FUN_140509770(block): unregisters its LOD water too
+		inline constexpr Offset kReleaseObject{ { 31633 }, { 30811 } };   // FUN_140501d00(handle): one reference (SE: (cache, handle), Release)
+		inline constexpr Offset kReleaseTerrain{ { 31794 }, { 31007 } };  // FUN_14050d170(handle) (SE: (cache, handle))
+		inline constexpr Offset kLodVisibleTest{ { 31865 }, { 31073 } };  // FUN_140512160(node, cell, objects): the update's show test
 		// Data.
-		inline constexpr Offset kManagerLock{ 0x315b8c8, 0x2f23ed8 };  // DAT_14315b8c8: the terrain manager's recursive BSSpinLock, held around the drain
-		inline constexpr Offset kLoadScreen{ 0x315b6a0, 0x2f23cb0 };   // DAT_14315b6a0: load screen up (FUN_1401a1150 sets it; its close runs the LOD full update, then clears it)
-		inline constexpr Offset kTlsIndex{ 0x35f0878, 0x3497408 };     // TLS index: +0x768 in its block is the memory context id FUN_140510a10 sets to 0x55
+		inline constexpr Offset kManagerLock{ { 402330 }, { 516179 } };  // DAT_14315b8c8: the terrain manager's recursive BSSpinLock, held around the drain
+		inline constexpr Offset kLoadScreen{ { 402259 }, { 516108 } };   // DAT_14315b6a0: load screen up (FUN_1401a1150 sets it; its close runs the LOD full update, then clears it)
+		inline constexpr Offset kTlsIndex{ { 415542 }, { 528600 } };     // TLS index: +0x768 in its block is the memory context id FUN_140510a10 sets to 0x55
 		// The object and terrain block caches (pointers): SE's release is the cache's, (cache + 0xD0, handle) (Release). AE's reads
 		// its own (DAT_143146ee0, DAT_143155448); only SE reads these.
-		inline constexpr Offset kObjectCache{ 0x3146ee0, 0x2f0f508 };
-		inline constexpr Offset kTerrainCache{ 0x3155448, 0x2f1da58 };
+		inline constexpr Offset kObjectCache{ { 402175 }, { 516081 } };
+		inline constexpr Offset kTerrainCache{ { 402238 }, { 516106 } };
 
 		struct CallSite
 		{

@@ -37,7 +37,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 
 	namespace
 	{
-		constexpr DCLF::Engine::Offset kParabolicProcess1{ 0x1519a90, 0x132c2b0 };  // BSParabolicCullingProcess::Process1, vtable slot 0x16
+		constexpr DCLF::Engine::Offset kParabolicProcess1{ { 108600 }, { 101597 } };  // BSParabolicCullingProcess::Process1, vtable slot 0x16
 		constexpr std::uint32_t kParabolicMode = 0xF - PassCapture::kFirstShadowMode;
 
 		bool installed = false;
@@ -64,8 +64,8 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		bool Excluded(const SunExclusion& a_exclusion, const void* a_object) { return ExcludedIndex(a_exclusion, a_object) != ~0u; }
 
 		// ---- The category filter (LocalLightCull.h).
-		constexpr DCLF::Engine::Offset kNodeOnVisible{ 0xd1e2c0, 0xc58c70 };  // NiNode::OnVisible, VTABLE_NiNode slot 0x34
-		constexpr DCLF::Engine::Offset kCull{ 0xd1c570, 0xc57140 };           // NiAVObject::Cull(object, process, arg)
+		constexpr DCLF::Engine::Offset kNodeOnVisible{ { 70307 }, { 68956 } };  // NiNode::OnVisible, VTABLE_NiNode slot 0x34
+		constexpr DCLF::Engine::Offset kCull{ { 70267 }, { 68916 } };           // NiAVObject::Cull(object, process, arg)
 		constexpr std::uint32_t kAlwaysDraw = 1u << 11;
 
 		bool filterInstalled = false;

@@ -27,18 +27,18 @@
 
 namespace DCLF::Features::Grass
 {
-	// AE 1.6.1170 and SE 1.5.97 (module offsets) of the engine state this feature alone reads (stage 0's reverse engineering).
+	// Engine::Offsets (Address Library ids) of the engine state this feature alone reads (stage 0's reverse engineering).
 	namespace Address
 	{
-		inline constexpr Engine::Offset kGrassShader{ 0x332b230, 0x31d1d70 };        // BSGrassShader*: the singleton (DistantTree's is 0x33dcd10)
-		inline constexpr Engine::Offset kGrassManager{ 0x20f8988, 0x1ec0aa8 };       // BGSGrassManager*
+		inline constexpr Engine::Offset kGrassShader{ { 414752 }, { 527801 } };        // BSGrassShader*: the singleton (DistantTree's is 0x33dcd10)
+		inline constexpr Engine::Offset kGrassManager{ { 400452 }, { 514292 } };       // BGSGrassManager*
 		inline constexpr std::uintptr_t kGrassManagerNode = 0x68;        // its grass node (NiAVObject*), +0xF4 bit 0: ToggleGrass off
-		inline constexpr Engine::Offset kWindTimer{ 0x2033090, 0x1e0df00 };          // float: the shader manager's timer SetupGeometry's WindTimer reads
-		inline constexpr Engine::Offset kWindSpeed{ 0x332b238, 0x31d1d78 };          // float: the grass wind's strength (clamped to 60)
-		inline constexpr Engine::Offset kWindGrassMultiplier{ 0x20334c8, 0x1e0e308 };  // float: fWindGrassMultiplier:Display
-		inline constexpr Engine::Offset kAlphaParams{ 0x332b000, 0x31d1b28 };        // float[2]: AlphaParam1, AlphaParam2 (the distance fade)
-		inline constexpr Engine::Offset kShadowClampValue{ 0x20334e0, 0x1e0e320 };   // float: fShadowClampValue:Display
-		inline constexpr Engine::Offset kFogNearColorW{ 0x20330fc, 0x1e0df6c };      // float: FogNearColor.w
+		inline constexpr Engine::Offset kWindTimer{ { 390957 }, { 513217 } };          // float: the shader manager's timer SetupGeometry's WindTimer reads
+		inline constexpr Engine::Offset kWindSpeed{ { 414753 }, { 527802 } };          // float: the grass wind's strength (clamped to 60)
+		inline constexpr Engine::Offset kWindGrassMultiplier{ { 391112 }, { 513337 } };  // float: fWindGrassMultiplier:Display
+		inline constexpr Engine::Offset kAlphaParams{ { 414681 }, { 527758 } };        // float[2]: AlphaParam1, AlphaParam2 (the distance fade)
+		inline constexpr Engine::Offset kShadowClampValue{ { 391115 }, { 513339 } };   // float: fShadowClampValue:Display
+		inline constexpr Engine::Offset kFogNearColorW{ { 390973 }, { 513233 } };      // float: FogNearColor.w
 	}
 
 	// GrassFeature.cpp: the feature's entry (Features/FeatureList.cpp).

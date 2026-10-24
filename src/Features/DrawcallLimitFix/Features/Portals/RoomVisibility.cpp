@@ -13,10 +13,10 @@ namespace DCLF::RoomVisibility
 	{
 		using Set = PortalViews::VisibleSet;
 
-		constexpr Engine::Offset kIsRoomVisible{ 0x649f20, 0x5b6470 };  // Main::IsRoomVisible(main, node)
+		constexpr Engine::Offset kIsRoomVisible{ { 36618 }, { 35608 } };  // Main::IsRoomVisible(main, node)
 		// Its calls (Ghidra, AE 1.6.1170 and SE 1.5.97; the other references are its unwind entries): the managed-nodes update
 		// FUN_1402b41a0, Actor::UpdateRefLight and the actor update FUN_140771520, each with the node at +0x30 of the reference's 3D.
-		constexpr std::array<Engine::Offset, 3> kCallSites{ { { 0x2b4268, 0x261158 }, { 0x2e1282, 0x28d512 }, { 0x771687, 0x6dca84 } } };
+		constexpr std::array<Engine::Offset, 3> kCallSites{ { { { 18894, 0xc8 }, { 18463, 0xc8 } }, { { 19677, 0x22 }, { 19251, 0x22 } }, { { 41381, 0x167 }, { 40367, 0xe4 } } } };
 
 		bool installed = false;
 		// Whether DCLF runs this frame (Main::Update's entry, the main thread; read by the job threads' calls during the frame).

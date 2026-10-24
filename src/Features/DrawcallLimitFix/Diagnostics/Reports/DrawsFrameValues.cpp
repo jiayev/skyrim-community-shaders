@@ -28,6 +28,14 @@ namespace DCLF::Reports
 			line += fmt::format("; parity against the engine: {} rows checked, {} differ{}{} ({} written this frame, the next frame's); {} palettes checked, {} differ{}{}",
 				s.checks, s.differs, s.differs ? " <- DIFFER; first: " : " <- OK", s.differs ? s.first : std::string(), s.fresh, s.paletteChecks, s.paletteDiffers,
 				s.paletteDiffers ? " <- DIFFER; first: " : " <- OK", s.paletteDiffers ? s.paletteFirst : std::string());
+			if (!s.causes.empty()) {
+				std::vector<std::pair<std::string, std::pair<std::uint64_t, std::string>>> causes(s.causes.begin(), s.causes.end());
+				std::ranges::sort(causes, [](const auto& a, const auto& b) { return a.second.first > b.second.first; });
+				line += fmt::format("\n[DCLF] frame values' parity against the engine: differing rows by owner ({} owners):", causes.size());
+				for (std::size_t i = 0; i < std::min<std::size_t>(causes.size(), 8); ++i)
+					line += fmt::format("{} {} x {} (e.g. {})", i ? ";" : "", causes[i].second.first, causes[i].first, causes[i].second.second);
+				s.causes.clear();
+			}
 			s.checks = s.differs = s.fresh = s.paletteChecks = s.paletteDiffers = 0;
 			s.first.clear();
 			s.paletteFirst.clear();

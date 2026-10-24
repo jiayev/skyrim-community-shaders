@@ -27,12 +27,12 @@ namespace DCLF
 	{
 		using namespace Engine;
 
-		// AE 1.6.1170 and SE 1.5.97 (module offsets).
-		constexpr Engine::Offset kBuildSceneLists{ 0x64bc20, 0x5b7c80 };  // DrawWorld_BuildSceneLists, a job of Main::Draw's
-		constexpr Engine::Offset kClearList{ 0x64cf20, 0x5b8e80 };  // FUN_14064cf20(list): Main::Draw's ClearLists job, one list
-		constexpr Engine::Offset kCullList{ 0xe28f70, 0xd51650 };  // FUN_140e28f70(process, list, camera, skipHidden, jobs): every list cull
+		// Engine::Offsets (Address Library ids).
+		constexpr Engine::Offset kBuildSceneLists{ { 36643 }, { 35630 } };  // DrawWorld_BuildSceneLists, a job of Main::Draw's
+		constexpr Engine::Offset kClearList{ { 36655 }, { 35641 } };  // FUN_14064cf20(list): Main::Draw's ClearLists job, one list
+		constexpr Engine::Offset kCullList{ { 76561 }, { 74811 } };  // FUN_140e28f70(process, list, camera, skipHidden, jobs): every list cull
 		// In DrawWorld_BuildSceneLists: `mov rax, [rcx]; call [rax + 0x18]`, the object root's AsNode (ShadowSceneNode child 3).
-		constexpr Engine::Offset kObjectRootAsNode{ 0x64be5a, 0x5b7eb9 };
+		constexpr Engine::Offset kObjectRootAsNode{ { 36643, 0x23a }, { 35630, 0x239 } };
 		constexpr std::array<std::uint8_t, 6> kObjectRootAsNodeBytes{ 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x18 };
 		// TES: the current worldspace (AE FUN_14019d200 reads +0x148, SE FUN_140153cf0 +0x140: TES is 8 bytes shorter before it on SE).
 		inline std::size_t TesWorldSpace() { return REL::Module::IsSE() ? 0x140 : 0x148; }

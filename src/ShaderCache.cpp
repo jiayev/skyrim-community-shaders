@@ -162,6 +162,46 @@ namespace SIE
 			return std::format(L"Data/Shaders/{}.hlsl", std::wstring(name.begin(), name.end()));
 		}
 
+		/**
+		 * @brief The newest last-write time of a_source and the files it includes, directly or through other includes (every
+		 * `#include "..."`, whatever the conditions around it), resolved against the including file's folder and then Data/Shaders.
+		 * The disk cache's skip-unchanged check compares it with the entry's: an edited include recompiles the shaders that use it.
+		 * Each file's includes are read once a run (its time is taken once too: a run's edits are the file watcher's).
+		 */
+		static std::optional<std::filesystem::file_time_type> NewestSourceTime(const std::filesystem::path& a_source)
+		{
+			static std::mutex lock;
+			static std::unordered_map<std::wstring, std::optional<std::filesystem::file_time_type>> newest;  // by file: its own and its includes'
+			const auto visit = [](auto&& self, const std::filesystem::path& a_file, std::unordered_set<std::wstring>& a_seen) -> std::optional<std::filesystem::file_time_type> {
+				const auto key = a_file.lexically_normal().wstring();
+				if (const auto it = newest.find(key); it != newest.end())
+					return it->second;
+				if (!a_seen.insert(key).second)
+					return std::nullopt;  // a cycle: its files are counted where it began
+				std::error_code ec;
+				std::optional<std::filesystem::file_time_type> result;
+				if (const auto time = std::filesystem::last_write_time(a_file, ec); !ec)
+					result = time;
+				std::ifstream in(a_file);
+				static const std::regex include(R"re(^\s*#\s*include\s*"([^"]+)")re");
+				for (std::string line; std::getline(in, line);) {
+					std::smatch match;
+					if (!std::regex_search(line, match, include))
+						continue;
+					auto target = a_file.parent_path() / match[1].str();
+					if (!std::filesystem::exists(target, ec))
+						target = std::filesystem::path(L"Data/Shaders") / match[1].str();
+					if (const auto time = self(self, target, a_seen); time && (!result || *time > *result))
+						result = time;
+				}
+				newest.emplace(key, result);
+				return result;
+			};
+			std::lock_guard guard(lock);
+			std::unordered_set<std::wstring> seen;
+			return visit(visit, a_source, seen);
+		}
+
 		static const char* GetShaderProfile(ShaderClass shaderClass)
 		{
 			switch (shaderClass) {
@@ -1775,6 +1815,9 @@ namespace SIE
 						} else if (sourceTime > diskCacheTime) {
 							diskCacheOutdated = true;
 							logger::debug("Disk-cached shader {} outdated: source is newer than cache", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true));
+						} else if (const auto includeTime = NewestSourceTime(shaderSourcePath); includeTime && *includeTime > diskCacheTime) {
+							diskCacheOutdated = true;
+							logger::debug("Disk-cached shader {} outdated: an include is newer than cache", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true));
 						}
 					}
 				}

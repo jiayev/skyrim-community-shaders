@@ -20,10 +20,10 @@ namespace DCLF::Diagnostics::LightSelectionParity
 		using Engine::Global;
 		using View = LightSelectionView;
 
-		// Module offsets, AE 1.6.1170 and SE 1.5.97.
-		constexpr Engine::Offset kLightCount{ 0x338c900, 0x32334d0 };   // the kept lights, the sun among them (the function's last store)
-		constexpr Engine::Offset kSlotCounter{ 0x338c904, 0x32334d4 };  // the next shadowLightsAccum slot; the next mask index at +4
-		constexpr Engine::Offset kFocusHost{ 0x33dcfb8, 0x3283b80 };    // last frame's focus host (non-sun)
+		// Engine::Offsets (Address Library ids).
+		constexpr Engine::Offset kLightCount{ { 415035 }, { 528090 } };   // the kept lights, the sun among them (the function's last store)
+		constexpr Engine::Offset kSlotCounter{ { 415036 }, { 528091 } };  // the next shadowLightsAccum slot; the next mask index at +4
+		constexpr Engine::Offset kFocusHost{ { 415267 }, { 528315 } };    // last frame's focus host (non-sun)
 		constexpr std::size_t kPortalEntry = 0x30190;       // a culling process's portal-graph entry
 
 		RE::ShadowSceneNode* SceneNode() { return Global<RE::ShadowSceneNode*>(Engine::Address::kShadowSceneNode); }

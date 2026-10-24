@@ -24,10 +24,12 @@
 #include <optional>
 #include <cstring>
 #include <limits>
+#include <mutex>
 
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
@@ -110,6 +112,16 @@ namespace DCLF
 		// node's world-bound centre depth (comparator 0x1414f55e0) and interleaved with the blended list. Only blended leaves join a
 		// group (FUN_1414b2330), so an opaque leaf's row stays 0. The bound is live unless kFixedBound (0x141503a60). Read inside the
 		// caller's engine-read lease.
+		/** @brief The nearest BSOrderedNode above a_object (exact type, FUN_1415039f0), or null. Read inside the caller's engine-read lease. */
+		const RE::NiNode* NearestOrderedNode(const RE::NiAVObject& a_object)
+		{
+			static const REL::Relocation<const RE::NiRTTI*> orderedRtti{ RE::BSOrderedNode::Ni_RTTI };
+			for (auto* node = a_object.parent; node; node = node->parent)
+				if (node->GetRTTI() == orderedRtti.get())
+					return node;
+			return nullptr;
+		}
+
 		void StoreForwardSort(const RE::BSGeometry& a_geometry, float (&a_out)[4])
 		{
 			a_out[0] = a_out[1] = a_out[2] = a_out[3] = 0.0f;
@@ -121,13 +133,7 @@ namespace DCLF
 					blended = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material)->materialAlpha < 1.0f;
 			if (!blended)
 				return;
-			static const REL::Relocation<const RE::NiRTTI*> orderedRtti{ RE::BSOrderedNode::Ni_RTTI };
-			const RE::NiNode* ordered = nullptr;
-			for (auto* node = a_geometry.parent; node; node = node->parent)
-				if (node->GetRTTI() == orderedRtti.get()) {
-					ordered = node;
-					break;
-				}
+			const auto* ordered = NearestOrderedNode(a_geometry);
 			std::uint32_t index = 0;
 			if (!ordered || !OrdinalUnder(*ordered, a_geometry, index))
 				return;
@@ -232,8 +238,30 @@ namespace DCLF
 			if (!reference)
 				for (const RE::NiAVObject* at = a_object.parent; at; at = at->parent)
 					a_out.push_back(at);
+			// The nearest BSOrderedNode, whose live bound a blended leaf's forward sort reads (StoreForwardSort): the writers that move the
+			// bound without moving the leaf (a particle system's update under it) key the node.
+			if (const auto* ordered = NearestOrderedNode(a_object))
+				a_out.push_back(ordered);
 			std::sort(a_out.begin(), a_out.end());
 			a_out.erase(std::unique(a_out.begin(), a_out.end()), a_out.end());
+		}
+
+		/** @brief A node's name and its owning reference's form types (the moved-only parity's causes): "'name' REFR/STAT". Under a lease. */
+		std::string OwnerKey(const RE::NiAVObject* a_node)
+		{
+			if (!a_node)
+				return "none";
+			const auto* ref = a_node->GetUserData();
+			const auto* base = ref ? ref->GetBaseObject() : nullptr;
+			return fmt::format("'{}' {}/{}", a_node->name.c_str(), ref ? magic_enum::enum_name(ref->GetFormType()) : "no ref",
+				base ? magic_enum::enum_name(base->GetFormType()) : "no base");
+		}
+
+		/** @brief The owning reference's form ID, or 0. Under a lease. */
+		std::uint32_t OwnerForm(const RE::NiAVObject* a_node)
+		{
+			const auto* ref = a_node ? a_node->GetUserData() : nullptr;
+			return ref ? ref->GetFormID() : 0u;
 		}
 
 		/** @brief The fields two placement rows differ in (the moved-only parity's first difference). */
@@ -441,7 +469,24 @@ namespace DCLF
 			std::uint64_t checks = 0, rows = 0, rowsDiffer = 0, palettes = 0, palettesDiffer = 0, rootRows = 0, rootRowsDiffer = 0;
 			std::uint64_t movers = 0, moversDue = 0, roots = 0, rootsDue = 0;
 			std::string first;
+			// The changes no event named, by what changed (a root's sun entry or fade node, a skin's palette) and its owner's name and
+			// form types: the writers to find. One example each: its reference and how far it moved.
+			struct Cause
+			{
+				std::uint64_t count = 0;
+				std::string example;
+			};
+			ankerl::unordered_dense::map<std::string, Cause> causes;
 		} movedParity;
+		std::mutex movedCausesLock;  // movedParity.causes: the palettes' parallel loop
+		template <class F>
+		void NoteMovedCause(std::string a_key, F&& a_example)
+		{
+			std::scoped_lock lock(movedCausesLock);
+			auto& cause = movedParity.causes[std::move(a_key)];
+			if (cause.count++ == 0)
+				cause.example = a_example();
+		}
 		std::atomic<std::uint64_t> done{ 0 };
 		std::atomic<std::uint64_t> sampledSeq{ 0 };  // the newest producer whose sampling is done (WaitSampled), before its done
 		void MarkSampled(std::uint64_t a_seq)
@@ -1616,6 +1661,18 @@ namespace DCLF
 					continue;
 				SampleItem(item, fresh[m].row, fresh[m].layer);
 				fresh[m].sampled = true;
+				if (!moverDue[m]) {
+					const auto& was = out[item.slot];
+					const auto& now = fresh[m].row;
+					const bool world = std::memcmp(was.world, now.world, sizeof(now.world)) != 0;
+					if (world && MirrorWatch::MovedFromParity())
+						MirrorWatch::ArmMoved(item.geometry.get());
+					if (world || std::memcmp(was.bound, now.bound, sizeof(now.bound)) != 0)
+						NoteMovedCause(fmt::format("{} of geometry {}", world ? "world" : "bound", OwnerKey(item.geometry.get())), [&] {
+							return fmt::format("ref {:08x}, bound ({} {} {} {}) -> ({} {} {} {})", OwnerForm(item.geometry.get()), was.bound[0], was.bound[1], was.bound[2],
+								was.bound[3], now.bound[0], now.bound[1], now.bound[2], now.bound[3]);
+						});
+				}
 				if (!item.boneRows || std::size_t(item.boneOffset) + item.boneRows > paletteOut.size() / 2)
 					continue;
 				auto& geometry = *item.geometry;
@@ -1629,6 +1686,10 @@ namespace DCLF
 				const bool currentDiffers = std::memcmp(&paletteOut[at.current], current, bytes) != 0;
 				if (currentDiffers || std::memcmp(&paletteOut[at.previous], previous, bytes) != 0) {
 					++a_palettesDiffer;
+					if (!moverDue[m])
+						NoteMovedCause(fmt::format("palette of {}", OwnerKey(&geometry)), [&] {
+							return fmt::format("ref {:08x}, {} rows, {}", OwnerForm(&geometry), item.boneRows, currentDiffers ? "current" : "previous only");
+						});
 					if (!firstPaletteTaken.test_and_set())
 						a_firstPalette = fmt::format("palette of slot {} ('{}', {}): {}", item.slot, geometry.name.c_str(), moverDue[m] ? "due" : "not due",
 							currentDiffers ? "current" : "previous");
@@ -1662,6 +1723,21 @@ namespace DCLF
 					StoreFadeNode(a_property, fade);
 					if (const auto it = slotMover.find(a_slot); it != slotMover.end() && fresh[it->second].sampled) {
 						auto& target = a_slot == keptMovers[it->second].item.slot ? fresh[it->second].row : fresh[it->second].layer;
+						const bool entryDiffers = std::memcmp(out[a_slot].sunEntry, entry, sizeof(entry)) != 0;
+						const bool fadeDiffers = std::memcmp(out[a_slot].lodFadeNode, fade, sizeof(fade)) != 0;
+						if (!rootDue[r] && !moverDue[it->second] && entryDiffers && MirrorWatch::MovedFromParity())
+							MirrorWatch::ArmMovedBound(root.root.get());
+						if (!rootDue[r] && !moverDue[it->second] && (entryDiffers || fadeDiffers))
+							NoteMovedCause(fmt::format("{} of root {}", entryDiffers ? (fadeDiffers ? "sun entry and fade node" : "sun entry") : "fade node",
+											   OwnerKey(root.root.get())),
+								[&] {
+									const auto& was = out[a_slot].sunEntry;
+									const float moved = std::sqrt((entry[0] - was[0]) * (entry[0] - was[0]) + (entry[1] - was[1]) * (entry[1] - was[1]) +
+																  (entry[2] - was[2]) * (entry[2] - was[2]));
+									return fmt::format("ref {:08x}, geometry '{}', center moved {:.3f}, radius {:.3f} -> {:.3f}, fade ({} {} {} {}) -> ({} {} {} {})",
+										OwnerForm(root.root.get()), dependent.geometry->name.c_str(), moved, was[3], entry[3], out[a_slot].lodFadeNode[0],
+										out[a_slot].lodFadeNode[1], out[a_slot].lodFadeNode[2], out[a_slot].lodFadeNode[3], fade[0], fade[1], fade[2], fade[3]);
+								});
 						std::memcpy(target.sunEntry, entry, sizeof(entry));
 						std::memcpy(target.lodFadeNode, fade, sizeof(fade));
 						return;
@@ -1730,6 +1806,14 @@ namespace DCLF
 					 "{} palettes checked, {} differ; {} root rows checked, {} differ{}{}",
 			p.checks, p.movers / n, p.moversDue / n, p.roots / n, p.rootsDue / n, p.rows, p.rowsDiffer, p.palettes, p.palettesDiffer, p.rootRows, p.rootRowsDiffer,
 			differs ? " <- DIFFER; first: " : " <- OK", differs ? p.first : std::string());
+		if (!p.causes.empty()) {
+			std::vector<std::pair<std::string, MovedParity::Cause>> causes(p.causes.begin(), p.causes.end());
+			std::ranges::sort(causes, [](const auto& a, const auto& b) { return a.second.count > b.second.count; });
+			std::string text;
+			for (std::size_t i = 0; i < std::min<std::size_t>(causes.size(), 8); ++i)
+				text += fmt::format("{}{} x {} (e.g. {})", i ? "; " : "", causes[i].second.count, causes[i].first, causes[i].second.example);
+			logger::info("[DCLF] frame values' moved-only sampling (parity): not due yet changed, by owner ({} owners): {}", causes.size(), text);
+		}
 		p = {};
 	}
 

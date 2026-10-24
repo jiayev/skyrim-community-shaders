@@ -280,9 +280,9 @@ namespace DCLF::Features::Faces
 			return;
 		// The per-head job FUN_1404334e0 calls FUN_140432550 at +0x13; Job_Face_morphing (RELOCATION_ID 38139, 39096)
 		// calls JobList::Finish (FUN_140cf6810) at +0x4D (SE: the same offsets). Checked before patching.
-		constexpr Engine::Offset kMorphCallSite{ 0x4334f3, 0x3d9863 };
-		constexpr Engine::Offset kMorph{ 0x432550, 0x3d8980 };
-		constexpr Engine::Offset kJoinCallSite{ 0x6d36fd, 0x640f4d };
+		constexpr Engine::Offset kMorphCallSite{ { 26999, 0x13 }, { 26418, 0x13 } };
+		constexpr Engine::Offset kMorph{ { 26988 }, { 26407 } };
+		constexpr Engine::Offset kJoinCallSite{ { 39096, 0x4d }, { 38139, 0x4d } };
 		const auto morphCall = REL::Offset(kMorphCallSite).address();
 		const auto joinCall = REL::Offset(kJoinCallSite).address();
 		if (!Engine::CallsTo(morphCall, REL::Offset(kMorph).address()) || !Engine::CallsTo(joinCall, REL::Offset(Engine::Address::kListJobsFinish).address())) {

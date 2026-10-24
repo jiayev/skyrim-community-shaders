@@ -8,10 +8,10 @@ namespace DCLF::Features::TreeWind::TreeList
 {
 	namespace
 	{
-		// AE 1.6.1170 and SE 1.5.97 (module offsets; Ghidra). SE's update calls the loop without AE's test of the process's camera (+0x18);
+		// Engine::Offsets (Address Library ids; Ghidra). SE's update calls the loop without AE's test of the process's camera (+0x18);
 		// the thunk reads neither, and the loop dereferences it on both.
-		constexpr Engine::Offset kListLoop{ 0x437e50, 0x3ddd40 };      // FUN_140437e50(manager, process): the tree list's loop
-		constexpr Engine::Offset kListLoopCall{ 0x437df1, 0x3ddce6 };  // its call in FUN_140437d40 (the manager's update, Main::Update 0x140646176)
+		constexpr Engine::Offset kListLoop{ { 27094 }, { 26498 } };      // FUN_140437e50(manager, process): the tree list's loop
+		constexpr Engine::Offset kListLoopCall{ { 27093, 0xb1 }, { 26497, 0xb6 } };  // its call in FUN_140437d40 (the manager's update, Main::Update 0x140646176)
 
 		bool installed = false;
 

@@ -16,10 +16,10 @@ namespace DCLF::Features::TreeLod
 {
 	namespace
 	{
-		constexpr Engine::Offset kLodTreesRoot{ 0x315b880, 0x2f23e90 };  // NiNode*: the shapes' parent
+		constexpr Engine::Offset kLodTreesRoot{ { 402321 }, { 516170 } };  // NiNode*: the shapes' parent
 		// SE's two are jmp thunks to the conversions, as its refill calls them.
-		constexpr Engine::Offset kHalfToFloat{ 0xe19410, 0xd42700 }, kFloatToHalf{ 0xe19360, 0xd426f0 };
-		constexpr Engine::Offset kCos{ 0x153d032, 0x134beca }, kSin{ 0x153d038, 0x134bed0 };  // the CRT's, as the refill calls them
+		constexpr Engine::Offset kHalfToFloat{ { 76218 }, { 74492 } }, kFloatToHalf{ { 76217 }, { 74491 } };
+		constexpr Engine::Offset kCos{ { 109720 }, { 102264 } }, kSin{ { 109721 }, { 102265 } };  // the CRT's, as the refill calls them
 
 		// The render thread's id, from its first drain; the hooks count the events pushed from another thread.
 		std::atomic<std::uint32_t> drainThread{ 0 };

@@ -24,23 +24,23 @@ namespace DCLF::GeometryPort
 
 		static_assert(std::is_same_v<FrameLighting, std::array<float, 24>>);
 
-		// Module offsets, AE 1.6.1170 and SE 1.5.97 (SetupGeometry, AE 0x1414dd040, reads each).
-		constexpr Engine::Offset kVec3NormalizeImport{ 0x17502e0, 0x150a0f0 };  // D3DXVec3Normalize's IAT slot (the thunk at 0x14153d3da)
+		// Engine::Offsets (Address Library ids) (SetupGeometry, AE 0x1414dd040, reads each).
+		constexpr Engine::Offset kVec3NormalizeImport{ { 417053 }, { 228300 } };  // D3DXVec3Normalize's IAT slot (the thunk at 0x14153d3da)
 		constexpr std::size_t kImageSpaceHdr = 0xe0;
 		constexpr std::size_t kBSLightNiLight = 0x48;     // BSLight -> NiLight*
 		constexpr std::size_t kNiLightDiffuse = 0x11c;    // NiColor
 		constexpr std::size_t kNiLightFade = 0x134;
 		constexpr std::size_t kNiLightDirection = 0x140;  // NiDirectionalLight's world direction
-		constexpr Engine::Offset kDirectionalAmbient{ 0x2033128, 0x1e0df98 };  // BSShaderManager::State+0xc8
-		constexpr Engine::Offset kCurrentAccumulator{ 0x332a3a8, 0x31d0e20 };  // FUN_141480b20's
+		constexpr Engine::Offset kDirectionalAmbient{ { 390984 }, { 513243 } };  // BSShaderManager::State+0xc8
+		constexpr Engine::Offset kCurrentAccumulator{ { 414600 }, { 527650 } };  // FUN_141480b20's
 		constexpr std::size_t kAccumulatorEye = 0x16c;
-		constexpr Engine::Offset kPosAdjust{ 0x202aecc, 0x302820c };  // RendererShadowState (0x14202ab70) +0x35c
-		constexpr Engine::Offset kSsrX{ 0x2034e80, 0x1e0fc20 };       // Setting values (ConfigureR)
-		constexpr Engine::Offset kSsrY{ 0x2034e98, 0x1e0fc38 };
-		constexpr Engine::Offset kSsrAuxiliary{ 0x338ca08, 0x32335d0 };
-		constexpr Engine::Offset kWorldMapVS{ 0x332a4f0, 0x31d0ed0 };
-		constexpr Engine::Offset kWorldMapPS{ 0x332a500, 0x31d0ee0 };
-		constexpr Engine::Offset kAmbientSpecularGlobal{ 0x203315c, 0x1e0dfcc };  // BSShaderManager::State+0xfc: tint xyz, Fresnel power w
+		constexpr Engine::Offset kPosAdjust{ { 388909 }, { 524862 } };  // RendererShadowState (0x14202ab70) +0x35c
+		constexpr Engine::Offset kSsrX{ { 391427 }, { 513554 } };       // Setting values (ConfigureR)
+		constexpr Engine::Offset kSsrY{ { 391430 }, { 513556 } };
+		constexpr Engine::Offset kSsrAuxiliary{ { 415095 }, { 528149 } };
+		constexpr Engine::Offset kWorldMapVS{ { 414639 }, { 527677 } };
+		constexpr Engine::Offset kWorldMapPS{ { 414642 }, { 527680 } };
+		constexpr Engine::Offset kAmbientSpecularGlobal{ { 390997 }, { 513256 } };  // BSShaderManager::State+0xfc: tint xyz, Fresnel power w
 
 		/**
 		 * @brief Whether SSE Engine Fixes' BSLightingAmbientSpecular fix is in SetupGeometry (EngineFixesSkyrim64,

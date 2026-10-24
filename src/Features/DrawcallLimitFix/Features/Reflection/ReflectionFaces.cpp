@@ -17,21 +17,21 @@ namespace DCLF::Features::Reflection::ReflectionFaces
 
 	namespace
 	{
-		// AE 1.6.1170 and SE 1.5.97 (module offsets) of the engine state the update reads, and the hooks' call sites and their callees.
+		// Engine::Offsets (Address Library ids) of the engine state the update reads, and the hooks' call sites and their callees.
 		namespace Address
 		{
-			inline constexpr Engine::Offset kReflectSky{ 0x20104e8, 0x1decfd0 };  // bool: the water reflection draws the sky
-			inline constexpr Engine::Offset kUpdateCall{ 0x52289c, 0x4c5f00 };  // TESWaterReflections::Update's call
-			inline constexpr Engine::Offset kUpdate{ 0x520570, 0x4c3e20 };
-			inline constexpr Engine::Offset kOrientCall{ 0x14eda00, 0x1302455 };  // the face render's FUN_1414ed500(camera, face)
-			inline constexpr Engine::Offset kOrient{ 0x14ed500, 0x1301fa0 };
-			inline constexpr Engine::Offset kAccumulatorRenderCall{ 0x14edbf8, 0x1302646 };  // the face render's FUN_1414a90f0(camera, accumulator, 8)
-			inline constexpr Engine::Offset kAccumulatorRender{ 0x14a90f0, 0x12c15c0 };
+			inline constexpr Engine::Offset kReflectSky{ { 380026 }, { 508381 } };  // bool: the water reflection draws the sky
+			inline constexpr Engine::Offset kUpdateCall{ { 32174, 0xc1c }, { 31383, 0x8a0 } };  // TESWaterReflections::Update's call
+			inline constexpr Engine::Offset kUpdate{ { 32160 }, { 31373 } };
+			inline constexpr Engine::Offset kOrientCall{ { 107564, 0xe0 }, { 100780, 0xe5 } };  // the face render's FUN_1414ed500(camera, face)
+			inline constexpr Engine::Offset kOrient{ { 107563 }, { 100779 } };
+			inline constexpr Engine::Offset kAccumulatorRenderCall{ { 107564, 0x2d8 }, { 100780, 0x2d6 } };  // the face render's FUN_1414a90f0(camera, accumulator, 8)
+			inline constexpr Engine::Offset kAccumulatorRender{ { 106436 }, { 99789 } };
 			// The update's LOD add-roots: land, objects, trees. AE's callee is FUN_1405275e0(camera, root), which appends to the camera's
 			// roots (+0x188); SE calls the roots array's append itself (FUN_1401d05c0(camera + 0x188, root), shared, never detoured), so
 			// AddLodRoot's first argument is the array there. It only forwards it.
-			inline constexpr std::array<Engine::Offset, 3> kAddRootCalls{ { { 0x52080d, 0x4c40ae }, { 0x520826, 0x4c40ce }, { 0x52083f, 0x4c40ee } } };
-			inline constexpr Engine::Offset kAddRoot{ 0x5275e0, 0x1d05c0 };
+			inline constexpr std::array<Engine::Offset, 3> kAddRootCalls{ { { { 32160, 0x29d }, { 31373, 0x28e } }, { { 32160, 0x2b6 }, { 31373, 0x2ae } }, { { 32160, 0x2cf }, { 31373, 0x2ce } } } };
+			inline constexpr Engine::Offset kAddRoot{ { 32258 }, { 15623 } };
 		}
 
 		// Render thread only: the update and the face render run there, and so does everything that asks.
