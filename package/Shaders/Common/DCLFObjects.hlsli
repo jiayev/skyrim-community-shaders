@@ -90,11 +90,12 @@ static uint DCLFObjectWord;
 #		define DCLFLocalShadowMask ((DCLFObjectWord >> 26) & 0xFu)
 #		define DCLFSunMiss ((DCLFObjectWord & 0x80000000u) != 0)
 #	else
-// The indirect draw's push data (DrawPipelines.h, kDrawPushWords): its sequence's bytes 4-55 (Records.h, DrawSequence), one
+// The indirect draw's push data (DrawPipelines.h, kDrawPushWords): its sequence's bytes 4-99 (Records.h, DrawSequence), one
 // Constant argument. The first four words are its rows' addresses (the pipeline row's, then the material row's), which the
 // pipeline layout consumes to resolve this draw's buffers and descriptors; then the object word and the geometry's two vertex
 // buffer views (address, size, stride: D3D12's layout), which the vertex stage pulls its attributes through (DCLF_PULLED_VERTICES:
-// no DCLF pipeline has input assembly). No vector straddles a register, so every member sits where the words are.
+// no DCLF pipeline has input assembly). The words after them (a pad, the rows' other blocks' addresses) only the layout reads, so they
+// are not declared. No vector straddles a register, so every member sits where the words are.
 cbuffer DCLFPushData : register(b190)
 {
 	uint2 DCLFPipelineRowAddress : packoffset(c0.x);
@@ -141,7 +142,7 @@ StructuredBuffer<float4> DCLFTreeWind : register(t124);
 #		include "Common/DCLFVertexPull.hlsli"
 #		if defined(DCLF_PULLED)
 // A pulled draw's own (its vertex stage reads them from its sequence, DCLF_PULLED above).
-static const uint kDCLFSequenceStride = 92;  // BuildDrawsCS's DrawSequence
+static const uint kDCLFSequenceStride = 136;  // BuildDrawsCS's DrawSequence
 
 // A pulled draw's sequence, by its instance: the vertex stage's SV_InstanceID, or the pixel stage's flat copy of it.
 uint64_t DCLFDrawSequence(uint a_instance) { return DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride; }
@@ -176,7 +177,7 @@ static const uint kDCLFGeometryBlock = 768;
 #		endif
 uint DCLFMaterialTextureIndex(uint a_register)
 {
-	// MaterialRowHeader: two addresses, textures[16], samplers[16], features (t71, t74, then TruePBR's t80-t91: kFeatureMaterialRegisters).
+	// MaterialRowHeader: four words (the animated row, reserved), textures[16], samplers[16], features (t71, t74, then TruePBR's t80-t91: kFeatureMaterialRegisters).
 	const uint slot = a_register == 71 ? 32 : a_register == 74 ? 33 : a_register >= 80 ? 34 + (a_register - 80) : a_register;
 	return vk::RawBufferLoad<uint>(DCLFMaterialRowAddress + kDCLFMaterialRowHeader + 16 + 4 * slot, 4);
 }
@@ -184,7 +185,7 @@ uint DCLFMaterialSamplerIndex(uint a_register)
 {
 	return vk::RawBufferLoad<uint>(DCLFMaterialRowAddress + kDCLFMaterialRowHeader + 80 + 4 * a_register, 4);
 }
-// PipelineRowHeader: six addresses, the shadow mask's texture and sampler, the vertex layout.
+// PipelineRowHeader: six reserved addresses, the shadow mask's texture and sampler, the vertex layout.
 uint DCLFPipelineTextureIndex() { return vk::RawBufferLoad<uint>(DCLFPipelineRowAddress + kDCLFPipelineRowHeader + 48, 4); }
 uint DCLFPipelineSamplerIndex() { return vk::RawBufferLoad<uint>(DCLFPipelineRowAddress + kDCLFPipelineRowHeader + 52, 4); }
 uint2 DCLFPipelineVertexLayout() { return vk::RawBufferLoad<uint2>(DCLFPipelineRowAddress + kDCLFPipelineRowHeader + 56, 8); }

@@ -20,6 +20,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 #include <bit>
+#include <deque>
 #include <cmath>
 #include <optional>
 #include <cstring>
@@ -192,21 +193,35 @@ namespace DCLF
 
 		using FrameLeases = std::array<org::services::BackingLease, FrameValues::kBuiltInPools>;
 
+		// The GPU's points of the retirement points the frames bound their backings to (render thread, oldest first): what a producer
+		// reusing a copy a frame in flight still binds (BackingPool::Config::reuseBound) has its uploads wait for.
+		using BoundPoints = std::deque<std::pair<std::uint64_t, org::PersistentGraphHost::GpuPoint>>;
+
 		// Render thread: binds a frame's backings (the built-in parts' and the registered pools') to everything submitted so far (the
-		// frame's last submission) and lets them go, so a backing is not reused before that frame completed on the GPU.
-		void BindFrameLeases(FrameLeases& a_leases, std::vector<org::services::BackingLease>& a_registered)
+		// frame's last submission) and lets them go, so a backing is not reused before that frame completed on the GPU, and notes that
+		// point's GPU point (BoundPoints).
+		void BindFrameLeases(FrameLeases& a_leases, std::vector<org::services::BackingLease>& a_registered, BoundPoints& a_points)
 		{
 			const auto point = SubmittedRetirementPoint();
+			bool bound = false;
 			const auto bind = [&](org::services::BackingLease& a_lease) {
 				if (a_lease) {
 					a_lease.Bind(point);
 					a_lease.Reset();
+					bound = true;
 				}
 			};
 			for (auto& lease : a_leases)
 				bind(lease);
 			for (auto& lease : a_registered)
 				bind(lease);
+			const auto* host = RenderGraphRuntime::Get().Host();
+			if (bound && host && point && (a_points.empty() || a_points.back().first < point))
+				a_points.emplace_back(point, host->SubmittedPoint());
+			// Retired points need no wait: kept back to the oldest the frames in flight may still bind.
+			const auto completed = FrameRetirement()->Completed();
+			while (a_points.size() > 1 && a_points[1].first <= completed)
+				a_points.pop_front();
 		}
 
 		void SampleItem(const Plan::Item& a_item, BindlessPlacement& a_row, BindlessPlacement& a_layer)
@@ -308,16 +323,21 @@ namespace DCLF
 		struct Pool
 		{
 			std::shared_ptr<org::services::BackingPool> pool;  // made with Impl
-			std::uint64_t capacity = 0;                        // render thread: the class last asked (GrowthPolicy::Doubling(1024))
+			std::uint64_t capacity = 0;                        // render thread: the class last asked (kPoolGrowth)
 			std::atomic<std::uint64_t> newestContentEpoch{ 0 };  // the content epoch the newest producer brought its backing to
 			std::atomic<std::uint64_t> floor{ 0 };            // the trim floor at the last Kick (diagnostics)
 			std::atomic<std::uint64_t> acquires{ 0 }, made{ 0 }, runs{ 0 }, bytes{ 0 };  // since the last take
 		};
 
+		// A pool's class grows a quarter past the rows asked, not to a power of two: every class is held a frame in flight times
+		// (PerFrameSpares), and the palettes' run to tens of MB with many skins.
+		static constexpr auto kPoolGrowth = org::services::GrowthPolicy::Headroom(25, 1024);
+
 		static std::shared_ptr<org::services::BackingPool> MakePool(std::string_view a_name)
 		{
 			return org::services::BackingPool::Create(PooledBackings::Hooks(), FrameRetirement(),
-				{ .name = fmt::format("cs.dclf.frame-values.{}", a_name), .maxPerClass = 0, .spareFree = PooledBackings::PerFrameSpares() });
+				{ .name = fmt::format("cs.dclf.frame-values.{}", a_name), .maxPerClass = PooledBackings::SceneCopies(), .spareFree = PooledBackings::SceneCopies(),
+					.reuseBound = true });
 		}
 
 		Impl()
@@ -340,6 +360,7 @@ namespace DCLF
 		// Render thread.
 		std::array<Pool, kBuiltInPools> pools;
 		FrameLeases frameLeases;  // the kicked frame's backings, bound at EndFrame
+		BoundPoints boundPoints;  // BindFrameLeases' GPU points
 		std::unique_ptr<Registered[]> registered;                        // made once (MakeRegistered)
 		std::atomic<std::size_t> registeredMade{ 0 };                     // their count, published once made (TakePoolStats reads it)
 		std::vector<org::services::BackingLease> registeredFrameLeases;  // the kicked frame's, by registered pool, bound at EndFrame
@@ -500,6 +521,7 @@ namespace DCLF
 			wetnessChanged{ 0 }, defects{ 0 }, runs{ 0 }, bytes{ 0 }, refused{ 0 }, failures{ 0 }, settled{ 0 }, seeded{ 0 };
 		std::atomic<std::uint64_t> movers{ 0 }, moversDue{ 0 }, roots{ 0 }, rootsDue{ 0 }, moveKeys{ 0 }, moveNodes{ 0 };
 		std::atomic<std::uint64_t> sampleUs{ 0 }, uploadUs{ 0 }, maxTotalUs{ 0 };
+		std::atomic<std::uint64_t> reusedInFlight{ 0 };  // render thread's (LeaseBackings), the report's take
 
 		/**
 		 * @brief A root view's member's rows and palettes (the first person's), sampled by the render thread at Kick, before Main::Draw
@@ -532,6 +554,8 @@ namespace DCLF
 			// oldest content a backing in circulation held at Kick; nullopt: none holds any, the journal keeps nothing).
 			FrameLeases leases;
 			std::array<std::optional<std::uint64_t>, kBuiltInPools> oldestContentEpochs;
+			// A copy a frame in flight still binds (SceneCopies, reuseBound): the GPU point its uploads wait for (empty: none).
+			org::PersistentGraphHost::GpuPoint writeAfter;
 			// Per registered pool: its kick's input (held until the producer is done), its backing and its journal's floor, as above.
 			struct RegisteredPart
 			{
@@ -654,7 +678,8 @@ namespace DCLF
 		void ApplyRootViewPlans(const std::vector<std::shared_ptr<const Plan>>& a_plans);
 		void QueuePlans(std::vector<std::shared_ptr<const Plan>>& a_plans);
 		void LeaseBackings(Job& a_job);
-		void LeasePool(Pool& a_pool, std::string_view a_name, std::uint32_t a_stride, std::uint64_t a_needed, org::services::BackingLease& a_frameLease,
+		// Returns the point the lease's copy is still bound to (BackingPool::AcquireInfo::writeAfter; 0: reusable now).
+		std::uint64_t LeasePool(Pool& a_pool, std::string_view a_name, std::uint32_t a_stride, bool a_deviceAddress, std::uint64_t a_needed, org::services::BackingLease& a_frameLease,
 			org::services::BackingLease& a_jobLease, std::optional<std::uint64_t>& a_oldestContentEpoch);
 		void MakeRegistered();
 		void KickRegistered(Job& a_job, const FrameGlobals* a_globals);
@@ -697,6 +722,9 @@ namespace DCLF
 			marked = true;
 			const auto sampledAt = std::chrono::steady_clock::now();
 			sampleUs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(sampledAt - start).count());
+			// The copies reused from frames in flight: this producer's uploads wait for them on the GPU, not here.
+			if (!a_job.writeAfter.points.empty() && !a_job.uploads->QueueStreamingWait(a_job.writeAfter.points))
+				throw std::runtime_error("the dedicated uploader cannot wait for the frame its copies were bound to");
 			Upload(a_job);
 			uploadUs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - sampledAt).count());
 		} catch (const std::exception& e) {
@@ -1929,7 +1957,8 @@ namespace DCLF
 			const Api::FrameValuePoolProducer::RowSink sink{ &put, [](void* a_owner, const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 																(*static_cast<Put*>(a_owner))(a_data, a_bytes, a_offset);
 															} };
-			a_emit(a_view, backing.contentEpoch.load(std::memory_order_acquire), sink);
+			const Api::FrameValuePoolProducer::SendTarget target{ backing.address, backing.capacityClass, &a_lease };
+			a_emit(a_view, backing.contentEpoch.load(std::memory_order_acquire), target, sink);
 		}
 		if (!ranges.empty()) {
 			ZoneScopedN("CS.DCLF.FrameValues.Send.Queue");
@@ -1952,7 +1981,7 @@ namespace DCLF
 	void FrameValues::Impl::Send(const Job& a_job, Part a_part, const KeptWholeArray<T>& a_rows)
 	{
 		SendRows(a_job.leases[a_part], pools[a_part], kPartNames[a_part], a_job, a_rows.Size(), a_rows.ContentEpoch(), &a_rows,
-			[](const void* a_view, std::uint64_t a_contentEpoch, const Api::FrameValuePoolProducer::RowSink& a_sink) {
+			[](const void* a_view, std::uint64_t a_contentEpoch, const Api::FrameValuePoolProducer::SendTarget&, const Api::FrameValuePoolProducer::RowSink& a_sink) {
 				static_cast<const KeptWholeArray<T>*>(a_view)->Emit(a_contentEpoch, a_sink);
 			});
 	}
@@ -2023,12 +2052,6 @@ namespace DCLF
 		return values;
 	}
 
-	bool FrameValues::Available() const
-	{
-		auto& runtime = RenderGraphRuntime::Get();
-		return runtime.Host() && runtime.FrameWaitTimeline();
-	}
-
 	void FrameValues::Impl::FrameStartRegistered(const std::shared_ptr<const FrameGlobals>& a_globals)
 	{
 		const Api::FrameValuePoolFrameStart start{ a_globals };
@@ -2087,22 +2110,33 @@ namespace DCLF
 	void FrameValues::Impl::LeaseBackings(Job& a_job)
 	{
 		const std::array<std::uint64_t, kBuiltInPools> needed{ plan ? plan->slots : 0u, plan ? 2ull * plan->boneCapacity : 0u, a_job.shadingSlots };
+		std::uint64_t writeAfter = 0;
 		for (std::size_t part = 0; part < kBuiltInPools; ++part)
-			LeasePool(pools[part], kPartNames[part], kStrides[part], needed[part], frameLeases[part], a_job.leases[part], a_job.oldestContentEpochs[part]);
+			writeAfter = std::max(writeAfter, LeasePool(pools[part], kPartNames[part], kStrides[part], false, needed[part], frameLeases[part], a_job.leases[part], a_job.oldestContentEpochs[part]));
 		for (std::size_t i = 0; i < a_job.registered.size(); ++i) {
 			auto& entry = registered[i];
 			auto& part = a_job.registered[i];
-			LeasePool(entry.pool, entry.entry->name, entry.entry->stride, entry.needed, registeredFrameLeases[i], part.lease, part.oldestContentEpoch);
+			writeAfter = std::max(writeAfter, LeasePool(entry.pool, entry.entry->name, entry.entry->stride, entry.entry->deviceAddress, entry.needed, registeredFrameLeases[i], part.lease,
+													 part.oldestContentEpoch));
+		}
+		// The latest point a reused copy is bound to (points rise per queue: it covers the others), unless the GPU has passed it.
+		if (writeAfter > FrameRetirement()->Completed()) {
+			const auto at = std::ranges::find_if(boundPoints, [&](const auto& a_point) { return a_point.first >= writeAfter; });
+			if (at != boundPoints.end())
+				a_job.writeAfter = at->second;
+			else if (const auto* host = RenderGraphRuntime::Get().Host())
+				a_job.writeAfter = host->SubmittedPoint();  // never: every bind notes its point; waiting for everything is still safe
+			reusedInFlight.fetch_add(1, std::memory_order_relaxed);
 		}
 	}
 
-	void FrameValues::Impl::LeasePool(Pool& a_pool, std::string_view a_name, std::uint32_t a_stride, std::uint64_t a_needed, org::services::BackingLease& a_frameLease,
+	std::uint64_t FrameValues::Impl::LeasePool(Pool& a_pool, std::string_view a_name, std::uint32_t a_stride, bool a_deviceAddress, std::uint64_t a_needed, org::services::BackingLease& a_frameLease,
 		org::services::BackingLease& a_jobLease, std::optional<std::uint64_t>& a_oldestContentEpoch)
 	{
-		a_pool.capacity = org::services::GrowthPolicy::Doubling(1024).Next(a_pool.capacity, a_needed);
+		a_pool.capacity = kPoolGrowth.Next(a_pool.capacity, a_needed);
 		const auto name = fmt::format("cs.dclf.frame-values.{}", a_name);
 		org::services::BackingPool::AcquireInfo info;
-		auto lease = a_pool.pool->Acquire({ .capacityClass = a_pool.capacity, .stride = a_stride, .name = name },
+		auto lease = a_pool.pool->Acquire({ .capacityClass = a_pool.capacity, .stride = a_stride, .flags = { .deviceAddress = a_deviceAddress }, .name = name },
 			a_pool.newestContentEpoch.load(std::memory_order_acquire), &info);
 		if (!lease)
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: the frame values' {} pool returned no backing", a_name));
@@ -2113,6 +2147,7 @@ namespace DCLF
 		a_pool.floor.store(a_oldestContentEpoch.value_or(0), std::memory_order_relaxed);
 		a_frameLease = lease;
 		a_jobLease = std::move(lease);
+		return info.writeAfter;
 	}
 
 	void FrameValues::Impl::MakeRegistered()
@@ -2186,7 +2221,7 @@ namespace DCLF
 		auto& s = *impl;
 		s.kicked = false;
 		// A frame whose EndFrame did not come: its backings are bound to what was submitted so far.
-		BindFrameLeases(s.frameLeases, s.registeredFrameLeases);
+		BindFrameLeases(s.frameLeases, s.registeredFrameLeases, s.boundPoints);
 		// The registered pools' frame-start reads (Api::FrameValuePool::frameStart), whether or not the frame has a producer: Features/Fades'
 		// seeds' the last.
 		Impl::FrameStartRegistered(a_globals);
@@ -2245,7 +2280,7 @@ namespace DCLF
 		job.globals = a_globals;
 		// The registered pools' inputs for the frame's producer, and the rows each asks for.
 		s.KickRegistered(job, a_globals.get());
-		// Each part's backing, holding every row the producer leaves (a class of GrowthPolicy::Doubling(1024)), the one that holds
+		// Each part's backing, holding every row the producer leaves (a class of kPoolGrowth), the one that holds
 		// most of the journal preferred; the floor (the oldest content in circulation, this lease's included) is what the
 		// producer's journal keeps.
 		s.LeaseBackings(job);
@@ -2296,7 +2331,7 @@ namespace DCLF
 	void FrameValues::Skip()
 	{
 		impl->kicked = false;
-		BindFrameLeases(impl->frameLeases, impl->registeredFrameLeases);
+		BindFrameLeases(impl->frameLeases, impl->registeredFrameLeases, impl->boundPoints);
 		if (auto* host = RenderGraphRuntime::Get().Host())
 			host->SetFrameWaitValue(0);
 	}
@@ -2307,7 +2342,7 @@ namespace DCLF
 		if (!s.kicked)
 			return;
 		s.kicked = false;
-		BindFrameLeases(s.frameLeases, s.registeredFrameLeases);
+		BindFrameLeases(s.frameLeases, s.registeredFrameLeases, s.boundPoints);
 	}
 
 	bool FrameValues::ProducerDone(bool a_wait) const
@@ -2406,6 +2441,7 @@ namespace DCLF
 		c.rootsDue = s.rootsDue.exchange(0);
 		c.moveKeys = s.moveKeys.exchange(0);
 		c.moveNodes = s.moveNodes.exchange(0);
+		c.reusedInFlight = s.reusedInFlight.exchange(0);
 		return c;
 	}
 
@@ -2413,6 +2449,27 @@ namespace DCLF
 	{
 		const auto& indices = impl->registeredIndex;
 		return a_pool.index < indices.size() ? indices[a_pool.index] : 0u;
+	}
+
+	std::uint64_t FrameValues::PoolAddress(Api::FrameValuePoolId a_pool) const
+	{
+		const auto backing = PoolBacking(a_pool);
+		return backing ? backing->address : 0;
+	}
+
+	std::shared_ptr<const org::services::Backing> FrameValues::PoolBacking(Api::FrameValuePoolId a_pool) const
+	{
+		const auto& s = *impl;
+		if (!s.kicked || a_pool.index >= s.registeredFrameLeases.size())
+			return nullptr;
+		return s.registeredFrameLeases[a_pool.index].Get();
+	}
+
+	bool FrameValues::Available() const
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		auto uploads = host ? host->RetainUploads() : nullptr;
+		return host && RenderGraphRuntime::Get().FrameWaitTimeline() && uploads && uploads->HasDedicatedStreamingQueue();
 	}
 
 	std::vector<FrameValues::PoolStats> FrameValues::TakePoolStats()

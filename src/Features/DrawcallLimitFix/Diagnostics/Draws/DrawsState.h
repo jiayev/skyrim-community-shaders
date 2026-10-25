@@ -240,14 +240,9 @@ namespace DCLF::Diagnostics
 			// Inputs the kept shadow build lacks, by reason, with the first of each.
 			std::map<std::string, std::uint64_t> shadowMissingBy;
 			std::map<std::string, std::string> shadowMissingFirst;
-			// The payload's extras backings' rows as caught up (MirrorExtras, CheckExtras: the snapshot builder's thread, as the report),
-			// by Backing::generation; a released backing's mirror is dropped at the next catch-up.
-			struct ExtrasMirror
-			{
-				std::weak_ptr<org::services::Backing> backing;
-				std::vector<float> rows;
-			};
-			ankerl::unordered_dense::map<std::uint64_t, ExtrasMirror> extrasMirrors;
+			// The payload's extras versions' rows as built (MirrorExtras, CheckExtras: the extras versions' producer, one build at a time),
+			// by version: the newest and its predecessor.
+			ankerl::unordered_dense::map<std::uint64_t, std::vector<float>> extrasMirrors;
 			ParityCounter extras;
 			// Rows that differed in blocks no live object owns (never read; not compared).
 			std::uint64_t extrasFreedRows = 0;
@@ -259,9 +254,8 @@ namespace DCLF::Diagnostics
 		bool cullingSetupLogged = false;
 		std::array<std::uint32_t, 2> epochLines{};  // colour, Z-prepass
 
-		// CS_DCLF_PERSISTENT_PARITY: the payload's pools' leak watch, by part (the snapshot builder's ProducerReport).
-		std::array<PoolLeakWatch, Draws::kPayloadParts> payloadPools;
-		// ... and FrameValues' pools' (the render thread's FrameValuesLine, which sizes it: the registered pools included).
+		// CS_DCLF_PERSISTENT_PARITY: FrameValues' pools' leak watch (the render thread's FrameValuesLine, which sizes it: the registered pools,
+		// the payload's among them, included).
 		std::vector<PoolLeakWatch> frameValuesPools;
 
 		// CS_DCLF_PERSISTENT_PARITY: view masks (CheckViewMasks, in the builds), taken by the render thread's report.

@@ -61,6 +61,7 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/ScreenshotFeature.h"
 #if defined(CS_HAS_RENDER_GRAPH)
+#	include "RenderGraph/MemoryWindow.h"
 #	include "RenderGraph/ScheduleWindow.h"
 #endif
 
@@ -908,7 +909,7 @@ void Menu::DrawSettings()
 	}
 	ImGui::End();
 
-	DrawRenderGraphScheduleWindow();
+	DrawRenderGraphWindows();
 
 	// After every watched feature has drawn; records the change an interaction that ended this frame made
 	undoHistory.EndFrame();
@@ -1530,13 +1531,14 @@ void Menu::DrawWeatherDetailsWindow()
 }
 
 /**
- * @brief Renders the render graph's schedule window while it is open
+ * @brief Renders the render graph's schedule and memory windows while they are open
  *
- * Opened from Drawcall Limit Fix's settings; drawn with the menu. The window owns its tracing switch (RenderGraph/ScheduleWindow.h).
+ * Opened from Drawcall Limit Fix's settings; drawn with the menu. The schedule window owns its tracing switch (RenderGraph/ScheduleWindow.h).
  */
-void Menu::DrawRenderGraphScheduleWindow()
+void Menu::DrawRenderGraphWindows()
 {
 #if defined(CS_HAS_RENDER_GRAPH)
 	RenderGraphSchedule::DrawWindow();
+	RenderGraphMemory::DrawWindow();
 #endif
 }

@@ -168,10 +168,11 @@ namespace DCLF::Draws
 		{
 			const std::uint32_t draws = a_draws;
 			for (auto s = static_cast<std::uint32_t>(a_state.sequences.size()); s < a_slots; ++s) {
-				// A unit: a draw of every class (kShadowClasses ranges).
+				// A unit: a draw of every class (kShadowClasses ranges). Every slot holds the scene's casting bound, so they grow a quarter
+				// past it, not to a power of two (32 slots in a large list's interiors).
 				a_state.sequences.push_back(MakeVersioned(CreateWords(kShadowClasses * std::uint64_t(draws) * sizeof(DrawSequence) / 4, true,
 															  fmt::format("cs.dclf.shadow.sequences{}", s).c_str()),
-					{ .extent = { 0, kShadowClasses * sizeof(DrawSequence), 4 } }));
+					{ .extent = { 0, kShadowClasses * sizeof(DrawSequence), 4 }, .policy = org::services::GrowthPolicy::Headroom(25, 64) }));
 				a_state.count.push_back(CreateWords(kCountWords, true, fmt::format("cs.dclf.shadow.draw-count{}", s).c_str()));
 				// A word per key slot: the latch layout's key slots exactly (doubled there).
 				a_state.bucketCounts.push_back(MakeVersioned(CreateWords(std::max(a_words, 64u), true, fmt::format("cs.dclf.shadow.bucket-counts{}", s).c_str()),

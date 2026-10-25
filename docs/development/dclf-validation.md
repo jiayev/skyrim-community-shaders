@@ -152,10 +152,10 @@ Each compares a live path with a reference built from scratch and flags every mi
 | Switch | Default | Meaning |
 | --- | --- | --- |
 | `CS_DCLF_WORKERS` | hardware threads - 2 | The preparation pool's threads (at least 1). |
+| `CS_DCLF_SCENE_COPIES` | 3 | The copies FrameValues' pools keep a class, 2 to the frames in flight: a frame's producer reuses the copy the oldest in-flight frame bound, its uploads waiting for that frame on the GPU. |
 | `CS_DCLF_FANOUT` | `2` | The scene pass's evaluation: `0` interleaved on the scene lane (the reference), `1` every entry evaluated then merged on the lane, `2` evaluated on the preparation pool from 128 entries, merged in order. |
 | `CS_DCLF_ASYNC_PRIORITY` | unset | `normal`: the coordinator and scene threads keep normal priority instead of above normal; `noboost`: workers are not raised to a `ParallelFor` caller's priority. |
 | `CS_DCLF_ASYNC_COMPUTE` | on | `0`: the passes that prefer the compute queue (build-draws' queries, fades, portal batches, tree wind) run on the graphics queue, for timing them in the graphics queue's order. |
-| `CS_DCLF_PAYLOAD_APPEND` | off | `1`: a payload part whose changes all lie past the sealed mark appends into the last backing instead of catching up a pooled one. |
 
 ### Other switches DCLF runs depend on
 
@@ -304,7 +304,6 @@ tags are counters of the normal path.
 | `<- UNPINNED PROPERTY`, `<- MASK UNHELD`, `<- SET PATCHED`, `<- STALE`, `<- SLOT VIOLATION`, `<- DETACH` | coordinator lines | A property refused for want of a pin, a shadow mask not held, a member patched after its commit, a cached verdict that differs from one computed again, a slot rule broken, and validation drops of detaches. |
 | `<- CAPTURE` | `[DCLF] subtrees (T6b1c, ...)`, `[DCLF] frame capture (6e F2): ...` | New category nodes without their children captured, or unscoped captures. |
 | `<- MATERIAL PORT` | material port lines | A material whose port output was not covered by its retake. |
-| `<- APPEND BELOW MARK` | pooled payload line | A payload append below the sealed mark (with `CS_DCLF_PAYLOAD_APPEND=1`). |
 
 **Features**
 

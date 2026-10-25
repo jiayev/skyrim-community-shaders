@@ -50,8 +50,9 @@ namespace DCLF::Features::Particles
 		constexpr std::uint32_t kSlotMask = 3;
 		constexpr std::uint32_t kFresh = 4;
 
-		// One address per quad bucket (QuadSlotKey): DCLF's own, so no engine TriShape can share a geometry slot key with them.
-		constexpr std::uint32_t kBuckets = std::countr_zero(ParticleSnapshots::kMaxQuads) + 1;
+		// One address per quad bucket (QuadSlotKey: an octave's step): DCLF's own, so no engine TriShape can share a geometry slot key with them.
+		constexpr std::uint32_t kOctaves = std::countr_zero(ParticleSnapshots::kMaxQuads) + 1;
+		constexpr std::uint32_t kBuckets = kOctaves * ParticleSnapshots::kOctaveSteps;
 		alignas(8) std::byte quadSlotKeys[kBuckets]{};
 
 		// The snapshots' move writer ("particle update"), reserved at the install before the update thunks go in.
@@ -230,12 +231,17 @@ namespace DCLF::Features::Particles
 
 	std::uint32_t ParticleSnapshots::QuadsOf(std::uint32_t a_capacity)
 	{
-		return std::bit_ceil(std::clamp(a_capacity, kMinQuads, kMaxQuads));
+		return kBlockRule.Units(a_capacity);
 	}
 
 	const void* ParticleSnapshots::QuadSlotKey(std::uint32_t a_quads)
 	{
-		return &quadSlotKeys[std::min<std::uint32_t>(std::countr_zero(QuadsOf(a_quads)), kBuckets - 1)];
+		// A size's octave, and its step in it (the rule's sizes: a power of two is step 0, the next octave's power step 0 of that).
+		const std::uint32_t quads = QuadsOf(a_quads);
+		const std::uint32_t octave = std::bit_floor(quads);
+		const std::uint32_t step = std::max(octave / kOctaveSteps, 1u);
+		const std::uint32_t bucket = std::countr_zero(octave) * kOctaveSteps + (quads - octave) / step;
+		return &quadSlotKeys[std::min(bucket, kBuckets - 1)];
 	}
 
 	void ParticleSnapshots::Install(Api::InstallContext& a_context)

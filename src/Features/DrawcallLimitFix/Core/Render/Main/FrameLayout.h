@@ -135,7 +135,7 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief A content epoch per kept table (ObjectRecordStore, ExtrasStore, GeometryStore): what a build trims each one's
-	 * journal to (PayloadBuilder::OldestContentEpoch of its part).
+	 * journal to (PayloadPools::OldestContentEpoch of its part).
 	 */
 	struct TablesContentEpochs
 	{

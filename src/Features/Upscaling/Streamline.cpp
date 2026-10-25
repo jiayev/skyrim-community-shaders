@@ -645,6 +645,14 @@ static sl::Result cs_EvaluateFeature(sl::Feature a_feature, sl::FrameToken& a_to
 	const sl::BaseStructure* inputs[] = { &a_viewport };
 	result = g_sl.slEvaluateFeature(
 		a_feature, a_token, inputs, static_cast<uint32_t>(std::size(inputs)), a_commandBuffer);
+	// Streamline replaces a successful evaluate's eOk with eWarnOutOfVRAM while the VRAM budget is exhausted
+	// (sl.common's slEvaluateFeatureInternal): the work is recorded and the output written, so it is a success.
+	if (result == sl::Result::eWarnOutOfVRAM) {
+		static std::atomic<bool> s_logged{ false };
+		if (!s_logged.exchange(true))
+			logger::warn("[Streamline] evaluating over the VRAM budget (eWarnOutOfVRAM): outputs kept; expect stutter");
+		result = sl::Result::eOk;
+	}
 	return result;
 }
 

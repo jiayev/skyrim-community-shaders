@@ -331,6 +331,8 @@ namespace DCLF::Draws
 			void WriteMaterialRow(std::uint32_t m, std::uint32_t p, const PipelineBlocks& blocks, PairWork& a_work);
 			/** @brief A_work's rows marks, counters, skips and samples into the build and the rows (owner thread, in order); a_work cleared. */
 			void MergeWork(PairWork& a_work);
+			/** @brief The written rows' animated rows (MainRows::AnimatedRows) taken or let go, their headers with them (Finish, before the rows' views). */
+			void AssignAnimatedRows();
 			/** @brief What packing a material row for pipeline p depends on of p (technique bindings, projected, constant tables). */
 			std::array<std::uint64_t, 3> PackingOf(std::uint32_t p) const;
 			/** @brief Policy::CheckRowPacking: logs a material whose pipelines pack its one row differently (a_first, a_second). */
@@ -435,6 +437,7 @@ namespace DCLF::Draws
 			rows.pipeline.Clear();
 			rows.materials.clear();
 			rows.pipelines.clear();
+			rows.animated.Clear();
 			rows.active = true;
 			rows.identity = in.addresses.identity;
 			rows.generation = in.tablesGeneration;
@@ -551,12 +554,8 @@ namespace DCLF::Draws
 		const std::uint32_t data[8] = { permutation.vertexShaderDescriptor, permutation.pixelShaderDescriptor, permutation.extraShaderDescriptor,
 			permutation.extraFeatureDescriptor, 0, 0, 0, 0 };
 		std::memcpy(row.bytes.data() + kPipelineRowPermutation, data, sizeof(data));
+		// The header holds no addresses (its reserved words stay zero): the draws' sequences carry the blocks' (BuildDrawsCS).
 		auto& header = HeaderOf(row);
-		header.vsTechnique = kPipelineRowTechniqueVS;
-		header.psTechnique = kPipelineRowTechniquePS;
-		header.vsGeometry = kPipelineRowGeometryVS;
-		header.psGeometry = kPipelineRowGeometryPS;
-		header.vsPermutation = header.psPermutation = kPipelineRowPermutation;
 		// The technique's shadow mask (t14, s14), or the null texture where the technique binds none.
 		const std::uint32_t shadowMask = technique.shadowMask ? blocks.shadowMaskIndex : lookups.nullTexture;
 		header.shadowMask = shadowMask == Lookups::kNone ? 0u : shadowMask;
@@ -583,7 +582,7 @@ namespace DCLF::Draws
 
 	void MainBuild::PrepareObjects()
 	{
-		// The per-object records are the stream views' (MakeStreamViews, published in the payload by PayloadBuilder) and the palettes the
+		// The per-object records are the stream views' (MakeStreamViews, published in the payload source, sent by PayloadPools) and the palettes the
 		// frame values' (FrameValues), not the build's.
 		Mark(6);
 		if (colourBuilt) {
@@ -630,7 +629,7 @@ namespace DCLF::Draws
 				if (!first && seen->second.second != PackingOf(p))
 					NotePackingConflict(m, seen->second.first, p);
 			}
-			// No row waits for a table: the payload's row tables hold every row (PayloadBuilder).
+			// No row waits for a table: the payload's row tables hold every row (PayloadPools).
 			Mark(0);
 			WriteMaterialRow(m, p, blocks, loopWork);
 			Mark(1);
@@ -817,6 +816,8 @@ namespace DCLF::Draws
 				a_work.keyMoved[k] += state.key[k] != key[k] ? 1u : 0u;
 		MaterialRow row;
 		PackMaterialRow(m, p, blocks, key, state, row);
+		// The animated row it holds (read only here: Finish assigns a row that has none and lets go of one no longer animated).
+		HeaderOf(row).animatedRow = MainRows::AnimatedRows::Animated(state) ? rows.animated.RowOf(m) : ~0u;
 		// Only the parts that moved are marked (an animated effect's TexcoordOffset or falloff moves one, not the row): a backing catches up
 		// those parts alone (EmitMainRowParts).
 		// Its state moved with it (the products read it: MainRows::productDirty, marked here or by MergeWork).
@@ -933,8 +934,8 @@ namespace DCLF::Draws
 		state = {};
 		PackMaterialBlocks(p, material, blocks, state, row);
 		auto& header = HeaderOf(row);
-		header.vsMaterial = kMaterialRowVS;
-		header.psMaterial = kMaterialRowPS;
+		// No addresses (the draws' sequences carry the blocks'); not an animated row until one is assigned (MaterialRowHeader).
+		header.animatedRow = ~0u;
 		PackMaterialTextures(m, projected, lookup, material, state, header);
 		PackMaterialSamplers(p, projected, material, state, header);
 		state.tables = blocks.tables;
@@ -943,7 +944,7 @@ namespace DCLF::Draws
 	}
 
 	// The resident region (dclf-architecture.md, "Persistent resident draws"): draw inputs kept across frames, changed only by
-	// the tables' change log, a pipeline's set index or a pair's record failing. The loop skips its objects; PayloadBuilder sends
+	// the tables' change log, a pipeline's set index or a pair's record failing. The loop skips its objects; PayloadPools send
 	// a backing only what changed since its content epoch.
 	void MainBuild::BuildResidentRegion()
 	{
@@ -1765,6 +1766,9 @@ namespace DCLF::Draws
 			MainRows::MaterialState state;
 			MaterialRow row;
 			PackMaterialRow(m, p, blocks, rowKey, state, row);
+			// Its animated row is the builds' (AssignAnimatedRows), not the packing's.
+			if (m < materialRows.size())
+				HeaderOf(row).animatedRow = reinterpret_cast<const MaterialRowHeader*>(materialRows[m].bytes.data() + kMaterialRowHeader)->animatedRow;
 			if (!SameMaterialState(state, held) || m >= materialRows.size() || std::memcmp(&row, &materialRows[m], sizeof(MaterialRow)) != 0)
 				note([&] { return fmt::format("material row {} (pipeline {}): bytes or state differ from a fresh packing", m, p); });
 			ResolvedBindings resolved;
@@ -2035,6 +2039,40 @@ namespace DCLF::Draws
 		Mark(3);
 	}
 
+	void MainBuild::AssignAnimatedRows()
+	{
+		// The rows this build wrote (every one after a resync): each animated one holds its row of the frame's copy, any other none. A row
+		// that keeps its index was written with it (WriteMaterialRow); one taken or let go here is written again, its header part alone.
+		ZoneScopedN("CS.DCLF.BuildMain.AnimatedRows");
+		auto& animated = rows.animated;
+		const auto assign = [&](std::uint32_t m) {
+			if (m >= rows.materials.size() || m >= rows.material.Size())
+				return;
+			std::uint32_t row = ~0u;
+			if (MainRows::AnimatedRows::Animated(rows.materials[m]))
+				row = animated.Assign(m);
+			else
+				animated.Release(m);
+			if (MaterialRowHeader header = *reinterpret_cast<const MaterialRowHeader*>(rows.material.Get()[m].bytes.data() + kMaterialRowHeader); header.animatedRow != row) {
+				MaterialRow written = rows.material.Get()[m];
+				HeaderOf(written).animatedRow = row;
+				rows.material.SetParts(m, written, kMaterialRowParts);
+			}
+		};
+		const auto& dirty = rows.productDirty;
+		if (dirty.every) {
+			for (std::uint32_t m = 0; m < rows.materials.size(); ++m)
+				assign(m);
+		} else {
+			// In slot order, so the rows taken do not depend on the order the chunks marked them.
+			static std::vector<std::uint32_t> slots;  // the builds run one at a time (the snapshot builder's)
+			slots.assign(dirty.slots.begin(), dirty.slots.end());
+			std::sort(slots.begin(), slots.end());
+			for (const std::uint32_t m : slots)
+				assign(m);
+		}
+	}
+
 	void MainBuild::Finish(std::shared_ptr<const StreamViews> a_streams)
 	{
 		ZoneScopedN("CS.DCLF.BuildMain.Finish");
@@ -2047,6 +2085,7 @@ namespace DCLF::Draws
 		if (in.addresses.streamBuffer)
 			body.streamRows = tables.streamRows;
 		TracyCZoneEnd(streamRowsZone);
+		AssignAnimatedRows();
 		body.materialRows = rows.material.View();
 		body.pipelineRows = rows.pipeline.View();
 		// The features' payload products, from the rows and tables as this build left them (Api::PayloadProduct), each from its last build

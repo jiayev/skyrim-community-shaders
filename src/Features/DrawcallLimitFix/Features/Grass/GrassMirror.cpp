@@ -414,20 +414,31 @@ namespace DCLF::Features::Grass
 
 	void Mirror::LayOutVisible()
 	{
-		// Every live bucket's tiers with a resolved mesh, in slot order: each the bucket's instance count long.
+		// Every live bucket's ranges, in slot order, each the bucket's instance count long: tier 0's, and one tiers 1 and 2 share (tier 1
+		// from its start, tier 2 down from its end), for the tiers with a resolved mesh.
 		std::uint32_t base = 0;
 		for (auto& bucket : buckets) {
 			if (!bucket.live)
 				continue;
 			auto& row = bucket.row.Plain();
 			row.flags &= ~(GrassInstances::kBucketTierOne | GrassInstances::kBucketTierTwo);
+			bool lodRange = false;
 			for (std::uint32_t tier = 0; tier < kTiers; ++tier) {
 				const auto it = bucket.meshes[tier] ? meshes.find(bucket.meshes[tier]) : meshes.end();
 				const bool drawn = it != meshes.end() && it->second.resolved;
 				row.mesh[tier] = drawn ? it->second.slot : kNoMesh;
-				row.visibleBase[tier] = drawn ? base : 0;
+				row.visibleBase[tier] = 0;
 				if (drawn) {
-					base += bucket.total;
+					if (tier == 0) {
+						row.visibleBase[0] = base;
+						base += bucket.total;
+					} else {
+						if (!lodRange) {
+							lodRange = true;
+							base += bucket.total;
+						}
+						row.visibleBase[tier] = tier == 1 ? base - bucket.total : base;
+					}
 					row.flags |= tier == 1 ? GrassInstances::kBucketTierOne : tier == 2 ? GrassInstances::kBucketTierTwo : 0u;
 				}
 				// A LOD tier's own mesh cost (Grass Optimizations' UploadCullBucketConstants: sqrt(triangles / 8)), tier 0's without a mesh.

@@ -8,7 +8,13 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <optional>
 #include <vector>
+
+namespace org::services
+{
+	struct Backing;
+}
 
 namespace DCLF
 {
@@ -112,6 +118,15 @@ namespace DCLF
 		 * before the first frame, on a frame without a producer, and for an unknown pool).
 		 */
 		std::uint32_t PoolIndex(Api::FrameValuePoolId a_pool) const;
+		/** @brief Render thread: the device address of that backing (deviceAddress pools; 0 otherwise, or as PoolIndex). */
+		std::uint64_t PoolAddress(Api::FrameValuePoolId a_pool) const;
+		/** @brief Render thread (diagnostics): that backing (null as PoolIndex), held by the frame until EndFrame. */
+		std::shared_ptr<const org::services::Backing> PoolBacking(Api::FrameValuePoolId a_pool) const;
+		/**
+		 * @brief Render thread: whether a frame's Kick now makes its values (a graph host with a dedicated upload queue): what a covered frame
+		 * needs, for the placements and shading it draws with.
+		 */
+		bool Available() const;
 		/**
 		 * @brief Render thread (diagnostics): whether the frame's producer is done (false before the first frame); a_wait: waits for it
 		 * first. A registered pool's rows are then as it left them, until the next Kick.
@@ -124,7 +139,6 @@ namespace DCLF
 		void WaitSampled() const;
 		/** @brief The producer (a pool's sample): an engine-read lease refused, counted with the built-in parts' (Counters::refused). */
 		void NoteRefused();
-		bool Available() const;
 
 		/**
 		 * @brief Render thread: the rows as the frame's producer left them, once it is done (diagnostics); null while it runs (a_wait:
@@ -143,6 +157,8 @@ namespace DCLF
 						  failures = 0;
 			// The moved-only sampling: the kept set's movers and roots, those due (sampled), the move keys and node events drained.
 			std::uint64_t movers = 0, moversDue = 0, roots = 0, rootsDue = 0, moveKeys = 0, moveNodes = 0;
+			// Producers that reused a copy a frame in flight still bound (SceneCopies): their uploads waited for it on the GPU.
+			std::uint64_t reusedInFlight = 0;
 			// The placement plans applied onto the kept set, those that reset it, and their items (joined, changed and left).
 			std::uint64_t plans = 0, planResets = 0, planItems = 0;
 		};

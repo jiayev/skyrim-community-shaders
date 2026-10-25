@@ -41,10 +41,10 @@ static const uint kSortRankInstance = 2;  // ForwardSortConstants::kRankInstance
 
 static const uint kCountForward = 128;     // GpuLayouts.h, kCountForwardWord
 static const uint kObjectWordOffset = 20;  // DrawSequence::objectIndex
-static const uint kInstanceCountOffset = 76;
-static const uint kFirstIndexOffset = 80;  // the DrawIndexed arguments' firstIndex
-static const uint kVertexOffsetOffset = 84;
-static const uint kFirstInstanceOffset = 88;
+static const uint kInstanceCountOffset = 120;
+static const uint kFirstIndexOffset = 124;  // the DrawIndexed arguments' firstIndex
+static const uint kVertexOffsetOffset = 128;
+static const uint kFirstInstanceOffset = 132;
 static const uint kObjectIndexMask = (1u << 26) - 1;  // Records.h, kObjectIndexMask
 static const uint kTile = 64;                         // the thread group (IndirectDraws: kForwardSortGroup)
 

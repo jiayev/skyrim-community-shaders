@@ -70,7 +70,6 @@
 #include <ORGModuleServices/GrowableBufferTypes.h>
 #include <ORGModuleServices/GrowableBufferSet.h>
 #include <ORGModuleServices/BackingPool.h>
-#include <ORGModuleServices/JournaledBufferSet.h>
 #include <Resources/ExternalTextureResource.h>
 #include <Resources/PixelBuffer.h>
 #include <rhi_helpers.h>

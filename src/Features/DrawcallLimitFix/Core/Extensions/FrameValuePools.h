@@ -17,6 +17,11 @@ namespace DCLF
 	struct FrameGlobals;
 }
 
+namespace org::services
+{
+	class BackingLease;
+}
+
 namespace DCLF::Api
 {
 	/** @brief A pool's frame start (render thread, every FrameValues::Kick): the frame's engine globals (null: none captured). */
@@ -48,7 +53,17 @@ namespace DCLF::Api
 			void (*put)(void* a_owner, const void* a_data, std::size_t a_bytes, std::size_t a_offset) = nullptr;
 			void operator()(const void* a_data, std::size_t a_bytes, std::size_t a_offset) const { put(owner, a_data, a_bytes, a_offset); }
 		};
-		using EmitRowsFn = void (*)(const void* a_view, std::uint64_t a_contentEpoch, const RowSink& a_sink);
+		/**
+		 * @brief The backing a send fills, as its emit sees it: its device address (deviceAddress pools; else 0), the rows it holds and its
+		 * lease (diagnostics). The sink's data must stay put until the send queues it.
+		 */
+		struct SendTarget
+		{
+			std::uint64_t address = 0;
+			std::uint64_t capacityUnits = 0;
+			const org::services::BackingLease* lease = nullptr;
+		};
+		using EmitRowsFn = void (*)(const void* a_view, std::uint64_t a_contentEpoch, const SendTarget& a_target, const RowSink& a_sink);
 		using SendRowsFn = void (*)(void* a_owner, std::size_t a_pool, std::size_t a_count, std::uint64_t a_contentEpoch, const void* a_view, EmitRowsFn a_emit);
 
 		std::uint64_t seq = 0;                       // the frame's producer
@@ -86,7 +101,7 @@ namespace DCLF::Api
 		template <class Row>
 		void Send(const KeptWholeArray<Row>& a_rows) const
 		{
-			send(owner, pool, a_rows.Size(), a_rows.ContentEpoch(), &a_rows, [](const void* a_view, std::uint64_t a_contentEpoch, const RowSink& a_sink) {
+			send(owner, pool, a_rows.Size(), a_rows.ContentEpoch(), &a_rows, [](const void* a_view, std::uint64_t a_contentEpoch, const SendTarget&, const RowSink& a_sink) {
 				static_cast<const KeptWholeArray<Row>*>(a_view)->Emit(a_contentEpoch, a_sink);
 			});
 		}

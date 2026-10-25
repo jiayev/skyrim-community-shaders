@@ -144,7 +144,7 @@ namespace DCLF::Diagnostics
 		std::uint32_t frame;
 		std::uint64_t snapshot;  // the snapshot's serial
 		const Draws::NamedVersions* set;
-		const Draws::PayloadVersions* payload;
+		const Draws::ScenePayload* payload;
 		bool growth;  // its set's versions are the first a growth made current (the frame noted as the growth's adoption)
 	};
 
@@ -158,9 +158,9 @@ namespace DCLF::Diagnostics
 		std::span<const bool> covered;
 		std::uint64_t snapshot;  // the adopted snapshot's serial (0: none)
 		bool drawsComplete, stale;
-		const Draws::PayloadVersions* payload;  // the installed payload (null: none)
+		const Draws::ScenePayload* payload;  // the installed payload (null: none)
 		bool versions;  // the active revision names a set
-		bool current;   // ... the adopted one, with the snapshot current and its payload ready
+		bool current;   // ... the adopted one, with the snapshot current and a payload source
 	};
 
 	/**
@@ -250,22 +250,23 @@ namespace DCLF::Diagnostics
 	// ---- The stores the builds keep (the builder's thread, or the render thread while the builder is idle) and the buffers they fill.
 
 	/**
-	 * @brief The payload's extras backing `backing` (its lease) is about to be caught up with a publication's rows
-	 * (PayloadBuilder::Publish, the snapshot builder's thread): an observer may give the mirror they are copied into as sent.
+	 * @brief The payload's extras version `version` is about to be built from version `previous` (0: none, written whole) with its delta
+	 * (PayloadPools, the version's producer): an observer may give the mirror the delta is copied into as uploaded (`previous`'s mirror
+	 * with it written over).
 	 */
 	struct ExtrasSending
 	{
-		const org::services::BackingLease& backing;
+		std::uint64_t version, previous;
 		std::vector<float>*& mirror;
 	};
 
 	/**
-	 * @brief The payload's extras backing `backing` was caught up to `rows` (it now holds every row of them), from `tables` (whose
-	 * extraOffset names the blocks a live object owns: a freed block's rows are never read, nor journalled once its owner is gone).
+	 * @brief The payload's extras version `version` was built to `rows` (it holds every row of them), from `tables` (whose extraOffset
+	 * names the blocks a live object owns: a freed block's rows are never read, nor journalled once its owner is gone).
 	 */
 	struct ExtrasSent
 	{
-		const org::services::BackingLease& backing;
+		std::uint64_t version;
 		const Draws::ExtrasOut& rows;
 		const SceneTables* tables = nullptr;
 	};

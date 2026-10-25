@@ -491,13 +491,17 @@ namespace DCLF::Draws
 		// The colour segment: the local shadow lights' mask records (a LocalShadowMaskRegion), bytes into the latch block, which
 		// LocalShadowMaskCS resolves into kSHADOW_MASK. 0 elsewhere.
 		std::uint32_t localShadowMaskOffset;
-		std::uint32_t reserved;
+		// The latches of the main rows (PayloadLatch: the depth and colour segments', the views'): the device address of the frame's copy
+		// of the installed payload's animated material rows (Api::PassDef::animatedRows: Features/TextureTransforms' pool), which BuildDraws
+		// points a row whose header names one at (MaterialRowHeader::animatedRow). 0: none (every draw reads the installed rows).
+		std::uint32_t animatedRowsLo, animatedRowsHi;
+		std::uint32_t reserved[3];
 	};
 	// BuildDrawsLatch::focusRoot for a target that is no listed root: no input's root word is its - 1.
 	constexpr std::uint32_t kFocusRootNone = 0xFFFFFFFFu;
 	// BuildDrawsLatch::portalProgramsIndex's byte offset (BuildDrawsCS, FadeStateCS and PortalBatchCS read it as kLatchPortalPrograms).
 	constexpr std::uint32_t kLatchPortalProgramsOffset = 320;
-	static_assert(sizeof(BuildDrawsLatch) == 352 && offsetof(BuildDrawsLatch, localShadowMaskOffset) == 344 && offsetof(BuildDrawsLatch, slotLayoutsOffset) == 336 && offsetof(BuildDrawsLatch, minCasterRadius) == 340 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
+	static_assert(sizeof(BuildDrawsLatch) == 368 && offsetof(BuildDrawsLatch, animatedRowsLo) == 348 && offsetof(BuildDrawsLatch, localShadowMaskOffset) == 344 && offsetof(BuildDrawsLatch, slotLayoutsOffset) == 336 && offsetof(BuildDrawsLatch, minCasterRadius) == 340 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
 				  offsetof(BuildDrawsLatch, lightContextsIndex) == 324 && offsetof(BuildDrawsLatch, strictContext) == 332 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, classTableOffset) == 292 &&
 				  offsetof(BuildDrawsLatch, classMapOffset) == 296 && offsetof(BuildDrawsLatch, focusRoot) == 268 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 288 && offsetof(BuildDrawsLatch, inputsIndex) == 256 &&
 				  offsetof(BuildDrawsLatch, viewBits) == 264 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&

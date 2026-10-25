@@ -583,7 +583,7 @@ namespace DCLF::Extensions
 			{
 				if (a_pool.name.empty() || !a_pool.stride || !a_pool.kick || !a_pool.sample || !a_pool.send)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete frame-value pool", feature));
-				lists.pools.push_back({ std::string(a_pool.name), a_pool.stride, a_pool.frameStart, a_pool.kick, a_pool.sample, a_pool.send });
+				lists.pools.push_back({ std::string(a_pool.name), a_pool.stride, a_pool.deviceAddress, a_pool.frameStart, a_pool.kick, a_pool.sample, a_pool.send });
 				return { static_cast<std::uint32_t>(lists.pools.size() - 1) };
 			}
 
@@ -1103,7 +1103,8 @@ namespace DCLF::Extensions
 			void RegisterPaletteRows(const Api::PaletteRowsContribution& a_rows) override
 			{
 				const auto& rule = a_rows.rule;
-				const bool ruleValid = rule.rowsPerUnit && rule.minUnits && rule.minUnits <= rule.maxUnits && (!rule.pow2 || std::has_single_bit(rule.maxUnits));
+				const bool ruleValid = rule.rowsPerUnit && rule.minUnits && rule.minUnits <= rule.maxUnits &&
+				                       (!rule.pow2 || (std::has_single_bit(rule.maxUnits) && std::has_single_bit(rule.octaveSteps)));
 				if (a_rows.itemClass == Api::FrameValueItemClass::None || a_rows.itemClass >= Api::FrameValueItemClass::Count || a_rows.name.empty() || !ruleValid ||
 					!a_rows.geometrySource || !a_rows.beginRun || !a_rows.sampleChunk || !a_rows.endRun)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete palette rows class", feature));

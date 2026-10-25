@@ -76,9 +76,9 @@ namespace DCLF
 			std::uint64_t serial = 0;
 			std::shared_ptr<const ScenePublication> publication;
 			std::shared_ptr<const DrawPublication> draws;
-			// Its draws' payload (PayloadVersions, ready: the builder posts a snapshot only once its uploads completed); null without
-			// draws. A snapshot without one draws nothing (DecideCoverage).
-			std::shared_ptr<const PayloadVersions> payload;
+			// Its draws' payload (ScenePayload: every part's version, GPU ready before it was posted); null without draws, or when a
+			// version's build failed. A snapshot without one draws nothing (DecideCoverage).
+			std::shared_ptr<const ScenePayload> payload;
 			org::async::RevisionAssembler::Lease revision;
 			// Both main payloads built for the main resources; without, its frames have no claims (DecideCoverage).
 			bool drawsComplete = false;
@@ -133,13 +133,14 @@ namespace DCLF
 		// The frame's: the adopted snapshot, and whether the newest found was stale (no claims until a current one).
 		std::shared_ptr<const SceneSnapshot> adoptedSnapshot;
 		// The frame's: the adopted snapshot's payload, installed with its draws (the snapshot holds it too, so the builder releases it),
-		// bound after the frame's last submission (BindAdopted). The epochs read its parts by value.
-		std::shared_ptr<const PayloadVersions> installedPayload;
-		/** @brief The frame: the installed payload (null: none; a covered epoch always has one, ready: DecideCoverage). */
-		const PayloadVersions* InstalledPayload() const { return installedPayload.get(); }
-		// The snapshot builder's: the payloads' pools (D5), on DCLF's retirement clock; their single acquirer is the builder. Census is
-		// any thread's.
-		PayloadBuilder payloadBuilder{ FrameRetirement() };
+		// and the frame's payload made from its versions at the frame's start (MakeFramePayload). The epochs read its parts by value.
+		std::shared_ptr<const ScenePayload> installedPayload;
+		PayloadVersions framePayload;
+		bool framePayloadMade = false;
+		/** @brief The frame: its payload (null: none yet, before its start made it or without one; a covered epoch always has one). */
+		const PayloadVersions* InstalledPayload() const { return framePayloadMade ? &framePayload : nullptr; }
+		/** @brief The frame: the installed snapshot's payload (null: none). */
+		const ScenePayload* InstalledScenePayload() const { return installedPayload.get(); }
 		bool snapshotStale = false;
 		// The frame's waits at its start for a current snapshot (AdoptCurrentSnapshot) since the last report: how many, their total and
 		// longest time.
@@ -165,8 +166,8 @@ namespace DCLF
 				Make,        // its revision to make (again), then its draws for the versions the revision names
 				Waiting,     // made, none sealed (a growth or a build pending): made again when woken
 				// Sealed, draws built: its recordings awaited, its payload published once the frame will adopt it (PublishPayload; no
-				// newer work replaces it: a build starts only while the gate is open) and its uploads awaited (their completions and the
-				// frame's take wake the builder).
+				// newer work replaces it: a build starts only while the gate is open) and its parts' versions awaited (their GPU readiness,
+				// the recordings' completions and the frame's take wake the builder).
 				Recordings,
 			};
 			Stage stage = Stage::Idle;
@@ -177,7 +178,12 @@ namespace DCLF
 			std::unique_ptr<SnapshotWork> held;
 			std::shared_ptr<const DrawPublication> draws;
 			// draws' payload (PublishPayload), published once per draws: a snapshot made again for the same draws keeps it.
-			std::shared_ptr<const PayloadVersions> payload;
+			std::shared_ptr<const ScenePayload> payload;
+			// The source whose parts' versions are in flight (PayloadPools::Post; null: none), for these draws or ones replaced since; and
+			// whether these draws' payload failed (a version's build, or no uploader that copies): their snapshot is posted without one, and
+			// the next make builds it again.
+			std::shared_ptr<const PayloadSource> payloadSource;
+			bool payloadFailed = false;
 			std::uint64_t drawsSerial = 0;     // the serial of the sealed set draws embed the addresses of (0: none)
 			std::uint64_t sealedSequence = 0;  // the assembler sequence of the revision sealed for work
 			std::uint64_t serial = 0, lastPublication = 0;
@@ -208,7 +214,7 @@ namespace DCLF
 				std::shared_ptr<const ScenePublication> publication;
 				std::shared_ptr<const EntrySpace> sun, light;
 				std::shared_ptr<const DrawPublication> draws;
-				std::shared_ptr<const PayloadVersions> payload;
+				std::shared_ptr<const ScenePayload> payload;
 				org::async::RevisionAssembler::Lease revision;
 				std::uint64_t drawsSerial = 0;
 				// The ahead context's shape (which builds ran, for which resources and frame slots).

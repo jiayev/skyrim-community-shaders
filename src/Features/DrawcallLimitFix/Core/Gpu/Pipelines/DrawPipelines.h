@@ -43,17 +43,26 @@ namespace DCLF
 	inline constexpr std::uint32_t kFramePushRecord = 0;
 	inline constexpr std::uint32_t kFramePushRegisters = 2;
 	inline constexpr std::uint32_t kFramePushWords = kFramePushRegisters + 2 * (std::popcount(kFramePushVS) + std::popcount(kFramePushPS));
-	// A draw's push data (DrawSequence's Constant argument: its bytes 4-55): pipeline row address, material row address, object word,
-	// then the geometry's two vertex buffer views (address, size, stride each), which the vertex stage pulls its attributes through
-	// (DCLF_PULLED_VERTICES; DCLFObjects.hlsli, DCLFPushData, whose packoffsets are these words), and a pad so the pass's push data
-	// after it is 8-byte aligned (BasicRHI packs the ranges back to back).
+	// A draw's push data (DrawSequence's Constant argument: its bytes 4-99): pipeline row address (VS b0), material row address (VS
+	// b1), object word, the geometry's two vertex buffer views (address, size, stride each), which the vertex stage pulls its attributes
+	// through (DCLF_PULLED_VERTICES; DCLFObjects.hlsli, DCLFPushData, whose packoffsets are these words), a pad (word 13), then the
+	// rows' other blocks' addresses (PS b0, VS b2, PS b2, b4, PS b1: the layout maps each as a pushed address, MainLayoutRanges).
+	// BasicRHI requires a pushed address 8-byte aligned in the push data, hence the pad: every address is at an even word. The words
+	// are even in number, so the pass's push data after them is 8-byte aligned too (BasicRHI packs the ranges back to back).
 	inline constexpr std::uint32_t kDrawPushPipelineRow = 0, kDrawPushMaterialRow = 2, kDrawPushObject = 4, kDrawPushVertexBuffer = 5, kDrawPushStreamBuffer = 9,
-								   kDrawPushArgumentWords = 13, kDrawPushWords = 14;
-	static_assert(kDrawPushWords % 2 == 0 && kDrawPushArgumentWords < kDrawPushWords);
+								   kDrawPushTechniquePS = 14, kDrawPushGeometryVS = 16, kDrawPushGeometryPS = 18, kDrawPushPermutation = 20, kDrawPushMaterialPS = 22,
+								   kDrawPushArgumentWords = 24, kDrawPushWords = 24;
+	static_assert(kDrawPushWords % 2 == 0 && kDrawPushArgumentWords <= kDrawPushWords);
+	// The pushed addresses' words are even (BasicRHI: PushAddress ranges 8-byte aligned; the draw's range starts the push data).
+	static_assert(kDrawPushPipelineRow % 2 == 0 && kDrawPushMaterialRow % 2 == 0 && kDrawPushTechniquePS % 2 == 0 && kDrawPushGeometryVS % 2 == 0 &&
+				  kDrawPushGeometryPS % 2 == 0 && kDrawPushPermutation % 2 == 0 && kDrawPushMaterialPS % 2 == 0);
 	// Push word w is the sequence's byte 4 + 4w, and the argument ends where the index buffer view starts.
 	static_assert(offsetof(DrawSequence, pipelineRowAddress) == 4 + 4 * kDrawPushPipelineRow && offsetof(DrawSequence, materialRowAddress) == 4 + 4 * kDrawPushMaterialRow &&
 				  offsetof(DrawSequence, objectIndex) == 4 + 4 * kDrawPushObject && offsetof(DrawSequence, vertexBufferAddress) == 4 + 4 * kDrawPushVertexBuffer &&
 				  offsetof(DrawSequence, streamBufferAddress) == 4 + 4 * kDrawPushStreamBuffer &&
+				  offsetof(DrawSequence, psTechniqueAddress) == 4 + 4 * kDrawPushTechniquePS && offsetof(DrawSequence, vsGeometryAddress) == 4 + 4 * kDrawPushGeometryVS &&
+				  offsetof(DrawSequence, psGeometryAddress) == 4 + 4 * kDrawPushGeometryPS && offsetof(DrawSequence, permutationAddress) == 4 + 4 * kDrawPushPermutation &&
+				  offsetof(DrawSequence, psMaterialAddress) == 4 + 4 * kDrawPushMaterialPS &&
 				  offsetof(DrawSequence, indexBufferAddress) == 4 + 4 * kDrawPushArgumentWords);
 	// Z-prepass plain draws' push word, per call: the first sequence's address. A call draws every pipeline slot sharing its depth
 	// pipeline (ZPipelineKey), so rows and vertex layout are read per draw through its sequence (Lighting.hlsl, DCLF_PULLED).
@@ -65,7 +74,8 @@ namespace DCLF
 	// material rows' table (for the layout's b1/t0 ranges; the stages read the draw's row themselves), the vertex layout.
 	inline constexpr std::uint32_t kShadowDrawPushSequences = 0, kShadowDrawPushMaterialRows = 2, kShadowDrawPushVertexLayout = 4;
 	/** @brief Where a DrawSequence's draw arguments start, which the shadow views' plain indexed draws read. */
-	inline constexpr std::uint32_t kSequenceDrawOffset = 72;
+	inline constexpr std::uint32_t kSequenceDrawOffset = 116;
+	static_assert(offsetof(DrawSequence, indexCount) == kSequenceDrawOffset);
 	/*
 	 * The shadow views' layout: a draw's words are its material row's address (ShadowMaterialRow: Utility's PerMaterial b1, and the
 	 * diffuse t0) and the object word; the rest is pushed once per view (six addresses below). The frame record gives every other
@@ -83,8 +93,9 @@ namespace DCLF
 
 	/*
 	 * The main pass's rows (Resources::materialRows, pipelineRows). A draw names one of each; other registers come from the frame
-	 * record. Blocks sit at 256-byte offsets (a table is an array of constant buffers); each row's header holds its blocks' addresses
-	 * (written at upload) and descriptor indices, which the layout's indirect ranges read.
+	 * record. Blocks sit at 256-byte offsets (a table is an array of constant buffers); each row's header holds its descriptor indices,
+	 * which the layout's indirect ranges read. The rows hold no addresses: a draw's sequence carries its blocks' (DrawSequence; BuildDrawsCS
+	 * writes them from the rows' addresses), so a version's bytes are the same whatever backing holds them.
 	 *
 	 * Material row (SceneTables::materials, keyed {material, pass descriptor}): PerMaterial (b1), its textures and samplers, projected
 	 * textures (t3, t8, t10, t11), feature textures (the material contributors', by slot: Extensions::FeatureTextureRegister, today
@@ -96,13 +107,17 @@ namespace DCLF
 	inline constexpr std::uint32_t kMaterialRowVSBytes = 256, kMaterialRowPSBytes = 512;
 	struct MaterialRowHeader
 	{
-		std::uint64_t vsMaterial = 0, psMaterial = 0;  // b1: the row's own blocks
+		// The material's index among its version's animated rows (Texture Transforms: the frame's copy BuildDrawsCS's MaterialRowAddress
+		// resolves the row to), ~0u: none. Then reserved (the pulled stages read the indices below at fixed offsets).
+		std::uint32_t animatedRow = ~0u;
+		std::uint32_t reserved[3]{};
 		std::uint32_t textures[kPixelTextureSlots]{};
 		std::uint32_t samplers[16]{};
 		std::uint32_t features[Extensions::kFeatureTextureSlots]{};
 	};
 	static_assert(kMaterialRowHeader + sizeof(MaterialRowHeader) <= kMaterialRowBytes);
-	// DCLFMaterialTextureIndex (DCLFObjects.hlsli) reads the features from the 32nd word after the addresses, in register order.
+	// DCLFMaterialTextureIndex (DCLFObjects.hlsli) reads the textures from byte 16 and the features from the 32nd word after them, in
+	// register order.
 	static_assert(offsetof(MaterialRowHeader, features) == 16 + 4 * 32);
 	inline constexpr std::uint32_t kPipelineRowBytes = 2048;
 	inline constexpr std::uint32_t kPipelineRowTechniqueVS = 0, kPipelineRowTechniquePS = 256, kPipelineRowGeometryVS = 512, kPipelineRowGeometryPS = 768,
@@ -111,14 +126,27 @@ namespace DCLF
 								   kPipelineRowPermutationBytes = 256;
 	struct PipelineRowHeader
 	{
-		std::uint64_t vsTechnique = 0, psTechnique = 0;  // b0
-		std::uint64_t vsGeometry = 0, psGeometry = 0;    // b2
-		std::uint64_t vsPermutation = 0, psPermutation = 0;  // b4: one block, both stages
+		// Reserved (zero): the blocks' addresses are the draw's sequence's (DrawSequence); the pulled stages read the words below at
+		// fixed offsets.
+		std::uint64_t reserved[6]{};
 		std::uint32_t shadowMask = 0;                    // t14
 		std::uint32_t shadowMaskSampler = 0;             // s14
 		std::uint64_t vertexLayout = 0;                  // PipelineKey::vertexLayout, decoded by a pulled vertex stage
 	};
 	static_assert(kPipelineRowHeader + sizeof(PipelineRowHeader) <= kPipelineRowBytes);
+	static_assert(offsetof(PipelineRowHeader, shadowMask) == 48 && offsetof(PipelineRowHeader, vertexLayout) == 56);  // DCLFPipeline*Index
+	/**
+	 * @brief A sequence's block addresses (DrawSequence: PS b0, VS b2, PS b2, b4, PS b1) from its rows' addresses, as BuildDrawsCS
+	 * writes them (StoreSequence): the CPU templates' (the build parity).
+	 */
+	inline void SetSequenceBlocks(DrawSequence& a_sequence)
+	{
+		a_sequence.psTechniqueAddress = a_sequence.pipelineRowAddress + kPipelineRowTechniquePS;
+		a_sequence.vsGeometryAddress = a_sequence.pipelineRowAddress + kPipelineRowGeometryVS;
+		a_sequence.psGeometryAddress = a_sequence.pipelineRowAddress + kPipelineRowGeometryPS;
+		a_sequence.permutationAddress = a_sequence.pipelineRowAddress + kPipelineRowPermutation;
+		a_sequence.psMaterialAddress = a_sequence.materialRowAddress + kMaterialRowPS;
+	}
 	// Every DCLF draw signature is preprocessed explicitly before the passes that execute it (CommandList::PreprocessIndirect).
 	/** @brief Pixel shader resource registers t0-t127 (textures and structured buffers). */
 	inline constexpr std::uint32_t kTextureRegisters = 128;

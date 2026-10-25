@@ -16,7 +16,7 @@ namespace DCLF::Draws
 	/**
 	 * @brief What the versions a_sealed names of a_scene's buffers hold, with per-object buffers of a_objectBuffers objects (an epoch's
 	 * visibility). A buffer the set does not name holds nothing. The payload's parts (records, geometry rows, extras) bound nothing:
-	 * the payload holds every row of its publication (PayloadBuilder). A feature's scene resources say what theirs hold
+	 * the payload holds every row of its publication (PayloadPools). A feature's scene resources say what theirs hold
 	 * (Api::SceneResources::fit): the root states' rows among them (their family's rows; without the fade program no draw reads them).
 	 */
 	inline SceneFit SceneFitOf(const NamedVersions& a_sealed, const SceneBuffers& a_scene, std::uint64_t a_objectBuffers)

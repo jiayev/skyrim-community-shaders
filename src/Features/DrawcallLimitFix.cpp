@@ -42,6 +42,7 @@
 #	include "DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #	include "DrawcallLimitFix/Core/Engine/Capture/SceneTracker.h"
 #	include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#	include "RenderGraph/MemoryWindow.h"
 #	include "RenderGraph/ScheduleWindow.h"
 #	include "RenderGraph/RenderGraphRuntime.h"
 #	include <OpenRenderGraph/PersistentGraphHost.h>
@@ -564,6 +565,13 @@ void DrawcallLimitFix::DrawSettings()
 			ImGui::TextUnformatted(
 				"Opens the persistent schedule inspector: each executable's batches per queue, their passes, the barriers before each pass and "
 				"every cross-queue wait with its cause. The graph traces its schedule while the window is open.");
+		ImGui::SameLine();
+		if (ImGui::Button("Render graph memory"))
+			RenderGraphMemory::OpenWindow();
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(
+				"Opens ORG's memory introspection: every render graph buffer and texture (DCLF's tables, pools and targets among them) with the "
+				"size of its allocation, by category or as a list. The game's own textures and buffers are DXVK's, not in it.");
 	};
 	if (!switchedOn) {
 		ImGui::TextWrapped("Switched off with the feature's toggle: the game renders natively and DCLF does no frame work. Switch it back on to resume; no restart needed.");

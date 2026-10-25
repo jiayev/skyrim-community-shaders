@@ -50,6 +50,10 @@ namespace DCLF::Api
 	 * - latchWord: render thread, at each depth commit: the value of the depth segment's BuildDrawsLatch stage word (byte 300), which the
 	 *   pass's shader reads from the latch. The latch has one such word: a second pass with one fails the install (grow BuildDrawsLatch,
 	 *   Core/Render/Resources/GpuLayouts.h, first), as does a key the schedule names anywhere but in main.depth before core.z.build-draws.
+	 * - animatedRows: render thread, at each latch of the main rows (PayloadLatch: the depth and colour segments', the views'): the device
+	 *   address of the frame's copy of the installed payload's animated material rows (MaterialRowHeader::animatedRow: row k at k *
+	 *   kMaterialRowBytes), BuildDrawsLatch::animatedRows, which the pass writes whole before any of the frame's draws and BuildDraws
+	 *   points those rows' draws at (0: none, the draws read the installed rows). One pass may have one, scheduled as latchWord's is.
 	 */
 	struct PassDef
 	{
@@ -61,5 +65,6 @@ namespace DCLF::Api
 		void (*emit)(const PassContext& a_context, PassOut& a_out) = nullptr;
 		std::shared_ptr<const void> (*setup)(const PassSetup& a_setup) = nullptr;
 		std::uint32_t (*latchWord)() = nullptr;
+		std::uint64_t (*animatedRows)() = nullptr;
 	};
 }

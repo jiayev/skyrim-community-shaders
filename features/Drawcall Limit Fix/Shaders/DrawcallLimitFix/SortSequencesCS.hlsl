@@ -23,8 +23,8 @@ cbuffer SortSequencesConstants : register(b0)
 static const uint kCountDrawn = 0;
 static const uint kSortRankBits = 20;  // BuildDrawsCS's
 static const uint kSortRankMask = (1u << kSortRankBits) - 1;
-static const uint kInstanceCountOffset = 76;  // the staged class's first slot (BuildDrawsCS)
-static const uint kFirstInstanceOffset = 88;  // the staged class's first sort key (BuildDrawsCS)
+static const uint kInstanceCountOffset = 120;  // the staged class's first slot (BuildDrawsCS)
+static const uint kFirstInstanceOffset = 132;  // the staged class's first sort key (BuildDrawsCS)
 
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {

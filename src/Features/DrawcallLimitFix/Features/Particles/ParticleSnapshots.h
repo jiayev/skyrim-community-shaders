@@ -3,6 +3,8 @@
 // The particle snapshots (Features/Particles): the writer's engine hooks, the followed records and the expansion the feature's palette
 // rows class runs (ParticleRows.cpp). Included by the feature's sources only.
 
+#include "Features/DrawcallLimitFix/Api/FrameValues.h"
+
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -71,6 +73,11 @@ namespace DCLF::Features::Particles
 		// The engine draws at most 0x800 particles a system (FUN_1414f2ad0) with a quad index list of as many quads (FUN_140e4d280).
 		static constexpr std::uint32_t kMaxQuads = 0x800;
 		static constexpr std::uint32_t kMinQuads = 8;
+		// A block holds its system's capacity rounded up to a quarter octave (8, 10, 12, 14, 16, 20, ...), not to a power of two: a large
+		// list's hundreds of systems held three times their capacity in the palettes. Each size is a geometry slot (QuadSlotKey).
+		static constexpr std::uint32_t kOctaveSteps = 4;
+		static constexpr Api::PaletteRowsContribution::BlockRule kBlockRule{ .rowsPerUnit = kRowsPerParticle, .minUnits = kMinQuads, .maxUnits = kMaxQuads,
+			.pow2 = true, .octaveSteps = kOctaveSteps };
 		/**
 		 * @brief The particle quads' geometry slot's vertex description: the renderer's static texture-coordinate stream alone (4 bytes a
 		 * vertex, half2 at stream 0), which the draw binds and the DCLF particle permutation does not read. NiParticles' own description

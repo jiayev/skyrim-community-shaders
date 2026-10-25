@@ -19,7 +19,7 @@ namespace DCLF::Api
 	 *   from here and shared by both segments' payloads; it may hold engine pointers only while the publication the payload belongs to
 	 *   holds them. Nothing moved: it may return its previous result (the same object), whose pointers the moves it was told of keep
 	 *   current.
-	 * - carried (optional): the snapshot builder, when a payload with main parts is published (PayloadBuilder::Publish), with the main
+	 * - carried (optional): the snapshot builder, when a payload with main parts is published (PayloadPools::MakeSource), with the main
 	 *   payload's product (null when its build made none).
 	 * - install: render thread, when the frame adopts a snapshot whose payload is not the installed one (AdoptSnapshot), with the
 	 *   installed payload's product (null: no payload, or one without main parts). It stays valid until the next install.

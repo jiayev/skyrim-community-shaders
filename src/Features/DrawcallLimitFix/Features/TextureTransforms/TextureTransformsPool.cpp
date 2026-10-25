@@ -1,9 +1,12 @@
-// The texture transforms' frame-value pool: every installed material row's TexcoordOffset and declared frame variables sampled each frame
+// The texture transforms' frame-value pools: every installed material row's TexcoordOffset and declared frame variables sampled each frame
 // by FrameValues' producer
-// (TextureTransformRow: the header, then entry i at i + 1), the rows that moved sent into the frame's backing, with its parity and its
-// stats line (Diagnostics/TextureTransformsParity.cpp).
+// (TextureTransformRow: the header, then entry i at i + 1, then the animated rows to copy), the rows that moved sent into the frame's
+// backing, with its parity and its stats line (Diagnostics/TextureTransformsParity.cpp); and the frame's copy of the animated material
+// rows (animated-material-rows: a backing per frame the GPU alone writes, TextureTransformsCS).
 
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransformsPool.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 
@@ -19,6 +22,9 @@ namespace DCLF::Features::TextureTransforms
 		std::shared_ptr<const TextureTransformList> installed;
 		std::uint64_t rowsNeeded = 1;
 		Api::FrameValuePoolId pool;
+		// The frame's copy of the animated material rows (a row each, kMaterialRowBytes), and whether the pass's program that writes it was made.
+		Api::FrameValuePoolId copyPool;
+		bool copyAvailable = false;
 
 		// The producers', one at a time in frame order.
 		struct Produced
@@ -32,9 +38,19 @@ namespace DCLF::Features::TextureTransforms
 		// Render thread, at Kick: the installed payload's TexcoordOffset rows for the frame's producer.
 		Api::FrameValueInput Kick(const Api::FrameValuePoolKick&)
 		{
-			rowsNeeded = std::max<std::uint64_t>(rowsNeeded, (installed ? installed->entries.size() : 0u) + 1u);
+			rowsNeeded = std::max<std::uint64_t>(rowsNeeded, (installed ? installed->entries.size() + installed->animatedSlots.size() : 0u) + 1u);
 			return { installed, rowsNeeded };
 		}
+
+		// The frame's copy: a backing holding the installed payload's animated rows. Nothing is sampled or sent: TextureTransformsCS writes
+		// every row of it the frame's draws are pointed at (the installed rows copied whole) before any of them reads it, on the graphics
+		// queue they draw on.
+		Api::FrameValueInput KickCopy(const Api::FrameValuePoolKick&)
+		{
+			return { installed, installed ? installed->animatedSlots.size() : 0u };
+		}
+		void SampleCopy(Api::FrameValuePoolProducer&) {}
+		void SendCopy(Api::FrameValuePoolProducer&) {}
 
 		// Sample's stages: the entries read across the pool (the rows that changed marked, in order), the parity, the line.
 		struct Sampled
@@ -105,17 +121,29 @@ namespace DCLF::Features::TextureTransforms
 			auto& out = p.transforms.Mutable();
 			const auto* list = a_producer.Input<TextureTransformList>();
 			const std::size_t count = list ? list->entries.size() : 0;
-			if (out.size() < count + 1) {
+			const std::size_t animated = list ? list->animatedSlots.size() : 0;
+			if (out.size() < count + animated + 1) {
 				const std::size_t first = out.size();
-				out.resize(count + 1, TextureTransformRow{});
-				p.transforms.MarkRange(first, count + 1 - first);
+				out.resize(count + animated + 1, TextureTransformRow{});
+				p.transforms.MarkRange(first, count + animated + 1 - first);
 			}
 			if (p.materials.size() < count)
 				p.materials.resize(count, nullptr);
-			if (out[0].rowOffset != count) {
+			if (out[0].rowOffset != count || out[0].mask != animated) {
 				out[0] = TextureTransformRow{};
 				out[0].rowOffset = static_cast<std::uint32_t>(count);
+				out[0].mask = static_cast<std::uint32_t>(animated);
 				p.transforms.Mark(0);
+			}
+			// The animated rows the pass copies into the frame's copy first (the list's: they move only with a payload).
+			for (std::size_t k = 0; k < animated; ++k) {
+				const std::uint32_t slot = list->animatedSlots[k];
+				TextureTransformRow next{};
+				next.rowOffset = slot == ~0u ? ~0u : slot * kMaterialRowBytes;
+				if (std::memcmp(&next, &out[count + 1 + k], sizeof(next)) != 0) {
+					out[count + 1 + k] = next;
+					p.transforms.Mark(count + 1 + k);
+				}
 			}
 			// The texture-transform buffer the frame's shaders read (the frame's capture of it, after Main::Update's flip; the controllers
 			// write the other one).
@@ -135,6 +163,8 @@ namespace DCLF::Features::TextureTransforms
 	void RegisterPool(Api::InstallContext& a_context)
 	{
 		pool = a_context.RegisterFrameValuePool({ .name = "texture-transforms", .stride = sizeof(TextureTransformRow), .kick = &Kick, .sample = &Sample, .send = &Send });
+		copyPool = a_context.RegisterFrameValuePool(
+			{ .name = "animated-material-rows", .stride = kMaterialRowBytes, .deviceAddress = true, .kick = &KickCopy, .sample = &SampleCopy, .send = &SendCopy });
 	}
 
 	// Render thread, when a payload is installed (before Kick): the main material rows that carry TexcoordOffset (null: none). From the next
@@ -155,5 +185,16 @@ namespace DCLF::Features::TextureTransforms
 	std::uint32_t RowsIndex()
 	{
 		return Extensions::FrameValuePoolIndex(pool);
+	}
+
+	std::uint64_t AnimatedRowsAddress()
+	{
+		// Without a producer the frame has neither backing: the pass stores nothing, and the draws read the installed rows.
+		return copyAvailable && RowsIndex() ? FrameValues::Get().PoolAddress(copyPool) : 0u;
+	}
+
+	void SetCopyAvailable(bool a_available)
+	{
+		copyAvailable = a_available;
 	}
 }

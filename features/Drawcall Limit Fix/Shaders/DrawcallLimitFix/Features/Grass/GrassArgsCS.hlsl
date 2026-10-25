@@ -72,7 +72,10 @@ void Pack(RWByteAddressBuffer a_draws, uint a_counter, uint a_array, uint a_vert
 		return;
 	ByteAddressBuffer meshes = ResourceDescriptorHeap[MeshesIndex];
 	const uint vertices = meshes.Load(mesh * kMeshRowBytes + 24);
-	const uint first = buckets.Load(bucketBase + 16 + tier * 4);
+	// Tiers 0 and 1 fill up from their base, tier 2 down from its (GrassCullCS Append): its entries so far are the count below it, phase
+	// 2's below phase 1's.
+	const uint base = buckets.Load(bucketBase + 16 + tier * 4);
+	const uint first = tier == 2 ? base - count : base;
 	if (Mode == 1) {
 		draws.Store(kPhaseOneCountsOffset + a_id * 4, count);
 		if (count)
@@ -80,7 +83,7 @@ void Pack(RWByteAddressBuffer a_draws, uint a_counter, uint a_array, uint a_vert
 	} else if (Mode == 2) {
 		const uint phaseOne = draws.Load(kPhaseOneCountsOffset + a_id * 4);
 		if (count > phaseOne)
-			Pack(draws, kPhaseTwoDraws, kPhaseTwoArgs, vertices, count - phaseOne, first + phaseOne);
+			Pack(draws, kPhaseTwoDraws, kPhaseTwoArgs, vertices, count - phaseOne, tier == 2 ? first : first + phaseOne);
 	} else if (count) {
 		const uint program = (buckets.Load(bucketBase + 12) & kBucketTruePbr) != 0 ? 1u : 0u;
 		Pack(draws, kColourDraws + program * 4, kColourArgs + program * kMaxDrawSlots * 16, vertices, count, first);

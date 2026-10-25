@@ -34,7 +34,7 @@ namespace DCLF::Api
 		// Held by the frame's job until its producer is done, then let go on DCLF's pool (no engine reference may be in it). Kick runs
 		// every frame: hand over a pointer the feature already holds, not a new allocation.
 		std::shared_ptr<const void> input;
-		// The rows the producer may leave: the frame's backing holds at least these (its class grows by doubling, never shrinks).
+		// The rows the producer may leave: the frame's backing holds at least these (its class grows by FrameValues' headroom policy, never shrinks).
 		std::uint64_t rows = 0;
 	};
 
@@ -62,6 +62,9 @@ namespace DCLF::Api
 	{
 		std::string_view name;    // the backing pool's name, cs.dclf.frame-values.<name>, and the report's
 		std::uint32_t stride = 0;  // bytes a row
+		// Its backings report their device address (FrameValues::PoolAddress): rows that hold their own address, or a pass that reads them
+		// by address.
+		bool deviceAddress = false;
 		void (*frameStart)(const FrameValuePoolFrameStart& a_start) = nullptr;
 		FrameValueInput (*kick)(const FrameValuePoolKick& a_kick) = nullptr;
 		void (*sample)(FrameValuePoolProducer& a_producer) = nullptr;
@@ -100,7 +103,8 @@ namespace DCLF::Api
 	 * - name: the report's and the install's.
 	 * - itemClass: the class (one registration's).
 	 * - rule: a block's rows from the geometry's unit count (SceneCapture's record: a particle system's capacity): the units clamped to
-	 *   [minUnits, maxUnits], rounded up to a power of two when pow2 (maxUnits then one), times rowsPerUnit. The walk reads it as data.
+	 *   [minUnits, maxUnits], rounded up when pow2 (maxUnits then a power of two) to the next of octaveSteps equal steps between powers
+	 *   of two (1: a power of two; 4: 8, 10, 12, 14, 16, 20, ...), times rowsPerUnit. The walk reads it as data.
 	 * - geometrySource: the scene lane (the walk's record writes): the geometry slot the class's draws read, for a_source.units units
 	 *   (the rule's); false: none yet (the record waits, Tables::kSlotFree).
 	 * - frameStart (optional): render thread, FrameDriver::BeginFrame, every frame (after the primary cull's frame camera): the engine's
@@ -121,12 +125,19 @@ namespace DCLF::Api
 		{
 			std::uint32_t rowsPerUnit = 0, minUnits = 0, maxUnits = 0;
 			bool pow2 = false;
+			// With pow2: each octave's equal steps (a power of two itself: 1, 2, 4, ...). More steps hold fewer rows past the count (at most
+			// a 1/octaveSteps share of the octave) at more sizes (each size a geometry slot of the class's).
+			std::uint32_t octaveSteps = 1;
 
 			/** @brief The units a geometry of a_count is given a block for. */
 			constexpr std::uint32_t Units(std::uint32_t a_count) const
 			{
 				const std::uint32_t units = std::clamp(a_count, minUnits, maxUnits);
-				return pow2 ? std::bit_ceil(units) : units;
+				if (!pow2)
+					return units;
+				const std::uint32_t octave = std::bit_floor(units);
+				const std::uint32_t step = std::max(octave / std::max(octaveSteps, 1u), 1u);
+				return (units + step - 1) / step * step;
 			}
 			/** @brief Its block's rows in the frame's palettes. */
 			constexpr std::uint32_t Rows(std::uint32_t a_count) const { return Units(a_count) * rowsPerUnit; }

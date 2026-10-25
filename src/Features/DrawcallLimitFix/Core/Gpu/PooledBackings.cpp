@@ -1,6 +1,7 @@
 // PooledBackings (see the header): DCLF's allocate and retire hooks for its backing pools.
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
 
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 
 #include <ORGModuleServices/BackingPool.h>
@@ -76,5 +77,15 @@ namespace DCLF::PooledBackings
 		// The newest frame's backing is still bound when the next is acquired: the other frames in flight retire in turn (measured: one
 		// fewer makes a backing again every few frames; this many makes none once warm).
 		return RenderGraphRuntime::kGameFramesInFlight - 1;
+	}
+
+	std::uint32_t SceneCopies()
+	{
+		static const std::uint32_t copies = [] {
+			const auto& value = SwitchValue(Switch::SceneCopies);
+			const auto asked = value.empty() ? 3u : static_cast<std::uint32_t>(std::strtoul(value.c_str(), nullptr, 10));
+			return std::clamp(asked, 2u, RenderGraphRuntime::kGameFramesInFlight);
+		}();
+		return copies;
 	}
 }

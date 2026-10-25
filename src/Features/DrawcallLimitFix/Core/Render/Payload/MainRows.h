@@ -8,10 +8,12 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
@@ -19,9 +21,8 @@
 namespace DCLF::Draws
 {
 	/**
-	 * @brief A main-pass row's bytes (DrawPipelines.h: kMaterialRowBytes, kPipelineRowBytes). Its header's addresses hold the
-	 * blocks' offsets in the row until the upload adds the row's own address (EmitMainRows): a table that grows is sent again
-	 * whole, with the new addresses.
+	 * @brief A main-pass row's bytes (DrawPipelines.h: kMaterialRowBytes, kPipelineRowBytes). It holds no addresses (the draws'
+	 * sequences carry their blocks', BuildDrawsCS), so a backing takes it as it is (EmitMainRows).
 	 */
 	template <std::size_t Bytes>
 	struct RowBytes
@@ -79,6 +80,72 @@ namespace DCLF::Draws
 		};
 		std::vector<MaterialState> materials;
 		std::vector<PipelineState> pipelines;
+		/**
+		 * @brief The material rows a frame patch may write (Animated: TexcoordOffset or a declared frame variable placed), each given a row of
+		 * the frame's copy (MaterialRowHeader::animatedRow; Features/TextureTransforms copies them there and patches the copy, the installed
+		 * rows stay as built). A row keeps its index while it stays animated; a freed index is the lowest one taken next, and the count is the
+		 * highest held plus one (the trailing free ones dropped), so an index moves only with its own row. Assigned on the builder's thread at
+		 * MainBuild::Finish from the slots the build wrote; WriteMaterialRow reads rowOf (pool chunks too: Finish alone writes it).
+		 */
+		struct AnimatedRows
+		{
+			std::vector<std::uint32_t> slotOf;  // per animated row: its material slot, ~0u free
+			std::vector<std::uint32_t> rowOf;   // per material slot: its animated row, ~0u none
+			std::vector<std::uint32_t> free;    // free rows below slotOf.size(), a min-heap (stale entries skipped as taken)
+
+			static bool Animated(const MaterialState& a_state)
+			{
+				return a_state.written && a_state.blocksOk &&
+				       (a_state.texcoordMask || std::any_of(a_state.frameVariables.begin(), a_state.frameVariables.end(), [](const auto& a_place) { return a_place.mask != 0; }));
+			}
+			std::uint32_t RowOf(std::uint32_t a_slot) const { return a_slot < rowOf.size() ? rowOf[a_slot] : ~0u; }
+			std::uint32_t Count() const { return static_cast<std::uint32_t>(slotOf.size()); }
+			/** @brief a_slot's row, taken when it has none. */
+			std::uint32_t Assign(std::uint32_t a_slot)
+			{
+				if (const std::uint32_t held = RowOf(a_slot); held != ~0u)
+					return held;
+				std::uint32_t row = ~0u;
+				while (!free.empty() && row == ~0u) {
+					std::pop_heap(free.begin(), free.end(), std::greater<>{});
+					const std::uint32_t candidate = free.back();
+					free.pop_back();
+					if (candidate < slotOf.size() && slotOf[candidate] == ~0u)
+						row = candidate;
+				}
+				if (row == ~0u) {
+					row = static_cast<std::uint32_t>(slotOf.size());
+					slotOf.push_back(~0u);
+				}
+				slotOf[row] = a_slot;
+				if (rowOf.size() <= a_slot)
+					rowOf.resize(std::size_t(a_slot) + 1, ~0u);
+				rowOf[a_slot] = row;
+				return row;
+			}
+			/** @brief a_slot's row let go (none: nothing). */
+			void Release(std::uint32_t a_slot)
+			{
+				const std::uint32_t row = RowOf(a_slot);
+				if (row == ~0u)
+					return;
+				rowOf[a_slot] = ~0u;
+				slotOf[row] = ~0u;
+				if (row + 1 == slotOf.size()) {
+					while (!slotOf.empty() && slotOf.back() == ~0u)
+						slotOf.pop_back();
+				} else {
+					free.push_back(row);
+					std::push_heap(free.begin(), free.end(), std::greater<>{});
+				}
+			}
+			void Clear()
+			{
+				slotOf.clear();
+				rowOf.clear();
+				free.clear();
+			}
+		} animated;
 		const void* identity = nullptr;
 		std::uint32_t generation = 0;  // the tables generation its rows were written for
 		bool active = false;

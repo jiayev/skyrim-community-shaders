@@ -538,8 +538,12 @@ namespace DCLF
 
 	/**
 	 * @brief One indirect draw, in the command signature's argument order (BasicRHI packs arguments like D3D12, 4-byte aligned):
-	 * pipeline set index, push data (words 0-12: pipeline row and material row addresses, object word, two vertex buffer views in
-	 * D3D12's VBV layout), index buffer view (D3D12's IBV layout), DrawIndexed.
+	 * pipeline set index, push data (words 0-23: pipeline row and material row addresses, object word, two vertex buffer views in
+	 * D3D12's VBV layout, a pad, then the rows' other blocks' addresses: the pad puts them at even push words, as BasicRHI needs a
+	 * pushed address 8-byte aligned in the push data), index buffer view (D3D12's IBV layout), DrawIndexed.
+	 *
+	 * The rows hold no addresses (a version's bytes are the same in any backing): BuildDrawsCS writes every block a draw's layout maps
+	 * (b0/b1/b2/b4, DrawPipelines.h MainLayoutRanges) as a pushed address, from the rows' addresses it resolves.
 	 *
 	 * No DCLF pipeline has input assembly: the vertex stages pull their attributes through the vertex buffer views, the device-generated
 	 * draws' from their push data (DrawPipelines.h, kDrawPushWords; DCLF_PULLED_VERTICES), the plain draws' from the sequence itself
@@ -552,9 +556,9 @@ namespace DCLF
 	struct DrawSequence
 	{
 		std::uint32_t pipelineIndex;  // in its state class's execution sets (a device-generated draw's); 0 for a plain draw
-		// The draw's rows (the pipeline row's registers and the material row) and the object's index in SceneTables::objects, then
-		// the two vertex buffer views: thirteen words, one contiguous Constant indirect argument (the per-draw push data, whose
-		// packoffsets are DCLFObjects.hlsli's DCLFPushData): keep them together, in order.
+		// The draw's rows (the pipeline row's base, VS b0, and the material row's, VS b1) and the object's index in SceneTables::objects,
+		// the two vertex buffer views, a pad, then the rows' other blocks: 24 words, one contiguous Constant indirect argument (the per-draw push
+		// data; DCLFObjects.hlsli's DCLFPushData has the first 13's packoffsets): keep them together, in order.
 		std::uint64_t pipelineRowAddress;
 		std::uint64_t materialRowAddress;
 		std::uint32_t objectIndex;
@@ -564,6 +568,12 @@ namespace DCLF
 		std::uint64_t streamBufferAddress;  // slot 1: a face shape's positions, else the slot 0 view again
 		std::uint32_t streamBufferSize;  // written; no draw reads it
 		std::uint32_t streamStride;
+		std::uint32_t blockPad;  // 0: the block addresses after it start at an even push word (BasicRHI: pushed addresses 8-aligned)
+		std::uint64_t psTechniqueAddress;  // PS b0: pipeline row + kPipelineRowTechniquePS
+		std::uint64_t vsGeometryAddress;  // VS b2: pipeline row + kPipelineRowGeometryVS
+		std::uint64_t psGeometryAddress;  // PS b2: pipeline row + kPipelineRowGeometryPS
+		std::uint64_t permutationAddress;  // b4, both stages: pipeline row + kPipelineRowPermutation
+		std::uint64_t psMaterialAddress;  // PS b1: material row + kMaterialRowPS
 		std::uint64_t indexBufferAddress;  // GeometryBuffers::indexAddress
 		std::uint32_t indexBufferSize;
 		std::uint32_t indexFormat;  // DXGI_FORMAT_R16_UINT
@@ -574,12 +584,19 @@ namespace DCLF
 		std::uint32_t firstInstance;
 	};
 #pragma pack(pop)
-	static_assert(sizeof(DrawSequence) == 92);
+	static_assert(sizeof(DrawSequence) == 136);
 	static_assert(offsetof(DrawSequence, pipelineRowAddress) == 4);
 	static_assert(offsetof(DrawSequence, materialRowAddress) == 12);
 	static_assert(offsetof(DrawSequence, objectIndex) == 20);
 	static_assert(offsetof(DrawSequence, vertexBufferAddress) == 24);
 	static_assert(offsetof(DrawSequence, streamBufferAddress) == 40);
-	static_assert(offsetof(DrawSequence, indexBufferAddress) == 56);
-	static_assert(offsetof(DrawSequence, indexCount) == 72);
+	static_assert(offsetof(DrawSequence, blockPad) == 56);
+	static_assert(offsetof(DrawSequence, psTechniqueAddress) == 60);
+	static_assert(offsetof(DrawSequence, vsGeometryAddress) == 68);
+	static_assert(offsetof(DrawSequence, psGeometryAddress) == 76);
+	static_assert(offsetof(DrawSequence, permutationAddress) == 84);
+	static_assert(offsetof(DrawSequence, psMaterialAddress) == 92);
+	static_assert(offsetof(DrawSequence, indexBufferAddress) == 100);
+	static_assert(offsetof(DrawSequence, indexCount) == 116);
+	static_assert(offsetof(DrawSequence, instanceCount) == 120 && offsetof(DrawSequence, vertexOffset) == 128 && offsetof(DrawSequence, firstInstance) == 132);
 }

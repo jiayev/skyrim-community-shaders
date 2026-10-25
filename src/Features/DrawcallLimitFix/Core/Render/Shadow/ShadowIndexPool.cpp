@@ -20,9 +20,11 @@ namespace DCLF
 				logger::warn("[DCLF] The index pool's copy program could not be created");
 				return nullptr;
 			}
-			// 16-bit indices (a unit: an index), grown to twice what the ranges hold; a first index per geometry slot; a copy per range.
+			// 16-bit indices (a unit: an index), required with a quarter's slack over what the ranges hold (PoolSlack) and grown a
+			// quarter past that, not to a power of two: the pool is a copy of the scene's indices, the largest of DCLF's tables; a first
+			// index per geometry slot; a copy per range.
 			pool->indices = MakeVersioned(CreateWords((a_small ? 4096u : kInitialPoolIndices) / 2, true, "cs.dclf.index-pool"),
-				{ .extent = { 0, sizeof(std::uint16_t), 4 }, .policy = org::services::GrowthPolicy::Doubling(2) });
+				{ .extent = { 0, sizeof(std::uint16_t), 4 }, .policy = org::services::GrowthPolicy::Headroom(25, 2) });
 			pool->firsts = MakeVersioned(CreateWords(a_small ? 64u : kInitialGeometries, false, "cs.dclf.pool-firsts"), { .extent = { 0, 4, 4 } });
 			auto copies = org::Buffer::CreateUnmaterializedStructuredBuffer(a_small ? 16u : 1024u, 4 * sizeof(std::uint32_t), false);
 			copies->SetName("cs.dclf.pool-copies");
@@ -30,6 +32,12 @@ namespace DCLF
 			pool->copies = MakeVersioned(std::move(copies), { .extent = { 0, 4 * sizeof(std::uint32_t), 4 * sizeof(std::uint32_t) } });
 			a_scene.pool = pool;
 			return pool;
+		}
+
+		/** @brief The room the pool's versions keep for a_indices held: a quarter more, which fragmentation uses before a relayout. */
+		constexpr std::uint64_t PoolSlack(std::uint64_t a_indices)
+		{
+			return a_indices + a_indices / 4;
 		}
 
 		/** @brief A geometry slot's indices in the pool: its index buffer's, rounded up to whole words (0: none). */
@@ -136,9 +144,9 @@ namespace DCLF
 					}
 					const std::uint32_t first = Allocate(slotIndices);
 					if (first == IndexPool::kNoRange) {
-						// No room though the version holds twice what the ranges do: fragmented. The producer requires a newer version
-						// (laid out again whole by the update that first writes it).
-						if ((std::uint64_t(p.indicesHeld) + slotIndices) * 2 <= capacity)
+						// No room though the version holds the ranges' slack (PoolSlack): fragmented. The producer requires a newer
+						// version (laid out again whole by the update that first writes it).
+						if (PoolSlack(std::uint64_t(p.indicesHeld) + slotIndices) <= capacity)
 							p.fragmentedAt.store(indices.serial, std::memory_order_relaxed);
 						p.waiting.push_back(a_slot);
 						return;
@@ -287,10 +295,10 @@ namespace DCLF
 					take(g);
 		}
 		b.cursor.Advance(a_tables.geometryLog);
-		// Room for twice the indices (a relayout needs no more), a first index per slot and a copy per range, so together with the
-		// claims; and a version newer than one the frame found fragmented (laid out again at the same size).
+		// Room for the indices' slack (PoolSlack; a relayout needs none), a first index per slot and a copy per range, so together with
+		// the claims; and a version newer than one the frame found fragmented (laid out again at the same size).
 		auto& buffers = SceneBufferSet::Get();
-		buffers.Require(a_build, p.indices, std::uint64_t(b.total) * 2);
+		buffers.Require(a_build, p.indices, Draws::PoolSlack(b.total));
 		buffers.RequireNewer(a_build, p.indices, p.fragmentedAt.load(std::memory_order_relaxed));
 		UnitGroup{}.Add(p.firsts).Add(p.copies).Require(a_build, std::max(count, 1u));
 	}

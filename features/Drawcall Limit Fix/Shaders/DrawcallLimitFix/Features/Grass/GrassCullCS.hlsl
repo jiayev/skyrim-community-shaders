@@ -40,7 +40,7 @@ cbuffer GrassCullConstants : register(b0)
 static const uint kInstanceBytes = 32;
 static const uint kShapeRowBytes = 32;
 static const uint kBucketRowBytes = 160;
-static const uint kFrameBytes = 16;
+static const uint kFrameBytes = 8;  // GrassInstances::InstanceFrame: the wind halfs, then the fade (unorm16) and flags (high 16)
 static const uint kTiers = 3;
 static const uint kBucketTierOne = 4;
 static const uint kBucketTierTwo = 8;
@@ -223,7 +223,8 @@ void Bound(uint4 a_raw0, uint4 a_raw1, float3 a_world, float3 a_boundCenter, flo
 	a_radius = a_modelRadius * (1.0 + max(sizeVariance, 0.0)) + length(a_boundCenter) * abs(sizeVariance);
 }
 
-// The draw slot's count and the instance's entry in its bucket tier's visible range.
+// The draw slot's count and the instance's entry in its bucket tier's visible range: tiers 0 and 1 up from their base, tier 2 down from
+// its (the end of the range it shares with tier 1).
 void Append(RWByteAddressBuffer a_draws, uint a_index, uint a_bucket, uint a_tier, uint a_counter)
 {
 	ByteAddressBuffer buckets = ResourceDescriptorHeap[BucketsIndex];
@@ -232,7 +233,8 @@ void Append(RWByteAddressBuffer a_draws, uint a_index, uint a_bucket, uint a_tie
 	uint at, scratch;
 	a_draws.InterlockedAdd(kCountsOffset + slot * 4, 1u, at);
 	a_draws.InterlockedAdd(a_counter, 1u, scratch);
-	visible.Store((buckets.Load(a_bucket * kBucketRowBytes + 16 + a_tier * 4) + at) * 4, a_index);
+	const uint base = buckets.Load(a_bucket * kBucketRowBytes + 16 + a_tier * 4);
+	visible.Store((a_tier == 2 ? base - 1 - at : base + at) * 4, a_index);
 }
 
 // Phase 2: a retest entry's instance against the rebuilt HZB, appended after phase 1's when it is in view now.
@@ -259,7 +261,7 @@ void Retest(uint a_id, RWByteAddressBuffer a_draws, Cull a_cull)
 	Bound(raw0, raw1, world, asfloat(buckets.Load3(bucketBase + 48)), asfloat(buckets.Load(bucketBase + 60)), centre, radius);
 	if (Occluded(LatchViewProj(), centre, radius, a_cull.Flags))
 		return;
-	const uint tier = frames.Load(index * kFrameBytes + 12) & 3u;
+	const uint tier = (frames.Load(index * kFrameBytes + 4) >> 16) & 3u;
 	Append(a_draws, index, bucket, tier, kPhaseTwoInstances);
 }
 
@@ -384,7 +386,8 @@ uint Tier(Cull a_cull, float a_projPx, float a_dither, uint a_bucketFlags)
 	flags |= distSq < cull.CollisionDistSq ? kFrameCollision : 0u;
 	flags |= cull.SimpleShadingPx > 0.0 && projPx < cull.SimpleShadingPx ? kFrameSimpleShading : 0u;
 	RWByteAddressBuffer frames = ResourceDescriptorHeap[FrameIndex];
-	frames.Store4(index * kFrameBytes, uint4(asuint(WindScalar(basis, times.x * wavePeriod)), asuint(WindScalar(basis, times.y * wavePeriod)), asuint(fade), flags));
+	const uint wind = f32tof16(WindScalar(basis, times.x * wavePeriod)) | (f32tof16(WindScalar(basis, times.y * wavePeriod)) << 16);
+	frames.Store2(index * kFrameBytes, uint2(wind, uint(saturate(fade) * 65535.0 + 0.5) | (flags << 16)));
 
 	draws.InterlockedAdd(kTested, 1u, scratch);
 	if (Occluded(viewProj, centre, radius, cull.Flags)) {
