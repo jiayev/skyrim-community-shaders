@@ -148,12 +148,16 @@ private:
 		float timeBase;
 		float prevTimeBase;
 		float farLODMeshCost;
+
+		std::array<float, kTierCount> canopyHeights;
+		float pad1;
 	};
 	STATIC_ASSERT_ALIGNAS_16(CullBucketCB);
 	// RunGrass.hlsl reads the draw marker, texture threshold and shared-page offset through this slot.
-	static_assert(sizeof(CullBucketCB) == 80 && offsetof(CullBucketCB, groupCount) == 0 && offsetof(CullBucketCB, complexThreshold) == 56 &&
+	static_assert(sizeof(CullBucketCB) == 96 && offsetof(CullBucketCB, groupCount) == 0 && offsetof(CullBucketCB, complexThreshold) == 56 &&
 				  offsetof(CullBucketCB, outputOffset) == 20 && offsetof(CullBucketCB, argsOffset) == 24 &&
-				  offsetof(CullBucketCB, midLODMeshCost) == 60 && offsetof(CullBucketCB, farLODMeshCost) == 76);
+				  offsetof(CullBucketCB, midLODMeshCost) == 60 && offsetof(CullBucketCB, farLODMeshCost) == 76 &&
+				  offsetof(CullBucketCB, canopyHeights) == 80);
 
 	// Match the c16-c21 fields read by GRASS_OPTIMIZATIONS in RunGrass.hlsl.
 	struct alignas(16) GrassPerGeometry

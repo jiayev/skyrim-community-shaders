@@ -317,7 +317,7 @@ void GrassOptimizations::DrawBucket(GrassBucket& b)
 	}
 
 	// Batch material texture bindings instead of letting SetDirtyStates bind each slot separately.
-	constexpr uint32_t kMaterialTextureBits = 0x1F;
+	constexpr uint32_t kMaterialTextureBits = 0x7F;
 	const uint32_t materialTextures = shadowState.PSResourceModifiedBits & kMaterialTextureBits;
 	shadowState.PSResourceModifiedBits &= ~kMaterialTextureBits;
 	SetDirtyStates(0);
@@ -327,7 +327,7 @@ void GrassOptimizations::DrawBucket(GrassBucket& b)
 		ctx->PSSetShaderResources(firstTexture, textureCount, reinterpret_cast<ID3D11ShaderResourceView* const*>(&shadowState.PSTexture[firstTexture]));
 	}
 
-	// The vertex shader uses the bucket's cull constants to identify complex grass.
+	// Bind complexity and canopy heights for all tiers; the vertex shader selects each record's tier.
 	ID3D11Buffer* bucketCB = cullBucketCB->CB();
 	UINT bucketFirst = b.cullSlot * (kSlotBytes / 16);
 	UINT bucketNum = 16;
