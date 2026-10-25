@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/RemoteControl/NvPerf.h"
 
 namespace DCLF::Draws
@@ -71,6 +72,30 @@ namespace DCLF::Draws
 
 	namespace
 	{
+		/**
+		 * @brief The latched copies a_source names, as LatchedCopiesPass records them: the epoch's own lists, then each hosted shape's
+		 * (none in a recording without that view's work), each copy from frame slot a_frameSlot's latch region (a fixed list's one) to
+		 * the buffer a_target resolves its target to (a null handle: a target not declared, skipped).
+		 */
+		template <class TargetOf>
+		void CopyLatchedLists(rhi::CommandList& a_commands, const LatchedSource& a_source, std::uint32_t a_frameSlot, const TargetOf& a_target)
+		{
+			auto copyLists = [&](std::span<const LatchedList> a_lists) {
+				for (const auto& list : a_lists) {
+					if (!list.latch)
+						continue;
+					const auto latch = list.latch->Resource()->GetAPIResource().GetHandle();
+					const std::uint64_t region = list.fixed ? 0 : list.latch->Offset(a_frameSlot);
+					for (const auto& copy : list.copies)
+						if (const auto target = a_target(copy.target); target.valid())
+							a_commands.CopyBufferRegion(target, copy.dstOffset, latch, region + copy.latchOffset, copy.bytes);
+				}
+			};
+			copyLists(a_source.lists);
+			for (const auto& hosted : a_source.hosted)
+				copyLists(hosted.lists);
+		}
+
 		struct LatchedCopiesBindings
 		{
 			std::vector<std::pair<const void*, org::ResourceBindingToken>> targets;  // LatchedTarget::Key
@@ -82,6 +107,16 @@ namespace DCLF::Draws
 			LatchedCopiesPass(std::function<std::vector<LatchedTarget>()> a_targets, std::function<LatchedSource(const org::PassPrepareContext&)> a_source,
 				std::atomic<std::shared_ptr<const std::vector<const void*>>>* a_declared) :
 				targets(std::move(a_targets)), source(std::move(a_source)), declared(a_declared) {}
+
+			/** @brief What Declare publishes, without a graph (the CPU pipeline's build: the pass is not added, its copies are the pre-work's). */
+			void PublishTargets() const
+			{
+				auto keys = std::make_shared<std::vector<const void*>>();
+				for (const auto& target : targets())
+					keys->push_back(target.Key());
+				if (declared)
+					declared->store(std::move(keys), std::memory_order_release);
+			}
 
 			LatchedCopiesBindings Declare(org::PassBuilder& a_builder)
 			{
@@ -111,24 +146,10 @@ namespace DCLF::Draws
 			{
 				if (LatchedRecordCut())
 					return;
-				auto& commands = a_recording.Commands();
-				auto copyLists = [&](std::span<const LatchedList> a_lists) {
-					for (const auto& list : a_lists) {
-						if (!list.latch)
-							continue;
-						const auto latch = list.latch->Resource()->GetAPIResource().GetHandle();
-						const std::uint64_t region = list.fixed ? 0 : list.latch->Offset(a_recording.FrameSlot());
-						for (const auto& copy : list.copies) {
-							const auto target = std::find_if(a_bindings.targets.begin(), a_bindings.targets.end(), [&](const auto& a_target) { return a_target.first == copy.target; });
-							if (target != a_bindings.targets.end())
-								commands.CopyBufferRegion(a_recording.Resolve(target->second).GetHandle(), copy.dstOffset, latch, region + copy.latchOffset, copy.bytes);
-						}
-					}
-				};
-				// The epoch's own lists, then each hosted shape's (none in a recording without that view's work).
-				copyLists(a_prepared.lists);
-				for (const auto& hosted : a_prepared.hosted)
-					copyLists(hosted.lists);
+				CopyLatchedLists(a_recording.Commands(), a_prepared, a_recording.FrameSlot(), [&](const void* a_key) {
+					const auto target = std::find_if(a_bindings.targets.begin(), a_bindings.targets.end(), [&](const auto& a_target) { return a_target.first == a_key; });
+					return target != a_bindings.targets.end() ? a_recording.Resolve(target->second).GetHandle() : rhi::ResourceHandle{};
+				});
 			}
 
 		private:
@@ -138,10 +159,39 @@ namespace DCLF::Draws
 		};
 	}
 
+	bool PublishLatchedTargets(const org::RenderPass& a_pass)
+	{
+		const auto* latched = dynamic_cast<const LatchedCopiesPass*>(&a_pass);
+		if (latched)
+			latched->PublishTargets();
+		return latched != nullptr;
+	}
+
 	std::shared_ptr<org::RenderPass> MakeLatchedCopiesPass(std::function<std::vector<LatchedTarget>()> a_targets,
 		std::function<LatchedSource(const org::PassPrepareContext&)> a_source, std::atomic<std::shared_ptr<const std::vector<const void*>>>* a_declared)
 	{
 		return std::make_shared<LatchedCopiesPass>(std::move(a_targets), std::move(a_source), a_declared);
+	}
+
+	void DirectLatchedCopies(const Api::DirectPass& a_pass, std::span<const LatchedTarget> a_targets, LatchedSource a_source, Api::DirectWork& a_out)
+	{
+		if (!a_source.shape)
+			return;
+		// Each target's buffer as a preparation resolves it: a versioned one's version the adopted set names (none: skipped, as an
+		// undeclared target is), held with the work.
+		std::vector<std::pair<const void*, std::shared_ptr<org::Buffer>>> targets;
+		targets.reserve(a_targets.size());
+		for (const auto& target : a_targets)
+			if (auto buffer = target.versioned ? a_pass.Version(target.versioned) : target.buffer)
+				targets.emplace_back(target.Key(), std::move(buffer));
+		a_out.Add([source = std::move(a_source), targets = std::move(targets), slot = a_pass.frameSlot](rhi::CommandList& a_commands) {
+			if (LatchedRecordCut())
+				return;
+			CopyLatchedLists(a_commands, source, slot, [&](const void* a_key) {
+				const auto target = std::find_if(targets.begin(), targets.end(), [&](const auto& a_target) { return a_target.first == a_key; });
+				return target != targets.end() ? target->second->GetAPIResource().GetHandle() : rhi::ResourceHandle{};
+			});
+		});
 	}
 
 	void DeclareFrameBuffers(org::PassBuilder& a_builder, const Resources& a_resources, bool a_lights)

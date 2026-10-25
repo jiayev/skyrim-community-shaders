@@ -15,6 +15,9 @@ namespace DCLF
 	{
 		using Readback = VisibilityReadback;
 
+		// The CPU's batches (PostCpuVisibility): a lock-free stack any thread pushes, the frame start's kick takes whole.
+		std::atomic<Readback::Batch*> cpuVisibility{ nullptr };
+
 		inline constexpr std::uint32_t kUnlisted = ~0u;
 		// An object's share in its plain entry (VisibilityDecode::objectShare): counted (listed), in view, an engine residue.
 		inline constexpr std::uint8_t kShareListed = 1, kShareVisible = 2, kShareResidue = 4;
@@ -1257,8 +1260,24 @@ namespace DCLF
 			Dispatch(a_scene.visibilityReadback);
 	}
 
+	void Draws::PostCpuVisibility(VisibilityReadback::Batch* a_batch)
+	{
+		a_batch->next = cpuVisibility.load(std::memory_order_relaxed);
+		while (!cpuVisibility.compare_exchange_weak(a_batch->next, a_batch, std::memory_order_release, std::memory_order_relaxed)) {}
+	}
+
 	void IndirectDraws::KickVisibilityReadback()
 	{
+		// The CPU's batches join the harvested ones (Dispatch sorts them by frame); without a readback they are let go here.
+		for (auto* batch = cpuVisibility.exchange(nullptr, std::memory_order_acquire); batch;) {
+			auto* following = batch->next;
+			batch->next = nullptr;
+			if (impl->scene && impl->scene->visibilityReadback)
+				impl->scene->visibilityReadback->pending.push_back(batch);
+			else
+				delete batch;
+			batch = following;
+		}
 		if (!impl->scene || !impl->scene->visibilityReadback)
 			return;
 		ReleaseDecoded(*impl->scene->visibilityReadback);

@@ -4,6 +4,7 @@
 // (FitsScene) are the coordinator's.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatches.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
@@ -463,6 +464,39 @@ namespace DCLF
 		return *pump;
 	}
 
+	// The CPU pipeline's view batches of the draws' payload (ViewBatches.h), while the graph the revision inputs are of is the CPU
+	// pipeline's: made once the payload is, their sequences' version GPU ready before the snapshot is posted (its readiness wakes the
+	// builder). True: nothing to wait for (none wanted, made, or failed: the snapshot is posted without).
+	bool IndirectDraws::Impl::ViewBatchesReady()
+	{
+		auto& b = snapshotBuilder;
+		if (!producer.inputs.cpuPipeline || !b.payload || !b.draws) {
+			if (b.viewBatches)
+				b.viewBatches->Reset();
+			return true;
+		}
+		if (!b.viewBatches)
+			b.viewBatches = std::make_shared<Draws::ViewBatchBuilder>();
+		const auto& publication = *b.work->publication;
+		Draws::ViewBatchInputs in;
+		in.keep = std::make_shared<std::pair<std::shared_ptr<const DrawPublication>, std::shared_ptr<const ScenePayload>>>(b.draws, b.payload);
+		in.tables = b.draws->tables.get();
+		in.lookups = publication.lookups.get();
+		in.catalog = publication.catalog.get();
+		in.targetsGeneration = producer.inputs.targetsGeneration;
+		in.payload = b.payload.get();
+		in.main = NewestMainPayload(*b.draws);
+		in.shadow = b.draws->shadow.get();
+		in.uploads = producer.inputs.uploads.lock();
+		return b.viewBatches->Ready(in);
+	}
+
+	bool IndirectDraws::Impl::PayloadSettled()
+	{
+		const auto& b = snapshotBuilder;
+		return (b.payload || b.payloadFailed || !PayloadWanted()) && ViewBatchesReady();
+	}
+
 	void IndirectDraws::Impl::SnapshotPass()
 	{
 		ZoneScopedN("CS.DCLF.SnapshotBuilder");
@@ -510,8 +544,7 @@ namespace DCLF
 						PublishPayload();
 					(void)rv.assembler.TrySelect();
 					auto lease = rv.assembler.AcquireActive();
-					const bool payloadReady = b.payload || b.payloadFailed || !PayloadWanted();
-					if (lease && lease->Sequence() >= b.sealedSequence && payloadReady) {
+					if (lease && lease->Sequence() >= b.sealedSequence && PayloadSettled()) {
 						b.timing.recordingsMs = msSince(b.sealedAt);
 						PostSnapshot(std::move(lease));
 						b.stage = Stage::Idle;
@@ -697,6 +730,17 @@ namespace DCLF
 		const auto* catalog = snapshot->publication ? snapshot->publication->catalog.get() : nullptr;
 		snapshot->targetsGeneration = catalog && catalog->setVersion && catalog->targetsGeneration == inputs.targetsGeneration ? inputs.targetsGeneration : ~0u;
 		snapshot->shadowFormat = inputs.shadowFormat;
+		// The CPU pipeline's view batches: the set made for its payload, else (passed through) the one posted with that payload; a new set's
+		// serial is the first snapshot's it is.
+		if (inputs.cpuPipeline && b.payload) {
+			if (const auto& set = b.viewBatches ? b.viewBatches->Set() : nullptr; set && b.viewBatches->For() == b.payload.get()) {
+				if (!set->serial)
+					set->serial = snapshot->serial;
+				snapshot->viewBatches = set;
+			} else if (b.posted.payload == b.payload) {
+				snapshot->viewBatches = b.posted.viewBatches;
+			}
+		}
 		// What a publication changing only deltas passes through to (PassesThrough): a snapshot with a revision, complete draws and
 		// their payload, and what it was built from (a context of its publication's toggles: BuildSnapshotDraws).
 		auto& posted = b.posted;
@@ -707,6 +751,7 @@ namespace DCLF
 			posted.light = b.work->light;
 			posted.draws = b.draws;
 			posted.payload = b.payload;
+			posted.viewBatches = snapshot->viewBatches;
 			posted.revision = snapshot->revision;
 			posted.drawsSerial = b.drawsSerial;
 			posted.valid = context.valid;

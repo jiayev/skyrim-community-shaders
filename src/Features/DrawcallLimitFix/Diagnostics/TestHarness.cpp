@@ -332,6 +332,25 @@ namespace DCLF
 						DCLF::Toggles::Get().Requested().cullMode = value == "occlusion" ? 2 : value == "frustum" ? 1 : 0;
 						return;
 					}
+					// The CPU-driven pipeline's toggles (CS_DCLF_PIPELINE's, CS_DCLF_CPU_RECORD's and CS_DCLF_CPU_CADENCE's live values):
+					// "dclf:pipeline=gpu|cpu" (from the next build point: it changes the graph's conditions), "dclf:cpu-record=serial|parallel",
+					// "dclf:cpu-cadence-<view>=frame|snapshot" ("dclf:cpu-cadence=frame|snapshot": every view but main).
+					if (command.rfind("dclf:pipeline=", 0) == 0) {
+						DCLF::Toggles::Get().Requested().cpuPipeline = command.substr(14) == "cpu";
+						return;
+					}
+					if (command.rfind("dclf:cpu-record=", 0) == 0) {
+						DCLF::Toggles::Get().Requested().cpuRecord = command.substr(16) == "parallel" ? 1 : 0;
+						return;
+					}
+					if (command.rfind("dclf:cpu-cadence", 0) == 0) {
+						const auto equals = command.find('=');
+						const std::string view = command.size() > 16 && command[16] == '-' ? command.substr(17, equals == std::string::npos ? std::string::npos : equals - 17) : std::string();
+						const std::string value = equals == std::string::npos ? std::string() : command.substr(equals + 1);
+						if (!DCLF::ApplyCpuCadence(DCLF::Toggles::Get().Requested(), view.empty() ? value : view + "=" + value))
+							logger::warn("[DCLF] test command: '{}' names an unknown view or cadence", command);
+						return;
+					}
 					if (command.rfind("dclf:", 0) == 0) {
 						const auto equals = command.find('=');
 						const auto name = command.substr(5, equals == std::string::npos ? std::string::npos : equals - 5);

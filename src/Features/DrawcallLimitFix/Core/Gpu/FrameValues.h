@@ -11,6 +11,8 @@
 #include <optional>
 #include <vector>
 
+struct VkSemaphore_T;
+
 namespace org::services
 {
 	struct Backing;
@@ -21,6 +23,11 @@ namespace DCLF
 	struct FrameGlobals;
 	struct BindlessPlacement;
 	struct BindlessShading;
+	namespace Direct
+	{
+		struct ViewBatchSet;
+		struct SnapshotSpheres;
+	}
 
 	/**
 	 * @brief FrameValues(N) (dclf-architecture.md, "FrameValues"): the values a frame's draws need to be its own - the
@@ -92,6 +99,19 @@ namespace DCLF
 		 */
 		void SetRootViewClaims(std::shared_ptr<const SetSnapshot> a_claims) { rootViewClaims = std::move(a_claims); }
 		/**
+		 * @brief Render thread, before Kick: the CPU pipeline's view batches the frame draws with (the adopted snapshot's; null: none, the GPU
+		 * pipeline). Kept until replaced: every producer from the next Kick on stores its movers' spheres into the set's live column of its
+		 * parity (Direct::LiveParity), and the static lanes' once a set and parity, after its sampling and before it is done.
+		 */
+		void SetViewBatches(std::shared_ptr<const Direct::ViewBatchSet> a_set) { viewBatches = std::move(a_set); }
+		/**
+		 * @brief Any thread (the snapshot builder): asks the next producer for its placement bounds (Direct::SnapshotSpheres), taken with
+		 * TakeSnapshotSpheres once posted (latest wins). Made only when asked: a gather of every slot's bound.
+		 */
+		void RequestSnapshotSpheres();
+		/** @brief The snapshot builder: the newest bounds a producer posted since the last take (null: none). */
+		std::unique_ptr<Direct::SnapshotSpheres> TakeSnapshotSpheres();
+		/**
 		 * @brief The first-person report: the palette rows classes' first-person writes since the last call that gave their placement
 		 * (Api::PaletteRowsChunk::NoteFirstPerson; Features/Particles: the first-person particle members' expansions), their units (the
 		 * particles), and the farthest a written placement's bound centre was from the first-person eye (a particle snapshot taken while
@@ -107,6 +127,19 @@ namespace DCLF
 		void Skip();
 		/** @brief Render thread, after the frame's last submission: binds the frame's backings to it (SubmittedRetirementPoint). */
 		void EndFrame();
+		/** @brief A GPU wait on a Vulkan timeline semaphore (VkSemaphore): none while semaphore is null. */
+		struct FrameWait
+		{
+			VkSemaphore_T* semaphore = nullptr;
+			std::uint64_t value = 0;
+		};
+		/**
+		 * @brief Render thread, after Kick: what the frame's GPU work must wait for, the frame-wait timeline (signalled from the upload
+		 * queue once the producer's uploads for the frame are sent) at the frame's value (what Kick set as the host's SetFrameWaitValue).
+		 * None on a frame without a producer. Work submitted outside ORG's batches (the CPU mode's external commands in DXVK's command
+		 * buffer: the next DXVK submission waits for it) takes it at its trigger, on the render thread: the next Kick moves it.
+		 */
+		FrameWait FrameWaitPoint() const;
 		/** @brief Render thread: the descriptor of the placement buffer the current frame's draws read (0 before the first frame). */
 		std::uint32_t PlacementsIndex() const { return frameIndex; }
 		/** @brief Render thread: the descriptor of the palette buffer the current frame's draws read (0 before the first frame). */
@@ -189,5 +222,6 @@ namespace DCLF
 		std::unique_ptr<Impl> impl;
 		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0;
 		std::shared_ptr<const SetSnapshot> rootViewClaims;  // SetRootViewClaims
+		std::shared_ptr<const Direct::ViewBatchSet> viewBatches;  // SetViewBatches
 	};
 }

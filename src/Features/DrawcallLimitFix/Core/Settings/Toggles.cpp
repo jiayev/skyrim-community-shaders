@@ -1,6 +1,8 @@
 // Toggles: the flag table (seed, menu entry, dependencies), packing the active set, and the per-frame apply (render thread).
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Direct.h"
+
 #include <algorithm>
 #include <deque>
 #include <string>
@@ -35,10 +37,19 @@ namespace DCLF
 			// bits right after these; then Features/Reflection's "reflections" and Features/FirstPerson's "first person".)
 		};
 
-		// The packed word: cullMode in the low two bits, then each flag in kToggles order, then the features' by their bits.
+		// The packed word: cullMode in the low two bits, then each flag in kToggles order, then the features' by their bits (the low 32).
 		constexpr std::uint32_t kFirstFlagBit = 2;
 		constexpr std::uint32_t kFirstRegisteredBit = kFirstFlagBit + static_cast<std::uint32_t>(std::size(kToggles));
 		static_assert(kFirstRegisteredBit < 32);
+		// The high word: the CPU pipeline's state (cpuPipeline, cpuRecord, then cpuCadence's bits by Direct::ViewType).
+		constexpr std::uint32_t kCpuPipelineBit = 32, kCpuRecordBit = 33, kFirstCadenceBit = 34;
+		static_assert(kFirstCadenceBit + Direct::kViewTypes <= 64 && Direct::kViewTypes <= 16, "the cadences fit the word and ToggleSet::cpuCadence");
+		// Main's cadence is always per frame.
+		constexpr std::uint16_t kCadenceMask = static_cast<std::uint16_t>(((1u << Direct::kViewTypes) - 1u) & ~(1u << static_cast<std::uint32_t>(Direct::ViewType::Main)));
+
+		constexpr std::string_view kCpuViewNames[] = { "main", "decal", "forward", "refraction", "sun", "spot", "point", "sky", "precipitation", "reflection",
+			"first-person" };
+		static_assert(std::size(kCpuViewNames) == Direct::kViewTypes);
 
 		// The features' toggles (RegisterToggle), in registration order: their strings (the table's entries view them), their anchors and
 		// needs by name, and their entries; then the table with them placed in it (SeedRegistered), and their count. Written at install
@@ -88,6 +99,12 @@ namespace DCLF
 			ToggleSet set;
 			const auto& cull = SwitchValue(Switch::Cull);
 			set.cullMode = (cull.empty() || cull == "occlusion") ? 2 : cull == "frustum" ? 1 : 0;
+			set.cpuPipeline = SwitchValue(Switch::CpuPipeline) == "cpu";
+			set.cpuRecord = SwitchValue(Switch::CpuRecord) == "parallel" ? static_cast<std::uint8_t>(Direct::RecordMode::Parallel) : static_cast<std::uint8_t>(Direct::RecordMode::Serial);
+			if (const auto& cadence = SwitchValue(Switch::CpuCadence); !cadence.empty() && !ApplyCpuCadence(set, cadence))
+				logger::warn("[DCLF] CS_DCLF_CPU_CADENCE={}: a view or value it names is unknown (views: main, decal, forward, refraction, sun, spot, point, sky, "
+							 "precipitation, reflection, first-person; values: frame, snapshot)",
+					cadence);
 			for (const auto& toggle : Table()) {
 				const auto& value = SeedValue(toggle);
 				SetToggleValue(set, toggle, value.empty() ? !toggle.offByDefault : value == toggle.onValue);
@@ -100,6 +117,8 @@ namespace DCLF
 		{
 			for (const auto& toggle : Table())
 				SetToggleValue(a_set, toggle, ToggleValue(a_set, toggle) && NeedsMet(toggle, a_set));
+			a_set.cpuRecord &= 1u;
+			a_set.cpuCadence &= kCadenceMask;
 			return a_set;
 		}
 
@@ -183,6 +202,61 @@ namespace DCLF
 			}
 			Table() = std::move(table);
 		}
+	}
+
+	Direct::Mode ModeOf(const ToggleSet& a_set)
+	{
+		Direct::Mode mode;
+		mode.cpu = a_set.cpuPipeline;
+		mode.record = a_set.cpuRecord ? Direct::RecordMode::Parallel : Direct::RecordMode::Serial;
+		for (std::size_t v = 0; v < Direct::kViewTypes; ++v)
+			mode.cadence[v] = ((a_set.cpuCadence & kCadenceMask) >> v) & 1u ? Direct::Cadence::PerSnapshot : Direct::Cadence::PerFrame;
+		return mode;
+	}
+
+	std::string_view CpuViewName(std::size_t a_view)
+	{
+		return a_view < std::size(kCpuViewNames) ? kCpuViewNames[a_view] : std::string_view{};
+	}
+
+	std::size_t CpuViewByName(std::string_view a_name)
+	{
+		for (std::size_t v = 0; v < std::size(kCpuViewNames); ++v)
+			if (kCpuViewNames[v] == a_name)
+				return v;
+		return Direct::kViewTypes;
+	}
+
+	bool ApplyCpuCadence(ToggleSet& a_set, std::string_view a_spec)
+	{
+		const auto bitOf = [](std::string_view a_value, bool& a_known) {
+			a_known = a_value == "frame" || a_value == "snapshot";
+			return a_value == "snapshot";
+		};
+		bool ok = true;
+		if (a_spec.find('=') == std::string_view::npos) {
+			bool known = false;
+			const bool snapshot = bitOf(a_spec, known);
+			if (known)
+				a_set.cpuCadence = snapshot ? kCadenceMask : 0;
+			return known;
+		}
+		while (!a_spec.empty()) {
+			const auto comma = a_spec.find(',');
+			const auto item = a_spec.substr(0, comma);
+			a_spec = comma == std::string_view::npos ? std::string_view{} : a_spec.substr(comma + 1);
+			const auto equals = item.find('=');
+			const auto view = CpuViewByName(item.substr(0, equals));
+			bool known = false;
+			const bool snapshot = equals != std::string_view::npos && bitOf(item.substr(equals + 1), known);
+			if (view >= Direct::kViewTypes || !known) {
+				ok = false;
+				continue;
+			}
+			const auto bit = static_cast<std::uint16_t>(1u << view);
+			a_set.cpuCadence = static_cast<std::uint16_t>((snapshot ? a_set.cpuCadence | bit : a_set.cpuCadence & ~bit) & kCadenceMask);
+		}
+		return ok;
 	}
 
 	std::span<const ToggleInfo> ToggleTable()
@@ -273,22 +347,30 @@ namespace DCLF
 		frame.store(active.load(std::memory_order_relaxed), std::memory_order_relaxed);
 	}
 
-	std::uint32_t Toggles::Pack(const ToggleSet& a_set)
+	std::uint64_t Toggles::Pack(const ToggleSet& a_set)
 	{
 		std::uint32_t bits = a_set.cullMode & 3u;
 		for (std::uint32_t i = 0; i < std::size(kToggles); ++i)
 			bits |= (a_set.*kToggles[i].member ? 1u : 0u) << (kFirstFlagBit + i);
 		bits |= (a_set.registered & RegisteredMask()) << kFirstRegisteredBit;
-		return bits;
+		std::uint64_t word = bits;
+		word |= static_cast<std::uint64_t>(a_set.cpuPipeline ? 1u : 0u) << kCpuPipelineBit;
+		word |= static_cast<std::uint64_t>(a_set.cpuRecord & 1u) << kCpuRecordBit;
+		word |= static_cast<std::uint64_t>(a_set.cpuCadence & kCadenceMask) << kFirstCadenceBit;
+		return word;
 	}
 
-	ToggleSet Toggles::Unpack(std::uint32_t a_bits)
+	ToggleSet Toggles::Unpack(std::uint64_t a_word)
 	{
+		const auto bits = static_cast<std::uint32_t>(a_word);
 		ToggleSet set;
-		set.cullMode = static_cast<std::uint8_t>(a_bits & 3u);
+		set.cullMode = static_cast<std::uint8_t>(bits & 3u);
 		for (std::uint32_t i = 0; i < std::size(kToggles); ++i)
-			set.*kToggles[i].member = ((a_bits >> (kFirstFlagBit + i)) & 1u) != 0;
-		set.registered = (a_bits >> kFirstRegisteredBit) & RegisteredMask();
+			set.*kToggles[i].member = ((bits >> (kFirstFlagBit + i)) & 1u) != 0;
+		set.registered = (bits >> kFirstRegisteredBit) & RegisteredMask();
+		set.cpuPipeline = ((a_word >> kCpuPipelineBit) & 1u) != 0;
+		set.cpuRecord = static_cast<std::uint8_t>((a_word >> kCpuRecordBit) & 1u);
+		set.cpuCadence = static_cast<std::uint16_t>((a_word >> kFirstCadenceBit) & kCadenceMask);
 		return set;
 	}
 

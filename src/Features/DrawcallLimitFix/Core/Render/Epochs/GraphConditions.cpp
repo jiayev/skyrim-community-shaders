@@ -14,6 +14,12 @@ namespace DCLF::Draws
 		std::mutex cutsMutex;
 		std::string requestedCuts;  // cutsMutex
 		std::atomic<bool> latchedRecordCut{ false };
+		std::atomic<bool> builtForCpu{ false };
+	}
+
+	bool GraphBuiltForCpu()
+	{
+		return builtForCpu.load(std::memory_order_acquire);
 	}
 
 	bool LatchedRecordCut()
@@ -46,16 +52,21 @@ namespace DCLF::Draws
 		const auto* tes = RE::TES::GetSingleton();
 		next.interior = tes && tes->interiorCell;
 		next.twoPassOcclusion = Toggles::Get().Active().cullMode >= 2;
+		// The pipeline from the newest applied toggles, as the cull mode: the rebuild here makes every recording of the old graph stale, so
+		// the frame waits at its start for a snapshot made for the graph as built (AdoptCurrentSnapshot), whose revision records the
+		// epochs (GPU) or none (CPU: RevisionInputs::cpuPipeline).
+		next.cpuPipeline = Toggles::Get().Active().cpuPipeline;
 		{
 			std::lock_guard lock(cutsMutex);
 			next.cuts = requestedCuts;
 		}
 		if (next == current)
 			return;
-		logger::info("[DCLF] graph conditions: {} cell, {}{}{}; the graph is rebuilt", next.interior ? "interior" : "exterior",
-				next.twoPassOcclusion ? "two-pass occlusion" : "no occlusion pass (portal and frustum culling)", next.cuts.empty() ? "" : ", passes cut: ",
-				next.cuts);
+		logger::info("[DCLF] graph conditions: {} cell, {}, {} pipeline{}{}; the graph is rebuilt", next.interior ? "interior" : "exterior",
+				next.twoPassOcclusion ? "two-pass occlusion" : "no occlusion pass (portal and frustum culling)", next.cpuPipeline ? "CPU" : "GPU",
+				next.cuts.empty() ? "" : ", passes cut: ", next.cuts);
 		current = next;
+		builtForCpu.store(current.cpuPipeline, std::memory_order_release);
 		latchedRecordCut.store(("," + current.cuts + ",").find(",~latched-record,") != std::string::npos, std::memory_order_relaxed);
 		a_host.RequestRebuild();
 	}
@@ -67,6 +78,6 @@ namespace DCLF::Draws
 
 	bool OcclusionTested(const Resources& a_resources, const PassFrame& a_frame)
 	{
-		return a_resources.hzb && current.twoPassOcclusion && a_frame.cullMode >= 2 && a_frame.width && a_frame.height;
+		return a_resources.hzb && current.twoPassOcclusion && !current.cpuPipeline && a_frame.cullMode >= 2 && a_frame.width && a_frame.height;
 	}
 }

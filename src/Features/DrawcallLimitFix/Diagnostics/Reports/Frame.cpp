@@ -63,6 +63,10 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 	if (due)
 		if (const auto line = DCLF::RenderThreadBudget::Get().Report(); !line.empty())
 			logger::info("{}", line);
+	// The CPU-driven pipeline's line, whenever CPU frames ran in the window (always reported: it says whether its sites draw).
+	if (due)
+		if (const auto line = CpuPipelineLine(); !line.empty())
+			logger::info("{}", line);
 	// The culling's counters, reported whether or not the full statistics are on: they are what says
 	// whether GPU culling is running and how much it rejects.
 	if (due) {

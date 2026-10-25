@@ -166,6 +166,11 @@ namespace DCLF::Features::Fades
 	 * A root's seed is its node as the frame's start had it (its bytes copied at Kick, StaticOf on the copy by the producer). FadeSeeds.cpp.
 	 */
 	std::uint32_t SeedsIndex();
+	/**
+	 * @brief FrameValues' producer, a pool sampled after the seeds' (the CPU fade stage): the seed rows this producer just made. Producer
+	 * thread only. FadeSeeds.cpp.
+	 */
+	const std::vector<FadeRootStatic>& ProducerSeeds();
 	/** @brief Render thread: the seed rows as the frame's producer left them, once it is done; a_wait (diagnostics frames): waits for it. */
 	const std::vector<FadeRootStatic>* SeedsIfDone(bool a_wait = false);
 
@@ -193,4 +198,15 @@ namespace DCLF::Features::Fades
 	void RegisterCommit(Api::InstallContext& a_context);
 	/** @brief The passes at the depth epoch's cull state: the fade state, then its events' copy to the host. FadeStage.cpp. */
 	void RegisterPasses(Api::InstallContext& a_context);
+	/**
+	 * @brief The CPU-driven pipeline's fade stage (dclf-architecture.md, "The CPU-driven pipeline"): the "fade-states-cpu" frame-value pool,
+	 * after the seeds'. On a frame Core's KickCpuFrameState armed, its producer steps every root on the CPU (FadeState's port, FadeStateCS's
+	 * order), sends the states into the pool's backing (the fade states the frame's draws and culls bind), pushes the milestones to the
+	 * write-back, and publishes the frame's Direct::CullFrame. FadeCpuStage.cpp.
+	 */
+	void RegisterCpuStage(Api::InstallContext& a_context);
+	/** @brief Render thread: the descriptor of the CPU stage's states the current frame reads (0: none this frame). FadeCpuStage.cpp. */
+	std::uint32_t CpuStatesIndex();
+	/** @brief Any thread: the write-back's batches made on the CPU (the CPU stage's events), as the harvest pushes the GPU's. FadeWriteBack.cpp. */
+	void PostCpuFadeEvents(FadeWriteBack& a_writeBack, std::uint32_t a_frame, std::vector<FadeEvent> a_events);
 }

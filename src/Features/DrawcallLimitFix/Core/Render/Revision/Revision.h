@@ -73,6 +73,9 @@ namespace DCLF::Draws
 		// for them), and its uploader (a growth's fills: SceneBufferSet::SetUploads; weak, so no post outlives a graph).
 		bool asyncEpochs = false;
 		std::weak_ptr<org::runtime::IUploadService> uploads;
+		// The graph is built for the CPU pipeline (GraphConditions::cpuPipeline, posted with its build): no epoch has a pass, so the
+		// revision records none (AssembleRevision) and a snapshot is complete without recordings (DecideEpochCoverage).
+		bool cpuPipeline = false;
 	};
 
 	/** @brief A latch layout's key for the scene's set (GrowthBuild::Require of a latch): another layout, another block. */
@@ -207,6 +210,8 @@ namespace DCLF::Draws
 	{
 		std::shared_ptr<const org::async::RevisionFragment> shape;
 		std::shared_ptr<const RevisionRecordings> recordings;
-		explicit operator bool() const { return shape && recordings && !recordings->recordings.empty(); }
+		// The CPU pipeline's graph (GraphConditions::cpuPipeline): its revisions record nothing, and the direct sites draw from the shape.
+		bool direct = false;
+		explicit operator bool() const { return shape && (direct || (recordings && !recordings->recordings.empty())); }
 	};
 }

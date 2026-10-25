@@ -18,6 +18,8 @@ namespace DCLF::Api
 	class PassContext;  // what a pass is made from: the epoch and its extension's resources
 	class PassOut;      // where an anchor adds its passes
 	class PassSetup;    // what a pass's setup is handed: the device and the scene's tables
+	class DirectPass;   // what a pass's CPU-mode work is prepared from: the frame's committed shapes and adopted set
+	class DirectWork;   // where it adds that work, recorded later into DXVK's command buffer
 
 	/** @brief The kind of a pass (the graph's ExternalPassDesc). */
 	enum class PassKind : std::uint8_t
@@ -54,6 +56,11 @@ namespace DCLF::Api
 	 *   address of the frame's copy of the installed payload's animated material rows (MaterialRowHeader::animatedRow: row k at k *
 	 *   kMaterialRowBytes), BuildDrawsLatch::animatedRows, which the pass writes whole before any of the frame's draws and BuildDraws
 	 *   points those rows' draws at (0: none, the draws read the installed rows). One pass may have one, scheduled as latchWord's is.
+	 * - direct: the pass's work in the CPU-driven pipeline (dclf:pipeline=cpu; Core/Render/Direct/PreWork.h), where no ORG epoch runs at
+	 *   the draw points: render thread, at its epoch's site after the commits, prepared from the frame's committed shapes and adopted set
+	 *   (DirectPass) into closures (DirectWork) that DXVK's CS thread records into DXVK's command buffer before the site's draws, outside
+	 *   any render pass, the same commands the pass's Record makes. Null: the pass has none there (the CPU does its work, or it draws:
+	 *   the direct sites record the draws).
 	 */
 	struct PassDef
 	{
@@ -66,5 +73,6 @@ namespace DCLF::Api
 		std::shared_ptr<const void> (*setup)(const PassSetup& a_setup) = nullptr;
 		std::uint32_t (*latchWord)() = nullptr;
 		std::uint64_t (*animatedRows)() = nullptr;
+		void (*direct)(const DirectPass& a_pass, DirectWork& a_out) = nullptr;
 	};
 }

@@ -3,6 +3,7 @@
 // The index pool's copy pass (IndexPoolCS.hlsl), made for the main and shadow epochs (CorePasses.cpp: core.z.index-pool; Passes/Shadow.cpp MakeShadowIndexPoolPass: shadows.index-pool, registered by Features/Shadows/Engine).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 
 namespace DCLF::Draws
 {
@@ -68,13 +69,41 @@ namespace DCLF::Draws
 
 		static void Record(const IndexPoolBindings&, const IndexPoolPrepared& a_prepared, org::PassRecordContext& a_recording)
 		{
+			RecordCopies(a_recording.Commands(), a_prepared, a_recording.FrameSlot());
+		}
+
+		/**
+		 * @brief The CPU mode's preparation (Api::PassDef::direct): Prepare's, from a_latch and the frame's adopted set (the copies' and
+		 * the pool's versions), then RecordCopies in a_pass's frame slot.
+		 */
+		static void Direct(const Api::DirectPass& a_pass, const std::shared_ptr<IndexPool>& a_pool, const LatchOf& a_latch, Api::DirectWork& a_out)
+		{
+			if (!a_pool || !a_pool->program || !a_latch.latch)
+				return;
+			IndexPoolPrepared prepared{};
+			prepared.pool = a_pool;
+			prepared.latch = a_latch.latch;
+			prepared.poolOffset = a_latch.poolOffset;
+			prepared.constants.latchIndex = a_latch.latch->SrvIndex();
+			prepared.constants.copiesIndex = a_pass.Srv(a_pool->copies);
+			prepared.constants.poolIndex = a_pass.Uav(a_pool->indices);
+			// The versions read, held with the work (a preparation's bindings hold them).
+			a_out.Add([prepared, copies = a_pass.Version(a_pool->copies), indices = a_pass.Version(a_pool->indices), slot = a_pass.frameSlot](rhi::CommandList& a_commands) {
+				if (copies && indices)
+					RecordCopies(a_commands, prepared, slot);
+			});
+		}
+
+		// The dispatch, from the latch's region of a_frameSlot (Record's and the CPU mode's).
+		static void RecordCopies(rhi::CommandList& a_commands, const IndexPoolPrepared& a_prepared, std::uint32_t a_frameSlot)
+		{
 			if (!a_prepared.pool || !a_prepared.latch)
 				return;
 			auto constants = a_prepared.constants;
 			const auto& layout = a_prepared.latch;
-			const std::uint64_t offset = layout->Offset(a_recording.FrameSlot()) + a_prepared.poolOffset;
+			const std::uint64_t offset = layout->Offset(a_frameSlot) + a_prepared.poolOffset;
 			constants.latchOffset = static_cast<std::uint32_t>(offset);
-			auto& commands = a_recording.Commands();
+			auto& commands = a_commands;
 			const auto& program = *a_prepared.pool->program;
 			commands.BindLayout(program.layout->GetHandle());
 			commands.BindPipeline(program.Pipeline());

@@ -5,6 +5,15 @@
 
 namespace DCLF
 {
+	namespace Direct
+	{
+		struct ViewBatchSet;
+	}
+	namespace Draws
+	{
+		class ViewBatchBuilder;
+	}
+
 	// The builds ahead and the snapshot builder: the publication's draws and the ahead context, the coordinator's post,
 	// the builder's work, its snapshots and their adoption by the frame.
 	struct ImplSnapshotBuilder
@@ -87,6 +96,9 @@ namespace DCLF
 			std::uint64_t buildGeneration = 0, mainGeneration = 0;
 			std::uint32_t targetsGeneration = 0;
 			DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;
+			// The CPU pipeline's view batches of its draws (Snapshot/ViewBatches.h), made while its revision inputs' graph is the CPU
+			// pipeline's (RevisionInputs::cpuPipeline), their sequences GPU ready; null otherwise, or when they could not be made.
+			std::shared_ptr<const Direct::ViewBatchSet> viewBatches;
 		};
 		/** @brief One snapshot build's times (drained by the report): its draws (0 when kept), shapes, recordings. */
 		struct SnapshotTiming
@@ -141,6 +153,12 @@ namespace DCLF
 		const PayloadVersions* InstalledPayload() const { return framePayloadMade ? &framePayload : nullptr; }
 		/** @brief The frame: the installed snapshot's payload (null: none). */
 		const ScenePayload* InstalledScenePayload() const { return installedPayload.get(); }
+		/** @brief The frame: the adopted snapshot's view batches (null: none: the GPU pipeline's graph, or none made). */
+		const std::shared_ptr<const Direct::ViewBatchSet>& InstalledViewBatches() const
+		{
+			static const std::shared_ptr<const Direct::ViewBatchSet> kNone;
+			return adoptedSnapshot ? adoptedSnapshot->viewBatches : kNone;
+		}
 		bool snapshotStale = false;
 		// The frame's waits at its start for a current snapshot (AdoptCurrentSnapshot) since the last report: how many, their total and
 		// longest time.
@@ -184,6 +202,9 @@ namespace DCLF
 			// the next make builds it again.
 			std::shared_ptr<const PayloadSource> payloadSource;
 			bool payloadFailed = false;
+			// The CPU pipeline's view batches of draws' payload (ViewBatches.h), made once the payload is published and posted with the
+			// snapshot once their sequences are GPU ready (made at the first need: shared, so this header needs only its name).
+			std::shared_ptr<Draws::ViewBatchBuilder> viewBatches;
 			std::uint64_t drawsSerial = 0;     // the serial of the sealed set draws embed the addresses of (0: none)
 			std::uint64_t sealedSequence = 0;  // the assembler sequence of the revision sealed for work
 			std::uint64_t serial = 0, lastPublication = 0;
@@ -215,6 +236,7 @@ namespace DCLF
 				std::shared_ptr<const EntrySpace> sun, light;
 				std::shared_ptr<const DrawPublication> draws;
 				std::shared_ptr<const ScenePayload> payload;
+				std::shared_ptr<const Direct::ViewBatchSet> viewBatches;  // its snapshot's (posted again with it)
 				org::async::RevisionAssembler::Lease revision;
 				std::uint64_t drawsSerial = 0;
 				// The ahead context's shape (which builds ran, for which resources and frame slots).

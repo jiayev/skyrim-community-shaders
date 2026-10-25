@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Render/DrawFamilies/FamilySlots.h"
 
 #include "ShaderCache.h"
 #include <Render/RenderGraph/RenderGraph.h>
@@ -99,6 +100,21 @@ namespace DCLF::Features::TreeLod
 			builder.ShaderResource(tables->draw, noViews);
 		}
 
+		// The CPU pipeline's main draw (main.direct): MainDeclare's arguments, the visible list's version the frame adopted
+		// (its header the depth commit latched, its counts the depth site's single-phase cull wrote), and the draw row's address.
+		bool MainDirect(Api::DrawFamilyDirect& a_draw)
+		{
+			const auto* tables = TablesOf(a_draw.scene);
+			if (!tables || !tables->visible || !tables->drawAddress || !a_draw.adopted.Names(*tables->visible))
+				return false;
+			const auto& version = a_draw.adopted.Of(*tables->visible).version;
+			if (!version || !version->buffer)
+				return false;
+			a_draw.row = tables->drawAddress;
+			a_draw.arguments = version->buffer;
+			return true;
+		}
+
 		// Its pipelines (built late, rebuilt on a target change).
 		void MainRevision(const Api::DrawFamilyRevision& a_revision, std::vector<std::uint64_t>& a_out)
 		{
@@ -120,7 +136,7 @@ namespace DCLF::Features::TreeLod
 			.resources = TablesId(),
 			.colourRange = "cs.dclf.colour.tree-lod",
 			.frame = { .serve = &Serve, .decide = &Decide, .programSource = &ProgramSource },
-			.main = { .declare = &MainDeclare, .revision = &MainRevision, .record = &MainRecord },
+			.main = { .declare = &MainDeclare, .revision = &MainRevision, .record = &MainRecord, .direct = &MainDirect },
 			.faces = FacesContribution(),
 			.program = kProgram,
 			.engineShapes = { .propertyVtable = &EngineShapeVtable } });

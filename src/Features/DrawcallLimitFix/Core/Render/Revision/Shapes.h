@@ -62,6 +62,15 @@ namespace DCLF::Draws
 		return sealed ? NamedUnits(*sealed, a_buffer) : 0;
 	}
 	/** @brief The shape a_preparation prepares the segment's passes for: its revision's, null without one or for a segment that does not draw. */
+	/** @brief a_segment's main shape in a_shapes (the CPU mode's committed shapes: Api::DirectPass::shapes), as a preparation's is read. */
+	inline std::shared_ptr<const PassFrame> CurrentFrame(const RevisionShapes& a_shapes, RenderGraphRuntime::Segment a_segment)
+	{
+		if (a_segment == RenderGraphRuntime::Segment::ZPrepass)
+			return a_shapes.main[kDepthShape];
+		if (a_segment == RenderGraphRuntime::Segment::MainOpaque)
+			return a_shapes.main[kColourShape];
+		return nullptr;
+	}
 	inline std::shared_ptr<const PassFrame> CurrentFrame(const org::PassPrepareContext& a_preparation, RenderGraphRuntime::Segment a_segment)
 	{
 		if (const auto* shapes = RevisionShapesOf(a_preparation)) {
@@ -79,6 +88,12 @@ namespace DCLF::Draws
 	inline bool BuildsDraws(const org::PassPrepareContext& a_preparation, const Resources& a_resources, RenderGraphRuntime::Segment a_segment)
 	{
 		const auto frame = a_resources.buildDraws && a_resources.dispatchSignature ? CurrentFrame(a_preparation, a_segment) : nullptr;
+		return frame && frame->latch;
+	}
+	/** @brief BuildsDraws of the CPU mode's committed shapes (Api::DirectPass::shapes): whether the segment's commit latched its build's values. */
+	inline bool BuildsDraws(const RevisionShapes& a_shapes, const Resources& a_resources, RenderGraphRuntime::Segment a_segment)
+	{
+		const auto frame = a_resources.buildDraws && a_resources.dispatchSignature ? CurrentFrame(a_shapes, a_segment) : nullptr;
 		return frame && frame->latch;
 	}
 }

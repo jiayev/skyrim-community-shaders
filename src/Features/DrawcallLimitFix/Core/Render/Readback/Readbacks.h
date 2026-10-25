@@ -312,6 +312,13 @@ namespace DCLF::Draws
 	};
 
 	/**
+	 * @brief Any thread: a frame's events made on the CPU (the CPU-driven pipeline's main-camera verdicts, Direct/Cull.cpp: the same diff
+	 * VisibilityEventsCS makes, against the CPU's own reported words), with its frame's tables and entries. Handed to the decoder with the
+	 * harvested batches at the next IndirectDraws::KickVisibilityReadback (render thread), in frame order. Visibility.cpp.
+	 */
+	void PostCpuVisibility(VisibilityReadback::Batch* a_batch);
+
+	/**
 	 * @brief The culling's counters read back without a stall: each execution of its epoch, a fixed copy (CounterReadbackPass) of
 	 * each drawn source's count words and of the stamp its culling latch carried (BuildDrawsLatch::visibilityStamp, the frame) into
 	 * the frame slot's host buffer. The render thread arms one source after an execution and reads it once that slot's copy is the

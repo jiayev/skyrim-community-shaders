@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 
 namespace DCLF
@@ -325,7 +326,9 @@ namespace DCLF
 						return false;
 				return true;
 			};
-			if (!recordable || !shapeFragment || traits.hostedBy != kNoEpoch) {
+			// The CPU pipeline's graph has no pass in any DCLF epoch (GraphConditions::cpuPipeline): nothing to record, and the snapshot is
+			// complete without (DecideEpochCoverage); the direct sites draw from its payload and view batches.
+			if (!recordable || !shapeFragment || traits.hostedBy != kNoEpoch || producer.inputs.cpuPipeline) {
 				draft.Set(slot, nullptr);
 				continue;
 			}
@@ -371,6 +374,7 @@ namespace DCLF
 		if (const auto& active = revisions.active) {
 			out.shape = active->Fragment(R::kShapeSlot + a_epoch);
 			out.recordings = active->Get<RevisionRecordings>(R::kRecordingSlot + a_epoch);
+			out.direct = Draws::CurrentGraphConditions().cpuPipeline;
 		}
 		if (!out) {
 			if (revisions.unrevised[a_epoch]++ == 0)

@@ -583,7 +583,7 @@ VS_OUTPUT DCLFPulledVertex(uint index, uint a_instance)
 {
 	const uint64_t sequence = DCLFDrawSequence(a_instance);
 	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
-	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
+	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
 	DCLFPipelineRowAddress = DCLFAddress(rows.xy);
 	DCLFMaterialRowAddress = DCLFAddress(rows.zw);
 	DCLFPerMaterialStatics();
@@ -1349,7 +1349,7 @@ PS_OUTPUT DCLFPulledPixel(PS_INPUT input, uint a_instance)
 {
 	const uint64_t sequence = DCLFDrawSequence(a_instance);
 	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
-	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
+	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
 	DCLFPipelineRowAddress = DCLFAddress(rows.xy);
 	DCLFMaterialRowAddress = DCLFAddress(rows.zw);
 	DCLFPerMaterialStatics();

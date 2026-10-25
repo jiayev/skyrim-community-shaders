@@ -73,6 +73,13 @@ namespace DCLF
 	// A shadow view's plain draw's push words: the first sequence's address (indexed by instance; Utility.hlsl, DCLF_PULLED), the
 	// material rows' table (for the layout's b1/t0 ranges; the stages read the draw's row themselves), the vertex layout.
 	inline constexpr std::uint32_t kShadowDrawPushSequences = 0, kShadowDrawPushMaterialRows = 2, kShadowDrawPushVertexLayout = 4;
+	// The CPU-driven pipeline's direct draws (Direct/Recorder.cpp: one plain draw a resident sequence, in either layout above): the
+	// draw's object word, whose per-frame bits (local shadow mask, cross-fade copy, sun miss) the resident sequence does not hold, and
+	// kDirectFlagObjectWord, with which the pulled stages take it in place of the sequence's (DCLFObjects.hlsli, DCLFSequenceObjectWord).
+	// The GPU path's plain draws push both 0, so their stages read the sequence's word as before.
+	inline constexpr std::uint32_t kDirectDrawPushObjectWord = 6, kDirectDrawPushFlags = 7;
+	inline constexpr std::uint32_t kDirectFlagObjectWord = 1;
+	static_assert(kDirectDrawPushObjectWord > kZDrawPushOffsetDepth && kDirectDrawPushObjectWord >= kShadowDrawPushVertexLayout + 2 && kDirectDrawPushFlags < kDrawPushWords);
 	/** @brief Where a DrawSequence's draw arguments start, which the shadow views' plain indexed draws read. */
 	inline constexpr std::uint32_t kSequenceDrawOffset = 116;
 	static_assert(offsetof(DrawSequence, indexCount) == kSequenceDrawOffset);
@@ -135,6 +142,12 @@ namespace DCLF
 	};
 	static_assert(kPipelineRowHeader + sizeof(PipelineRowHeader) <= kPipelineRowBytes);
 	static_assert(offsetof(PipelineRowHeader, shadowMask) == 48 && offsetof(PipelineRowHeader, vertexLayout) == 56);  // DCLFPipeline*Index
+	// Every block address a draw pushes is a row's address (its part's backing base, at least 256-aligned) plus these: on Vulkan's
+	// descriptor-buffer model the shaders read the blocks through PhysicalStorageBuffer pointers whose loads assume 16-byte alignment
+	// (BasicRHI's SPIR-V lowering). Rows and blocks are kept at 256 (D3D11's constant buffer offset granularity).
+	static_assert(kPipelineRowBytes % 256 == 0 && kMaterialRowBytes % 256 == 0);
+	static_assert(kPipelineRowTechniqueVS % 256 == 0 && kPipelineRowTechniquePS % 256 == 0 && kPipelineRowGeometryVS % 256 == 0 &&
+				  kPipelineRowGeometryPS % 256 == 0 && kPipelineRowPermutation % 256 == 0 && kMaterialRowVS % 256 == 0 && kMaterialRowPS % 256 == 0);
 	/**
 	 * @brief A sequence's block addresses (DrawSequence: PS b0, VS b2, PS b2, b4, PS b1) from its rows' addresses, as BuildDrawsCS
 	 * writes them (StoreSequence): the CPU templates' (the build parity).

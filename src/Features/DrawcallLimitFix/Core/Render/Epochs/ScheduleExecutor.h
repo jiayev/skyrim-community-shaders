@@ -79,4 +79,12 @@ namespace DCLF::Draws
 	 * passes see the views whose passes are added (PassContext::hosted).
 	 */
 	void GatherScheduled(Api::EpochShape a_shape, Api::EngineView a_view, const Api::PassContext& a_base, std::vector<org::RenderGraph::ExternalPassDesc>& a_out);
+	/**
+	 * @brief Render thread, at a site of the CPU-driven pipeline (Core/Render/Direct/PreWork.cpp), after its commits: epoch a_epoch's
+	 * passes with CPU-mode work (Api::PassDef::direct), in the schedule's order, each prepared from a_base with the epoch's fields set,
+	 * its setup's state and, for a hosted epoch's pass, its view's resources (only a view whose shape a_base.shapes has: committed this
+	 * frame, as the recording with its work is selected), into a_out (DirectWork::passEnds: where each pass's work ends). A cut pass
+	 * (diagnostics) adds none.
+	 */
+	void PrepareDirectPasses(std::uint32_t a_epoch, const Api::DirectPass& a_base, Api::DirectWork& a_out);
 }

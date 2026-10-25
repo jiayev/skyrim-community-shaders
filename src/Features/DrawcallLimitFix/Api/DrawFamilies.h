@@ -17,6 +17,7 @@ namespace DCLF::Api
 	// Defined by Core (Core/Extensions/DrawFamilies.h), which the features inside DCLF include for them.
 	class DrawFamilyFrame;
 	class DrawFamilyDeclare;
+	class DrawFamilyDirect;
 	class DrawFamilyRevision;
 	class DrawFamilyRecord;
 	class DrawFamilyFaceRow;
@@ -149,6 +150,9 @@ namespace DCLF::Api
 			void (*declare)(DrawFamilyDeclare& a_declare) = nullptr;
 			void (*revision)(const DrawFamilyRevision& a_revision, std::vector<std::uint64_t>& a_out) = nullptr;
 			void (*record)(const DrawFamilyRecord& a_record) = nullptr;
+			// Optional: the CPU-driven pipeline's main draw (Core/Render/Direct), where no pass declares it: what declare gives the graph, its
+			// draw row's address and arguments buffer. False: none to draw with this frame. A family without it is the engine's in CPU frames.
+			bool (*direct)(DrawFamilyDirect& a_direct) = nullptr;
 		} main;
 		struct Faces
 		{

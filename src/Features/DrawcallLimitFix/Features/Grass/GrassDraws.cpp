@@ -10,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Render/DrawFamilies/FamilySlots.h"
 
 #include "GrassShared/GrassCapture.h"
 #include "GrassShared/GrassFrame.h"
@@ -135,6 +136,18 @@ namespace DCLF::Features::Grass
 			builder.ShaderResource(tables->draw, noViews);
 		}
 
+		// The CPU pipeline's main draw (main.direct): MainDeclare's draws buffer (a plain buffer, fixed with the tables) and
+		// draw row's address.
+		bool MainDirect(Api::DrawFamilyDirect& a_draw)
+		{
+			const auto* tables = TablesOf(a_draw.scene);
+			if (!tables || !tables->draws || !tables->drawAddress)
+				return false;
+			a_draw.row = tables->drawAddress;
+			a_draw.arguments = tables->draws;
+			return true;
+		}
+
 		// Its pipelines (built late, rebuilt on a target change).
 		void MainRevision(const Api::DrawFamilyRevision& a_revision, std::vector<std::uint64_t>& a_out)
 		{
@@ -174,7 +187,7 @@ namespace DCLF::Features::Grass
 			.resources = TablesId(),
 			.colourRange = "cs.dclf.colour.grass",
 			.frame = { .serve = &Serve, .decide = &Decide, .owned = &Owned, .programSource = &ProgramSource },
-			.main = { .declare = &MainDeclare, .revision = &MainRevision, .record = &MainRecord },
+			.main = { .declare = &MainDeclare, .revision = &MainRevision, .record = &MainRecord, .direct = &MainDirect },
 			.program = kProgram,
 			.engineShapes = { .propertyVtable = &EngineShapeVtable } });
 	}

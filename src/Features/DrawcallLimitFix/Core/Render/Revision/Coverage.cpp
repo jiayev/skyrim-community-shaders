@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
@@ -78,7 +79,7 @@ namespace DCLF
 			       a_next.shadowPlacements == a_previous.shadowPlacements && a_next.shadowActiveViews == a_previous.shadowActiveViews && a_next.mainKnown == a_previous.mainKnown && a_next.viewport == a_previous.viewport &&
 			       a_next.blockSizes == a_previous.blockSizes &&
 			       a_next.resourceInputs == a_previous.resourceInputs &&
-			       a_next.shadowSlots == a_previous.shadowSlots && a_next.asyncEpochs == a_previous.asyncEpochs &&
+			       a_next.shadowSlots == a_previous.shadowSlots && a_next.asyncEpochs == a_previous.asyncEpochs && a_next.cpuPipeline == a_previous.cpuPipeline &&
 			       !a_next.uploads.owner_before(a_previous.uploads) && !a_previous.uploads.owner_before(a_next.uploads);
 		}
 	}
@@ -102,6 +103,7 @@ namespace DCLF
 			next.asyncEpochs = host->AsyncEpochs();
 			next.uploads = host->RetainUploads();
 		}
+		next.cpuPipeline = Draws::CurrentGraphConditions().cpuPipeline;
 		auto& drawPipelines = DrawPipelines::Get();
 		next.targetsGeneration = drawPipelines.Generation();
 		next.claims = !IndirectDraws::Get().Failed();
@@ -136,6 +138,8 @@ namespace DCLF
 
 	bool IndirectDraws::DecideCoverage()
 	{
+		// The CPU pipeline's frame start, with the adopted snapshot's view batches (null in GPU mode), before anything covers or draws.
+		Direct::FrameStart(failed ? nullptr : impl->InstalledViewBatches());
 		auto& rv = impl->revisions;
 		if (failed) {
 			impl->CoverFailedGraph();
@@ -216,7 +220,20 @@ namespace DCLF
 			growthToDraws.push_back(frameNow >= growthAdoptedFrame ? frameNow - growthAdoptedFrame : 0u);
 			growthAdoptedFrame = ~0u;
 		}
-		if (current && snapshot)
+		// The CPU pipeline's graph (GraphConditions::cpuPipeline): its revisions record nothing (AssembleRevision), so an epoch is covered by
+		// its shape in the revision (a shared one's while its gate class is on) and the snapshot's view batches (Direct::FrameBatches,
+		// adopted with it), which the direct sites draw from at the epochs' triggers. Never waits for a recording. An epoch whose site is
+		// not live (Direct::ShadowSiteLive, ViewSiteLive) is not covered, so the engine draws it meanwhile; a hosted one only with its host.
+		if (current && snapshot && Draws::CurrentGraphConditions().cpuPipeline) {
+			const bool batches = Direct::FrameBatches() != nullptr;
+			for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e) {
+				const auto& traits = EpochTraitsOf(e);
+				const bool live = traits.shape == ShapeKind::Main     ? true :
+				                  traits.shape == ShapeKind::Shadow ? Direct::ShadowSiteLive() :
+				                                                      Direct::ViewSiteLive(traits.index);
+				rv.covered[e] = batches && live && active->Fragment(R::kShapeSlot + e) != nullptr && (traits.hostedBy == kNoEpoch || rv.covered[traits.hostedBy]);
+			}
+		} else if (current && snapshot)
 			for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e) {
 				// An epoch's recordings are all of the build its versions were made at (AssembleRevision asks for them again after one). A
 				// hosted epoch's are its host's (an earlier row), covered while they were recorded with its shape (RevisionRecordings::

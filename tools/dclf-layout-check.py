@@ -58,7 +58,7 @@ DEPENDS = {
     "LocalLights": {"Portals"},
     "FirstPerson": {"Actors", "Skins"},
     "Effects": {"Skins"},
-    "Fades": set(),
+    "Fades": {"Portals"},
     "MainView": set(),
     "Actors": {"Shadows/Sun", "Shadows/Local"},
 }

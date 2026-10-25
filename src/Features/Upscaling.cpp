@@ -1627,8 +1627,15 @@ bool Upscaling::IsWindowUnusable()
 			s_windowUnfocused.store(foregroundProcess != GetCurrentProcessId(), std::memory_order_relaxed);
 	}
 
+	// CS_UPSCALE_UNFOCUSED=1: unattended test runs on another monitor keep upscaling (and HDR, frame generation) while another
+	// process has the foreground; minimized and size/move still suspend.
+	static const bool s_ignoreFocus = [] {
+		char v[2] = {};
+		return GetEnvironmentVariableA("CS_UPSCALE_UNFOCUSED", v, sizeof(v)) && v[0] == '1';
+	}();
+
 	return IsWindowMinimized() ||
-	       s_windowUnfocused.load(std::memory_order_relaxed) ||
+	       (!s_ignoreFocus && s_windowUnfocused.load(std::memory_order_relaxed)) ||
 	       s_windowModifying.load(std::memory_order_relaxed);
 }
 

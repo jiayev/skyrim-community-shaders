@@ -11,6 +11,8 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/ScheduleDump.h"
 
+#include <cassert>
+
 namespace DCLF::Draws
 {
 	namespace
@@ -68,7 +70,11 @@ namespace DCLF::Draws
 
 		std::uint64_t AddressOf(rhi::Device a_device, org::Buffer& a_buffer)
 		{
-			return a_device.GetBufferDeviceAddress({ a_buffer.GetAPIResource().GetHandle(), 0 });
+			// A whole buffer: BasicRHI places buffers at 256 or more. The rows' and blocks' offsets keep 16 on top (DrawPipelines.h), which
+			// the descriptor-buffer model's pointer loads assume.
+			const auto address = a_device.GetBufferDeviceAddress({ a_buffer.GetAPIResource().GetHandle(), 0 });
+			assert(address % 16 == 0);
+			return address;
 		}
 
 		/** @brief A per-object buffer's first units (CS_DCLF_TABLE_START=small: a few, to test growth); RequireSceneTables grows it. */

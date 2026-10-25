@@ -12,6 +12,9 @@
 #include "Features/DrawcallLimitFix/Core/Engine/SkinPalettes.h"
 
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Direct.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PlacementRows/BillboardRow.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
@@ -43,6 +46,7 @@
 #include <ORGModuleServices/BackingPool.h>
 #include <ORGModuleServices/GrowthPolicy.h>
 #include <rhi.h>
+#include <rhi_interop.h>
 
 #include <algorithm>
 #include <ankerl/unordered_dense.h>
@@ -217,7 +221,7 @@ namespace DCLF
 				bind(lease);
 			const auto* host = RenderGraphRuntime::Get().Host();
 			if (bound && host && point && (a_points.empty() || a_points.back().first < point))
-				a_points.emplace_back(point, host->SubmittedPoint());
+				a_points.emplace_back(point, DCLF::SubmittedGpuPoint());
 			// Retired points need no wait: kept back to the oldest the frames in flight may still bind.
 			const auto completed = FrameRetirement()->Completed();
 			while (a_points.size() > 1 && a_points[1].first <= completed)
@@ -422,6 +426,13 @@ namespace DCLF
 		// Written slots whose previous transform still differs from the current (a static's first update): resampled until equal.
 		std::vector<Plan::Item> settling;
 		std::vector<std::uint32_t> listedSlots, listedBlocks;  // the marks set in listed and blockListed (cleared alone)
+		// The CPU pipeline's snapshot spheres (Direct::SnapshotSpheres), the producers': per slot, the geometry its row was last sampled for
+		// (ListItem), its bound as last sampled and the producer that changed it (TrackSpheres); posted only when the builder asked.
+		std::vector<const void*> rowOwner;
+		std::vector<std::array<float, 4>> lastSphere;
+		std::vector<std::uint64_t> sphereSeq;
+		std::atomic<bool> spheresWanted{ false };
+		LatestSlot<Direct::SnapshotSpheres> spheresSlot;
 
 		// The moved-only sampling (dclf B) over the kept placement set: the plans applied in order (ApplyPlans), each a delta, onto movers
 		// and roots kept at stable indices (a freed one reused), and the index from move key to them (KeysOf) patched as they join,
@@ -569,6 +580,8 @@ namespace DCLF
 			std::vector<RootViewSample> rootViewSamples;  // the render thread's samples (Kick)
 			// The palette rows classes' frame inputs (their kicks'; by class index - 1).
 			std::array<Api::PaletteRowsInput, Api::kPaletteRowsClasses> paletteInputs{};
+			// The CPU pipeline's view batches the frame draws with (SetViewBatches; null: none): their live column of the job's parity.
+			std::shared_ptr<const Direct::ViewBatchSet> viewBatches;
 		};
 		// Sample's stages.
 		struct Listed
@@ -687,6 +700,9 @@ namespace DCLF
 		void Run(const Job& a_job);
 		void Sample(const Job& a_job);
 		void ApplyPlans(const Job& a_job);
+		void TrackSpheres(const Job& a_job, const std::vector<BindlessPlacement>& a_out);
+		void PostSnapshotSpheres(const Job& a_job, const std::vector<BindlessPlacement>& a_out);
+		static void StoreLiveSpheres(const Job& a_job, const std::vector<BindlessPlacement>& a_out);
 		void MarkMover(std::uint32_t a_mover);
 		void MarkRoot(std::uint32_t a_root);
 		void MarkDue(const Job& a_job);
@@ -1277,6 +1293,7 @@ namespace DCLF
 		// Parity (CS_DCLF_PERSISTENT_PARITY): every mover and root sampled again, against what the moved-only sampling left.
 		if (a_job.parity)
 			CheckEveryMover(a_job);
+		TrackSpheres(a_job, out);
 		// Only the marks set this frame go back to zero.
 		for (const auto slot : listedSlots)
 			listed[slot] = 0;
@@ -1285,7 +1302,106 @@ namespace DCLF
 		listedSlots.clear();
 		listedBlocks.clear();
 		SampleShadingRows(a_job, a_job.shadingSlots);
+		// The CPU pipeline's: the rows are this frame's from here (the registered pools' samples write none). The view batches' live spheres,
+		// the builder's snapshot spheres when it asked, then the CPU stages' hook (Features/Fades' CPU fade states, a registered pool, read
+		// what it stashes).
+		StoreLiveSpheres(a_job, out);
+		PostSnapshotSpheres(a_job, out);
+		Direct::OnFrameValuesSampled(a_job.seq, std::span<const BindlessPlacement>(out));
 		ForEachRegistered(a_job, [](const Extensions::FrameValuePoolEntry& a_entry, Api::FrameValuePoolProducer& a_producer) { a_entry.sample(a_producer); });
+	}
+
+	void FrameValues::Impl::TrackSpheres(const Job& a_job, const std::vector<BindlessPlacement>& a_out)
+	{
+		// Only the slots sampled this frame can have moved their bound (a root writes its dependents' sun entry and fade node, not it).
+		if (lastSphere.size() < a_out.size()) {
+			lastSphere.resize(a_out.size(), std::array<float, 4>{});
+			sphereSeq.resize(a_out.size(), 0);
+		}
+		for (const auto slot : listedSlots) {
+			if (slot >= a_out.size())
+				continue;
+			const auto& bound = a_out[slot].bound;
+			auto& last = lastSphere[slot];
+			if (std::memcmp(last.data(), bound, sizeof(bound)) != 0) {
+				std::memcpy(last.data(), bound, sizeof(bound));
+				sphereSeq[slot] = a_job.seq;
+			}
+		}
+	}
+
+	void FrameValues::Impl::PostSnapshotSpheres(const Job& a_job, const std::vector<BindlessPlacement>& a_out)
+	{
+		if (!spheresWanted.exchange(false, std::memory_order_acq_rel))
+			return;
+		ZoneScopedN("CS.DCLF.FrameValues.SnapshotSpheres");
+		auto table = std::make_unique<Direct::SnapshotSpheres>();
+		const std::size_t slots = a_out.size();
+		table->seq = a_job.seq;
+		table->sphere.resize(slots);
+		for (std::size_t i = 0; i < slots; ++i)
+			std::memcpy(table->sphere[i].data(), a_out[i].bound, sizeof(a_out[i].bound));
+		table->owner.assign(rowOwner.begin(), rowOwner.begin() + std::min(rowOwner.size(), slots));
+		table->owner.resize(slots, nullptr);
+		// Moving: changed by this producer or the last (a written slot settling, a mover's last sample), a kept mover, an every-frame item,
+		// or still settling. Their lanes take the live column every frame.
+		table->moving.assign(slots, 0);
+		for (std::size_t i = 0; i < std::min(slots, sphereSeq.size()); ++i)
+			table->moving[i] = sphereSeq[i] && sphereSeq[i] + 2 > a_job.seq ? 1 : 0;
+		const auto mark = [&](std::uint32_t a_slot) {
+			if (a_slot < slots)
+				table->moving[a_slot] = 1;
+		};
+		for (const auto& mover : keptMovers)
+			if (mover.live) {
+				mark(mover.item.slot);
+				mark(mover.item.layerSlot);
+			}
+		for (const auto& item : settling)
+			mark(item.slot);
+		spheresSlot.Post(std::move(table));
+	}
+
+	void FrameValues::Impl::StoreLiveSpheres(const Job& a_job, const std::vector<BindlessPlacement>& a_out)
+	{
+		const auto* set = a_job.viewBatches.get();
+		if (!set)
+			return;
+		ZoneScopedN("CS.DCLF.FrameValues.LiveSpheres");
+		const std::size_t parity = Direct::LiveParity(a_job.seq);
+		// The static lanes once a set and parity: the snapshot's spheres (a mover's is unknown there: written below every frame).
+		if (!set->liveFilled[parity].exchange(true, std::memory_order_acq_rel))
+			for (const auto& list : set->lists)
+				for (const auto& batch : list) {
+					const auto& live = batch.liveSpheres[parity];
+					const std::size_t bytes = std::size_t(batch.count) * sizeof(float);
+					std::memcpy(live.cx, batch.cx, bytes);
+					std::memcpy(live.cy, batch.cy, bytes);
+					std::memcpy(live.cz, batch.cz, bytes);
+					std::memcpy(live.r, batch.r, bytes);
+				}
+		for (const auto& ref : set->moverLanes) {
+			const auto& batch = set->lists[ref.view][ref.batch];
+			const std::uint32_t object = batch.object[ref.lane];
+			if (object >= a_out.size())
+				continue;
+			const auto& bound = a_out[object].bound;
+			const auto& live = batch.liveSpheres[parity];
+			live.cx[ref.lane] = bound[0];
+			live.cy[ref.lane] = bound[1];
+			live.cz[ref.lane] = bound[2];
+			live.r[ref.lane] = bound[3];
+		}
+	}
+
+	void FrameValues::RequestSnapshotSpheres()
+	{
+		impl->spheresWanted.store(true, std::memory_order_release);
+	}
+
+	std::unique_ptr<Direct::SnapshotSpheres> FrameValues::TakeSnapshotSpheres()
+	{
+		return impl->spheresSlot.Take();
 	}
 
 	// First-person items are the render thread's (RootViewSample), except a palette rows class's (particle members, expanded from
@@ -1296,6 +1412,9 @@ namespace DCLF
 			return;
 		listed[a_item.slot] = 1;
 		listedSlots.push_back(a_item.slot);
+		if (rowOwner.size() <= a_item.slot)
+			rowOwner.resize(std::size_t(a_item.slot) + 1, nullptr);
+		rowOwner[a_item.slot] = a_item.geometry.get();
 		const bool palette = a_item.boneRows && std::size_t(a_item.boneOffset) + a_item.boneRows <= a_blocks && !blockListed[a_item.boneOffset];
 		if (palette) {
 			blockListed[a_item.boneOffset] = 1;
@@ -2125,7 +2244,7 @@ namespace DCLF
 			if (at != boundPoints.end())
 				a_job.writeAfter = at->second;
 			else if (const auto* host = RenderGraphRuntime::Get().Host())
-				a_job.writeAfter = host->SubmittedPoint();  // never: every bind notes its point; waiting for everything is still safe
+				a_job.writeAfter = DCLF::SubmittedGpuPoint();  // never: every bind notes its point; waiting for everything is still safe
 			reusedInFlight.fetch_add(1, std::memory_order_relaxed);
 		}
 	}
@@ -2278,6 +2397,7 @@ namespace DCLF
 			if (value.slot != kNoObjectSlot)
 				job.shadingSlots = std::max<std::size_t>(job.shadingSlots, std::size_t(value.slot) + 1);
 		job.globals = a_globals;
+		job.viewBatches = viewBatches;
 		// The registered pools' inputs for the frame's producer, and the rows each asks for.
 		s.KickRegistered(job, a_globals.get());
 		// Each part's backing, holding every row the producer leaves (a class of kPoolGrowth), the one that holds
@@ -2334,6 +2454,17 @@ namespace DCLF
 		BindFrameLeases(impl->frameLeases, impl->registeredFrameLeases, impl->boundPoints);
 		if (auto* host = RenderGraphRuntime::Get().Host())
 			host->SetFrameWaitValue(0);
+	}
+
+	FrameValues::FrameWait FrameValues::FrameWaitPoint() const
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		const auto timeline = RenderGraphRuntime::Get().FrameWaitTimeline();
+		const std::uint64_t value = host && impl->kicked ? host->FrameWaitValue() : 0;
+		rhi::VulkanTimelineInfo info{};
+		if (!value || !timeline || !*timeline || !rhi::QueryNativeTimeline(timeline->Get(), rhi::RHI_IID_VK_TIMELINE, &info, sizeof(info)))
+			return {};
+		return { static_cast<VkSemaphore_T*>(info.timeline), value };
 	}
 
 	void FrameValues::EndFrame()

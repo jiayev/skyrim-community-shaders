@@ -41,6 +41,7 @@ the addresses in comments and below are AE 1.6.1170's.
     -   [Shadows](#shadows), [The occlusion maps, drawn by DCLF](#the-occlusion-maps-drawn-by-dclf),
         [Water reflections](#water-reflections), [First person as a view bit](#first-person-as-a-view-bit),
         [Portals](#portals)
+-   [The CPU-driven pipeline (experiment)](#the-cpu-driven-pipeline-experiment)
 -   [What the engine still draws](#what-the-engine-still-draws)
 -   [Trusted and parity](#trusted-and-parity)
 
@@ -58,6 +59,9 @@ the addresses in comments and below are AE 1.6.1170's.
     miss is a defect the parities find, never something a periodic re-read hides.
 5.  **Lock-free by construction.** Data moves between threads as immutable publications, messages and pooled versions. No
     pipeline waits on a mutex in the normal path, and none is tuned faster instead of restructured.
+
+The CPU-driven pipeline, an experiment behind `dclf:pipeline=cpu`, suspends policies 1 and 2 while it runs
+([The CPU-driven pipeline](#the-cpu-driven-pipeline-experiment)).
 
 ### The model
 
@@ -2618,6 +2622,94 @@ A shadow light's rooms (`PortalViews::WalkLight`, `CommitLightWalk`, `LightSelec
 
 Occluder states and boxes are the main walk's. A light's edge flags persist only once the light is kept (`CommitLightWalk`). An
 unwalked light keeps its entry.
+
+## The CPU-driven pipeline (experiment)
+
+A second pipeline, switched live against the GPU one (`dclf:pipeline=gpu|cpu`), to measure how much of DCLF's GPU overhead goes
+when the CPU culls and records instead: the GPU cull (BuildDrawsCS, the HZB, the sorts), the epochs' entry and exit barriers and
+DXVK's list splits at each epoch. The GPU path is unchanged; with `pipeline=gpu` the schedule dump is the same. The contract is
+`Core/Render/Direct/Direct.h`.
+
+**Suspended policies, in this mode only.** "DCLF owns all culling, on the GPU" (the CPU culls) and "No per-view lists" (the
+snapshot builder makes a list per view type). Why: they are what the experiment measures. The claims, the set, withholding, the
+stand-ins and the engine boundary are the GPU path's: the same objects are DCLF's; only how they are drawn changes.
+
+**The frame.**
+-   **View batches.** The snapshot builder makes, with each snapshot made for a CPU graph, one immutable `ViewBatchSet`
+    (`Core/Render/Snapshot/ViewBatches.cpp`, `MakeViewBatches`): a list per view type (main, decal, forward, refraction, sun, spot,
+    point, the two occluder maps, reflection, first person) of fixed-size SoA batches (256 lanes, `CS_DCLF_CPU_BATCH`), ordered
+    by pipeline bucket then object, with resident sequences (one resolved `DrawSequence` per drawn object, partition and view
+    class) in a pooled version of their own. FrameValues' producer writes the movers' spheres into the batches' live column of
+    its parity.
+-   **The graph.** `GraphConditions::cpuPipeline` leaves every DCLF epoch's passes out (the draws, the HZB and phase 2, the
+    visibility and fade-event readbacks, `fades.state`, tree wind's compute pass); their latched copies' targets are still
+    published (`Draws::PublishLatchedTargets`). The build posts it with the revision inputs (`RevisionInputs::cpuPipeline`):
+    such a revision records nothing (`AssembleRevision`), and an epoch is covered by its shape and the snapshot's view batches
+    (`DecideEpochCoverage`). A switch takes effect at the build point, with the one-off wait for a snapshot made for the graph
+    as built ([The frame start and the wait](#the-frame-start-and-the-wait)).
+-   **The sites** (`Core/Render/Direct/Sites.cpp`) replace the draw epochs at the same triggers. The commits run on the render
+    thread as in the GPU path (`Direct::ExecuteEpoch` runs the epoch's body outside any ORG epoch); at the point the GPU path
+    submits its recording the site culls its views on DCLF's pool (`Cull.cpp`, `CullBatch`, a job per 8 batches) and queues one
+    callback into DXVK's command stream (`RenderGraphRuntime::EmitExternalCommands`, waiting for the frame values). On DXVK's
+    CS thread the callback adopts DXVK's command buffer, executes the commits' staged uploads (recorded on the render thread
+    into a secondary outside any rendering, so DXVK's list is not ended), records the pre-work (`PreWork.cpp`: latched copies,
+    index pool, texture transforms, tree wind), then the views' direct draws (`Recorder.cpp`) inside one rendering per pass,
+    and leaves the global exit barrier to DXVK. The sites: shadow (`shadow-maps.after`: the sun, spot and point views and the
+    two occlusion maps, each into its map's slice, `ShadowSite.cpp`), depth (main depth, the families' depth, and the hosted
+    views: the reflection's faces into their cube and first person's depth, `ViewSites.cpp`), colour (decal depth, main colour,
+    the families' colour, the second pass), forward (forward and refraction) and first person's colour (`fp.colour-render`).
+    Every site records into secondaries of the CS thread's (`SiteFrame.h`, `SiteOut`).
+-   **One descriptor model.** BasicRHI and DXVK must bind the same model in DXVK's command buffer: with DXVK on descriptor
+    buffers and BasicRHI on heaps, NVIDIA fetched garbage descriptors in the callbacks' draws (render-graph.md, "External
+    commands in DXVK's command buffer"). DXVK and the graph negotiate it at device creation: descriptor heaps, or descriptor
+    buffers with BasicRHI's shaders lowered to them (BasicRHI README, "Two Vulkan binding models"). The CPU pipeline runs on
+    either; verified 2026-10-25 on both (CPU and parallel record, under the validation layer).
+-   **The draw families** (tree LOD, grass) are drawn in their own rendering after main depth and after main colour, from
+    their single-phase GPU cull in the depth site's pre-work; a family takes part through its contribution's `main.direct`
+    (its draw row and arguments outside ORG), else it is the engine's in CPU mode.
+-   **Portal-strict point lights'** casters and local shadow volumes are gated on the CPU as on the GPU
+    (`Direct::FrameStrictGates`: Features/LocalLights' verdicts, atlas and object gate column).
+-   **Fades and kAccumulated** come from the CPU: the CPU fade stage (Features/Fades) publishes the frame's `CullFrame`; the
+    main camera's lists (main, decal, forward, refraction) are culled every frame and their verdicts diffed into the
+    visibility decoder.
+-   **Lifetime.** A CPU frame's state (arenas, secondaries, the adopted buffer's wrapper, the executions' owners) is its frame
+    slot's, one per host frame slot. Each frame ends with a signal on DCLF's CPU-frame timeline behind its callbacks; the
+    slot's next frame waits for it before it reuses the slot and its latch regions (`PersistentGraphHost::BeginExternalFrameSlot`).
+    DCLF's retirement clock counts those signals with the host's submissions (`Core/Runtime/FrameRetirement.h`).
+
+**The modes and cadences.**
+-   `dclf:cpu-record=serial` (the default): the CS thread records each culled batch as it arrives, in list order (a reorder
+    window by batch index). `parallel`: each cull job records its plain-list batches into a secondary of its own (a command
+    pool per worker and frame slot); the callback executes them in list order. Decals, forward and refraction are one ordered
+    stream on the CS thread in both.
+-   `dclf:cpu-cadence-<view>=frame|snapshot`: a view culled and recorded every frame, or once per batch set. A per-snapshot
+    view (`PrepareSnapshotView`) is culled per frame on the set's first frame and, beside it, culled again with the snapshot's
+    spheres against the view as that frame captured it and recorded into one simultaneous-use secondary; the set's later frames
+    execute it in the view's rendering instead of culling. A recording is kept by what it bakes (the view, its pass, heaps,
+    index pool, push words, map row and pipelines' set version) and dropped when the draws' index ranges move. The recording is
+    made at the set's first frame, not on the snapshot builder: the builder has no captured view until a frame has one. Main is
+    always per frame, and so are the main camera's other lists (their culls are kAccumulated's) and first person (its colour
+    site draws its depth view's batches).
+
+**What is live.** Every site above: CPU mode covers every DCLF epoch whose site is live (`Direct::ShadowSiteLive`,
+`ViewSiteLive`; the shadow site with DCLF's shadows on, a view with its feature on).
+
+**Heaps in DXVK's buffer.** Each callback binds the graph's descriptor heaps (descriptor buffers in that model) in DXVK's command buffer before it executes its
+secondaries, not only inside them (`SiteOut::BindHeaps`; render-graph.md, "Heaps bound in DXVK's buffer too"). Without it,
+draws mid command list fetched DXVK's descriptors and lost the device (exterior, shadow site on: every run under the validation
+layer, about one in seven without).
+
+**Geometry the set no longer names.** A set's sequences are resolved against its snapshot's geometry; a frame draws a geometry
+slot's sequences only while the index pool's range for it is of the same index buffer (`ViewBatchSet::geometryIndexAddress`,
+`TakePoolFirsts`), else the pool holds another geometry's indices, which the sequence would pull its own vertex buffer with. The
+report counts such slots ("geometry slots a frame changed since their set").
+
+**Open.** The view batch set is made again about every 20 ms (a snapshot each), which bounds how often a per-snapshot recording
+is reused.
+
+**Accepted differences.** The frustum test is a sphere against the view's planes (the GPU projects the sphere's AABB): the CPU
+keeps a subset of the GPU's draws. No HZB: more overdraw in colour, which draws exactly the depth pass's set (EQUAL holds).
+Per-snapshot views pop at their edges. Forward's cross-class order is as in the GPU path.
 
 ## What the engine still draws
 

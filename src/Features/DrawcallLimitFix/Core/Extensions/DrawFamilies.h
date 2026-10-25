@@ -19,8 +19,14 @@
 #include <string>
 #include <vector>
 
+namespace org::services
+{
+	class NamedVersions;
+}
+
 namespace org
 {
+	class Buffer;
 	class RenderPassBuilder;
 	struct FramePreparationContext;
 	struct ResourceBindingToken;
@@ -69,6 +75,20 @@ namespace DCLF::Api
 		const Draws::ViewResources* view;
 		std::span<org::ResourceBindingToken> arguments;
 		std::uint64_t row = 0;  // the main pass's (out): the draw row's address its records read, fixed with the family's tables
+	};
+
+	/**
+	 * @brief A family's main draw for the CPU-driven pipeline (Api::DrawFamilyContribution::main.direct; render thread, at the depth
+	 * commit): the scene's tables and the frame's adopted set in, the draw row's address (DrawFamilyDeclare::row) and the arguments buffer
+	 * (arguments[0]'s; of a versioned buffer, the version the set names) out. The caller holds the buffer with the frame.
+	 */
+	class DrawFamilyDirect
+	{
+	public:
+		const Draws::SceneBuffers& scene;
+		const org::services::NamedVersions& adopted;
+		std::uint64_t row = 0;
+		std::shared_ptr<org::Buffer> arguments;
 	};
 
 	/**
