@@ -309,9 +309,16 @@ namespace DCLF::Diagnostics
 		readback.expected.reserve(sequences.size());
 		// The templates' rows are offsets into the tables: placed at the payload's. Their pipeline index is the set index, which BuildDraws
 		// stores as its index in its state class (the shape's set version's class map).
+		// An animated row's draws read its row of the frame's copy (BuildDrawsCS's MaterialRowAddress: the header's animatedRow, the latch's
+		// animatedRows, as this frame's latches name it).
+		const std::uint64_t animatedRows = Draws::PassAnimatedRows();
 		auto place = [&](DrawSequence& a_sequence) {
 			a_sequence.pipelineRowAddress += readback.pipelineRowsBase;
-			a_sequence.materialRowAddress += readback.materialRowsBase;
+			const auto* row = animatedRows ? a_payload.body->materialRows.At(a_sequence.materialRowAddress / kMaterialRowBytes) : nullptr;
+			const std::uint32_t animatedRow = row ? reinterpret_cast<const MaterialRowHeader*>(row->bytes.data() + kMaterialRowHeader)->animatedRow : ~0u;
+			a_sequence.materialRowAddress = animatedRow != ~0u ? animatedRows + std::uint64_t(animatedRow) * kMaterialRowBytes :
+			                                                     a_sequence.materialRowAddress + readback.materialRowsBase;
+			SetSequenceBlocks(a_sequence);  // the blocks' addresses, from the rows' (BuildDrawsCS's StoreSequence)
 			ClassIndexOf(a_sequence, shape->indirect.classOf);
 		};
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group) {

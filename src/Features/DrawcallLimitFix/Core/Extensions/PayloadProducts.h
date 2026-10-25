@@ -50,7 +50,7 @@ namespace DCLF::Extensions
 	 * a_previous (the last build's products, by registration: a_build's previous, set per product).
 	 */
 	void BuildPayloadProducts(const Api::PayloadProductBuild& a_build, const PayloadProducts& a_previous, PayloadProducts& a_out);
-	/** @brief Snapshot builder (PayloadBuilder::Publish of a payload with main parts): each product's carried, with the main payload's. */
+	/** @brief Snapshot builder (PayloadPools::MakeSource of a payload with main parts): each product's carried, with the main payload's. */
 	void CarryPayloadProducts(const PayloadProducts& a_main);
 	/** @brief Render thread (AdoptSnapshot): each product's install, with a_installed's (null: no payload's). */
 	void InstallPayloadProducts(const PayloadProducts* a_installed);

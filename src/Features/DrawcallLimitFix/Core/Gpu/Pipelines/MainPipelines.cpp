@@ -98,11 +98,26 @@ namespace DCLF
 
 	inline namespace DrawPipelinesDetail
 	{
-		// The main pass: pass-wide blocks by push address, b0/b1/b2/b4 from the draw's rows, the rest from the frame record.
+		// The main pass: pass-wide blocks by push address, b0/b1/b2/b4 by the draw's pushed addresses (its sequence's, DrawSequence),
+		// the rest from the frame record.
 		std::vector<rhi::LayoutBindingRange> MainLayoutRanges(bool a_pulled)
 		{
 			// A pulled draw (Z-prepass plain draws) reads its rows itself (DCLF_PULLED): no row ranges.
 			auto fromRow = [](rhi::LayoutBindingRange a_range) { return RangeFrom(a_range, 0, kDrawPushPipelineRow); };
+			// The draw's push word of a row block's address (DrawPipelines.h, kDrawPush*): b0 technique, b1 material, b2 geometry, b4
+			// permutation (one block, both stages).
+			auto rowBlockWord = [](std::uint32_t a_register, bool a_pixel) {
+				switch (a_register) {
+				case 0:
+					return a_pixel ? kDrawPushTechniquePS : kDrawPushPipelineRow;
+				case 1:
+					return a_pixel ? kDrawPushMaterialPS : kDrawPushMaterialRow;
+				case 2:
+					return a_pixel ? kDrawPushGeometryPS : kDrawPushGeometryVS;
+				default:
+					return kDrawPushPermutation;
+				}
+			};
 			std::vector<rhi::LayoutBindingRange> mainRanges;
 			std::uint32_t word = kFramePushRegisters;
 			for (const bool pixel : { false, true }) {
@@ -115,20 +130,9 @@ namespace DCLF
 					if ((mask >> r) & 1) {
 						mainRanges.push_back(PushedRange(b, stage, 1, word));
 						word += 2;
-					} else if (a_pulled && (r <= 2 || r == 4)) {
-						continue;
-					} else if (r == 0) {
-						mainRanges.push_back(fromRow(LayoutRange(b, 1, stage, address,
-							kPipelineRowHeader + (pixel ? offsetof(PipelineRowHeader, psTechnique) : offsetof(PipelineRowHeader, vsTechnique)))));
-					} else if (r == 1) {
-						mainRanges.push_back(FromMaterialRow(LayoutRange(b, 1, stage, address,
-							kMaterialRowHeader + (pixel ? offsetof(MaterialRowHeader, psMaterial) : offsetof(MaterialRowHeader, vsMaterial)))));
-					} else if (r == 2) {
-						mainRanges.push_back(fromRow(LayoutRange(b, 1, stage, address,
-							kPipelineRowHeader + (pixel ? offsetof(PipelineRowHeader, psGeometry) : offsetof(PipelineRowHeader, vsGeometry)))));
-					} else if (r == 4) {
-						mainRanges.push_back(fromRow(LayoutRange(b, 1, stage, address,
-							kPipelineRowHeader + (pixel ? offsetof(PipelineRowHeader, psPermutation) : offsetof(PipelineRowHeader, vsPermutation)))));
+					} else if (r <= 2 || r == 4) {
+						if (!a_pulled)
+							mainRanges.push_back(PushedRange(b, stage, 0, rowBlockWord(r, pixel)));
 					} else {
 						mainRanges.push_back(FromFrameRecord(LayoutRange(b, 1, stage, address, frame + 8 * std::size_t{ r })));
 					}
@@ -795,7 +799,8 @@ namespace DCLF
 		rhi::IndirectArg args[4]{};
 		args[0].kind = rhi::IndirectArgKind::PipelineIndex;
 		args[1].kind = rhi::IndirectArgKind::Constant;
-		// The rows' addresses, the object word and both vertex buffer views (DrawSequence bytes 4-55) -> the layout's push data.
+		// The rows' addresses, the object word, both vertex buffer views, the pad and the rows' other blocks' addresses (DrawSequence
+		// bytes 4-99) -> the layout's push data.
 		args[1].u.rootConstants = { 0, 0, kDrawPushArgumentWords };
 		args[2].kind = rhi::IndirectArgKind::IndexBuffer;
 		args[3].kind = rhi::IndirectArgKind::DrawIndexed;

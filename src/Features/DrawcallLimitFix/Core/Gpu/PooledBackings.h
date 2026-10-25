@@ -53,5 +53,12 @@ namespace DCLF
 		 * surplus, and a frame later the pool makes it again and writes it whole.
 		 */
 		std::uint32_t PerFrameSpares();
+
+		/**
+		 * @brief The copies a per-frame pool keeps of a class (CS_DCLF_SCENE_COPIES; default 3, clamped to 2 through the game frames in
+		 * flight): its BackingPool::Config::maxPerClass with reuseBound, so a frame's producer reuses the copy the oldest in-flight frame
+		 * bound and its uploads wait on the GPU for that frame (FrameValues).
+		 */
+		std::uint32_t SceneCopies();
 	}
 }

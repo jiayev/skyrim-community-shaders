@@ -7,6 +7,7 @@
 
 #include "Features/DrawcallLimitFix/Api/Passes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/DrawHelpers.h"
 
 namespace DCLF::Draws
@@ -115,6 +116,10 @@ namespace DCLF::Draws
 		a_latch.materialRowsHi = static_cast<std::uint32_t>(materialRows >> 32);
 		a_latch.pipelineRowsLo = static_cast<std::uint32_t>(pipelineRows);
 		a_latch.pipelineRowsHi = static_cast<std::uint32_t>(pipelineRows >> 32);
+		// The frame's copy of the rows that animate (Api::PassDef::animatedRows), which their draws read in place of the installed rows.
+		const std::uint64_t animatedRows = PassAnimatedRows();
+		a_latch.animatedRowsLo = static_cast<std::uint32_t>(animatedRows);
+		a_latch.animatedRowsHi = static_cast<std::uint32_t>(animatedRows >> 32);
 	}
 	/** @brief The installed payload's shadow parts into a shadow or occlusion view's latch: the scene list, the geometry table, the shadow rows. */
 	inline void ShadowPayloadLatch(const PayloadVersions& a_payload, BuildDrawsLatch& a_latch)

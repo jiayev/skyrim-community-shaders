@@ -94,7 +94,7 @@ namespace DCLF::Features::Particles
 	{
 		a_context.RegisterPaletteRows({ .name = "particles",
 			.itemClass = Api::FrameValueItemClass::ParticleSystem,
-			.rule = { .rowsPerUnit = ParticleSnapshots::kRowsPerParticle, .minUnits = ParticleSnapshots::kMinQuads, .maxUnits = ParticleSnapshots::kMaxQuads, .pow2 = true },
+			.rule = ParticleSnapshots::kBlockRule,
 			.geometrySource = &GeometrySource,
 			.frameStart = &FrameStart,
 			.kick = &Kick,

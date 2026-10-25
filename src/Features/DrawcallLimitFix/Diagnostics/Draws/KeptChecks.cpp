@@ -48,26 +48,28 @@ namespace DCLF::Diagnostics
 
 	void MirrorExtras(const ExtrasSending& a_sending)
 	{
-		// The backing's own mirror (each catch-up sends what that backing lacks); released backings' mirrors go.
+		// The version's mirror: its predecessor's (kept: a failed build is made again from it), the delta written over it; the others go.
 		auto& mirrors = DrawsState::Get().kept.extrasMirrors;
+		std::vector<float> base;
+		if (const auto it = mirrors.find(a_sending.previous); a_sending.previous && it != mirrors.end())
+			base = it->second;
 		for (auto it = mirrors.begin(); it != mirrors.end();)
-			it = it->second.backing.expired() ? mirrors.erase(it) : std::next(it);
-		auto& mirror = mirrors[a_sending.backing->generation];
-		mirror.backing = a_sending.backing.Get();
-		a_sending.mirror = &mirror.rows;
+			it = it->first != a_sending.previous ? mirrors.erase(it) : std::next(it);
+		auto& mirror = mirrors[a_sending.version] = std::move(base);
+		a_sending.mirror = &mirror;
 	}
 
 	void CheckExtras(const ExtrasSent& a_sent)
 	{
-		// Every publication: the backing, caught up from what it held, against the rows it was caught up to (a catch-up that missed a
-		// change since the backing's contentEpoch differs here).
+		// Every version: its predecessor's rows with its delta, against the rows it was built to (a delta that missed a change since the
+		// predecessor's journal position differs here).
 		auto& kept = DrawsState::Get().kept;
-		const auto it = kept.extrasMirrors.find(a_sent.backing->generation);
+		const auto it = kept.extrasMirrors.find(a_sent.version);
 		static const std::vector<float> none;
 		std::string first;
-		const bool same = CompareExtras(it != kept.extrasMirrors.end() ? it->second.rows : none, a_sent.rows, a_sent.tables, kept.extrasFreedRows,
+		const bool same = CompareExtras(it != kept.extrasMirrors.end() ? it->second : none, a_sent.rows, a_sent.tables, kept.extrasFreedRows,
 			kept.extras.mismatches ? nullptr : &first);
-		kept.extras.Check(same, [&] { return fmt::format("extras backing {}: {}", a_sent.backing->generation, first); });
+		kept.extras.Check(same, [&] { return fmt::format("extras version {}: {}", a_sent.version, first); });
 	}
 
 	void CheckObjectRecords(const StoreUpdated<Draws::ObjectRecordStore>& a_updated)

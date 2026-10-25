@@ -26,6 +26,7 @@
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "RenderGraph/MemoryWindow.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "State.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
@@ -156,7 +157,7 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 		if (!missing.empty())
 			skipped += " (missing" + missing + ")";
 		const auto& textures = DCLF::GpuTextures::Get().GetStats();
-		logger::info("[DCLF] indirect draws (last frame): {} candidates built from {} material rows, skipped:{}; {:.1f} MB written by the build (the catch-up: payload pools), {:.3f} ms CPU; {} epochs, {} not ready; textures {} live in {} registry slots, {} cleanup pending, rejected {}/{}/{}, {} samplers; imports: {} made off the render thread; requests (the scene work's): {} answered, {} not answered yet",
+		logger::info("[DCLF] indirect draws (last frame): {} candidates built from {} material rows, skipped:{}; {:.1f} MB written by the build (the delta: the payload parts' versions), {:.3f} ms CPU; {} epochs, {} not ready; textures {} live in {} registry slots, {} cleanup pending, rejected {}/{}/{}, {} samplers; imports: {} made off the render thread; requests (the scene work's): {} answered, {} not answered yet",
 			draws.drawn, draws.records, skipped, draws.uploadBytes / 1048576.0,
 			draws.cpuMs, draws.epochs, draws.notReady, textures.cached, textures.registrySlots, textures.cleanupPending,
 			textures.rejected[1], textures.rejected[2], textures.rejected[3], textures.samplers, textures.importedAsync,
@@ -304,6 +305,9 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 						 "no newer one",
 				installs.installed, installs.skipped, installs.kept);
 		}
+		// The graph's tracked memory (ORG's tracking world: DCLF's tables, pools and targets with the rest of the graph's).
+		if (const auto memory = RenderGraphMemory::ReportLine(12, 16); !memory.empty())
+			logger::info("[DCLF] {}", memory);
 		// The features' lines here (Features/HiddenNodes: CS_DCLF_HIDDEN_WATCH's watch of the hidden bit stores).
 		DCLF::Extensions::ReportLinesAt(DCLF::Api::ReportPoint::Statistics, frame);
 		timing = {};

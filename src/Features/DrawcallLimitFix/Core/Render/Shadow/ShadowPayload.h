@@ -68,8 +68,8 @@ namespace DCLF::Draws
 		// Community Shaders' SharedData (b5) and FeatureData (b6), copied from the structs CS keeps.
 		std::vector<std::byte> sharedData, featureData;
 		std::uint32_t lookupGeneration = 0, tablesGeneration = 0;
-		TablesContentEpochs tablesOldestContentEpochs;  // PayloadBuilder::OldestContentEpoch of each kept table
-		// What the shadow journals keep changes back to (a build ahead's: the payload pools' oldest content epochs; else 0, kept whole).
+		TablesContentEpochs tablesOldestContentEpochs;  // PayloadPools::OldestContentEpoch of each kept table
+		// What the shadow journals keep changes back to (a build ahead's: the payload parts' journal floors; else 0, kept whole).
 		std::uint64_t inputsOldestContentEpoch = 0;  // the shadow list's
 		std::uint64_t materialRowsOldestContentEpoch = 0;
 	};

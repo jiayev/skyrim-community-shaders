@@ -119,11 +119,14 @@ namespace DCLF
 		if (a_rows && boneRows[a_slot] == a_rows)
 			return boneOffset[a_slot];
 		FreeBones(a_slot);
-		auto& free = BoneFreeList(a_rows);
 		std::uint32_t offset;
-		if (!free.empty()) {
-			offset = free.back();
-			free.pop_back();
+		auto run = std::ranges::find_if(boneFree, [&](const auto& a_free) { return a_free.second >= a_rows; });
+		if (run != boneFree.end()) {
+			offset = run->first;
+			const std::uint32_t rest = run->second - a_rows;
+			boneFree.erase(run);
+			if (rest)
+				boneFree.emplace(offset + a_rows, rest);
 		} else {
 			offset = boneTop;
 			boneTop += a_rows;
@@ -134,6 +137,30 @@ namespace DCLF
 		boneOffset[a_slot] = offset;
 		boneRows[a_slot] = a_rows;
 		return offset;
+	}
+
+	void SceneTables::ReturnBones(std::uint32_t a_offset, std::uint32_t a_rows)
+	{
+		if (!a_rows)
+			return;
+		auto [at, inserted] = boneFree.emplace(a_offset, a_rows);
+		if (!inserted)
+			return;  // already free: a reset table's retirement after its clear
+		if (auto next = std::next(at); next != boneFree.end() && at->first + at->second == next->first) {
+			at->second += next->second;
+			boneFree.erase(next);
+		}
+		if (at != boneFree.begin()) {
+			if (auto previous = std::prev(at); previous->first + previous->second == at->first) {
+				previous->second += at->second;
+				boneFree.erase(at);
+				at = previous;
+			}
+		}
+		if (at->first + at->second == boneTop) {
+			boneTop = at->first;
+			boneFree.erase(at);
+		}
 	}
 
 	void SceneTables::FreeBones(std::uint32_t a_slot)
@@ -239,8 +266,7 @@ namespace DCLF
 			draws.clear();
 			boneOffset.clear();
 			boneRows.clear();
-			boneFree = {};
-			boneFreeOther.clear();
+			boneFree.clear();
 			boneTop = 0;
 			boneCapacity = 0;
 			extraOffset.clear();
@@ -329,8 +355,7 @@ namespace DCLF
 		rangeCount = {};
 		boneOffset.clear();
 		boneRows.clear();
-		boneFree = {};
-		boneFreeOther.clear();
+		boneFree.clear();
 		boneTop = 0;
 		boneCapacity = 0;
 		extraRows.clear();

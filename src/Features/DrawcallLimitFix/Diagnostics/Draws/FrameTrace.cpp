@@ -33,11 +33,10 @@ namespace DCLF::Diagnostics
 		std::string parts;
 		if (const auto* p = a_adopted.payload)
 			for (std::size_t k = 0; k < Draws::kPayloadParts; ++k)
-				parts += fmt::format(" p{}[srv {} units {} bytes {}{}{}]", k, p->parts[k].srvIndex, p->parts[k].units, p->bytes[k], p->allocated[k] ? " NEW" : "",
-					p->shared[k] ? " shared" : "");
-		logger::info("[DCLF] frame trace: frame {} adopts snapshot {} (versions {}, set {:p}{}), payload {} ready {}{}", a_adopted.frame, a_adopted.snapshot,
+				parts += fmt::format(" p{}[units {}]", k, p->units[k]);
+		logger::info("[DCLF] frame trace: frame {} adopts snapshot {} (versions {}, set {:p}{}), payload source {}{}", a_adopted.frame, a_adopted.snapshot,
 			a_adopted.set ? "yes" : "none", static_cast<const void*>(a_adopted.set), a_adopted.growth ? " GROWTH" : "", a_adopted.payload ? a_adopted.payload->serial : 0,
-			a_adopted.payload ? a_adopted.payload->Ready() : false, parts);
+			parts);
 	}
 
 	void TraceEpochCoverage(const EpochCoverageDecided& a_decided)
@@ -46,9 +45,9 @@ namespace DCLF::Diagnostics
 		bits.reserve(a_decided.covered.size());
 		for (const bool covered : a_decided.covered)
 			bits += covered ? '1' : '0';
-		logger::info("[DCLF] frame trace: frame {} coverage {} (snapshot {} drawsComplete {} stale {} payload {} ready {} versions {} current {})", a_decided.frame, bits,
-			a_decided.snapshot, a_decided.drawsComplete, a_decided.stale, a_decided.payload ? a_decided.payload->serial : 0, a_decided.payload && a_decided.payload->Ready(),
-			a_decided.versions ? "yes" : "none", a_decided.current);
+		logger::info("[DCLF] frame trace: frame {} coverage {} (snapshot {} drawsComplete {} stale {} payload source {} versions {} current {})", a_decided.frame, bits,
+			a_decided.snapshot, a_decided.drawsComplete, a_decided.stale, a_decided.payload ? a_decided.payload->serial : 0, a_decided.versions ? "yes" : "none",
+			a_decided.current);
 	}
 
 	void TraceMainEpoch(const MainEpochOutcome& a_outcome)

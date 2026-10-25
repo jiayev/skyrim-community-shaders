@@ -164,7 +164,7 @@ namespace DCLF
 	{
 		const auto& s = *impl;
 		const auto& adopted = s.adoptedSnapshot;
-		const auto* payload = s.InstalledPayload();
+		const auto* payload = s.InstalledScenePayload();
 		auto* host = RenderGraphRuntime::Get().Host();
 		std::string epochs;
 		for (std::uint32_t e = 0, count = EpochCount(); e < count; ++e)
@@ -173,7 +173,7 @@ namespace DCLF
 						   "newest taken stale {}, payload {}, adopted set {}; epochs: {}",
 			adopted ? adopted->serial : 0, adopted && adopted->revision, adopted && adopted->drawsComplete, adopted ? s.StaleKindOf(*adopted) : static_cast<std::size_t>(Impl::kStaleKinds),
 			static_cast<std::size_t>(Impl::kStaleKinds), adopted ? adopted->buildGeneration : 0, host ? host->BuildGeneration() : 0,
-			adopted ? adopted->mainGeneration : 0, s.postedInputs.mainGeneration, s.snapshotStale, !payload ? "none" : payload->Ready() ? "ready" : "NOT READY",
+			adopted ? adopted->mainGeneration : 0, s.postedInputs.mainGeneration, s.snapshotStale, !payload ? "none" : FrameValues::Get().Available() ? "installed" : "installed, NO FRAME VALUES",
 			s.adoptedSet ? "named" : "none", epochs);
 	}
 
@@ -198,13 +198,16 @@ namespace DCLF
 		auto* host = a_host;
 		// Each epoch's recordings in the adopted snapshot's revision, of the graph as built now (the build point just ran), and its set the
 		// adopted one (its versions made current at the adoption) - when the snapshot is current (AdoptSnapshot found none stale), its
-		// draws are for the main resources and its payload is installed and ready (no payload: not covered; no fallback).
+		// draws are for the main resources and its payload is installed (none: not covered; no fallback).
 		rv.covered.fill(false);
 		const auto& active = rv.active;
 		const auto& versionsFragment = active ? active->Fragment(R::kVersionsSlot) : nullptr;
 		const auto versions = versionsFragment ? versionsFragment->Value<NamedVersions>() : nullptr;
-		const auto* payload = InstalledPayload();
-		bool snapshot = adoptedSnapshot && adoptedSnapshot->drawsComplete && !snapshotStale && payload && payload->Ready();
+		const auto* payload = InstalledScenePayload();
+		// Its payload: the installed versions (GPU ready before the snapshot was posted), with an uploader that builds the next ones (it
+		// copies from them); and the frame values its draws read (the placements and shading, made at this frame's Kick).
+		bool snapshot = adoptedSnapshot && adoptedSnapshot->drawsComplete && !snapshotStale && payload && PayloadPools::Available() &&
+		                FrameValues::Get().Available();
 		const bool current = host && snapshot && versions && versions.get() == adoptedSet;
 		// The adopted draws embed the addresses of the versions its revision names (BuildSnapshotDraws builds them from the sealed set;
 		// Diagnostics' SnapshotSealed checks it): the first frame whose draws embed the versions a growth's adoption made current.

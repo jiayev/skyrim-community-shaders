@@ -79,7 +79,7 @@ namespace DCLF
 		const std::shared_ptr<const EntrySpace>& sunCandidates;
 		const std::shared_ptr<const EntrySpace>& lightCandidates;
 		const TablesContentEpochs& oldestTables;
-		const PayloadBuilder& payloads;  // the payloads' pools: their journals' oldest content epochs
+		const PayloadFloors& payloads;  // the payload parts' pools: their journals' oldest positions a backing holds
 		ResidentRegion& mainRegion;      // the main build's region (BuildCache::region), as it left it
 		MainRows::PairStats& stats;      // the stages' times
 	};

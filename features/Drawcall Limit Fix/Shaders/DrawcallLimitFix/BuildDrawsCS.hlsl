@@ -729,12 +729,31 @@ static const uint kNoPartitions = 1u << 8;
 // A chain (Records.h, kPartitionChain): every slot linked from the first, the count in the low bits (object LOD's visible ranges).
 static const uint kPartitionChain = 1u << 15;
 static const uint kPartitionChainCount = kPartitionChain - 1;
-// DrawSequence (Records.h): 92 bytes, 4-byte packed. Words 1-5 are the root constants (the pipeline row's address, the material row's,
-// then the object index), which is why the object index sits between the rows' addresses and the vertex buffer.
+// DrawSequence (Records.h): 136 bytes, 4-byte packed. Words 1-24 are the push data (DrawPipelines.h, kDrawPush*): the pipeline row's
+// address (VS b0), the material row's (VS b1), the object index, the two vertex buffer views, a pad (BasicRHI needs pushed addresses
+// 8-byte aligned), then the rows' other blocks' addresses (PS b0, VS b2, PS b2, b4, PS b1), which the layout maps as pushed addresses
+// (the rows hold none). The index buffer view at 100, the DrawIndexed arguments at 116 (DrawPipelines.h, kSequenceDrawOffset).
 // The second vertex buffer view (slot 1) is a face shape's positions (FaceSnapshots), else the first again.
-static const uint kSequenceStride = 92;
+static const uint kSequenceStride = 136;
+static const uint kSequenceDrawOffset = 116;
+// The staged sort keys' words (ForwardSortCS, SortSequencesCS): instanceCount, vertexOffset, firstInstance.
+static const uint kSequenceInstanceCount = 120;
+static const uint kSequenceVertexOffset = 128;
+static const uint kSequenceFirstInstance = 132;
+// The rows' blocks (DrawPipelines.h, kPipelineRow*, kMaterialRowPS).
+static const uint kPipelineRowTechniquePS = 256;
+static const uint kPipelineRowGeometryVS = 512;
+static const uint kPipelineRowGeometryPS = 768;
+static const uint kPipelineRowPermutation = 1280;
+static const uint kMaterialRowPS = 256;
 static const uint kIndexFormatR16 = 57;  // DXGI_FORMAT_R16_UINT
 static const uint kNoStream = 0xFFFFFFFFu;
+
+uint2 AddressOf(uint a_lo, uint a_hi, uint a_offset)
+{
+	const uint lo = a_lo + a_offset;
+	return uint2(lo, a_hi + (lo < a_lo ? 1 : 0));
+}
 
 void StoreSequence(RWByteAddressBuffer sequences, uint slot, uint pipeline, uint4 rows, uint objectIndex, uint4 vertexBuffer,
 	uint4 streamBuffer, uint4 indexBuffer, uint indexCount, uint firstIndex)
@@ -745,9 +764,15 @@ void StoreSequence(RWByteAddressBuffer sequences, uint slot, uint pipeline, uint
 	sequences.Store(base + 20, objectIndex);
 	sequences.Store4(base + 24, vertexBuffer);
 	sequences.Store4(base + 40, streamBuffer);
-	sequences.Store4(base + 56, uint4(indexBuffer.xyz, kIndexFormatR16));
-	sequences.Store4(base + 72, uint4(indexCount, 1, firstIndex, 0));
-	sequences.Store(base + 88, 0);
+	// The rows' other blocks (a shadow view's sequence has its slot's vertex layout in the pipeline-row words: these are then unread,
+	// its layout maps only the material row and object word).
+	sequences.Store(base + 56, 0);  // the pad
+	sequences.Store4(base + 60, uint4(AddressOf(rows.x, rows.y, kPipelineRowTechniquePS), AddressOf(rows.x, rows.y, kPipelineRowGeometryVS)));
+	sequences.Store4(base + 76, uint4(AddressOf(rows.x, rows.y, kPipelineRowGeometryPS), AddressOf(rows.x, rows.y, kPipelineRowPermutation)));
+	sequences.Store2(base + 92, AddressOf(rows.z, rows.w, kMaterialRowPS));
+	sequences.Store4(base + 100, uint4(indexBuffer.xyz, kIndexFormatR16));
+	sequences.Store4(base + kSequenceDrawOffset, uint4(indexCount, 1, firstIndex, 0));
+	sequences.Store(base + kSequenceFirstInstance, 0);
 }
 
 // A shadow view's sequence: a plain indexed draw (ShadowViewPass) from the index pool (a_poolFirst, ~0: no indices), no vertex
@@ -757,21 +782,33 @@ void StoreShadowSequence(RWByteAddressBuffer sequences, uint slot, uint instance
 {
 	StoreSequence(sequences, slot, 0, rows, objectIndex, vertexBuffer, streamBuffer, indexBuffer, indexCount, firstIndex);
 	const bool pooled = a_poolFirst != 0xFFFFFFFFu;
-	sequences.Store4(slot * kSequenceStride + 72, uint4(pooled ? indexCount : 0, 1, pooled ? a_poolFirst + firstIndex : 0, 0));
-	sequences.Store(slot * kSequenceStride + 88, instance);
+	sequences.Store4(slot * kSequenceStride + kSequenceDrawOffset, uint4(pooled ? indexCount : 0, 1, pooled ? a_poolFirst + firstIndex : 0, 0));
+	sequences.Store(slot * kSequenceStride + kSequenceFirstInstance, instance);
 }
 
-uint2 AddressOf(uint a_lo, uint a_hi, uint a_offset)
+// ---- MaterialRowAddress: the one place a draw's material row address is computed (its sequence's VS b1 address and, from it,
+// PS b1's: StoreSequence). Today the installed rows' base plus the slot's offset. ----
+uint2 MaterialRowAddress(uint a_materialSlot)
 {
-	const uint lo = a_lo + a_offset;
-	return uint2(lo, a_hi + (lo < a_lo ? 1 : 0));
+	const uint2 installed = AddressOf(MaterialRowsLo, MaterialRowsHi, a_materialSlot * MaterialRowStride);
+	// A row a frame patch writes (its header's animatedRow, MaterialRowHeader word 0 at byte 768) is drawn from its row of the frame's
+	// copy (the latch's animatedRows at 348: TextureTransformsCS copied and patched it before this frame's draws). 0: no copy this frame
+	// (a shadow or occlusion view's rows, whose header is not a material row's, or a frame without one): the installed row.
+	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+	const uint2 copyRows = latch.Load2(LatchOffset + 348);
+	if ((copyRows.x | copyRows.y) == 0)
+		return installed;
+	const uint animatedRow = vk::RawBufferLoad<uint>(((uint64_t(installed.y) << 32) | uint64_t(installed.x)) + 768, 4);
+	if (animatedRow == 0xFFFFFFFFu)
+		return installed;
+	return AddressOf(copyRows.x, copyRows.y, animatedRow * 1024);  // kMaterialRowBytes
 }
 
-// An input's rows (y: pipeline row high 12 bits, material row low 20) as addresses: the draw's first four push words.
+// An input's rows (y: pipeline row high 16 bits, material row low 16: MainPayload.h kRowPipelineShift) as addresses: the draw's first four push words.
 uint4 RowsOf(uint a_rows)
 {
-	const uint2 pipelineRow = PipelineRowStride ? AddressOf(PipelineRowsLo, PipelineRowsHi, (a_rows >> 20) * PipelineRowStride) : uint2(0, 0);
-	const uint2 materialRow = AddressOf(MaterialRowsLo, MaterialRowsHi, (a_rows & 0xFFFFFu) * MaterialRowStride);
+	const uint2 pipelineRow = PipelineRowStride ? AddressOf(PipelineRowsLo, PipelineRowsHi, (a_rows >> 16) * PipelineRowStride) : uint2(0, 0);
+	const uint2 materialRow = MaterialRowAddress(a_rows & 0xFFFFu);
 	return uint4(pipelineRow, materialRow);
 }
 
@@ -786,9 +823,9 @@ void StageForwardKey(RWByteAddressBuffer sequences, uint a_slot, uint a_object)
 	const float clipW = mul(ViewProj, float4(sortCentre, 1.0)).w;
 	const uint group = ordinal != 0 ? (asuint(forwardSort.x) * 0x9E3779B1u) ^ (asuint(forwardSort.y) * 0x85EBCA77u) ^ (asuint(forwardSort.z) * 0xC2B2AE3Du) : 0u;
 	const uint stagedAt = a_slot * kSequenceStride;
-	sequences.Store(stagedAt + 76, group);
-	sequences.Store(stagedAt + 84, ordinal);
-	sequences.Store(stagedAt + 88, asuint(isnan(clipW) ? 0.0 : clipW));  // a NaN would break the rank
+	sequences.Store(stagedAt + kSequenceInstanceCount, group);
+	sequences.Store(stagedAt + kSequenceVertexOffset, ordinal);
+	sequences.Store(stagedAt + kSequenceFirstInstance, asuint(isnan(clipW) ? 0.0 : clipW));  // a NaN would break the rank
 }
 
 // The bounding sphere's world AABB, projected corner by corner: rejected only when all eight corners are outside one clip plane.
@@ -1192,9 +1229,9 @@ void BuildInput(uint draw, DrawInputWords a_words)
 							decalFirsts.Load((decalGeometry != kNoPartition ? decalGeometry : input.z) * 4));
 						// The sort key (ForwardSortCS): a plain draw (group and ordinal 0) at "depth" minus its slot's ordinal, so the lower
 						// ordinal draws first; unique per slot.
-						sequences.Store(staged * kSequenceStride + 76, 0);
-						sequences.Store(staged * kSequenceStride + 84, 0);
-						sequences.Store(staged * kSequenceStride + 88, asuint(-float(decalOrdinal + k)));
+						sequences.Store(staged * kSequenceStride + kSequenceInstanceCount, 0);
+						sequences.Store(staged * kSequenceStride + kSequenceVertexOffset, 0);
+						sequences.Store(staged * kSequenceStride + kSequenceFirstInstance, asuint(-float(decalOrdinal + k)));
 					}
 				}
 				if (decalGeometry != kNoPartition)
@@ -1332,11 +1369,11 @@ void BuildInput(uint draw, DrawInputWords a_words)
 		return;
 	const uint pipeline = DrawPipeline(drawKey);  // a shadow view's: the draw's bucket
 	// A draw's bucket: a shadow view's is its pipeline map entry; with a slot map (depth segment, reflection faces), the pipeline slot's
-	// (rows' top 12 bits) entry: the group sharing its depth pipeline, or a reflection's forward pipeline for LOD slots; kNoPipeline: none.
+	// (rows' top 16 bits) entry: the group sharing its depth pipeline, or a reflection's forward pipeline for LOD slots; kNoPipeline: none.
 	uint bucketKey = pipeline;
 	if (BucketMapOffset != 0) {
 		ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
-		bucketKey = latch.Load(BucketMapOffset + (rowsWord >> 20) * 4);
+		bucketKey = latch.Load(BucketMapOffset + (rowsWord >> 16) * 4);
 	}
 	if (pipeline == kNoPipeline || bucketKey == kNoPipeline)
 		return;
@@ -1552,8 +1589,8 @@ void BuildInput(uint draw, DrawInputWords a_words)
 					sortCounts.InterlockedAdd(sortKey * 4, 1, rank);
 					ranks.Store(slot * 4, (sortKey << kSortRankBits) | rank);
 					StoreSequence(staging, slot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
-					staging.Store(slot * kSequenceStride + 76, ClassRange(setClass, kClassRangeMain).x);
-					staging.Store(slot * kSequenceStride + 88, ClassKeyBase(setClass));
+					staging.Store(slot * kSequenceStride + kSequenceInstanceCount, ClassRange(setClass, kClassRangeMain).x);
+					staging.Store(slot * kSequenceStride + kSequenceFirstInstance, ClassKeyBase(setClass));
 				} else {
 					count.InterlockedAdd(kCountDrawn, 1, scratch);
 					StoreSequence(sequences, classSlot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);

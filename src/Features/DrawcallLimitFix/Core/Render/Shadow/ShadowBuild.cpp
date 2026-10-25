@@ -36,6 +36,9 @@ namespace DCLF::Draws
 			std::uint32_t a_stream)
 		{
 			const auto& object = a_tables.objects[a_object];
+			// The record is the input's rows word's material field (BuildDrawsCS.hlsl RowsOf): past it is a hard failure, as the main build's.
+			if (a_record > kRowMaterialMask)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: shadow material row {} past an input's row fields", a_record));
 			std::uint32_t mask = 0;
 			bool caster = false;
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
@@ -854,7 +857,7 @@ namespace DCLF::Draws
 			};
 
 			// ---- Shared by every view: the geometry table and binding records (object records are the stream views', published
-			// in the payload by PayloadBuilder; palettes are FrameValues').
+			// in the payload by PayloadPools; palettes are FrameValues').
 			TakeGeometryDraws(a_streams.get(), a_tables, a_in.tablesGeneration, a_in.frameNumber, a_out.geometries);
 			a_out.streams = std::move(a_streams);
 			AppendStreamRows(a_tables, a_in.addresses.streamBuffer, a_out.geometries);

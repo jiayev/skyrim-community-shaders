@@ -143,6 +143,12 @@ namespace DCLF::Features::TextureTransforms
 			} else {
 				list = BuildWhole(rows, tables, slots);
 			}
+			// The rows' animated rows as this build left them (MainBuild::AssignAnimatedRows): a list kept whole takes them only when they moved.
+			if (list->animatedSlots != rows.animated.slotOf) {
+				auto withRows = list == previous ? std::make_shared<TextureTransformList>(*list) : std::const_pointer_cast<TextureTransformList>(list);
+				withRows->animatedSlots = rows.animated.slotOf;
+				list = std::move(withRows);
+			}
 			if (a_build.check)
 				CheckListParity(*list, *BuildWhole(rows, tables, slots));
 			namespace stats = TextureTransformStats;
@@ -156,7 +162,7 @@ namespace DCLF::Features::TextureTransforms
 			return list;
 		}
 
-		// A main payload publishes its list (PayloadBuilder::Publish).
+		// A main payload publishes its list (PayloadPools::MakeSource).
 		void Carried(const std::shared_ptr<const void>& a_product)
 		{
 			if (a_product) {

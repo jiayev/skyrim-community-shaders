@@ -513,10 +513,10 @@ namespace DCLF::Diagnostics
 					context->CopyResource(snapshot.writersStaging.get(), writersView);
 			}
 		}
-		// TEMP: the GPU's scene list (the installed publication's inputs backing), copied after the colour epoch like the words.
+		// TEMP: the GPU's scene list (the installed inputs version's backing), copied after the colour epoch like the words.
 		if (const auto* versions = a_epoch.payloadVersions) {
 			snapshot.inputsSrv = (*versions)[Draws::PayloadPart::Inputs].srvIndex;
-			if (const auto& lease = versions->leases[static_cast<std::size_t>(Draws::PayloadPart::Inputs)]; lease && lease->buffer) {
+			if (const auto& lease = versions->backings[static_cast<std::size_t>(Draws::PayloadPart::Inputs)]; lease && lease->buffer) {
 				static std::uint64_t wrappedGeneration = 0;
 				static winrt::com_ptr<ID3D11Buffer> wrapped;
 				if (!wrapped || wrappedGeneration != lease->generation) {

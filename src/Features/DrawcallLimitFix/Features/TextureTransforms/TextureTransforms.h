@@ -28,10 +28,12 @@ namespace DCLF::Features::TextureTransforms
 {
 	/**
 	 * @brief One row of the pool's texture transform buffer (TextureTransformsCS.hlsl's TextureTransformRow; must match). Row 0 is
-	 * the header: rowOffset holds the entry count. Entry i is row i + 1: the material row's TexcoordOffset as the frame's shaders read
-	 * it (the material's texCoordOffset / texCoordScale of the frame's buffer), or a declared frame variable's live value (its read),
-	 * stored at rowOffset bytes past the material rows' address, component c where mask bit c is set (a component the record never wrote
-	 * stays the row's).
+	 * the header: rowOffset holds the entry count E, mask the animated rows' count A. Entry i is row i + 1: the material row's
+	 * TexcoordOffset as the frame's shaders read it (the material's texCoordOffset / texCoordScale of the frame's buffer), or a declared
+	 * frame variable's live value (its read), stored at rowOffset bytes past the material rows' address - into that row's frame copy
+	 * (MaterialRowHeader::animatedRow), component c where mask bit c is set (a component the record never wrote stays the row's). Animated
+	 * row k is row E + 1 + k: rowOffset the installed row's bytes past the material rows' address (~0u: a free row, not copied), which
+	 * the pass copies whole into the frame copy's row k before any entry is stored.
 	 */
 	struct TextureTransformRow
 	{
@@ -63,6 +65,9 @@ namespace DCLF::Features::TextureTransforms
 		};
 		std::vector<Entry> entries;
 		std::size_t variables = 0;  // the entries of declared frame variables
+		// The payload's animated rows (MainRows::AnimatedRows::slotOf, as its build left them): per row of the frame copy, the material slot
+		// copied into it (~0u free). Every row whose header names one, so the copy holds whatever the draws are pointed at.
+		std::vector<std::uint32_t> animatedSlots;
 		// The build's own (TextureTransformsList.cpp), so the next one rewrites only the slots that moved and keeps the rest: each entry's
 		// material slot (ascending, parallel to entries), each covered slot's verdict, and the slots left out by reason (unpacked, without
 		// TexcoordOffset or a frame variable, free, stale).
@@ -73,7 +78,7 @@ namespace DCLF::Features::TextureTransforms
 
 	/**
 	 * @brief The list's way to the frame, stage by stage (any thread, relaxed; the pool's line takes them): lists the builder made and
-	 * their entries, with the rows it left out by reason; lists a payload carried (PayloadBuilder::Publish); lists installed (adoption).
+	 * their entries, with the rows it left out by reason; lists a payload carried (PayloadPools::MakeSource); lists installed (adoption).
 	 */
 	namespace TextureTransformStats
 	{
@@ -89,6 +94,13 @@ namespace DCLF::Features::TextureTransforms
 	void InstallList(std::shared_ptr<const void> a_list);
 	/** @brief Render thread: the pool's backing the current frame reads (0 before the first frame): the depth segment's stage word. */
 	std::uint32_t RowsIndex();
+	/**
+	 * @brief Render thread: the device address of the frame's copy of the animated material rows (the animated-material-rows pool's
+	 * backing, kMaterialRowBytes a row; 0 without a producer or without the pass's program): every main-rows latch's animatedRows.
+	 */
+	std::uint64_t AnimatedRowsAddress();
+	/** @brief Render thread, the pass's setup: whether its program was made (without it nothing writes the copy, and no draw is pointed at it). */
+	void SetCopyAvailable(bool a_available);
 	// TextureTransformsList.cpp: the payload product.
 	void RegisterProduct(Api::InstallContext& a_context);
 	// Diagnostics/TextureTransformsParity.cpp, the builder's parity (Api::PayloadProductBuild::check): the list a build made from its previous

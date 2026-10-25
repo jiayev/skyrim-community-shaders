@@ -220,13 +220,16 @@ namespace DCLF::Features::Grass
 			}
 			const bool smallStart = a_setup.smallStart;
 			const std::uint32_t instances = smallStart ? 4u : kInitialInstances;
-			auto make = [](std::uint32_t a_units, std::uint32_t a_unitBytes, bool a_uav, const char* a_name) {
-				return Draws::MakeVersioned(Draws::CreateWords(std::uint64_t(a_units) * a_unitBytes / 4, a_uav, a_name), { .extent = { 0, a_unitBytes, 4 } });
+			// The instance tables grow a quarter past the slots asked, not to a power of two: a large list's grass runs to millions of
+			// instances, and the four of them hold 68 bytes an instance.
+			auto make = [](std::uint32_t a_units, std::uint32_t a_unitBytes, bool a_uav, const char* a_name, org::services::GrowthPolicy a_policy = {}) {
+				return Draws::MakeVersioned(Draws::CreateWords(std::uint64_t(a_units) * a_unitBytes / 4, a_uav, a_name), { .extent = { 0, a_unitBytes, 4 }, .policy = a_policy });
 			};
-			tables->instances = make(instances, sizeof(Instance), false, "cs.dclf.grass-instances");
-			tables->owners = make(instances, 4, false, "cs.dclf.grass-owners");
-			tables->frame = make(instances, sizeof(InstanceFrame), true, "cs.dclf.grass-frame");
-			tables->visible = make(instances, kVisibleUnitBytes, true, "cs.dclf.grass-visible");
+			constexpr auto instanceGrowth = org::services::GrowthPolicy::Headroom(25, 1024);
+			tables->instances = make(instances, sizeof(Instance), false, "cs.dclf.grass-instances", instanceGrowth);
+			tables->owners = make(instances, 4, false, "cs.dclf.grass-owners", instanceGrowth);
+			tables->frame = make(instances, sizeof(InstanceFrame), true, "cs.dclf.grass-frame", instanceGrowth);
+			tables->visible = make(instances, kVisibleUnitBytes, true, "cs.dclf.grass-visible", instanceGrowth);
 			tables->shapes = make(smallStart ? 4u : kInitialShapes, sizeof(ShapeRow), false, "cs.dclf.grass-shapes");
 			tables->buckets = make(smallStart ? 4u : kInitialBuckets, sizeof(BucketRow), false, "cs.dclf.grass-buckets");
 			tables->meshes = make(smallStart ? 4u : kInitialMeshes, sizeof(MeshRow), false, "cs.dclf.grass-meshes");

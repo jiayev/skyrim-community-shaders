@@ -1303,7 +1303,7 @@ namespace DCLF::Scene
 					tables.extraFree.push_back(slot);
 					break;
 				case Tables::kRetiredBones:
-					tables.BoneFreeList(retired.extra).push_back(slot);
+					tables.ReturnBones(slot, retired.extra);
 					break;
 				case Tables::kRetiredStreamRow:
 					tables.streamRowFree.push_back(slot);
@@ -1401,7 +1401,6 @@ namespace DCLF::Scene
 			a_column(a_left.geometryLastUsed, a_right.geometryLastUsed);
 			a_column(a_left.objectFree, a_right.objectFree);
 			a_column(a_left.boneFree, a_right.boneFree);
-			a_column(a_left.boneFreeOther, a_right.boneFreeOther);
 			a_column(a_left.extraFree, a_right.extraFree);
 			a_column(a_left.streamRowFree, a_right.streamRowFree);
 			a_column(a_left.streamRowsReleased, a_right.streamRowsReleased);

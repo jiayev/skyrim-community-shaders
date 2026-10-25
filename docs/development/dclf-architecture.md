@@ -788,7 +788,7 @@ exact clock ([Pooled versions and the retirement clock](#pooled-versions-and-the
 
 The snapshot builder (`SnapshotBuilder`, a `SerializedTaskPump` on the pool; `Core/Render/Snapshot/Snapshot.cpp`) takes the newest
 publication (`IndirectDraws::PostSnapshotWork`), makes the revision first, builds the draws ahead with every versioned address from
-the sealed set (`AddressesOf`), publishes the payload as pooled versions, waits for its recordings without a thread, and posts a
+the sealed set (`AddressesOf`), builds the payload's next versions, waits for them and its recordings without a thread, and posts a
 `SceneSnapshot` (publication, draws, revision lease, generations). Every epoch's frame owners hold the adopted snapshot, released
 on ORG's host thread after the slot completes, through the cleanup queue.
 
@@ -807,7 +807,7 @@ decal is `kRegionDecal`, its sequence in its group's range) and face shapes with
     recovering.
 -   The per-frame loop (`loopList`) holds only what the region cannot: a decal with no ordinal or with several partitions, and a
     shape whose stream is missing.
--   The payloads share the inputs copy-on-write, and `PayloadBuilder` catches a backing up from its content epoch.
+-   The payloads share the inputs copy-on-write, and the inputs part's next version uploads only what changed since the last.
 -   The shadow build writes its words into the same region's entries (`sharedRegion`, `sideOf`).
 -   It is off only under build parity (`Policy::ReuseResidentRegion`), whose whole builds are compared against BuildDraws' output.
 
@@ -823,32 +823,37 @@ constant block the pipeline reads that the row lacks - is checked per build from
 
 ### The payload
 
-The scene payload of a snapshot is one immutable `PayloadVersions` (`Core/Render/Payload/PayloadVersions.{h,cpp}`): seven parts
-(`PayloadPart`), each a backing leased from its own pool, with its SRV index, device address (the row parts) and units: objects,
-extras, geometries, material rows, pipeline rows, inputs (the scene list) and shadow rows. No recording binds it, and the draws
-embed none of it: the epochs take its parts by value.
+The scene payload is seven versioned buffers (`Core/Render/Payload/PayloadVersions.{h,cpp}`, `PayloadPart`: objects, extras,
+geometries, material rows, pipeline rows, inputs - the scene list - and shadow rows), each a chain of versions built on DCLF's
+state graph (`SceneArtifact::PayloadPart`, ORGModuleServices' versioned-buffer producer) into a pool of its own. A frame adopts
+the newest ready snapshot's versions and catches nothing up. No recording binds them, and the draws embed none of them: the epochs
+take the parts by value.
 
-1.  **Publication.** `PayloadBuilder` (one ORGModuleServices `JournaledBufferSet`; the snapshot builder is its one acquirer)
-    publishes a payload once the snapshot's draws are built. Each part leases the free backing nearest its journal (the highest
-    `contentEpoch` not past it) and is sent the journal's runs since that backing's `contentEpoch`. A row is patched with the
-    address of the backing it goes to (`PatchRowAddresses`), and the inputs' frame tails are written whole. A material row is
-    journalled in four 256-byte parts (`kMaterialRowParts`: the VS blocks, the PS blocks' two halves, the header), so an animated
-    material moves only the part holding its values. `ready` is built from the upload tickets; nothing waits on the GPU.
-2.  **The gate.** Only a snapshot the frame will adopt is published. The frame must have taken the last posted snapshot, and that
+1.  **Publication.** Once the snapshot's draws are built the builder makes their `PayloadSource`: where each part's rows are (the
+    publication's stream views, its newest main payload and its shadow payload, held with its draws, which are immutable:
+    copy-on-write chunks and journal snapshots), their units and the scene list's layout.
+2.  **The parts' versions** (`PayloadPools::Post`, `SceneGraph::PostPayloadPart`). A part that changed - its journal moved, its
+    units changed, or a tailed part (geometries' stream rows, the main and shadow frame inputs) has a new source - posts its next
+    version; the others keep theirs. Version N+1 is built from version N (`VersionedBufferBuildInput::predecessorCopy`): the
+    backing it leases is GPU-copied from N's what it lacks (the journal's runs since the version it holds, or N whole for a fresh
+    or grown backing), less this version's own writes, and only those writes are uploaded. Each change crosses PCIe once; the
+    copies run on the dedicated upload queue (`IUploadService::QueueTrackedStreamingCopyRanges`). A part's builds are a serial
+    chain: the next is posted only once the last is GPU ready, so its predecessor is the part's newest version. The rows hold no
+    addresses (the draws push their blocks' addresses), so a version's bytes are the same in every backing.
+3.  **The gate.** Only a snapshot the frame will adopt is published. The frame must have taken the last posted snapshot, and that
     frame's scene pass must have ended (`IndirectDraws::NoteScenePassDone`), since a publication it makes replaces the one waiting.
-    A sealed but unpublished build is replaced by newer work and sends nothing. A kept publication (the same draws made into a new
-    snapshot) keeps its payload and uploads nothing. The snapshot is posted only once the payload's uploads completed; their
-    completion wakes the builder.
-3.  **Adoption.** The payload is installed with the draws (`InstalledPayload()`), and a covered frame always has a ready one. The
-    epochs take its parts by value: the BuildDraws latch's payload block (`inputsIndex`, `geometriesIndex`, the rows' addresses),
-    the shadow and occlusion latches, and the frame record's object and extras registers. `BindAdopted` binds its leases with the
-    adopted set's.
-4.  **Trimming.** A part's journals keep their changes back to the oldest `contentEpoch` a backing of its pool holds
-    (`PayloadBuilder::OldestContentEpoch`); with none holding anything, everything may go, and the next backing is written whole.
-
-Payload patches only append past the sealed mark; a rewrite leases a fresh backing, and there are no byte-range leases
-(`CS_DCLF_PAYLOAD_APPEND`, off, appends into the last backing when every change lies past the mark). Measured, the pooled payload
-against the ring it replaced: 315 against 566 KB a frame uploaded.
+    The snapshot is posted once every part it posted is GPU ready (the graph's `AwaitExact` wakes the builder). A kept publication
+    (the same draws made into a new snapshot) keeps its versions. A failed build is reported once; the snapshot goes without a
+    payload (it draws nothing) and the next publication tries again from the parts' last versions.
+4.  **Adoption.** The adopted snapshot's `ScenePayload` (its versions, layout and products) is installed with the draws; a covered
+    frame needs one and an upload queue that copies (`PayloadPools::Available`). The frame's payload
+    (`IndirectDraws::MakeFramePayload`, `InstalledPayload()`) names the versions' backings: the BuildDraws latch's payload block
+    (`inputsIndex`, `geometriesIndex`, the rows' addresses), the shadow and occlusion latches, and the frame record's object and
+    extras registers. Every frame binds the installed versions at its end (`BindAdopted`), and a replaced version is bound at the
+    adoption that replaces it; its backing returns to the pool once the clock passes the last frame that read it.
+5.  **Trimming.** A part's journals keep their changes back to the oldest version a backing of its pool holds, as that version's
+    journal epoch (`PayloadPools::OldestContentEpoch`, published by the producer after each build); with nothing held, everything
+    may go.
 
 ### FrameValues
 
@@ -882,9 +887,21 @@ A material's `TexcoordOffset` (offset and scale) is not its record's: the record
 -   Each frame the feature's frame-value pool reads every entry's current buffer (`textureTransformBuffer`, the one the frame's
     shaders read) under a lease, sending only the rows that moved, and its pass `texture-transforms.apply`
     (`cs.dclf.z.texture-transforms`, `TextureTransformsCS`), first in the Z-prepass epoch before anything of the frame draws,
-    stores them into the installed payload's material rows. The pool's descriptor reaches the shader through the depth segment's
-    `BuildDrawsLatch::stageWord` (the pass's `latchWord`). Every such row is written every frame, so a pooled backing holds the
-    frame's value whatever its journal sent it.
+    stores them into **the frame's copy** of the rows; the installed payload's material rows are never written (immutable
+    versions the frames in flight share). The pool's descriptor reaches the shader through the depth segment's
+    `BuildDrawsLatch::stageWord` (the pass's `latchWord`).
+-   **Animated rows.** The main build gives every material row a frame patch may write (`MainRows::AnimatedRows::Animated`:
+    `TexcoordOffset` or a declared frame variable placed) a dense index, `MaterialRowHeader::animatedRow` (header word 0; `~0u`
+    none), at `Finish` (`AssignAnimatedRows`, over the rows the build wrote, in slot order): a row keeps its index while it stays
+    animated, a freed index is the lowest one taken next, and the count is the highest held plus one. The list carries the
+    version's rows (`TextureTransformList::animatedSlots`), and the pool sends them after the entries (header `mask`: their count).
+    The feature's second pool, `animated-material-rows` (`kMaterialRowBytes` a row, `deviceAddress`, nothing sampled or sent),
+    gives each frame a backing of that many rows; its address is every main-rows latch's `animatedRows` (`PayloadLatch`, from
+    the pass's `Api::PassDef::animatedRows`; 0 without a producer or program, and in the shadow views' latches). The pass's
+    first dispatch copies each animated row whole from the installed rows into the copy; after a barrier, its second stores
+    the entries into their rows' copies. BuildDraws' `MaterialRowAddress` reads the installed row's `animatedRow` and points
+    the draw (VS and PS b1) at `animatedRows + animatedRow * 1024` when it has one. Every animated row is copied and every
+    entry stored every frame, so the copy is the frame's whatever backing the pool handed it.
 -   **Frame variables.** The same list, pool and pass carry a port's declared frame variables (`MaterialPortContribution::frameVariables`,
     `Api::MaterialFrameVariable`: the Effect port's `FalloffData` and `BaseColor`, which the effect controllers move every frame).
     The main build records where a row placed each (`MainRows::MaterialState::frameVariables`, `PlaceFrameVariables`); the list
@@ -893,7 +910,7 @@ A material's `TexcoordOffset` (offset and scale) is not its record's: the record
 
 ### Pooled versions and the retirement clock
 
-The payload's parts, the frame values' row sets and the scene set's growth all lease their backings from ORGModuleServices
+The payload's versions, the frame values' row sets and the scene set's growth all lease their backings from ORGModuleServices
 `BackingPool`s, tied to DCLF by `Core/Gpu/PooledBackings.{h,cpp}`. All of DCLF's growable buffers are pooled versions; the
 snapshot is the only source of them (no rings, no duplicate copies).
 
@@ -901,9 +918,17 @@ snapshot is the only source of them (no rings, no duplicate copies).
     completed-frame callback: the exact GPU completion of each host frame, not a frames-in-flight window. A frame binds what it
     read after its last submission (`SubmittedRetirementPoint()`); `BackingLease::Bind` keeps the latest point.
 -   **Reuse.** A backing is reused once the clock has reached its bound point and no lease holds it. The acquirer prefers the free
-    backing whose contents are nearest what it needs, so a catch-up is about one publication's delta. No pool has a cap. Each keeps
-    one warm spare per game frame in flight, less one (`PooledBackings::PerFrameSpares`). The trim floor counts free spares: older
-    spares rotate in, and narrowing it to the leased and newest free would make every catch-up a whole re-send.
+    backing whose contents are nearest what it needs, so a catch-up is about one publication's delta. The other pools have no cap
+    and keep one warm spare per game frame in flight, less one (`PooledBackings::PerFrameSpares`). The trim floor counts free
+    spares: older spares rotate in, and narrowing it to the leased and newest free would make every catch-up a whole re-send.
+-   **The payload's pools** keep at most `kGameFramesInFlight + 2` backings a class, without `reuseBound`: a build that finds
+    none free suspends until the clock frees one (no frame waits for it; the newest ready snapshot keeps drawing).
+-   **Scene copies.** FrameValues' pools keep a fixed number of copies a class (`CS_DCLF_SCENE_COPIES`, default 3;
+    `PooledBackings::SceneCopies`): `BackingPool::Config::maxPerClass` with `reuseBound`. At the cap a frame's producer takes the copy
+    the oldest in-flight frame bound (`AcquireInfo::writeAfter`), its descriptor known at `Kick` as before, and its uploads wait for
+    that frame on the GPU (`IUploadService::QueueStreamingWait`, the GPU point `BindFrameLeases` noted for the bound point): no
+    thread waits, and the frame's draws already wait for its values (the frame-wait timeline), so fewer copies bound how far the CPU
+    runs ahead instead of costing a copy of every row per frame in flight.
 -   **Release.** A released backing is destroyed on the graph host's resource cleanup lane (`PooledBackings::Retire`), never on
     the thread that let it go (the render thread is the frame values' pools' acquirer). GPU resource destruction never runs on the
     render thread.
@@ -986,7 +1011,8 @@ Naming: `sealed` is a set the producer sealed, `adopted` the one the frame insta
 -   **No fixed draw limit.** Every sequence buffer is required to hold every draw the scene's tracked objects can produce
     (`SceneDrawBound`). A bound past the device's `maxIndirectSequenceCount` or the sort's 2^20 ranks is a hard failure
     (`CheckSequenceLimits`), never a silent drop.
--   **The index pool's room** is twice the geometry indices. A pool the frame found fragmented publishes that version's serial
+-   **The index pool's room** is the geometry indices and a quarter more (`PoolSlack`), grown a quarter past that (`Headroom(25)`), not to a
+    power of two: the pool copies the scene's indices, DCLF's largest table. A pool the frame found fragmented publishes that version's serial
     (`IndexPool::fragmentedAt`), and the next make requires a version newer than it (`RequireNewer`).
 -   **Latch blocks** are the set's (`SceneBufferSet::RegisterLatch`, once): the main latch, the main segments' latched-copies blocks,
     the shadow latch, zeros and latched-copies block, and each view's latch and zeros. The producer keeps only their layouts
@@ -1086,7 +1112,8 @@ latch's `drawCount` of 0 skips its view.
 DCLF's colour draws are device-generated commands (`vkCmdExecuteGeneratedCommandsEXT`); the Z-prepass, the shadow views, the views'
 depth and the draw families use plain indirect draws.
 -   **Explicit preprocessing.** The main colour signature (pipeline index, push data - the rows, the object word and the
-    geometry's two vertex buffer views, thirteen words - index buffer, DrawIndexed; no vertex buffer arguments:
+    geometry's two vertex buffer views, a pad and the rows' five block addresses, twenty-four words - index buffer,
+    DrawIndexed; no vertex buffer arguments:
     `DrawPipelines::Impl::CreateSignature`, `Core/Gpu/Pipelines/MainPipelines.cpp`) is created with `explicitPreprocess`. Each recording site keeps a never-submitted state list per frame slot (`PreprocessStates`,
     `Core/Render/Main/FrameLayout.h`) holding the same BeginPass, heaps, layout, topology and push data as the execution, because
     `vkCmdPreprocessGeneratedCommandsEXT` is recorded outside a render pass but snapshots its state. Sites: the main segment, the
@@ -1537,14 +1564,17 @@ Records are absolute: `Lighting.hlsl` and `Utility.hlsl` subtract the drawing vi
 why no build reads the eye. Palettes are eye-relative like World, so the shader pivot is zero.
 
 **Main pass** (`Core/Gpu/Pipelines/DrawPipelines.h`, `kDrawPush*`):
--   **per draw:** fourteen push words (`kDrawPushWords`; the Constant argument is thirteen, `kDrawPushArgumentWords`: the sequence's
-    bytes 4-55): the pipeline row's address (words 0-1), the material row's (2-3), the object word (4), the geometry's vertex buffer
-    view (5-8: address, size, stride) and its second stream's (9-12), then a pad. `DCLFObjects.hlsli`'s `DCLFPushData` places its
-    members on these words. `BuildDrawsCS` computes both addresses from
-    the input's `y` (`RowsOf`: the pipeline slot in the high 12 bits, the material slot in the low 20), the rows' strides in its
-    constants and the tables' bases in its latch (the installed payload's `materialRowsLo`, `pipelineRowsLo`). The object word holds
-    the object index (bits 0-25), the local shadow lights BuildDrawsCS selected (26-29, Light Limit Fix's `ShadowBitMask`) and
-    `kObjectSunMiss` (bit 31).
+-   **per draw:** twenty-four push words (`kDrawPushWords`, all of them the Constant argument: the sequence's bytes 4-99): the
+    pipeline row's address (words 0-1), the material row's (2-3), the object word (4), the geometry's vertex buffer view (5-8:
+    address, size, stride) and its second stream's (9-12), a pad (13: BasicRHI needs a pushed address 8-byte aligned), then the
+    rows' blocks: PS b0 (14-15, pipeline row + 256), VS b2 (16-17, + 512), PS b2 (18-19, + 768), b4 (20-21, + 1280, both stages)
+    and PS b1 (22-23, material row + 256). VS b0 and VS b1 are the rows' own addresses. The layout reads every block from push
+    data (`LayoutRangeSource::PushAddress`), so no row holds an address. `DCLFObjects.hlsli`'s `DCLFPushData` places its members
+    on words 0-12. `BuildDrawsCS` computes the addresses from the input's `y` (`RowsOf`: the pipeline slot in the high 16 bits,
+    the material slot in the low 16; `MaterialRowAddress`, which points an animated row at the frame's copy), the rows' strides in
+    its constants and the tables' bases in its latch (the installed payload's `materialRowsLo`, `pipelineRowsLo`). The object
+    word holds the object index (bits 0-25), the local shadow lights BuildDrawsCS selected (26-29, Light Limit Fix's
+    `ShadowBitMask`) and `kObjectSunMiss` (bit 31). A sequence is 136 bytes (`DrawSequence`, `Core/Scene/Model/Records.h`).
 -   **per material slot** (`MaterialRow`, `kMaterialRowBytes` 1024): the vertex and pixel `PerMaterial` blocks (b1), then a header
     with t0-t15, s0-s15, the projected textures and the feature textures. A material slot is keyed by (material, pass descriptor),
     and the pack tables depend only on the technique, so the row is packed once for every pipeline and both segments.
@@ -1554,8 +1584,8 @@ why no build reads the eye. Palettes are eye-relative like World, so the shader 
     b13 frame lighting, ...) and the frame record (`DrawBindings`, 800 bytes: every other texture and sampler, and the payload's
     object and extras tables).
 
-Row blocks sit at 256-byte offsets, so a row table is an array of constant buffers; each row's header holds its blocks' offsets
-until the publication adds the address of the row in the backing it goes to (`EmitMainRowParts`, `PatchRowAddresses`). The rows
+Row blocks sit at fixed 256-byte offsets, so a row table is an array of constant buffers; a row's header holds only indices
+(and a material row's `animatedRow`), so its bytes are the same in any backing. The rows
 are kept across frames (`MainRows`, a chunked `KeptArray` each): a row is written again only when its key changes (a material row
 by part). Under `DCLF_BINDLESS` the PerGeometry block is per pipeline; b3 (Light Limit Fix's room index and shadow mask), b11 (the
 alpha reference) and b8 (Linear Lighting's emissive multiplier) come from the object and shading rows. The permutation block keys

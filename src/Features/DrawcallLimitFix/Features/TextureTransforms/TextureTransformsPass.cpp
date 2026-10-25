@@ -1,5 +1,6 @@
-// The texture transforms' pass: this frame's TexcoordOffset and declared frame variables into the installed payload's material rows
-// (TextureTransformsCS: the same row format for both), first in the depth segment, from the pool's rows the depth latch's stage word names.
+// The texture transforms' pass: the installed payload's animated material rows copied into the frame's copy, then this frame's
+// TexcoordOffset and declared frame variables into the copy (TextureTransformsCS: the same row format for both), first in the depth
+// segment, from the pool's rows the depth latch's stage word names; the installed rows are only read.
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
@@ -22,14 +23,16 @@ namespace DCLF::Draws
 {
 	namespace
 	{
-		// TextureTransformsCS.hlsl (the frame's TexcoordOffset into the installed payload's material rows): the depth segment's
-		// BuildDrawsLatch in its frame slot, which names the rows (materialRowsLo/Hi) and the pool's entries (stageWord). The dispatch is
-		// fixed; its threads stride over the entries the header counts.
+		// TextureTransformsCS.hlsl (the animated rows into the frame's copy, then the frame's TexcoordOffset into the copy): the depth
+		// segment's BuildDrawsLatch in its frame slot, which names the installed rows (materialRowsLo/Hi), the frame's copy (animatedRows)
+		// and the pool's entries (stageWord). Two fixed dispatches, the copy (phase 0) then the stores (phase 1); their threads stride over
+		// the rows and entries the header counts.
 		constexpr const char* kShader = "DrawcallLimitFix/Features/TextureTransforms/TextureTransformsCS.hlsl";
 		struct Constants
 		{
 			std::uint32_t latchIndex = 0, latchOffset = 0;
-			std::uint32_t padding[2]{};
+			std::uint32_t phase = 0;
+			std::uint32_t padding = 0;
 		};
 		static_assert(sizeof(Constants) == 16);
 		constexpr std::uint32_t kConstantWords = sizeof(Constants) / 4;
@@ -47,11 +50,13 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief The frame's TexcoordOffset into the installed payload's material rows (TextureTransformsCS.hlsl), first in the depth segment:
-	 * the pool's entries (the material's buffer the frame's shaders read) stored at their rows' addresses, which every DCLF draw of
-	 * the frame then reads. The rows are read by address and declared by no pass, so the pass orders itself: full memory barriers around
-	 * its dispatch, on the graphics queue the draws run on (before it, the earlier frames' draws reading the same payload backing; after
-	 * it, this frame's). It declares the sequences as written (no view) so the graph keeps it before the depth build and its draws.
+	 * @brief The frame's copy of the installed payload's animated material rows, and the frame's TexcoordOffset into it
+	 * (TextureTransformsCS.hlsl), first in the depth segment: every animated row copied whole from the installed rows (immutable, shared
+	 * by the frames in flight), then the pool's entries (the material's buffer the frame's shaders read) stored into their rows' copies,
+	 * which every DCLF draw of those rows then reads (BuildDraws points them there: MaterialRowAddress). The copy is read by address and
+	 * declared by no pass, so the pass orders itself: full memory barriers before the copy (the earlier frames' draws reading a backing
+	 * the pool hands this frame again), between the copy and the stores, and after them (this frame's draws), on the graphics queue the
+	 * draws run on. It declares the sequences as written (no view) so the graph keeps it before the depth build and its draws.
 	 */
 	class TextureTransformsPass final : public org::TypedRenderGraphPass<TextureTransformsPass, TextureTransformsPrepared, TextureTransformsBindings>
 	{
@@ -100,6 +105,11 @@ namespace DCLF::Draws
 			const rhi::GlobalBarrier global = rhi::FullMemoryBarrier();
 			const rhi::BarrierBatch batch{ {}, {}, { &global, 1 } };
 			commands.Barriers(batch);
+			// Every animated row copied before any entry is stored (an entry's row may be another group's).
+			constants.phase = 0;
+			RecordDispatch(commands, *a_frame.program, constants, kGroups);
+			commands.Barriers(batch);
+			constants.phase = 1;
 			RecordDispatch(commands, *a_frame.program, constants, kGroups);
 			commands.Barriers(batch);
 		}
@@ -121,6 +131,8 @@ namespace DCLF::Features::TextureTransforms
 			auto program = ComputeProgram::Load(a_setup.device, { .source = Draws::kShader, .constantWords = Draws::kConstantWords });
 			if (!program)
 				logger::warn("[DCLF] The texture transforms program could not be created; DCLF's draws keep their materials' captured TexcoordOffset");
+			// Without it nothing writes the frame's copy: no latch names it (the draws read the installed rows).
+			SetCopyAvailable(program != nullptr);
 			return program;
 		}
 
@@ -132,9 +144,10 @@ namespace DCLF::Features::TextureTransforms
 
 	void RegisterPass(Api::InstallContext& a_context)
 	{
-		// The frame's texture transforms into the payload's material rows, before anything of the frame draws from them; the depth latch's
-		// stage word names the pool's rows (0: no producer this frame, the shader stores nothing).
+		// The animated material rows into the frame's copy and the frame's texture transforms into it, before anything of the frame draws
+		// from them; the depth latch's stage word names the pool's rows (0: no producer this frame, the shader writes nothing), every main-rows
+		// latch the copy (animatedRows: 0 then too).
 		a_context.RegisterPass({ .key = "texture-transforms.apply", .passName = "cs.dclf.z.texture-transforms", .make = &MakePass, .setup = &Setup,
-			.latchWord = &RowsIndex });
+			.latchWord = &RowsIndex, .animatedRows = &AnimatedRowsAddress });
 	}
 }

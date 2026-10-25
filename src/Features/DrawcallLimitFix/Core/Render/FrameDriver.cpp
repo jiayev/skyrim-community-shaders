@@ -180,9 +180,10 @@ namespace DCLF
 		PrimaryCull::Get().PublishListFilter();
 		// The frame's values (FrameValues): the placements and the shading the frame draws with, made on the pool from the plans and named
 		// slots the installed publications carried, and waited for by the GPU; the shading fields captured here (Integrations/AdvancedSkin's
-		// wetness: Skin's cache is the render thread's). The scene payload is not the frame's to send: the installed snapshot carries it,
-		// ready (PayloadVersions).
+		// wetness: Skin's cache is the render thread's). Then the scene payload: the installed snapshot's parts' versions (PayloadPools,
+		// built and GPU ready before it was posted), named for the frame's epochs (MakeFramePayload).
 		(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), Extensions::CaptureShadingFields(view), view.FrameGlobalsOfFrame());
+		(void)draws.MakeFramePayload();
 		// Under the parities the scene pass runs here, inline, so the render thread's observers keep their placement; the normal path
 		// never waits for a pass.
 		if (inlinePass)

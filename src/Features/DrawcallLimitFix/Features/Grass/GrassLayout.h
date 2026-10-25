@@ -68,14 +68,17 @@ namespace DCLF::GrassInstances
 
 	/**
 	 * @brief A bucket slot's row: the shapes that draw alike (mesh, material, texture, descriptors), their meshes per tier, their
-	 * visible lists' bases (one per tier, each the bucket's instance count long), and what their draws bind and the cull reads.
+	 * visible lists' bases (tier 0's range and tiers 1 and 2's shared one, each the bucket's instance count long: an instance is in one
+	 * tier a frame), and what their draws bind and the cull reads.
 	 */
 	struct BucketRow
 	{
 		std::uint32_t mesh[kTiers]{ kNoMesh, kNoMesh, kNoMesh };  // mesh slots; kNoMesh: none
 		std::uint32_t flags = 0;
-		std::uint32_t visibleBase[kTiers]{};  // the tiers' first entries in the visible list
-		std::uint32_t instanceCount = 0;      // each tier's capacity in the visible list; 0: a free slot (or not drawable yet)
+		// Tiers 0 and 1: their first entries in the visible list, filled upward; tier 2: the end of the range it shares with tier 1, filled
+		// downward from it (GrassCullCS Append).
+		std::uint32_t visibleBase[kTiers]{};
+		std::uint32_t instanceCount = 0;  // each range's capacity in the visible list; 0: a free slot (or not drawable yet)
 		DescriptorIndex diffuseIndex, depthSampler, colourSampler;  // OwnedRow's (GrassTables.cpp, BindBucket)
 		float alphaRef = 0.0f;
 		float boundCenter[3]{};
@@ -103,16 +106,18 @@ namespace DCLF::GrassInstances
 	// InstanceFrame::flags: the tier, whether the instance is in the collision's range, whether it is shaded simply (far).
 	inline constexpr std::uint32_t kFrameTierMask = 3u;
 	inline constexpr std::uint32_t kFrameCollision = 1u << 2;
-	inline constexpr std::uint32_t kFrameSimpleShading = 1u << 3;
+	inline constexpr std::uint32_t kFrameSimpleShading = 1u << 3;  // InstanceFrame's flags (fadeFlags' high 16 bits)
 
-	/** @brief An instance slot's per-frame values, the cull's (written before its occlusion verdict), the vertex stage's. */
+	/**
+	 * @brief An instance slot's per-frame values, the cull's (written before its occlusion verdict), the vertex stage's. Packed, as
+	 * every instance slot holds one (millions in a large list's grass): the wind scalars (about -1 to 1) as halfs, the fade as a unorm16.
+	 */
 	struct InstanceFrame
 	{
-		float windCur = 0.0f, windPrev = 0.0f;  // the wind scalars at this frame's and the previous frame's timer
-		float fade = 0.0f;
-		std::uint32_t flags = 0;
+		std::uint32_t wind = 0;       // the wind scalars at this frame's (low half) and the previous frame's timer (high), halfs
+		std::uint32_t fadeFlags = 0;  // the fade, unorm16 (low); the flags (high 16 bits)
 	};
-	static_assert(sizeof(InstanceFrame) == 16);
+	static_assert(sizeof(InstanceFrame) == 8);
 
 	// CullRow::flags.
 	inline constexpr std::uint32_t kCullMidLod = 1u << 0;     // Grass Optimizations' mesh LOD, middle tier
@@ -205,12 +210,12 @@ namespace DCLF::GrassInstances
 				  kColourArgs[1] == 172096 && kDrawsBytes == 221248);
 
 	/*
-	 * The visible list (versioned, a unit per instance slot, 16 bytes a unit): the visible entries (instance indices) at
-	 * [0, 3 * units) words, each bucket's tiers at their visibleBase; then the retest list (phase 1's occluded instances) at
-	 * kRetestOffsetPerUnit * units bytes.
+	 * The visible list (versioned, a unit per instance slot, 12 bytes a unit): the visible entries (instance indices) at
+	 * [0, 2 * units) words, each bucket's ranges at their visibleBase (tier 0's; tiers 1 and 2 sharing one); then the retest list
+	 * (phase 1's occluded instances) at kRetestOffsetPerUnit * units bytes.
 	 */
-	inline constexpr std::uint32_t kVisibleUnitBytes = 16;
-	inline constexpr std::uint32_t kRetestOffsetPerUnit = 12;
+	inline constexpr std::uint32_t kVisibleUnitBytes = 12;
+	inline constexpr std::uint32_t kRetestOffsetPerUnit = 8;
 
 	/**
 	 * @brief Whether a geometry is one of the family's engine shapes: its shader property is a BSGrassShaderProperty. Any thread

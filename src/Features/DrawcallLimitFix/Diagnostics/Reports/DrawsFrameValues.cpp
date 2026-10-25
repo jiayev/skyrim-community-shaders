@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameData.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
 
 // The frame values' and the frame data's report lines.
 
@@ -17,10 +18,11 @@ namespace DCLF::Reports
 		auto line = fmt::format("[DCLF] frame values: {} frames; a frame {:.0f} items sampled ({:.1f} written slots kept for their transforms to settle), {:.1f} fade roots seeded, {:.1f} rows changed, {:.0f} skins ({:.1f} palette rows changed), "
 								"{:.1f} shading items sampled ({:.1f} rows changed, {:.1f} wetness changed), "
 								"{:.1f} runs ({:.1f} KB) sent; {:.0f} us sampling, {:.0f} us sending, at most {} us; "
-								"{} refused leases, {} palette size defects, {} failures",
+								"{} refused leases, {} palette size defects, {} failures; {} producers wrote a copy a frame in flight still bound ({} copies a class), "
+								"waiting for it on the GPU",
 			c.frames, c.sampled / n, c.settled / n, c.seeded / n, c.rowsChanged / n, c.skins / n, c.paletteRowsChanged / n, c.shadingSampled / n, c.shadingChanged / n,
 			c.wetnessChanged / n, c.runs / n, c.bytes / n / 1024.0, c.sampleUs / n, c.uploadUs / n, c.maxTotalUs, c.refused, c.defects,
-			c.failures);
+			c.failures, c.reusedInFlight, PooledBackings::SceneCopies());
 		// The placement plans (deltas) the producers applied onto their kept set.
 		if (c.plans)
 			line += fmt::format("; {} placement plans applied ({} resets, {:.1f} items a plan)", c.plans, c.planResets, static_cast<double>(c.planItems) / static_cast<double>(c.plans));

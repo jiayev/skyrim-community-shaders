@@ -166,8 +166,8 @@ public:
 	void DrawOverlay();
 	/** @brief Draws the detached weather details editor window */
 	void DrawWeatherDetailsWindow();
-	/** @brief Draws the render graph's schedule window while it is open (RenderGraph/ScheduleWindow.h); nothing without the render graph */
-	void DrawRenderGraphScheduleWindow();
+	/** @brief Draws the render graph's schedule and memory windows while they are open (RenderGraph/ScheduleWindow.h, MemoryWindow.h); nothing without the render graph */
+	void DrawRenderGraphWindows();
 
 	/** @brief Translates raw Skyrim input events into the internal key event queue */
 	void ProcessInputEvents(RE::InputEvent* const* a_events);

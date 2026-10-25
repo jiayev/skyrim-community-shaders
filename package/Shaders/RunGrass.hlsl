@@ -45,8 +45,9 @@ static const uint kDCLFGrassBucketStride = 160, kDCLFGrassBucketFlags = 12, kDCL
 				  kDCLFGrassBucketPbrFlags = 76, kDCLFGrassBucketScaleMask = 80, kDCLFGrassBucketPbrTextures = 96, kDCLFGrassBucketPbrParams1 = 112,
 				  kDCLFGrassBucketPbrParams2 = 128, kDCLFGrassBucketWindDirection = 144;
 static const uint kDCLFGrassBucketTruePbr = 1u << 0, kDCLFGrassBucketSphereNormal = 1u << 1;
-// GrassInstances::InstanceFrame (16 bytes): windCur, windPrev, fade, flags (bits 0-1 the tier, 2 in collision range, 3 simple shading).
-static const uint kDCLFGrassFrameStride = 16, kDCLFGrassTierMask = 3u, kDCLFGrassInCollisionRange = 1u << 2, kDCLFGrassSimpleShading = 1u << 3;
+// GrassInstances::InstanceFrame (8 bytes): windCur and windPrev as halfs; the fade (unorm16) and, in the high 16 bits, the flags (bits 0-1 the
+// tier, 2 in collision range, 3 simple shading). The vertex stage takes it unpacked (DCLFGrassFrame: windCur, windPrev, fade as floats, flags).
+static const uint kDCLFGrassFrameStride = 8, kDCLFGrassTierMask = 3u, kDCLFGrassInCollisionRange = 1u << 2, kDCLFGrassSimpleShading = 1u << 3;
 static const uint kDCLFGrassNone = 0xFFFFFFFFu;
 #endif
 
@@ -465,7 +466,8 @@ VS_OUTPUT main(uint a_vertex : SV_VertexID, uint a_instance : SV_InstanceID)
 	const float3 origin = asfloat(vk::RawBufferLoad<uint3>(shape, 4));
 	const uint bucket = vk::RawBufferLoad<uint>(shape + 12, 4);
 	DCLFGrassStatics(bucket);
-	const uint4 frame = vk::RawBufferLoad<uint4>(DCLFGrassTable(kDCLFGrassFrame) + kDCLFGrassFrameStride * uint64_t(index), 16);
+	const uint2 packedFrame = vk::RawBufferLoad<uint2>(DCLFGrassTable(kDCLFGrassFrame) + kDCLFGrassFrameStride * uint64_t(index), 8);
+	const uint4 frame = uint4(asuint(f16tof32(packedFrame.x)), asuint(f16tof32(packedFrame.x >> 16)), asuint(float(packedFrame.y & 0xFFFFu) / 65535.0), packedFrame.y >> 16);
 	const uint meshSlot = vk::RawBufferLoad<uint>(DCLFGrassBucketRow + 4 * (frame.w & kDCLFGrassTierMask), 4);
 	if (meshSlot == kDCLFGrassNone)
 		return (VS_OUTPUT)0;

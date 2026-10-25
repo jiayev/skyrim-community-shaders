@@ -26,6 +26,7 @@ namespace DCLF::Draws
 			decltype(Api::PassDef::emit) emit = nullptr;
 			decltype(Api::PassDef::setup) setup = nullptr;
 			decltype(Api::PassDef::latchWord) latchWord = nullptr;
+			decltype(Api::PassDef::animatedRows) animatedRows = nullptr;
 			bool viewName = false;  // passName names "{view}"
 		};
 
@@ -60,6 +61,7 @@ namespace DCLF::Draws
 			// By shape (Api::EpochShape), in the schedule's order.
 			std::array<std::vector<ResolvedEpoch>, 3> epochs;
 			decltype(Api::PassDef::latchWord) latchWord = nullptr;  // the one pass's that has one (none: null)
+			decltype(Api::PassDef::animatedRows) animatedRows = nullptr;  // likewise
 			bool resolved = false;
 			// The epochs' definitions (Revision/Epochs.h), by row: their traits (named by names, owned), ids, and the epoch recording each
 			// main and shadow shape, and each view's.
@@ -285,13 +287,13 @@ namespace DCLF::Draws
 	void RegisterPassDef(const Api::PassDef& a_pass, std::string_view a_who)
 	{
 		auto& state = State();
-		if (a_pass.key.empty() || !a_pass.make == !a_pass.emit || (a_pass.make && a_pass.passName.empty()) || (a_pass.emit && (a_pass.setup || a_pass.latchWord)))
+		if (a_pass.key.empty() || !a_pass.make == !a_pass.emit || (a_pass.make && a_pass.passName.empty()) || (a_pass.emit && (a_pass.setup || a_pass.latchWord || a_pass.animatedRows)))
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete pass {}", a_who, a_pass.key));
 		for (const auto& entry : state.passes)
 			if (entry.key == a_pass.key)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered pass {}, which {} has", a_who, a_pass.key, entry.who));
 		state.passes.push_back({ std::string(a_pass.key), std::string(a_pass.passName), std::string(a_who), a_pass.kind, a_pass.queue, a_pass.make, a_pass.emit,
-			a_pass.setup, a_pass.latchWord, a_pass.passName.find(kViewToken) != std::string_view::npos });
+			a_pass.setup, a_pass.latchWord, a_pass.animatedRows, a_pass.passName.find(kViewToken) != std::string_view::npos });
 	}
 
 	Api::TriggerId FindTrigger(const Api::FrameSchedule& a_schedule, std::string_view a_id, std::string_view a_who)
@@ -320,6 +322,17 @@ namespace DCLF::Draws
 					state.passes[i].who, state.passes[i].key, state.passes[latchPass].who, state.passes[latchPass].key));
 			latchPass = i;
 		}
+		// The latch's animated rows likewise (one pass; before the depth build: every reader of the main rows runs after it).
+		std::uint32_t rowsPass = ~0u;
+		for (std::uint32_t i = 0; i < state.passes.size(); ++i) {
+			if (!state.passes[i].animatedRows)
+				continue;
+			if (rowsPass != ~0u)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s pass {} asks for the latch's animated rows, which {}'s pass {} has",
+					state.passes[i].who, state.passes[i].key, state.passes[rowsPass].who, state.passes[rowsPass].key));
+			rowsPass = i;
+		}
+		bool rowsScheduled = false;
 		bool latchScheduled = false;
 		for (std::uint32_t row = 0; row < a_schedule.epochs.size(); ++row) {
 			const auto& epoch = a_schedule.epochs[row];
@@ -351,14 +364,15 @@ namespace DCLF::Draws
 				if (state.passes[found].setup && epoch.shape == Api::EpochShape::Shadow)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} names pass {}, which has a setup, in a shadow epoch", epoch.id, key));
 				// The stage word is the depth commit's: its pass runs in the depth epoch, before the build that reads the latch.
-				if (found == latchPass) {
+				if (found == latchPass || found == rowsPass) {
 					const auto later = epoch.passes.subspan(k + 1);
 					const bool beforeBuild = epoch.segment == static_cast<std::uint32_t>(RenderGraphRuntime::Segment::ZPrepass) && epoch.shape == Api::EpochShape::Main &&
 					                         std::find(later.begin(), later.end(), kDepthBuild) != later.end();
 					if (!beforeBuild)
-						stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} names pass {}, which asks for the latch's stage word, outside the depth epoch before {}",
-							epoch.id, key, kDepthBuild));
-					latchScheduled = true;
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: the schedule's epoch {} names pass {}, which asks for the latch's {}, outside the depth epoch before {}",
+							epoch.id, key, found == latchPass ? "stage word" : "animated rows", kDepthBuild));
+					latchScheduled |= found == latchPass;
+					rowsScheduled |= found == rowsPass;
 				}
 				resolved.passes.push_back({ found, hosted });
 			}
@@ -368,6 +382,11 @@ namespace DCLF::Draws
 			if (!latchScheduled)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: pass {} asks for the latch's stage word, but the schedule does not name it", state.passes[latchPass].key));
 			state.latchWord = state.passes[latchPass].latchWord;
+		}
+		if (rowsPass != ~0u) {
+			if (!rowsScheduled)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: pass {} asks for the latch's animated rows, but the schedule does not name it", state.passes[rowsPass].key));
+			state.animatedRows = state.passes[rowsPass].animatedRows;
 		}
 	}
 
@@ -386,6 +405,12 @@ namespace DCLF::Draws
 	{
 		const auto latchWord = State().latchWord;
 		return latchWord ? latchWord() : 0u;
+	}
+
+	std::uint64_t PassAnimatedRows()
+	{
+		const auto animatedRows = State().animatedRows;
+		return animatedRows ? animatedRows() : 0u;
 	}
 
 	Api::TriggerId CoreTriggerOf(CoreTrigger a_trigger)

@@ -213,8 +213,8 @@ Small pieces still on the render thread, each with its route off it:
     `Features/TreeWind/TreeWindScene.cpp`, `Features/Fades/FadeCommit.cpp`, `Core/Render/Shadow/ShadowIndexPool.cpp`,
     `Core/Render/Readback/Visibility.cpp`, `Core/Render/Resources/FrameRecords.cpp` and `Features/Portals/PortalPrograms.cpp`.
 -   **Design.**
-    -   The face positions, tree rows and fade root rows become payload parts (or a second `JournaledBufferSet`), caught up
-        from their tables' journals on the snapshot builder and read by value. The tree rows get a journal by tree slot
+    -   The face positions, tree rows and fade root rows become payload parts (more versioned parts built from their
+        predecessors on the state graph, like the scene payload's seven), their deltas from their tables' journals, read by value. The tree rows get a journal by tree slot
         (`KeptArray`); today `UploadTrees` uploads them whole whenever the tree content epoch moves.
     -   The index pool's copy list becomes the publication's: the pool's update is a pure function of the geometry log.
     -   The per-frame rows (`TreeWindFrameRow` into `treeFrameBuffer`, and `fadeFrameBuffer`) move into the latch through a
@@ -224,7 +224,7 @@ Small pieces still on the render thread, each with its route off it:
         write is left, `CommitUploads` and its batch pool go.
 -   **Needs.** The readers first: the recordings bind these versioned buffers directly (`ShaderResource(*scene->fadeRoots)`,
     `ShaderResource(*scene.vertexStream)`, ...). A part needs its passes to read it by value (an SRV index or address through
-    the latch), and the draws' face stream addresses patched at emit time as `PatchRowAddresses` does for rows.
+    the latch), and the draws' face stream addresses pushed by BuildDraws (as the rows' block addresses are), not stored in a part.
 
 ### 2.4 Animated material values
 
@@ -256,7 +256,7 @@ Small pieces still on the render thread, each with its route off it:
         `BuildDrawsLatch::stageWord`), or let each pass compute its own value with the GPU scroll.
     -   **Frame-sourced components.** A per-signature row packed with the record (a frame's move writes one row per
         signature), or copy-on-write chunks for `SceneTables::materials`.
--   **Needs.** Measure first: the payload pools' catch-up per part (`Diagnostics/Reports/DrawsProducer.cpp`) and
+-   **Needs.** Measure first: the payload parts' versions (the `payload <part> versions` lines: KB uploaded and copied) and
     `frame data through the render thread` (`Diagnostics/Reports/DrawsFrameValues.cpp`).
 
 ### 2.5 The latch carries only per-frame values
@@ -268,7 +268,7 @@ Small pieces still on the render thread, each with its route off it:
     (`LatchRegionsHeld`, `Core/Render/Payload/Latched.h`); the shadow arena stages only the 256-byte chunks that differ
     (`kArenaChunk`, `Core/Render/Shadow/ShadowEpochs.cpp`). Staged shadow constants fell from 4.0 to 1.5 KB a frame. Not built:
     -   **per-publication values** (the BuildDrawsLatch's payload block, the frame record's object and extras registers) as a
-        small immutable block per `PayloadVersions`, pooled like a part and named once by value;
+        small immutable block per payload source, pooled like a part and named once by value;
     -   **rare values** (the frame record's texture descriptors, the captured D3D11 constant blocks, the engine's structured
         frame buffers copied whole every colour commit) as pooled versions published only when their bytes change (the
         `ConstantMirror` knows), the latch carrying only an index;

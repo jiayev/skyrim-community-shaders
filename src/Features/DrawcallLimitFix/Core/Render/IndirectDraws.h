@@ -249,10 +249,15 @@ namespace DCLF
 		std::shared_ptr<const void> AdoptCurrentSnapshot(bool a_wait);
 		/**
 		 * @brief Render thread, at Present (after the frame's last submission): binds the adopted set's pooled versions
-		 * (NamedVersions::Bind) and the installed payload's backings (PayloadVersions::Bind) to SubmittedRetirementPoint(), so no
+		 * (NamedVersions::Bind) and the installed payload's versions (PayloadPools::BindInstalled) to SubmittedRetirementPoint(), so no
 		 * backing the frame read is reused before its GPU work retires.
 		 */
 		void BindAdopted();
+		/**
+		 * @brief Render thread, the frame's start: the frame's payload (the installed snapshot's parts' versions, GPU ready before it was
+		 * posted), which the frame's epochs read. False without one.
+		 */
+		bool MakeFramePayload();
 		/**
 		 * @brief Render thread, the frame's start: posts what the next builds ahead take from the frame (resources, masks) and the
 		 * fits, through a latest-wins slot (TakeAheadContext).

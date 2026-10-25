@@ -11,29 +11,14 @@
 namespace DCLF::Draws
 {
 	/**
-	 * @brief Rows a table at a_contentEpoch lacks, each with its header's addresses made absolute (a_base plus the row's offset):
-	 * a_emit(data, bytes, offset). a_patch(row, rowAddress) fixes one row's header. Rows past a_capacity wait for the table's
-	 * growth: a captured version is filled with them, and the table then holds what it was filled with.
+	 * @brief Rows a table at a_contentEpoch lacks, as they are (the rows hold no addresses, so any backing takes the same bytes):
+	 * a_emit(data, bytes, offset), the data the rows' own (it stays put while a_rows is held). Rows past a_capacity wait for the table's
+	 * growth: a captured version is filled with them, and the table then holds what it was filled with. Returns the rows sent.
 	 */
-	template <class Row, class Patch, class Emit>
-	std::size_t EmitMainRows(const KeptView<Row>& a_rows, std::uint64_t a_contentEpoch, std::uint64_t a_base, std::uint64_t a_capacity, Patch&& a_patch, Emit&& a_emit)
+	template <class Row, class Emit>
+	std::size_t EmitMainRows(const KeptView<Row>& a_rows, std::uint64_t a_contentEpoch, std::uint64_t a_capacity, Emit&& a_emit)
 	{
-		if (!a_rows.elements)
-			return 0;
-		const auto& rows = *a_rows.elements;
-		std::vector<Row> run;
-		std::size_t sent = 0;
-		a_rows.changes.ForEachRun(a_contentEpoch, rows.size(), [&](std::uint64_t a_first, std::uint64_t a_count) {
-			if (a_first >= a_capacity)
-				return;
-			a_count = std::min(a_count, a_capacity - a_first);
-			run.assign(rows.begin() + static_cast<std::ptrdiff_t>(a_first), rows.begin() + static_cast<std::ptrdiff_t>(a_first + a_count));
-			for (std::size_t i = 0; i < run.size(); ++i)
-				a_patch(run[i], a_base + (a_first + i) * sizeof(Row));
-			a_emit(run.data(), run.size() * sizeof(Row), static_cast<std::size_t>(a_first) * sizeof(Row));
-			sent += run.size();
-		});
-		return sent;
+		return a_rows.Emit(a_contentEpoch, a_emit, static_cast<std::size_t>(a_capacity)) / sizeof(Row);
 	}
 	/**
 	 * @brief The parts a material row is journalled in (KeptArray::SetParts): its VS blocks, its PS blocks' two halves and its header,
@@ -45,56 +30,53 @@ namespace DCLF::Draws
 				  kMaterialRowPS % (kMaterialRowBytes / kMaterialRowParts) == 0 && kMaterialRowHeader % (kMaterialRowBytes / kMaterialRowParts) == 0);
 
 	/**
-	 * @brief EmitMainRows for rows journalled by part (KeptArray::SetParts, a_parts a row): the parts a table at a_contentEpoch lacks, each
-	 * cut from its row with the header's addresses made absolute (a_base plus the row's offset): a_emit(data, bytes, offset). Rows past
-	 * a_capacity wait for the table's growth.
+	 * @brief EmitMainRows for rows journalled by part (KeptArray::SetParts, a_parts a row): the parts a table at a_contentEpoch lacks, cut
+	 * from the rows' own bytes (a row's consecutive parts, and rows adjacent in memory, go as one span): a_emit(data, bytes, offset).
+	 * Rows past a_capacity wait for the table's growth. Returns the parts sent.
 	 */
-	template <class Row, class Patch, class Emit>
-	std::size_t EmitMainRowParts(const KeptView<Row>& a_rows, std::size_t a_parts, std::uint64_t a_contentEpoch, std::uint64_t a_base, std::uint64_t a_capacity, Patch&& a_patch,
-		Emit&& a_emit)
+	template <class Row, class Emit>
+	std::size_t EmitMainRowParts(const KeptView<Row>& a_rows, std::size_t a_parts, std::uint64_t a_contentEpoch, std::uint64_t a_capacity, Emit&& a_emit)
 	{
 		if (!a_rows.elements)
 			return 0;
 		const auto& rows = *a_rows.elements;
 		const std::size_t partBytes = sizeof(Row) / a_parts;
 		const std::uint64_t capacity = a_capacity * a_parts;
-		std::vector<std::byte> run;
-		std::size_t sent = 0;
+		const std::byte* pending = nullptr;
+		std::size_t pendingBytes = 0, pendingOffset = 0, sent = 0;
+		const auto flush = [&] {
+			if (pendingBytes)
+				a_emit(static_cast<const void*>(pending), pendingBytes, pendingOffset);
+			pendingBytes = 0;
+		};
 		a_rows.changes.ForEachRun(a_contentEpoch, rows.size() * a_parts, [&](std::uint64_t a_first, std::uint64_t a_count) {
 			if (a_first >= capacity)
 				return;
 			a_count = std::min(a_count, capacity - a_first);
-			run.resize(static_cast<std::size_t>(a_count * partBytes));
-			Row row;
-			std::uint64_t patched = ~std::uint64_t{ 0 };
-			for (std::uint64_t i = 0; i < a_count; ++i) {
-				const std::uint64_t part = a_first + i, r = part / a_parts;
-				if (r != patched) {
-					row = rows[static_cast<std::size_t>(r)];
-					a_patch(row, a_base + r * sizeof(Row));
-					patched = r;
+			for (std::uint64_t part = a_first; part < a_first + a_count;) {
+				// This row's parts in the run, one slice of its bytes.
+				const std::uint64_t r = part / a_parts;
+				const std::uint64_t partsEnd = std::min(a_first + a_count, (r + 1) * a_parts);
+				const std::byte* data = reinterpret_cast<const std::byte*>(&rows[static_cast<std::size_t>(r)]) + (part % a_parts) * partBytes;
+				const std::size_t bytes = static_cast<std::size_t>(partsEnd - part) * partBytes, offset = static_cast<std::size_t>(part * partBytes);
+				if (pendingBytes && pending + pendingBytes == data && pendingOffset + pendingBytes == offset) {
+					pendingBytes += bytes;
+				} else {
+					flush();
+					pending = data;
+					pendingBytes = bytes;
+					pendingOffset = offset;
 				}
-				std::memcpy(run.data() + i * partBytes, reinterpret_cast<const std::byte*>(&row) + (part % a_parts) * partBytes, partBytes);
+				sent += static_cast<std::size_t>(partsEnd - part);
+				part = partsEnd;
 			}
-			a_emit(run.data(), run.size(), static_cast<std::size_t>(a_first * partBytes));
-			sent += static_cast<std::size_t>(a_count);
 		});
+		flush();
 		return sent;
 	}
-	inline void PatchRowAddresses(MaterialRow& a_row, std::uint64_t a_address)
-	{
-		auto& header = HeaderOf(a_row);
-		header.vsMaterial += a_address;
-		header.psMaterial += a_address;
-	}
-	inline void PatchRowAddresses(PipelineRow& a_row, std::uint64_t a_address)
-	{
-		auto& header = HeaderOf(a_row);
-		for (auto* address : { &header.vsTechnique, &header.psTechnique, &header.vsGeometry, &header.psGeometry, &header.vsPermutation, &header.psPermutation })
-			*address += a_address;
-	}
-	/** @brief An input's rows (BuildDrawsCS.hlsl, RowsOf): the pipeline slot in the high 12 bits, the material slot in the low 20. */
-	constexpr std::uint32_t kRowPipelineShift = 20;
+	/** @brief An input's rows (BuildDrawsCS.hlsl, RowsOf): the pipeline slot in the high 16 bits, the material slot (a shadow input's shadow
+	 * material row) in the low 16. A large list's pipeline slots pass 4096 (HexRim: 4656). */
+	constexpr std::uint32_t kRowPipelineShift = 16;
 	constexpr std::uint32_t kRowMaterialMask = (1u << kRowPipelineShift) - 1;
 	constexpr std::uint32_t RowsOf(std::uint32_t a_pipeline, std::uint32_t a_material) { return (a_pipeline << kRowPipelineShift) | a_material; }
 
@@ -107,7 +89,7 @@ namespace DCLF::Draws
 		ResourceAddresses addresses{};
 		std::uint32_t lookupGeneration = 0, tablesGeneration = 0;
 		// What the region's, the kept tables' and the rows' journals keep changes back to: the oldest content epoch a backing of
-		// the payload's pools holds of each (PayloadBuilder::OldestContentEpoch; ~0: none, every change may go).
+		// the payload's pools holds of each (PayloadPools::OldestContentEpoch; ~0: none, every change may go).
 		std::uint64_t inputsOldestContentEpoch = 0;
 		TablesContentEpochs tablesOldestContentEpochs;
 		std::uint64_t materialRowsOldestContentEpoch = 0, pipelineRowsOldestContentEpoch = 0;

@@ -69,6 +69,8 @@ namespace DCLF::Draws
 	std::vector<std::shared_ptr<const void>> SetUpPassStates(rhi::Device a_device, const SceneBuffers& a_scene);
 	/** @brief Render thread (the depth commit): the depth segment's latch stage word (Api::PassDef::latchWord of the pass with one; 0: none). */
 	std::uint32_t PassLatchWord();
+	/** @brief Render thread (each latch of the main rows): the frame's copy of the animated material rows (Api::PassDef::animatedRows; 0: none). */
+	std::uint64_t PassAnimatedRows();
 	/**
 	 * @brief Render thread, at the graph's build (an extension's GatherStructuralPasses; never per frame): a_shape's epochs (a_view's, for
 	 * the View shape), in the schedule's order, each its passes in order, made from a_base with the epoch's fields set: a make's non-null

@@ -226,17 +226,13 @@ namespace DCLF
 		static constexpr std::uint32_t kBoneGrowRows = 4096;
 		std::vector<std::uint32_t> boneOffset;  // parallel to objects, in rows
 		std::vector<std::uint32_t> boneRows;    // parallel to objects
-		std::array<std::vector<std::uint32_t>, 81> boneFree{};  // freed blocks' offsets, by bones (rows / 3; at most 80)
-		// Freed blocks of any other size (a palette rows class's block: a particle member's quads, by its rule), by their rows.
-		std::map<std::uint32_t, std::vector<std::uint32_t>> boneFreeOther;
-		/** @brief The free list of a_rows-row blocks: a skin's palette by its bones, any other block by its rows. */
-		std::vector<std::uint32_t>& BoneFreeList(std::uint32_t a_rows)
-		{
-			if (a_rows % 3 == 0 && a_rows / 3 < boneFree.size())
-				return boneFree[a_rows / 3];
-			return boneFreeOther[a_rows];
-		}
-		std::uint32_t boneTop = 0;       // rows handed out
+		// The free rows below boneTop, coalesced (first row -> rows): a block of any size (a skin's palette, a palette rows class's block:
+		// a particle member's quads) takes the first run that holds it, so skeletons and particle systems of every size coming and going
+		// reuse each other's rows instead of raising boneTop (exact-size lists left most of a large list's palettes free).
+		std::map<std::uint32_t, std::uint32_t> boneFree;
+		/** @brief A retired block's rows back to boneFree (its retirement's, SceneSet): merged with its neighbours, boneTop lowered past a free top. */
+		void ReturnBones(std::uint32_t a_offset, std::uint32_t a_rows);
+		std::uint32_t boneTop = 0;       // rows handed out (past the last block in use)
 		std::uint32_t boneCapacity = 0;  // rows the blocks span (FrameValues' palettes hold twice as many)
 		std::uint32_t BoneCapacity() const { return boneCapacity; }
 		/** @brief The slot's block for a palette of a_rows rows (its own when the size is the same): its first row. */
