@@ -11,9 +11,22 @@ light culling is the first feature that does this. Its D3D11 path stays in place
     fences.
 -   **Device features.** Before the game creates its device, `DxvkLoader` calls
     `dxvkRequestDeviceFeatures` to ask for what BasicRHI needs beyond DXVK's own set:
-    `VK_EXT_descriptor_heap` and `vulkanMemoryModelDeviceScope` (DXC's atomics use Device scope, and
-    DXVK enables `vulkanMemoryModel`). These are enabled on the `VkDevice` only; DXVK's own code keeps
-    the feature set it would have chosen, including its descriptor-buffer binding model.
+    `vulkanMemoryModelDeviceScope` (DXC's atomics use Device scope, and DXVK enables
+    `vulkanMemoryModel`), `deviceGeneratedCommands` (DCLF), and the descriptor models' features below.
+    These are enabled on the `VkDevice` only; DXVK's own code keeps the feature set it would have chosen.
+-   **One negotiated binding model.** BasicRHI records into DXVK's own command buffers, so the two must
+    bind descriptors the same way (see "One descriptor model" below). `DxvkLoader` also registers
+    `dxvkSetBindingModelCallback`: during device creation DXVK calls `NegotiateBindingModel`
+    (`RenderGraphRuntime.cpp`) with the physical device and its own choice, and the callback answers
+    with `rhi::vulkan::EvaluateBindingModels` (BasicRHI's limit checks, with DXVK's 2048-sampler pool and
+    descriptor buffers counted in; every check is logged under `[ORG]`). DXVK keeps its choice if
+    BasicRHI accepts it, else switches between heaps and descriptor buffers if the device supports the other,
+    else keeps it; legacy descriptor sets (RDNA2, Pascal, most Intel) are never switched away from.
+    `dxvk.enableDescriptorHeap` / `dxvk.enableDescriptorBuffer` keep precedence. DXVK then grants
+    exactly its own model: `descriptorHeap` on heaps, `descriptorBuffer` + `mutableDescriptorType` on
+    descriptor buffers (BasicRHI's descriptor-buffer backend, shaders lowered), nothing on legacy
+    descriptor sets. `Initialize` logs the model, or disables the graph with the reason (RenderDoc's
+    capture config forces legacy sets).
 -   **Persistent graph.** A `org::PersistentGraphHost` drives the graph in persistent mode: it is compiled
     once and each frame runs `PrepareFrame` + record + submit. Resizes and pass-set changes rebuild it.
 -   **Epoch.** `RenderGraphRuntime::ExecuteEpoch` runs the graph once, on the thread that drives the
@@ -67,10 +80,11 @@ upscaler output").
 **Mechanism, as far as it is known.** This is inferred from black-box experiments, not proven.
 
 -   A Streamline plugin requests `VK_EXT_descriptor_heap`; the log says "requested by a plugin(s) added".
--   The render graph enables that extension on DXVK's device anyway, through `DxvkLoader`'s `dxvkRequestDeviceFeatures` (see
-    Device features above). So Streamline's features run on the descriptor-heap path.
--   DXVK itself stays on descriptor buffers.
+-   With DXVK on descriptor heaps (NVIDIA's default until 2026-10-25; now opt-in), the render graph is granted that extension through `DxvkLoader`'s
+    `dxvkRequestDeviceFeatures` (see Device features above). So Streamline's features run on the descriptor-heap path.
 -   Graph epochs bind the graph's descriptor heaps.
+-   Seen in that configuration (found when DXVK still ran on descriptor buffers beside the graph's heaps); not re-checked with
+    the graph on descriptor buffers.
 -   When a heap-path consumer's command buffer executes right behind an epoch's, NVIDIA's driver computes it from the wrong
     descriptors.
 -   Unknown: whether this is a driver defect, or state or heap memory the graph leaves behind that the consumer relies on.
@@ -122,9 +136,51 @@ upscaler output").
 -   Run Streamline without `VK_EXT_descriptor_heap` (do not grant the plugin's request), or give it heap state separate from the
     graph's.
 -   Have the graph's last command buffer re-bind or reset descriptor-heap state.
--   Check with a capture tool that supports `VK_EXT_descriptor_heap`. RenderDoc 1.46 does not; with RenderDoc loaded the graph turns
-    itself off.
+-   Check with a capture tool that supports `VK_EXT_descriptor_heap`. RenderDoc 1.46 does not, and CS's RenderDoc setup puts DXVK on
+    legacy descriptor sets, so with RenderDoc loaded the graph turns itself off.
 -   If it reproduces in isolation, report it to NVIDIA.
+
+## External commands in DXVK's command buffer
+
+`RenderGraphRuntime::EmitExternalCommands(record, user, waits, signals, bindsState, label, fullBarrier)` (render thread) queues
+`record(user, VkCommandBuffer)` into DXVK's command stream (`dxvkEmitExternalCommands`): DXVK's CS thread runs it once, in D3D11
+stream order, on its own command buffer, outside any render pass. DCLF's CPU-driven pipeline draws through it
+(`Core/Render/Direct/Sites.cpp`; dclf-architecture.md, "The CPU-driven pipeline"). The contract:
+
+-   **Entry.** DXVK has flushed its barriers (all earlier D3D11 work is visible) and every image is in its default layout
+    (`DxvkOrgInteropImageInfo::layout`, GENERAL for every image DCLF imports), deferred clears done.
+-   **Inside.** The callback begins and ends every rendering it opens. With `bindsState` DXVK forgets every binding it tracks
+    afterwards (pipelines, descriptor buffers or heaps, push data, vertex and index buffers, dynamic state, render targets) and
+    binds its own descriptors again, so the callback binds BasicRHI's heaps, layout and push data itself. BasicRHI wraps the
+    buffer for recording (`rhi::vulkan::AdoptCommandBuffer`: no submission, no tracked layouts); secondaries recorded elsewhere
+    (inside or outside a rendering, `SecondaryInheritance::insideRendering`) are executed with `ExecuteCommands`.
+-   **Exit.** Every image is left in its default layout, and the callback's writes are released: its own barrier to all commands,
+    or `fullBarrier` (DXVK records one global barrier). DXVK's barrier tracker is empty after the callback, so it orders nothing
+    against what the callback wrote.
+-   **Waits and signals** join the graphics submission of the command list the commands land in: a signal completes once that
+    whole submission did (the callback's retirement point; values grow in stream order per semaphore). DCLF waits for the frame
+    values' timeline and signals its CPU-frame timeline once a frame, behind the frame's callbacks.
+-   **Lifetime.** DXVK tracks nothing the callback uses: every D3D11 object, view and buffer it reads or writes is held until its
+    signal completes. ORG's staged uploads a callback depends on are recorded on the render thread into a secondary
+    (`RenderGraph::RecordPendingUploads`) and executed at the callback's start, so DXVK's list is not ended for them. ORG's latch
+    regions a callback's work reads are written at an external frame slot (`PersistentGraphHost::BeginExternalFrameSlot`), reused only
+    after its last frame's signal.
+-   Once the path has been used, DXVK no longer reorders transfers or layout transitions on interop images, or on buffers with a
+    stable address, ahead of the command buffer.
+-   **One descriptor model.** BasicRHI and DXVK always run on the same model, descriptor heaps or descriptor buffers, negotiated
+    at device creation (Runtime shape, "One negotiated binding model"; `[ORG] Binding model:` in CS's log, `Binding model:` in
+    DXVK's). With BasicRHI on heaps and DXVK on descriptor buffers, the two models in one command buffer made NVIDIA (RTX 5080,
+    driver 621.01) fetch garbage descriptors in the callback's draws: MMU faults with no owning resource, depending only on where
+    in DXVK's stream the callback landed, even with every command in secondaries. DXVK now grants the graph only its own model, so
+    that pairing cannot occur. NVIDIA runs on descriptor buffers, as upstream (`dxvk_device_info.cpp`; heaps there: NGX's D24S8 descriptor, black DLSS
+    output, level-to-3% slower frames); `dxvk.enableDescriptorHeap = True` opts into heaps, and BasicRHI follows.
+-   **Heaps bound in DXVK's buffer too.** A secondary that binds its own heaps is not enough: on the same GPU, on heaps, a
+    secondary's heap binding did not hold while the buffer executing it had DXVK's heap bound, and the draws fetched DXVK's
+    descriptors at the graph's indices (MMU faults with no owning resource; a callback at the start of a command list, before DXVK
+    bound a heap, ran clean, and a separate command buffer within the list did not help). The sites bind the graph's heaps
+    (`SetDescriptorHeaps`: heaps, or descriptor buffers and their offsets) in DXVK's buffer before each execution of their
+    secondaries (`Direct::SiteOut::BindHeaps`), on either model; DXVK binds its own heaps or descriptor buffers again after the
+    callback, and re-sets its descriptor buffer offsets at its next pipeline bind.
 
 ## Resources crossing the boundary
 

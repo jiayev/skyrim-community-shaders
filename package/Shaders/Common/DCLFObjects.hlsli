@@ -75,12 +75,16 @@ struct DCLFPlacement
 // A plain indirect draw's push data (DrawPipelines.h, kPulledPush*): pushed once per draw call, so nothing in it is a draw's
 // own. The draw's sequence (its first one's address here, indexed by the draw's instance) holds its object word, its rows'
 // addresses and its geometry's buffers, which the vertex stage reads (Utility.hlsl, the shadow views; Lighting.hlsl, the
-// Z-prepass). The second address is the layout's: the shadow views' material rows, the Z-prepass's pipeline row.
+// Z-prepass). The second address is the layout's: the shadow views' material rows, the Z-prepass's pipeline row. The CPU-driven
+// pipeline's direct draws (DrawPipelines.h, kDirectDrawPush*: one draw a sequence) also push the draw's object word and a flag taking
+// it in place of the sequence's (DCLFSequenceObjectWord); the GPU path's draws push both 0.
 cbuffer DCLFPushData : register(b190)
 {
 	uint2 DCLFSequencesAddress : packoffset(c0.x);
 	uint2 DCLFMaterialRowsAddress : packoffset(c0.z);
 	uint2 DCLFVertexLayout : packoffset(c1.x);
+	uint DCLFObjectWordOverride : packoffset(c1.z);
+	uint DCLFDirectFlags : packoffset(c1.w);  // bit 0: kDirectFlagObjectWord
 };
 
 // The object word (below), set by the stage's main from the draw's sequence (the vertex stage) or its vertex stage's output
@@ -146,6 +150,12 @@ static const uint kDCLFSequenceStride = 136;  // BuildDrawsCS's DrawSequence
 
 // A pulled draw's sequence, by its instance: the vertex stage's SV_InstanceID, or the pixel stage's flat copy of it.
 uint64_t DCLFDrawSequence(uint a_instance) { return DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride; }
+// A pulled draw's object word (DrawSequence::objectIndex, byte 20): a direct draw's pushed one (its per-frame bits the CPU's; the
+// resident sequence's are 0), else its sequence's.
+uint DCLFSequenceObjectWord(uint64_t a_sequence)
+{
+	return (DCLFDirectFlags & 1u) != 0 ? DCLFObjectWordOverride : vk::RawBufferLoad<uint>(a_sequence + 20);
+}
 #		endif
 
 #		if defined(DCLF_PULLED_VERTICES)

@@ -14,6 +14,12 @@
 
 struct DxvkOrgInteropResourceInfo;
 
+// The Vulkan handles EmitExternalCommands takes, declared as vulkan_core.h does on 64-bit targets (identical redeclarations),
+// so this header stays free of Vulkan includes.
+typedef struct VkSemaphore_T* VkSemaphore;
+typedef struct VkCommandBuffer_T* VkCommandBuffer;
+typedef std::uint64_t VkPipelineStageFlags2;
+
 namespace org::services
 {
 	class ShaderCompiler;
@@ -209,6 +215,26 @@ public:
 	 * chunk). a_results[i] is object i's result. False when the DXVK build lacks the batched export (nothing was described).
 	 */
 	bool DescribeResources(std::span<IUnknown* const> a_objects, std::span<DxvkOrgInteropResourceInfo> a_infos, std::span<HRESULT> a_results);
+
+	/** @brief A timeline semaphore point an external recording waits for or signals (stages 0: all commands). */
+	struct ExternalCommandsWait
+	{
+		VkSemaphore semaphore;
+		std::uint64_t value;
+		VkPipelineStageFlags2 stages;
+	};
+	/**
+	 * @brief Render thread: queues a_record on DXVK's worker in D3D11 stream order, into DXVK's own command buffer
+	 * (dxvkEmitExternalCommands), outside any render pass. With a_bindsState DXVK forgets every binding afterwards (pipelines,
+	 * descriptor heaps or buffers, push data, vertex/index buffers, dynamic state). a_waits and a_signals join the graphics
+	 * submission of the command list the commands land in; a signal completes once that whole submission did, the commands
+	 * included (values grow in stream order per semaphore). The recording finds every image in DxvkOrgInteropImageInfo::layout,
+	 * must leave it there, and releases its own accesses with barriers (a_fullBarrier: DXVK records a full memory barrier after
+	 * it instead). False when unsupported.
+	 */
+	bool EmitExternalCommands(void (*a_record)(void* a_user, VkCommandBuffer a_commandBuffer), void* a_user,
+		std::span<const ExternalCommandsWait> a_waits, std::span<const ExternalCommandsWait> a_signals, bool a_bindsState,
+		const char* a_label, bool a_fullBarrier = false);
 
 	/**
 	 * @brief Runtime DXC compilation to SPIR-V with BasicRHI's ABI (ORGModuleServices), content-addressed

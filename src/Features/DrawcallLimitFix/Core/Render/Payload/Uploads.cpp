@@ -1,6 +1,7 @@
 // The main epochs' commit (render thread, inside the epoch): stream views, CommitMainPayload (the frame's values
 // into the selected revision's shape) and the depth commit's scene uploads.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
@@ -711,6 +712,17 @@ namespace DCLF
 		// The depth epoch's recording without the index pool's dispatch when this commit gave out no range (the shadow epoch's took
 		// the frame's, or none changed): its dispatch would be of zero groups. With hosted epochs, the recording with the passes' work of
 		// those that committed and none of the others' (their passes record nothing: RevisionRecordings::hosted, IndexOf).
+		// The CPU pipeline's graph (EpochRevision::direct): no recording; the site draws the frame from this commit (Direct/Sites.h).
+		if (a_revision.direct) {
+			const Direct::MainCommitInputs site{ revisionShape, a_resources, &adopted, &latch, sunCascades, std::span(shadowVolumes.data(), shadowVolumesLatched), latchSlot,
+				poolCopies };
+			if (depthOnly)
+				Direct::DepthCommitted(site);
+			else
+				Direct::ColourCommitted(site);
+			lap(6);
+			return true;
+		}
 		const auto& recordings = *a_revision.recordings;
 		const std::size_t variant = depthOnly && !poolCopies && recordings.Variants() > 1 ? 1 : 0;
 		SubmitRevisionRecording(revisionEpoch, recordings, recordings.IndexOf(variant, hostedDrawn));

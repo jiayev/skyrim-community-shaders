@@ -3,6 +3,8 @@
 // Features/Shadows/Engine's handler calls it (ExecuteShadowFrame: Api/ShadowEpochs.h), in its epoch's segment (its traits).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/ShadowSite.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ExecutionOwners.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
@@ -259,10 +261,11 @@ namespace DCLF
 			/**
 			 * @brief The index pool, then every pending view's blocks and culling latch (with the revision's bucket tables and map rows
 			 * where the frame slot's region does not hold them yet), and a zero latch for each placement without a view. Returns the
-			 * placements drawn (ShadowFrame::activeViews' bits: a placement's view is its index in the shape's views).
+			 * placements drawn (ShadowFrame::activeViews' bits: a placement's view is its index in the shape's views). a_direct (the CPU
+			 * pipeline's): each latched view, for the shadow site's culls (Direct/ShadowSite.h).
 			 */
 			std::uint64_t LatchShadowViews(const ShadowCommit& a_commit, std::uint32_t a_latchSlot, const std::shared_ptr<const ShadowFrame>& a_revisionShape,
-				const std::vector<ShadowViewLayout>& a_layouts)
+				const std::vector<ShadowViewLayout>& a_layouts, std::vector<Direct::ShadowSiteView>* a_direct)
 			{
 				auto& resources = a_commit.resources;
 				auto& payload = a_commit.payload;
@@ -355,6 +358,10 @@ namespace DCLF
 					UseSlotLayouts(latchBlock, latchLayout, target, latchSlot, !Draws::LatchRegionsHeld::Hold(held, std::size_t(latchLayout.MapRows()) * 2 + 1), latch);
 					WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, target.views[index].buckets, !Draws::LatchRegionsHeld::Hold(held, std::size_t(slot) * 2), latch);
 					LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
+					// Its list as ShadowViewBits selects the inputs: the paraboloids' the point casters, a clamped mode's the sun's or the spots'.
+					if (a_direct)
+						a_direct->push_back({ view.modeIndex == kParabolicShadowMode ? Direct::ViewType::Point : view.sunView ? Direct::ViewType::Sun : Direct::ViewType::Spot,
+							slot, index, latch });
 					Diagnostics::Notify(Diagnostics::ShadowViewLatched{ view, latch, frameNumber, payload, shadowStats });
 					resources.labels.push_back({ view.viewId, view.renderMode, slot });
 				}
@@ -373,10 +380,12 @@ namespace DCLF
 			 * shape (after the placements): each map's blocks and culling latch where the shape has its view at the layout set up, with the
 			 * revision's bucket table and map row where the frame slot's region does not hold them yet, and a zero latch for every other
 			 * map view of the shape (no work: a map not drawn this frame, interiors' and a toggled-off map's frames included). Returns the
-			 * maps latched; their views' bits (by index into the shape's views) into a_active.
+			 * maps latched; their views' bits (by index into the shape's views) into a_active, and each latched map's view into a_direct (the
+			 * CPU pipeline's, as LatchShadowViews).
 			 */
 			std::uint32_t LatchOcclusionViews(const ShadowCommit& a_commit, std::uint32_t a_latchSlot, const std::shared_ptr<const ShadowFrame>& a_revisionShape,
-				const std::array<ShadowEngine::OcclusionState, kOcclusionViews>& a_occlusion, std::uint32_t a_maps, std::uint64_t& a_active)
+				const std::array<ShadowEngine::OcclusionState, kOcclusionViews>& a_occlusion, std::uint32_t a_maps, std::uint64_t& a_active,
+				std::vector<Direct::ShadowSiteView>* a_direct)
 			{
 				const auto& target = a_commit.target;
 				const std::uint32_t frameNumber = a_commit.frameNumber;
@@ -428,6 +437,11 @@ namespace DCLF
 					UseSlotLayouts(latchBlock, latchLayout, target, latchSlot, !Draws::LatchRegionsHeld::Hold(held, std::size_t(latchLayout.MapRows()) * 2 + 1), latch);
 					WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, shapeView.buckets, !Draws::LatchRegionsHeld::Hold(held, std::size_t(slot) * 2), latch);
 					LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
+					// Its list by its entry's view bit, as the view batches make them (ViewBatches.cpp: 1u << 5 the sky occluder's, 1u << 6 the
+					// precipitation mask's).
+					if (a_direct && (map.viewBit == (1u << 5) || map.viewBit == (1u << 6)))
+						a_direct->push_back({ map.viewBit == (1u << 5) ? Direct::ViewType::SkyOccluder : Direct::ViewType::PrecipOccluder, slot,
+							static_cast<std::uint32_t>(index), latch });
 					a_commit.stats.occlusionInputs[v] = inputCount;
 					latched |= 1u << v;
 					if (index < 64)
@@ -552,6 +566,18 @@ namespace DCLF
 				return variant;
 			}
 
+			/**
+			 * @brief The GPU path's variant of the commit's views: the narrowest covering a_active, with the epoch's one culling dispatch over the
+			 * whole shadow list (each view's latch bounds its own), a group row per view of it. Its recording is the one to submit.
+			 */
+			std::size_t ShadowVariantToSubmit(const ShadowCommit& a_commit, std::uint32_t a_latchSlot, const std::vector<std::shared_ptr<const ShadowFrame>>& a_variants,
+				std::uint64_t a_active)
+			{
+				const std::size_t variant = NarrowestShadowVariant(a_variants, a_active, a_commit.stats);
+				WriteBuildDispatch(*a_commit.target.latch, a_commit.target.latchLayout, a_latchSlot, static_cast<std::uint32_t>(a_commit.payload.Inputs()), *a_variants[variant]);
+				return variant;
+			}
+
 			/** @brief The shadow epoch's periodic log line (one in 600). */
 			void LogShadowEpoch(const ShadowCommit& a_commit)
 			{
@@ -587,7 +613,9 @@ namespace DCLF
 				shadowStats.occlusionNotReady[v] += ((a_maps & ~a_drawn) >> v) & 1;
 			return a_drawn;
 		};
-		if (!ActiveToggles().shadows || failed || (pending.empty() && !maps)) {
+		// The CPU pipeline's graph: the shadow site draws the views and the maps from this commit (Direct/ShadowSite.h) while it is live; until
+		// then its epoch is not covered (DecideEpochCoverage), and the engine draws them.
+		if (!ActiveToggles().shadows || failed || (pending.empty() && !maps) || (Direct::CpuFrame() && !Direct::ShadowSiteLive())) {
 			pending.clear();
 			return mapsNotDrawn(0);
 		}
@@ -643,7 +671,8 @@ namespace DCLF
 		auto owners = ExecutionOwners::Make();
 		if (!owners)
 			return mapsNotDrawn(0);
-		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(EpochTraitsOf(epoch).segment, [&](org::RenderGraph&) {
+		// The CPU pipeline's graph runs the commit here and the shadow site draws (Direct::ExecuteEpoch; the commit opens the site).
+		const bool ok = Direct::ExecuteEpoch(EpochTraitsOf(epoch).segment, [&] {
 			ZoneScopedN("CS.DCLF.ShadowInputs");
 			const auto bodyStart = std::chrono::steady_clock::now();
 			TracyCZoneN(shadowPrepareZone, "CS.DCLF.ShadowInputs.Prepare", true);
@@ -676,19 +705,21 @@ namespace DCLF
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
 			// The views the frame draws (its placements' views, then the occlusion maps': ShadowFrame::activeViews), posted for the
 			// revisions to record a variant of, and the narrowest variant covering them submitted.
-			std::uint64_t active = Draws::LatchShadowViews(commit, latchSlot, revisionShape, layouts);
+			// The CPU pipeline's (EpochRevision::direct): every latched view, for the shadow site's culls.
+			std::vector<Direct::ShadowSiteView> directViews;
+			std::uint64_t active = Draws::LatchShadowViews(commit, latchSlot, revisionShape, layouts, revision.direct ? &directViews : nullptr);
 			const auto occlusionStart = std::chrono::steady_clock::now();
-			mapsDrawn = Draws::LatchOcclusionViews(commit, latchSlot, revisionShape, engine.occlusion, maps, active);
+			mapsDrawn = Draws::LatchOcclusionViews(commit, latchSlot, revisionShape, engine.occlusion, maps, active, revision.direct ? &directViews : nullptr);
 			occlusionMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - occlusionStart).count();
 			const auto record = Draws::UploadShadowArena(commit);
 			impl->revisions.latchedMisses += Draws::LatchShadowCsBlocks(commit, latchSlot, record);
 			engine.lastActiveViews = active;
-			const auto& variants = revision.shape->Value<ShadowVariants>()->shapes;
-			const std::size_t variant = Draws::NarrowestShadowVariant(variants, active, shadowStats);
-			// The epoch's one culling dispatch, over the whole shadow list (each view's latch bounds its own), a group row per view of the
-			// variant submitted.
-			WriteBuildDispatch(*target.latch, target.latchLayout, latchSlot, static_cast<std::uint32_t>(payload.Inputs()), *variants[variant]);
-			impl->SubmitRevisionRecording(epoch, *revision.recordings, variant);
+			// The CPU pipeline's graph: no recording; the shadow site culls and draws the latched views from this commit (its pre-work the
+			// shape's latched copies and index pool copies).
+			if (revision.direct)
+				Direct::ShadowCommitted({ revisionShape, resources, &adopted, directViews, payload.inputs.sunEntryProcesses, latchSlot });
+			else
+				impl->SubmitRevisionRecording(epoch, *revision.recordings, Draws::ShadowVariantToSubmit(commit, latchSlot, revision.shape->Value<ShadowVariants>()->shapes, active));
 			owners.Seal(impl->scene.get());
 			blocksMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - blocksStart).count();
 			Draws::LogShadowEpoch(commit);

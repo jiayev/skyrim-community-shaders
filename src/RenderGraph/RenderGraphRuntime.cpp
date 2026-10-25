@@ -27,6 +27,7 @@
 #endif
 #include <Resources/Resource.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <filesystem>
@@ -71,11 +72,113 @@ namespace
 	// invalid unless vulkanMemoryModelDeviceScope is enabled as well.
 	// Drawcall Limit Fix draws through device-generated commands (optional: without it the graph
 	// runs, and DCLF stays off).
+	// BasicRHI binds descriptors in DXVK's own command buffers, so it runs on DXVK's model: DXVK grants
+	// descriptorHeap only while it runs on heaps, and descriptorBuffer + mutableDescriptorType only while it
+	// runs on descriptor buffers. Both are asked for; the binding model negotiation picks which applies.
 	constexpr DxvkOrgInteropFeature kRequestedFeatures[] = {
 		{ VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME, "descriptorHeap" },
+		{ VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME, "descriptorBuffer" },
+		{ VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME, "mutableDescriptorType" },
+		// The descriptor-buffer model's heap sets are variable-count bindings (a bound heap need only cover its own capacity).
+		{ nullptr, "descriptorBindingVariableDescriptorCount" },
 		{ nullptr, "vulkanMemoryModelDeviceScope" },
 		{ VK_EXT_DEVICE_GENERATED_COMMANDS_EXTENSION_NAME, "deviceGeneratedCommands" },
 	};
+
+	// What DXVK itself takes from the device's descriptor budgets, for BasicRHI's descriptor-buffer limit checks.
+	// DxvkSamplerPool::MaxSamplerCount (extern/dxvk/src/dxvk/dxvk_sampler.h): DXVK keeps up to this many VkSamplers alive,
+	// and its sampler descriptor buffer holds that many descriptors.
+	constexpr uint32_t kDxvkSamplerPoolSize = 2048;
+	// DxvkResourceDescriptorHeap::addRanges (extern/dxvk/src/dxvk/dxvk_descriptor_heap.cpp): 8 MiB per resource descriptor buffer
+	// on 64-bit (clamped to maxResourceDescriptorBufferRange). DXVK adds another buffer only when every range of the current ones
+	// is in flight, so one is the steady state.
+	constexpr VkDeviceSize kDxvkResourceDescriptorBufferBytes = 8ull << 20;
+
+	// DXVK's sampler descriptor buffer on the descriptor-buffer model (DxvkSamplerDescriptorHeap::initDescriptorHeap): the size of
+	// a set layout of kDxvkSamplerPoolSize samplers. That needs a device, so it is estimated from the physical device's
+	// samplerDescriptorSize, aligned to descriptorBufferOffsetAlignment; 0 when the device lacks VK_EXT_descriptor_buffer.
+	VkDeviceSize DxvkSamplerDescriptorBufferBytes(PFN_vkGetInstanceProcAddr a_getInstanceProcAddr, VkInstance a_instance,
+		VkPhysicalDevice a_physicalDevice)
+	{
+		const auto enumerate = reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
+			a_getInstanceProcAddr(a_instance, "vkEnumerateDeviceExtensionProperties"));
+		const auto getProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+			a_getInstanceProcAddr(a_instance, "vkGetPhysicalDeviceProperties2"));
+		if (!enumerate || !getProperties2)
+			return 0;
+		uint32_t count = 0;
+		if (enumerate(a_physicalDevice, nullptr, &count, nullptr) != VK_SUCCESS)
+			return 0;
+		std::vector<VkExtensionProperties> extensions(count);
+		if (enumerate(a_physicalDevice, nullptr, &count, extensions.data()) != VK_SUCCESS)
+			return 0;
+		// A structure of an extension the device lacks must not be chained into the query.
+		const bool supported = std::any_of(extensions.begin(), extensions.begin() + count, [](const VkExtensionProperties& a_ext) {
+			return std::strcmp(a_ext.extensionName, VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME) == 0;
+		});
+		if (!supported)
+			return 0;
+		VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptorBuffer{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT };
+		VkPhysicalDeviceProperties2 properties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+		properties.pNext = &descriptorBuffer;
+		getProperties2(a_physicalDevice, &properties);
+		const VkDeviceSize bytes = VkDeviceSize(kDxvkSamplerPoolSize) * descriptorBuffer.samplerDescriptorSize;
+		const VkDeviceSize alignment = std::max<VkDeviceSize>(descriptorBuffer.descriptorBufferOffsetAlignment, 1);
+		return (bytes + alignment - 1) / alignment * alignment;
+	}
+
+	// The BindingRequirements BasicRHI evaluates the device with: the same for the negotiation (EvaluateBindingModels) and the
+	// adoption (AdoptedVulkanDeviceInfo::bindingRequirements), so that the device is set up as the negotiation said. The heap
+	// capacities are the defaults (1,000,000 / 2048 preferred, a smaller device's limit down to the minimums).
+	rhi::vulkan::BindingRequirements GraphBindingRequirements(PFN_vkGetInstanceProcAddr a_getInstanceProcAddr, VkInstance a_instance,
+		VkPhysicalDevice a_physicalDevice)
+	{
+		rhi::vulkan::BindingRequirements requirements{};
+		requirements.heapCapacities = rhi::DescriptorHeapCapacities{};
+		// DXVK's sampler pool shares maxSamplerAllocationCount with the samplers BasicRHI creates on the descriptor-buffer model.
+		requirements.hostSamplerObjects = kDxvkSamplerPoolSize;
+		requirements.hostResourceDescriptorBufferBytes = kDxvkResourceDescriptorBufferBytes;
+		requirements.hostSamplerDescriptorBufferBytes = DxvkSamplerDescriptorBufferBytes(a_getInstanceProcAddr, a_instance, a_physicalDevice);
+		return requirements;
+	}
+
+	// dxvkSetBindingModelCallback's: inside DXVK's device creation, before the VkDevice exists. Answers which models BasicRHI
+	// can run on with DXVK beside it; DXVK settles on one both share. Must not call into D3D11 or DXVK, nor throw into it.
+	uint32_t NegotiateBindingModel(void*, VkInstance a_instance, VkPhysicalDevice a_physicalDevice,
+		PFN_vkGetInstanceProcAddr a_getInstanceProcAddr, uint32_t a_dxvkPreferredModel) noexcept
+	{
+		try {
+			const rhi::vulkan::BindingRequirements requirements = GraphBindingRequirements(a_getInstanceProcAddr, a_instance, a_physicalDevice);
+			const auto report = rhi::vulkan::EvaluateBindingModels(a_getInstanceProcAddr, a_instance, a_physicalDevice, requirements);
+			const auto modelNames = [](uint32_t a_mask) {
+				std::string names;
+				if (a_mask & rhi::vulkan::BindingModel_DescriptorHeap)
+					names += "descriptor heap";
+				if (a_mask & rhi::vulkan::BindingModel_DescriptorBuffer)
+					names += names.empty() ? "descriptor buffer" : ", descriptor buffer";
+				return names.empty() ? std::string("none") : names;
+			};
+			logger::info("[ORG] Binding model negotiation: DXVK prefers {}, BasicRHI supports {}",
+				a_dxvkPreferredModel ? modelNames(a_dxvkPreferredModel) : std::string("legacy descriptor sets"), modelNames(report.supportedModels));
+			for (const auto& check : report.checks)
+				logger::info("[ORG]   {}", check);
+			logger::info("[ORG] Shader-visible heap capacities: descriptor heap {} / {}, descriptor buffer {} / {} (CBV/SRV/UAV / sampler; 0: unsupported)",
+				report.heapModelResources, report.heapModelSamplers, report.bufferModelResources, report.bufferModelSamplers);
+			return report.supportedModels;
+		} catch (...) {
+			return 0;
+		}
+	}
+
+	// A feature struct in the chain the device was created with (DxvkOrgInteropDeviceInfo::enabledFeatures), or null.
+	template <class T>
+	const T* FindFeatures(const VkPhysicalDeviceFeatures2* a_chain, VkStructureType a_type)
+	{
+		for (auto* s = a_chain ? static_cast<const VkBaseInStructure*>(a_chain->pNext) : nullptr; s; s = s->pNext)
+			if (s->sType == a_type)
+				return reinterpret_cast<const T*>(s);
+		return nullptr;
+	}
 
 	// ConfigureFrame's segments (their values) as the epochs they run as.
 	std::vector<std::uint32_t> EpochsOf(const std::vector<std::uint32_t>& a_segments)
@@ -136,6 +239,7 @@ struct RenderGraphRuntime::Impl
 #endif
 	PFN_vkQueueSubmit2 queueSubmit2 = nullptr;
 	PFN_dxvkEmitCommandBufferCallback emitCommandBufferCallback = nullptr;  // diagnostics: SetSkippedEpochWorkerLoad
+	PFN_dxvkEmitExternalCommands emitExternalCommands = nullptr;            // optional: EmitExternalCommands
 	// Diagnostics (SkipDclfEpochs' boundaries 4 and 5): an empty primary command buffer of the graphics family, made on first use.
 	PFN_vkGetDeviceProcAddr deviceProcAddr = nullptr;
 	VkDevice adoptedDevice = VK_NULL_HANDLE;
@@ -1067,6 +1171,13 @@ void RenderGraphRuntime::RequestDeviceFeatures(HMODULE a_dxvkD3D11)
 	const DxvkOrgInteropFeatureRequest desc{ DXVK_ORG_INTEROP_VERSION, static_cast<uint32_t>(std::size(kRequestedFeatures)), kRequestedFeatures };
 	if (FAILED(request(&desc)))
 		logger::warn("[ORG] DXVK rejected the render graph device feature request");
+	// Without it (an older DXVK) DXVK keeps its own model, and the graph runs only if BasicRHI happens to support it.
+	auto setBindingModelCallback = ResolveExport<PFN_dxvkSetBindingModelCallback>(a_dxvkD3D11, "dxvkSetBindingModelCallback");
+	const DxvkOrgInteropBindingModelNegotiation negotiation{ DXVK_ORG_BINDING_MODEL_NEGOTIATION_VERSION, &NegotiateBindingModel, nullptr };
+	if (!setBindingModelCallback)
+		logger::warn("[ORG] dxvkSetBindingModelCallback is unavailable - DXVK picks its descriptor model without asking the render graph");
+	else if (FAILED(setBindingModelCallback(&negotiation)))
+		logger::warn("[ORG] DXVK rejected the render graph's binding model callback");
 }
 
 bool RenderGraphRuntime::Initialize()
@@ -1102,6 +1213,8 @@ bool RenderGraphRuntime::Initialize()
 	state->getResourceInfo = ResolveExport<PFN_dxvkGetInteropResourceInfo>(d3d11, "dxvkGetInteropResourceInfo");
 	state->getResourceInfos = ResolveExport<PFN_dxvkGetInteropResourceInfos>(d3d11, "dxvkGetInteropResourceInfos");
 	state->emitCommandBufferCallback = ResolveExport<PFN_dxvkEmitCommandBufferCallback>(d3d11, "dxvkEmitCommandBufferCallback");
+	// Optional: recordings into DXVK's own command buffer (Drawcall Limit Fix's CPU-driven pipeline).
+	state->emitExternalCommands = ResolveExport<PFN_dxvkEmitExternalCommands>(d3d11, "dxvkEmitExternalCommands");
 	// Optional: without it, each epoch flushes and waits for DXVK's command stream instead.
 	state->enqueueSubmission = ResolveExport<PFN_dxvkEnqueueInteropSubmission>(d3d11, "dxvkEnqueueInteropSubmission");
 	if (EnvEquals("CS_ORG_SUBMIT", "flush"))
@@ -1131,13 +1244,25 @@ bool RenderGraphRuntime::Initialize()
 			properties.vendorID, properties.deviceID, driverText, VK_API_VERSION_MAJOR(properties.apiVersion), VK_API_VERSION_MINOR(properties.apiVersion),
 			VK_API_VERSION_PATCH(properties.apiVersion), info.enabledExtensionCount);
 	}
-	if (!HasExtension(info, VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME)) {
+	// BasicRHI runs on the model DXVK granted, which is DXVK's own (negotiated in NegotiateBindingModel): descriptor heaps, or
+	// descriptor buffers with mutable descriptors. On legacy descriptor sets DXVK grants neither.
+	const auto* heapFeatures = FindFeatures<VkPhysicalDeviceDescriptorHeapFeaturesEXT>(info.enabledFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT);
+	const auto* bufferFeatures = FindFeatures<VkPhysicalDeviceDescriptorBufferFeaturesEXT>(info.enabledFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT);
+	const auto* mutableFeatures = FindFeatures<VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT>(info.enabledFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MUTABLE_DESCRIPTOR_TYPE_FEATURES_EXT);
+	const bool onHeaps = HasExtension(info, VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME) && heapFeatures && heapFeatures->descriptorHeap;
+	const bool onBuffers = HasExtension(info, VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME) && HasExtension(info, VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME) &&
+	                       bufferFeatures && bufferFeatures->descriptorBuffer && mutableFeatures && mutableFeatures->mutableDescriptorType;
+	if (!onHeaps && !onBuffers) {
 		// The one cause seen in practice, named so the menu does not leave it to be guessed.
 		if (::GetModuleHandleW(L"renderdoc.dll"))
-			return disable("the device was created without VK_EXT_descriptor_heap: RenderDoc is loaded, and RenderDoc does not support "
-						   "descriptor heaps yet (its capture layer hides the extension). Turn off RenderDoc capture to use the render graph.");
-		return disable("the device was created without VK_EXT_descriptor_heap (the driver or a Vulkan layer does not expose it)");
+			return disable("DXVK runs on legacy descriptor sets: RenderDoc is loaded, and its DXVK capture config turns off both descriptor heaps and "
+						   "descriptor buffers, which the render graph needs one of. Turn off RenderDoc capture to use the render graph.");
+		return disable("DXVK granted neither descriptor heaps nor descriptor buffers with mutable descriptors: it runs on legacy descriptor sets, or on a "
+					   "model BasicRHI cannot use on this device (see the binding model negotiation above and DXVK's 'Binding model' and "
+					   "'Interop feature denied' log lines)");
 	}
+	logger::info("[ORG] Binding model: {}", onHeaps ? "descriptor heap (VK_EXT_descriptor_heap)" :
+	                                                  "descriptor buffer (VK_EXT_descriptor_buffer + VK_EXT_mutable_descriptor_type)");
 
 	rhi::vulkan::AdoptedVulkanDeviceInfo adopt{};
 	adopt.getInstanceProcAddr = info.getInstanceProcAddr;
@@ -1153,6 +1278,8 @@ bool RenderGraphRuntime::Initialize()
 	adopt.enabledInstanceExtensions = info.enabledInstanceExtensions;
 	adopt.enabledInstanceExtensionCount = info.enabledInstanceExtensionCount;
 	adopt.enabledFeatureChain = info.enabledFeatures;
+	// Exactly what the negotiation evaluated (GraphBindingRequirements).
+	adopt.bindingRequirements = GraphBindingRequirements(info.getInstanceProcAddr, info.instance, info.physicalDevice);
 	adopt.queues[0] = { info.graphicsQueue, info.graphicsQueueFamily, info.graphicsQueueIndex };
 	adopt.submissionHooks = { state.get(), &Impl::LockQueue, &Impl::UnlockQueue, nullptr };
 	if (state->enqueueSubmission) {
@@ -1955,6 +2082,37 @@ bool RenderGraphRuntime::DescribeResources(std::span<IUnknown* const> a_objects,
 	return described;
 }
 
+bool RenderGraphRuntime::EmitExternalCommands(void (*a_record)(void* a_user, VkCommandBuffer a_commandBuffer), void* a_user,
+	std::span<const ExternalCommandsWait> a_waits, std::span<const ExternalCommandsWait> a_signals, bool a_bindsState, const char* a_label,
+	bool a_fullBarrier)
+{
+	if (!impl || !impl->emitExternalCommands || !a_record)
+		return false;
+	// DXVK copies the semaphores at the call: one scratch per calling thread (the render thread), reused.
+	thread_local std::vector<VkSemaphoreSubmitInfo> semaphores;
+	semaphores.clear();
+	for (const auto points : { a_waits, a_signals }) {
+		for (const auto& point : points) {
+			VkSemaphoreSubmitInfo info{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+			info.semaphore = point.semaphore;
+			info.value = point.value;
+			info.stageMask = point.stages;
+			semaphores.push_back(info);
+		}
+	}
+	DxvkOrgInteropExternalCommands commands{};
+	commands.version = DXVK_ORG_EXTERNAL_COMMANDS_VERSION;
+	commands.flags = (a_bindsState ? DXVK_ORG_EXTERNAL_COMMANDS_BINDS_STATE : 0u) | (a_fullBarrier ? DXVK_ORG_EXTERNAL_COMMANDS_FULL_BARRIER : 0u);
+	commands.callback = a_record;
+	commands.user = a_user;
+	commands.waitCount = static_cast<std::uint32_t>(a_waits.size());
+	commands.waits = semaphores.data();
+	commands.signalCount = static_cast<std::uint32_t>(a_signals.size());
+	commands.signals = semaphores.data() + a_waits.size();
+	commands.label = a_label;
+	return SUCCEEDED(impl->emitExternalCommands(globals::d3d::device, &commands));
+}
+
 winrt::com_ptr<ID3D11Buffer> RenderGraphRuntime::WrapBuffer(org::Resource& a_buffer, const D3D11_BUFFER_DESC& a_desc)
 {
 	winrt::com_ptr<ID3D11Buffer> result;
@@ -2009,6 +2167,8 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment, const std::function<void(org::Ren
 	std::shared_ptr<const void>) { return false; }
 bool RenderGraphRuntime::DescribeResource(IUnknown*, DxvkOrgInteropResourceInfo&) { return false; }
 bool RenderGraphRuntime::DescribeResources(std::span<IUnknown* const>, std::span<DxvkOrgInteropResourceInfo>, std::span<HRESULT>) { return false; }
+bool RenderGraphRuntime::EmitExternalCommands(void (*)(void*, VkCommandBuffer), void*, std::span<const ExternalCommandsWait>,
+	std::span<const ExternalCommandsWait>, bool, const char*, bool) { return false; }
 org::services::ShaderCompiler* RenderGraphRuntime::ShaderCompiler() { return nullptr; }
 const std::vector<std::filesystem::path>& RenderGraphRuntime::ShaderSourceFiles()
 {

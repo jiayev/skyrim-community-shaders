@@ -31,8 +31,10 @@ src/Features/DrawcallLimitFix/
     Gpu/            frame values, frame data, pooled backings, the build executor, GPU resources and textures,
                     Pipelines/ (one file per family), PlacementRows/
     Render/         IndirectDraws (IndirectDraws.h; its implementation: Impl.h, Impl/, Internal.h), the frame driver,
-                    Snapshot/, Revision/, Payload/, Epochs/ (the epoch framework and the schedule's executor), Passes/,
-                    Main/, Views/, Shadow/ (the shadow engine), DrawFamilies/, Readback/, Resources/
+                    Snapshot/ (the snapshot builder; ViewBatches: the CPU pipeline's per-view batches), Revision/, Payload/,
+                    Epochs/ (the epoch framework and the schedule's executor), Passes/, Main/, Views/, Shadow/ (the shadow
+                    engine), DrawFamilies/, Readback/, Resources/, Direct/ (the CPU-driven pipeline, an experiment:
+                    Direct.h the contract, Cull, Recorder, PreWork, Sites)
     Extensions/     the extension registry (Registry) and the Core halves of Api/'s contracts
   Features/       one folder per engine feature DCLF ports (MainView, Forward, FirstPerson, Reflection, OcclusionMaps,
                   Shadows/{Engine,Sun,Local}, Portals, GpuOcclusion, LocalLights, Skins, Actors, Faces, Particles, Billboards,
@@ -62,6 +64,16 @@ off: the frame commits (the depth commit, the colour commit and its frame consta
 BuildDraws passes of both main phases and phase 2, the latched copies, the index pool, the sorts, visibility and its readback, the
 frame constants, the z-bucket counts, the native targets and depth (first person draws into them), the shapes, the revisions and the
 view engine (`Core/Render/{Main,Epochs/MainEpochs.cpp,Passes/CorePasses.cpp,Passes/MainExtension.cpp}`).
+
+The CPU-driven pipeline (`dclf:pipeline=cpu`; dclf-architecture.md, "The CPU-driven pipeline") is Core's, in `Core/Render/Direct/`:
+`Direct.h` is the contract its parts build against (the batches, the culled batches, the sites, the mode and the report counters);
+`Cull.cpp` the CPU cull and the frame's CPU state, `Recorder.cpp` the direct draws, `PreWork.cpp` the GPU work a site still records
+(each PassDef's `direct`), `Sites.cpp` the frame, its slots, the callbacks into DXVK's command stream, the main depth, colour and
+forward sites and the per-snapshot recordings; `SiteFrame.h` their shared internals, and a file per other site: `ShadowSite.cpp`
+(the shadow views and occlusion maps), `ViewSites.cpp` (the reflection's faces, first person), `Families.cpp` (tree LOD, grass). The snapshot builder makes the view batches (`Core/Render/Snapshot/ViewBatches.{h,cpp}`). The call sites are the epochs' own
+(`Direct::ExecuteEpoch` in place of `RenderGraphRuntime::ExecuteEpoch`, and the commit's site call where its recording is submitted);
+beyond them only the graph conditions, the coverage, the revision's recordings, the shadow and view epochs' commits, the occlusion
+maps' readiness and the draw families' decision (a family without `main.direct` is the engine's) branch on the mode.
 
 The shadow engine's epoch half is a feature too, `Features/Shadows/Engine` ("shadow-epochs", namespace
 `DCLF::Features::Shadows::Engine`): the shadow epoch's passes (`ShadowBuildDrawsPass`, `ShadowViewPass`, in `namespace DCLF::Draws`;

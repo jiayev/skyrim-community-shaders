@@ -53,6 +53,10 @@ only `0` turns it off. Parity, diagnostic and test switches are off unless set.
 | `CS_DCLF` | on (unless 0) | `0`: DCLF does not install. |
 | `CS_DCLF_PRECOMPILE` | on (unless 0) | `0`: DCLF's SPIR-V programs compile on first use instead of alongside the engine's shaders. |
 | `CS_DCLF_CULL` | `occlusion` | `off`, `frustum` or `occlusion`: GPU culling. `off` and `frustum` count as a reduced featureset. |
+| `CS_DCLF_PIPELINE` | `gpu` | `cpu`: the CPU-driven pipeline (an experiment; dclf-architecture.md, "The CPU-driven pipeline"). Live: `dclf:pipeline=gpu\|cpu`, from the next build point. |
+| `CS_DCLF_CPU_RECORD` | `serial` | `parallel`: the CPU pipeline's plain lists recorded into a secondary per batch on the pool. Live: `dclf:cpu-record=serial\|parallel`. |
+| `CS_DCLF_CPU_CADENCE` | `frame` | `frame\|snapshot`, or `<view>=frame\|snapshot,...`: a CPU pipeline view culled every frame or once per snapshot (main always per frame). Live: `dclf:cpu-cadence-<view>=frame\|snapshot`, `dclf:cpu-cadence=frame\|snapshot`. Views: `main`, `decal`, `forward`, `refraction`, `sun`, `spot`, `point`, `sky`, `precipitation`, `reflection`, `first-person`. |
+| `CS_DCLF_CPU_BATCH` | 256 | The CPU pipeline's batch lanes, at startup (a multiple of 8). |
 | `CS_DCLF_SKINNED` | on (unless 1) | `0`: skinned objects stay native. |
 | `CS_DCLF_SKIN_PARTITIONS` | on (unless 1) | `0`: skins of several partitions (LOD trees, actor bodies) stay native. |
 | `CS_DCLF_ACTORS` | on (unless 1) | `0`: actors stay native. |
@@ -141,7 +145,7 @@ Each compares a live path with a reference built from scratch and flags every mi
 
 | Switch | Format | Effect |
 | --- | --- | --- |
-| `CS_DCLF_TEST_COMMANDS` | `<frame>:<command>;...` | A console command at a frame. Also `dclf:<toggle name>=0\|1` (a live toggle), `dclf:pov=first\|third`, `dclf:draw=1\|0` (weapons or magic hands drawn or sheathed), `dclf:rebuild` (a graph rebuild), `dclf:compat=0\|1` and `dclf:compat-report` (the compatibility monitor and its report), `dclf:foreign-write=<n>` (an unhooked alpha threshold write on up to n references near the player) and `dclf:kill-scene-pump` (the scene pump stopped for good, for its watchdog). |
+| `CS_DCLF_TEST_COMMANDS` | `<frame>:<command>;...` | A console command at a frame. Also `dclf:<toggle name>=0\|1` (a live toggle), `dclf:cull=`, `dclf:pipeline=`, `dclf:cpu-record=` and `dclf:cpu-cadence[-<view>]=` (the toggles that are not flags), `dclf:pov=first\|third`, `dclf:draw=1\|0` (weapons or magic hands drawn or sheathed), `dclf:rebuild` (a graph rebuild), `dclf:compat=0\|1` and `dclf:compat-report` (the compatibility monitor and its report), `dclf:foreign-write=<n>` (an unhooked alpha threshold write on up to n references near the player) and `dclf:kill-scene-pump` (the scene pump stopped for good, for its watchdog). |
 | `CS_DCLF_TEST_MOVE` | `<start>:<end>:<units per frame>;...` | Carries the player forward. |
 | `CS_DCLF_TEST_TURN` | `<start>:<end>:<degrees per frame>;...` | Turns the player. |
 | `CS_DCLF_TEST_TOGGLE` | `<off frame>:<on frame>...` | Switches DCLF off and on. |
@@ -527,6 +531,7 @@ These need no parity switch. Most come with `CS_DCLF_STATS=1`.
 | `[DCLF] engine-read window: ...` | `<- LANE ENGINE ACCESS` | Engine memory read by the scene lane without a lease. Must be absent. |
 | `[DCLF] release guard (T6b3e, CS_DCLF_RELEASE_GUARD): ...` | `<- LANE ENGINE RELEASE` | An engine object's last release on a DCLF thread. |
 | `[DCLF] scene pump (T6b3d): ...`, `[DCLF] scene pump wakes by source ...`, `[DCLF] event to adoption ...` | | Passes a frame, passes that changed nothing, publications, and the delay from an event to the frame that installs it. |
+| `[DCLF] [CPU] N frames, record ..., per-snapshot views: ...; a frame's cull (pool) by view: ...; record (DXVK's CS thread) by site: ...` | `<- <site> DREW NOTHING`, `<- NOT QUEUED`, `<- UPLOADS NOT TAKEN` | The CPU pipeline's window (only while CPU frames ran): per view a frame's cull time, batches and draws; per site the callback's record time and how many drew nothing; secondaries, the callbacks' waits for a batch, the frame slots' waits. A site whose callbacks all drew nothing is the CPU path's "sequences 0". `NOT QUEUED`: DXVK took no external commands. |
 
 ### Accepted differences
 
@@ -808,6 +813,18 @@ not reach `CommunityShaders.log`: write them to a file with `VK_LAYER_DEBUG_ACTI
     undefined layout at startup), `VUID-vkQueueSubmit2-semaphore-03868` (swapchain semaphore reuse) and
     `VUID-vkAcquireNextImageKHR-semaphore-01779`.
 -   DCLF's own open validation errors are in [dclf-open-defects.md](./dclf-open-defects.md).
+
+### The CPU-driven pipeline
+
+A/B it within one launch ([Timing runs](#timing-runs)): `CS_DCLF_TEST_COMMANDS` switches `dclf:pipeline=cpu` and back, then
+`dclf:cpu-record=parallel`, then the cadences, each at its own frame. A pipeline switch rebuilds the graph at the next build point,
+so expect one frame-start wait line per switch. Frame time is the `[Perf]` line's; the `[CPU]` line gives the cull time on the pool
+and the record time on DXVK's CS thread, which the CPU pipeline moves the GPU's cost to, and the render-thread budget line its
+render-thread share. Before trusting a CPU run, check the `[CPU]` line: every site with callbacks (shadow, depth, colour,
+forward, first person when it is on) and none tagged `DREW NOTHING`, and each view type the scene has (sun or point, sky,
+reflection with water in view) with batches and draws. With per-snapshot views, its `per-snapshot views:` part counts the
+recordings made and executed. Run the Vulkan validation layer once per change to the sites (the external commands' barriers
+and state); with the shadow site on it loses the device (dclf-architecture.md, "The CPU-driven pipeline", Open).
 
 ### Other runs
 

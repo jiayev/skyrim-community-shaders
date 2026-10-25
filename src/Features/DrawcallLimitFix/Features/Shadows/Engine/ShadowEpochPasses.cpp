@@ -357,21 +357,31 @@ namespace DCLF::Features::Shadows::Engine
 {
 	namespace
 	{
+		/** @brief What the views' latched copies write: the blocks, the counters, the commit's values in the constants. */
+		std::vector<Draws::LatchedTarget> LatchedTargets(const Draws::ShadowResources& a_shadow)
+		{
+			std::vector<Draws::LatchedTarget> out{ { nullptr, a_shadow.viewBlocks.buffer }, { a_shadow.constants, nullptr } };
+			for (std::size_t s = 0; s < a_shadow.count.size(); ++s) {
+				out.push_back({ a_shadow.count[s], nullptr });
+				out.push_back({ nullptr, a_shadow.bucketCounts[s] });
+			}
+			return out;
+		}
+
 		/** @brief The views' latched copies (the occlusion maps' too): blocks, counters, and the commit's values in the constants. */
 		std::shared_ptr<org::RenderPass> LatchedCopies(const Api::PassContext& a_context)
 		{
-			auto targets = [shadow = a_context.Shadow()] {
-				std::vector<Draws::LatchedTarget> out{ { nullptr, shadow->viewBlocks.buffer }, { shadow->constants, nullptr } };
-				for (std::size_t s = 0; s < shadow->count.size(); ++s) {
-					out.push_back({ shadow->count[s], nullptr });
-					out.push_back({ nullptr, shadow->bucketCounts[s] });
-				}
-				return out;
-			};
-			return Draws::MakeLatchedCopiesPass(std::move(targets), [](const org::PassPrepareContext& a_preparation) {
+			return Draws::MakeLatchedCopiesPass([shadow = a_context.Shadow()] { return LatchedTargets(*shadow); }, [](const org::PassPrepareContext& a_preparation) {
 				const auto frame = Draws::CurrentShadowFrame(a_preparation);
 				return frame ? Draws::LatchedSource{ frame->generation, frame, frame->latched } : Draws::LatchedSource{};
 			});
+		}
+
+		// The CPU mode's (Api::PassDef::direct): the same copies from the committed shadow shape.
+		void LatchedCopiesDirect(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
+		{
+			if (const auto& frame = a_pass.shapes.shadow)
+				Draws::DirectLatchedCopies(a_pass, LatchedTargets(*a_pass.Shadow()), Draws::LatchedSource{ frame->generation, frame, frame->latched }, a_out);
 		}
 
 		// Core's IndexPoolPass (the depth epoch's too), from the shadow shape's latch.
@@ -403,8 +413,8 @@ namespace DCLF::Features::Shadows::Engine
 
 		// The shadow epoch's: the shadow views' and the occlusion maps' (Skylighting's sky map, the precipitation mask), in one epoch.
 		constexpr Api::PassDef kShadowPasses[] = {
-			{ .key = "shadows.latched-copies", .passName = "cs.dclf.shadow.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies },
-			{ .key = "shadows.index-pool", .passName = "cs.dclf.shadow.index-pool", .make = &IndexPoolCopies },
+			{ .key = "shadows.latched-copies", .passName = "cs.dclf.shadow.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies, .direct = &LatchedCopiesDirect },
+			{ .key = "shadows.index-pool", .passName = "cs.dclf.shadow.index-pool", .make = &IndexPoolCopies, .direct = &Draws::DirectShadowIndexPool },
 			{ .key = "shadows.build-draws", .passName = "cs.dclf.shadow.build-draws", .make = &BuildDraws },
 			{ .key = "shadows.view", .passName = "cs.dclf.shadow.view", .kind = PassKind::Render, .make = &ViewDraws },
 			{ .key = "shadows.cull-counters", .passName = "cs.dclf.shadow.cull-counters", .kind = PassKind::Copy, .make = &CullCounters },

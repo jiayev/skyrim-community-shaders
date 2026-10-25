@@ -775,7 +775,8 @@ void DrawcallLimitFix::TargetDumpPoint(const char* a_label, ID3D11Texture2D* a_e
 
 void DrawcallLimitFix::OnGraphSubmissionsRetired(std::uint64_t a_submissions)
 {
-	DCLF::FrameRetirement()->Advance(a_submissions);
+	// With the CPU pipeline's frames, a point retires once its frames' signals did too (FrameRetirement.h).
+	DCLF::NoteGraphSubmissionsRetired(a_submissions);
 }
 
 #else  // !CS_HAS_DCLF: built without the render graph or ORGModuleServices; nothing is installed and every entry point is inert.

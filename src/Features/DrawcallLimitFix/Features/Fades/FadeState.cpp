@@ -353,6 +353,12 @@ namespace DCLF::FadeState
 			heightTest ? Global<float>(Features::Fades::Address::kTreeHeightLimit) : std::numeric_limits<float>::infinity() };
 	}
 
+	const RE::NiCamera* MainCamera()
+	{
+		const auto* sceneGraph = Global<const std::byte*>(Engine::Address::kWorldSceneGraph);
+		return sceneGraph ? At<const RE::NiCamera*>(sceneGraph, kSceneGraphCamera) : nullptr;
+	}
+
 	std::array<float, 4> FadeEye() { return fadeEye; }
 	std::array<float, 2> TreeHeightTest() { return treeHeight; }
 

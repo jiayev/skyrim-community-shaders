@@ -47,6 +47,8 @@ namespace DCLF
 		std::array<float, 2> TreeHeightTest();
 		/** @brief Render thread, the depth commit (Api::RootStatesContribution::latchGlobals): FadeEye and TreeHeightTest into the latch's words. */
 		void LatchGlobals(float (&a_eye)[4], float (&a_treeHeight)[2]);
+		/** @brief Render thread: the main camera BeginFrame measures from (the world scene graph's; null: none). The CPU fade stage's frustum. */
+		const RE::NiCamera* MainCamera();
 
 		/** @brief The node's fade fields as it holds them. */
 		FadeNodeState ReadNode(const RE::NiAVObject& a_node);

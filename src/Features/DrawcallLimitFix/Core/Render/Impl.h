@@ -118,6 +118,10 @@ namespace DCLF
 		org::async::SerializedTaskPump& SnapshotPump();
 		/** @brief The builder's pass (SnapshotPump's drain): see SnapshotBuilder. */
 		void SnapshotPass();
+		// SnapshotPass: the CPU pipeline's view batches made for its payload, or none wanted (Snapshot.cpp).
+		bool ViewBatchesReady();
+		// SnapshotPass: the snapshot's payload made, failed or not wanted, and its view batches with it (a snapshot can be posted).
+		bool PayloadSettled();
 		/**
 		 * @brief The builder: the work item's draws (RunAhead), every versioned buffer's address and SRV index they embed of the version
 		 * a_sealed names (AddressesOf, a_layout's decal range; none without a set: such draws draw nothing).
@@ -190,6 +194,11 @@ namespace DCLF
 		ViewFamilyRows ViewFaceRows(ViewKind a_kind, const ViewFrame& a_shape, std::vector<std::shared_ptr<const void>>& a_owners);
 		/** @brief A view's commit (render thread): its map, faces and draw families' face rows into the shape's latch; returns faces drawn. */
 		std::uint32_t CommitView(const ViewFrame& a_shape, std::span<const ViewFace> a_faces, std::uint32_t a_inputs, const ViewFamilyRows* a_rows);
+		// SubmitViewEpoch in CPU mode: a hosted epoch's committed view posted for the depth site (Direct/ViewSites.h), and an epoch of its own
+		// (first person's colour) run as its site (ViewEngine.cpp).
+		void PostHostedView(ViewKind a_view, std::uint32_t a_epoch, std::span<const ViewFace> a_faces);
+		IndirectDraws::ViewSubmit SubmitDirectViewEpoch(std::uint32_t a_epoch, RenderGraphRuntime::Segment a_segment, const IndirectDraws::ViewListed& a_listed,
+			std::span<const ViewFace> a_faces);
 		/**
 		 * @brief A hosted view epoch a_epoch's commit (IndirectDraws::SubmitViewEpoch of the reflection's faces, first person's depth), into its host's commit
 		 * (hostedCommit: only from inside it, the depth commit running the view's work), against the selected revision's shape of the epoch,

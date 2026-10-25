@@ -44,6 +44,10 @@ namespace DCLF::Draws
 	constexpr std::uint64_t kShadowArenaBlocksOffset = 1024;
 	// The arena's blocks at fixed places (ShadowArenaBlocksOf: zero block, SharedData, FeatureData), so shapes name them without a build.
 	constexpr std::uint64_t kShadowZeroBlockBytes = 1024;
+	// The shadow views' pushed addresses are these offsets from whole buffers: 16-byte aligned for the descriptor-buffer model's
+	// pointer loads (BasicRHI's SPIR-V lowering), 256 as D3D11's constant buffer offsets.
+	static_assert(kShadowPerFrameOffset % 256 == 0 && kShadowViewSlotBytes % 256 == 0 && kShadowFrameRecordOffset % 256 == 0 &&
+				  kShadowArenaBlocksOffset % 256 == 0 && kShadowZeroBlockBytes % 256 == 0);
 	// Depth targets: [0] kSHADOWMAPS_ESRAM (cascades, spot lights), [1] kSHADOWMAPS (point and focus lights), [2]
 	// kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM: the engine's second draw of each cascade's accumulator (flag 0x100) draws batch group 15
 	// alone (FUN_1414b44f0), i.e. the accumulation-hint-8 volumetric-only casters (kCullVolumetricOnly). [3] depth target 10 as
@@ -57,6 +61,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kInitialSequenceDraws = 16384;
 	constexpr std::uint32_t kInitialDecalDraws = 2048;
 	constexpr std::uint64_t kConstantAlignment = 256;  // uniform buffer address alignment (conservative)
+	static_assert((kConstantAlignment & (kConstantAlignment - 1)) == 0 && kConstantAlignment % 16 == 0);
 	constexpr std::uint32_t kColorTargets = 8;
 	// The scene tables' first capacities, doubled by the scene's set to Impl::RequireSceneTables. The object capacity sizes every per-object
 	// buffer.

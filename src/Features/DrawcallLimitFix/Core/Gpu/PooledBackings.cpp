@@ -10,6 +10,7 @@
 #include <Resources/Buffers/Buffer.h>
 #include <rhi.h>
 
+#include <cassert>
 #include <stdexcept>
 #include <string>
 
@@ -47,6 +48,7 @@ namespace DCLF::PooledBackings
 		buffer->Materialize();
 		org::services::BackingAllocation allocation;
 		allocation.address = a_request.flags.deviceAddress ? DeviceAddressOf(*buffer) : 0;
+		assert(allocation.address % 16 == 0);  // a whole buffer; row and block offsets keep 16 (DrawPipelines.h)
 		allocation.srvIndex = buffer->HasSRV() ? buffer->GetSRVInfo(0).slot.index : 0;
 		allocation.buffer = std::move(buffer);
 		return allocation;

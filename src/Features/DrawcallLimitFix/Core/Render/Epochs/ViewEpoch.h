@@ -65,6 +65,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kMaxViewFaces = 6;
 	// A face's VS_PerFrame (b12, VS and PS) as the engine writes it for the view's camera: at most a D3D11 block's worth.
 	constexpr std::uint32_t kViewBlockBytes = 1024;
+	static_assert(kViewBlockBytes % 256 == 0);  // pushed per face: 16-byte aligned for the descriptor-buffer model's pointer loads
 
 	/** @brief What tells the views apart: their faces, options, epochs and names. */
 	struct ViewTraits

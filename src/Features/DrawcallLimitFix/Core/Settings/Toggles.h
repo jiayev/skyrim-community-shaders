@@ -4,10 +4,16 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string_view>
 #include <utility>
+
+namespace DCLF::Direct
+{
+	struct Mode;
+}
 
 namespace DCLF
 {
@@ -16,14 +22,23 @@ namespace DCLF
 	 *
 	 * Each is seeded from its `CS_DCLF_*` switch (Switches.h) and then edited from the feature's menu. Unset,
 	 * they default to the tested configuration: everything on, both ownerships static, occlusion culling.
-	 * kToggles describes every Core flag (the features register theirs: RegisterToggle); cullMode, the one that is not a flag, is
-	 * handled beside it.
+	 * kToggles describes every Core flag (the features register theirs: RegisterToggle); cullMode and the CPU pipeline's three (cpuPipeline,
+	 * cpuRecord, cpuCadence), which are not flags of the table, are handled beside it.
 	 */
 	struct ToggleSet
 	{
 		// How BuildDrawsCS filters the frame's draws before it writes their sequences: 0 off, 1 frustum, 2 frustum then
 		// the HZB. The inputs are the whole tracked set, so the culling has real work to do.
 		std::uint8_t cullMode = 0;
+
+		// The CPU-driven pipeline (an experiment; Core/Render/Direct/Direct.h), handled beside cullMode: not flags of the table.
+		// dclf:pipeline=cpu: the draws culled on the CPU and recorded as direct draws into DXVK's command buffer (it changes the graph's
+		// conditions: from the next build point, GraphConditions::cpuPipeline).
+		bool cpuPipeline = false;
+		// dclf:cpu-record: the per-frame views' Direct::RecordMode (0 Serial, 1 Parallel).
+		std::uint8_t cpuRecord = 0;
+		// dclf:cpu-cadence-<view>: a bit per Direct::ViewType, set for a view culled and recorded once per snapshot (Main's never set).
+		std::uint16_t cpuCadence = 0;
 
 		// The object classes (LightingDescriptors):
 		// kProjectedUV objects (snow and moss projection);
@@ -52,6 +67,24 @@ namespace DCLF
 
 		bool operator==(const ToggleSet&) const = default;
 	};
+
+	/** @brief The CPU pipeline's state in a_set (Direct::Mode): its pipeline, record mode and cadences (Main's always per frame). */
+	Direct::Mode ModeOf(const ToggleSet& a_set);
+
+	/**
+	 * @brief A Direct::ViewType's name in the CPU pipeline's toggles and reports (dclf:cpu-cadence-<name>): main, decal, forward,
+	 * refraction, sun, spot, point, sky, precipitation, reflection, first-person; empty past the last.
+	 */
+	std::string_view CpuViewName(std::size_t a_view);
+
+	/** @brief The Direct::ViewType named a_name (CpuViewName), or the view types' count for none. */
+	std::size_t CpuViewByName(std::string_view a_name);
+
+	/**
+	 * @brief Sets a_set's cadence of the views a_spec names: "frame" or "snapshot" for every view, or "<view>=frame|snapshot,..."
+	 * (CS_DCLF_CPU_CADENCE's syntax). Main stays per frame. Returns false for a name or value it does not know (the rest applied).
+	 */
+	bool ApplyCpuCadence(ToggleSet& a_set, std::string_view a_spec);
 
 	/** @brief One flag of ToggleSet: its seed, its menu entry, and what it needs. A feature's has no member: its bit and seed are registered. */
 	struct ToggleInfo
@@ -112,8 +145,9 @@ namespace DCLF
 	 * toggles). The FRAME's set is the installed publication's (FrameView::HandOverAtFrameStart: Adopt), so a toggle never changes
 	 * under a running frame and takes effect for the frames only with a publication committed under it: until then they draw,
 	 * withhold and cover as the installed one's toggles say (a toggle withdraws nothing). Each set is one packed word behind a
-	 * relaxed atomic, because hooks on the engine's job threads and DCLF's threads read them: a toggle is a standing statement, not a
-	 * synchronisation point, and one word makes every read a single load.
+	 * relaxed atomic (64 bits: the flags in the low half, the CPU pipeline's state in the high one), because hooks on the engine's
+	 * job threads and DCLF's threads read them: a toggle is a standing statement, not a synchronisation point, and one word makes
+	 * every read a single load.
 	 *
 	 * A change to a toggle that enters the classification (the object classes) invalidates every cached verdict and
 	 * derivation (Coordinator::InvalidateVerdicts), because those caches witness the object, not the switches.
@@ -158,12 +192,12 @@ namespace DCLF
 	private:
 		Toggles();
 
-		static std::uint32_t Pack(const ToggleSet& a_set);
-		static ToggleSet Unpack(std::uint32_t a_bits);
+		static std::uint64_t Pack(const ToggleSet& a_set);
+		static ToggleSet Unpack(std::uint64_t a_word);
 
 		ToggleSet requested;
-		std::atomic<std::uint32_t> active{ 0 };
-		std::atomic<std::uint32_t> frame{ 0 };
+		std::atomic<std::uint64_t> active{ 0 };
+		std::atomic<std::uint64_t> frame{ 0 };
 		std::atomic<std::uint32_t> generation{ 0 };
 	};
 

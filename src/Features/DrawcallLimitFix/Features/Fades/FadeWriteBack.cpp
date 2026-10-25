@@ -80,6 +80,21 @@ namespace DCLF::Features::Fades
 			std::memory_order_relaxed);
 	}
 
+	void PostCpuFadeEvents(FadeWriteBack& a_writeBack, std::uint32_t a_frame, std::vector<FadeEvent> a_events)
+	{
+		// The CPU stage's events take the harvest's way in (FadeCommit.cpp's ArmFadeReadback): a batch per frame with any, judged by the
+		// next task as the GPU's are.
+		a_writeBack.harvested.fetch_add(1, std::memory_order_relaxed);
+		if (a_events.empty())
+			return;
+		auto* batch = new FadeWriteBack::Batch();
+		batch->frame = a_frame;
+		a_writeBack.events.fetch_add(a_events.size(), std::memory_order_relaxed);
+		a_writeBack.harvestedWithEvents.fetch_add(1, std::memory_order_relaxed);
+		batch->events = std::move(a_events);
+		a_writeBack.Push(batch);
+	}
+
 	void KickFadeWriteBack()
 	{
 		const auto* scene = IndirectDraws::Get().Scene();

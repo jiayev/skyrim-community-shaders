@@ -105,14 +105,47 @@ namespace DCLF::Draws
 			return prepared;
 		}
 
+		/**
+		 * @brief The CPU mode's (Api::PassDef::direct): phase 1 alone, single phase, with no HZB (the mode has none: no record is occluded,
+		 * none goes on the retest list), Prepare's values from the committed depth shape and the frame's adopted set.
+		 */
+		static void Direct(const Features::TreeLod::TreeLodTables& a_tables, const Api::DirectPass& a_pass, Api::DirectWork& a_out)
+		{
+			const auto frame = CurrentFrame(a_pass.shapes, a_pass.segment);
+			const std::uint64_t shapes = std::min({ a_pass.Units(a_tables.shapes), a_pass.Units(a_tables.instances), a_pass.Units(a_tables.visible) });
+			if (!a_tables.cull || !shapes || !frame || !frame->latch || !a_tables.draw)
+				return;
+			TreeLodCullPrepared prepared{};
+			prepared.program = a_tables.cull;
+			prepared.latch = frame->latch;
+			auto& constants = prepared.constants;
+			constants.shapesIndex = a_pass.Srv(a_tables.shapes);
+			constants.instancesIndex = a_pass.Srv(a_tables.instances);
+			constants.drawIndex = Api::DirectPass::Srv(a_tables.draw);
+			constants.visibleIndex = a_pass.Uav(a_tables.visible);
+			constants.latchIndex = frame->latch->SrvIndex();
+			constants.phase = 1;
+			const std::uint64_t records = shapes * TreeInstances::kMaxGroupInstances;
+			constants.retestOffset = static_cast<std::uint32_t>(sizeof(TreeInstances::VisibleHeader) + records * sizeof(std::uint32_t));
+			prepared.groups = static_cast<std::uint32_t>((records + Features::TreeLod::kTreeLodCullGroup - 1) / Features::TreeLod::kTreeLodCullGroup);
+			std::array<std::shared_ptr<org::Buffer>, 4> held{ a_pass.Version(a_tables.shapes), a_pass.Version(a_tables.instances), a_pass.Version(a_tables.visible), a_tables.draw };
+			a_out.Add([prepared = std::move(prepared), held = std::move(held), slot = a_pass.frameSlot](rhi::CommandList& a_commands) { RecordCull(a_commands, prepared, slot); });
+		}
+
 		static void Record(const TreeLodCullBindings&, const TreeLodCullPrepared& a_frame, org::PassRecordContext& a_recording)
+		{
+			RecordCull(a_recording.Commands(), a_frame, a_recording.FrameSlot());
+		}
+
+		// The dispatch, from the latch's region of a_frameSlot (Record's and the CPU mode's).
+		static void RecordCull(rhi::CommandList& a_commands, const TreeLodCullPrepared& a_frame, std::uint32_t a_frameSlot)
 		{
 			if (!a_frame.program || !a_frame.groups || !a_frame.latch)
 				return;
 			auto constants = a_frame.constants;
 			// The depth segment's BuildDrawsLatch in this frame slot.
-			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
-			auto& commands = a_recording.Commands();
+			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_frameSlot));
+			auto& commands = a_commands;
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->Pipeline());
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::TreeLod::kTreeLodCullConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
@@ -279,6 +312,14 @@ namespace DCLF::Features::TreeLod
 			return std::make_shared<Draws::TreeLodCullPass>(a_context.Main(), a_context.State<TreeLodTables>(), 1, a_context.segment);
 		}
 
+		void DirectCull(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
+		{
+			if (Draws::CurrentGraphConditions().interior)  // as MakeCullPhaseOne
+				return;
+			if (const auto tables = a_pass.State<TreeLodTables>())
+				Draws::TreeLodCullPass::Direct(*tables, a_pass, a_out);
+		}
+
 		// Phase 2's retest only with the HZB rebuilt this frame (the depth epoch's phase 2 block).
 		std::shared_ptr<org::RenderPass> MakeCullPhaseTwo(const Api::PassContext& a_context)
 		{
@@ -301,7 +342,7 @@ namespace DCLF::Features::TreeLod
 	{
 		// Phase 1's list before the depth draw; phase 2's retest against the HZB rebuilt this frame; the list's counts read back once both
 		// phases are done.
-		a_context.RegisterPass({ .key = "tree-lod.cull", .passName = "cs.dclf.z.tree-lod-cull", .make = &MakeCullPhaseOne, .setup = &CullSetup });
+		a_context.RegisterPass({ .key = "tree-lod.cull", .passName = "cs.dclf.z.tree-lod-cull", .make = &MakeCullPhaseOne, .setup = &CullSetup, .direct = &DirectCull });
 		a_context.RegisterPass({ .key = "tree-lod.cull-phase2", .passName = "cs.dclf.tree-lod-cull-phase2", .make = &MakeCullPhaseTwo, .setup = &CullSetup });
 		a_context.RegisterPass({ .key = "tree-lod.counts", .passName = "cs.dclf.z.tree-lod-counts", .kind = Api::PassKind::Copy,
 			.make = &MakeCounts, .setup = &CountsSetup });

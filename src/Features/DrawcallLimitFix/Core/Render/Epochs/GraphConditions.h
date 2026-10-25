@@ -20,6 +20,11 @@ namespace DCLF::Draws
 	{
 		bool interior = false;         // the current cell is an interior: no grass and no tree LOD (their passes are left out)
 		bool twoPassOcclusion = true;  // the cull mode tests occlusion (cullMode 2): the HZB and the depth epoch's phase 2 block
+		// The CPU-driven pipeline (dclf:pipeline=cpu; Core/Render/Direct): every DCLF epoch's passes are left out - the draws (main
+		// depth and colour, shadow and occlusion maps, forward, the reflection's faces, first person's depth and colour), the HZB and
+		// phase 2, the visibility and fade-event readbacks, fade state, and tree wind's compute pass. The direct sites draw at the
+		// epochs' triggers in DXVK's command buffer and record what they still need there (Direct/PreWork); no revision records them.
+		bool cpuPipeline = false;
 		std::string cuts;              // diagnostics (dclf:cut=): comma-separated pass key prefixes left out ("*": every pass)
 
 		bool operator==(const GraphConditions&) const = default;
@@ -42,6 +47,12 @@ namespace DCLF::Draws
 	 * copy. Unsafe with draws (their constants and counters are not reset): timing an empty-epoch run only.
 	 */
 	bool LatchedRecordCut();
+
+	/**
+	 * @brief Any thread: whether the graph as built is the CPU pipeline's (GraphConditions::cpuPipeline), which decides the frame's
+	 * pipeline: the direct sites draw while it holds, the epochs otherwise (the frame's mode, Direct::FrameMode). Set at the build point.
+	 */
+	bool GraphBuiltForCpu();
 
 	/** @brief The conditions the graph is built for (render thread: the passes' makes and preparations). */
 	const GraphConditions& CurrentGraphConditions();

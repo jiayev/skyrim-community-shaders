@@ -3,6 +3,7 @@
 // (Api::DrawFamilyFrame::Pipelines). Render thread.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 
 namespace DCLF::Api
 {
@@ -44,7 +45,10 @@ namespace DCLF
 			const auto family = static_cast<Api::DrawFamily>(f);
 			// A frame without claims is the engine's whole, the family's draws included; so is one whose family is not set up or off.
 			bool owned = false;
-			if (scene && Draws::FamilySetUp(*scene, family) && Extensions::DrawFamilyOn(toggles, family) && !Scene::FrameView::Get().NotDrawingYet())
+			// The CPU pipeline draws a family through its main.direct (its main draw's row and arguments outside ORG); one without it is
+			// the engine's there.
+			if (scene && Draws::FamilySetUp(*scene, family) && Extensions::DrawFamilyOn(toggles, family) && !Scene::FrameView::Get().NotDrawingYet() &&
+				(!Direct::CpuFrame() || entry.contribution.main.direct))
 				owned = entry.contribution.frame.decide({ a_frame, scene, family });
 			impl->familyOwned[f] = owned;
 			PassCapture::Get().SetFamilyOwned(family, owned);

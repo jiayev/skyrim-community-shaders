@@ -97,6 +97,10 @@ namespace DCLF::Draws
 	// the extras' pixel inputs (c16, ExtrasFrame::projectedGlobals).
 	constexpr std::uint64_t kExtrasPixelFrameOffset = std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame) + 32;
 	static_assert(sizeof(FrameLighting) + sizeof(LodFadeFrame) + 32 == 16 * 16);
+	// The frame record and every slot's block are pushed addresses (frame constants base + slot offsets), and the LOD fades' inputs
+	// (lighting slot + sizeof(FrameLighting)) a draw's material row word: all read through 16-byte-aligned pointers on Vulkan's
+	// descriptor-buffer model (BasicRHI's SPIR-V lowering).
+	static_assert(kFrameSlotBytes % 256 == 0 && sizeof(FrameLighting) % 16 == 0);
 	// Then Core's feature rows (c17 up to Extensions::kFrameConstantRowsEnd, Core/Extensions/Commits.h): the frame constant rows
 	// (Api::FrameConstantRow; the Effect port's camera planes, light colour and blood at c17-c19), 16 bytes each. Uploads.cpp checks the
 	// first is right after the extras' pixel row.

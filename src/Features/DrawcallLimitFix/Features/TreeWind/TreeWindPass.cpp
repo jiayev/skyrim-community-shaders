@@ -12,6 +12,7 @@
 #include <rhi.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -82,11 +83,45 @@ namespace DCLF::Draws
 			return prepared;
 		}
 
+		/**
+		 * @brief The CPU mode's (Api::PassDef::direct): Prepare's values from the frame's adopted set (the buffers' versions and their
+		 * default views), recorded on the graphics queue in the depth site's pre-work, before its draws: it still writes the next
+		 * frame's buffer by parity, which nothing of this frame reads, and the pre-work's barriers order it against the frame before's
+		 * reads of it.
+		 */
+		static void Direct(const Features::TreeWind::TreeWindScene& a_scene, const Api::DirectPass& a_pass, Api::DirectWork& a_out)
+		{
+			if (!a_scene.treeWind || !a_scene.treeFrameBuffer)
+				return;
+			TreeWindFramePrepared prepared{};
+			prepared.program = a_scene.treeWind;
+			auto& constants = prepared.constants;
+			constants.treesIndex = a_pass.Srv(a_scene.trees);
+			constants.clocksIndex = a_pass.Uav(a_scene.treeClocks);
+			constants.frameIndex = Api::DirectPass::Srv(a_scene.treeFrameBuffer);
+			for (std::uint32_t h = 0; h < 2; ++h)
+				constants.windIndices[h] = a_pass.Uav(a_scene.treeWindRows[h]);
+			const std::uint64_t trees = std::min({ a_pass.Units(a_scene.trees), a_pass.Units(a_scene.treeClocks), a_pass.Units(a_scene.treeWindRows[0]),
+				a_pass.Units(a_scene.treeWindRows[1]) });
+			constexpr std::uint32_t group = Features::TreeWind::kTreeWindGroup;
+			prepared.groups = static_cast<std::uint32_t>((trees + 1 + group - 1) / group);
+			// The versions read and written, held with the work (a preparation's bindings hold them).
+			std::array<std::shared_ptr<org::Buffer>, 4> held{ a_pass.Version(a_scene.trees), a_pass.Version(a_scene.treeClocks), a_pass.Version(a_scene.treeWindRows[0]),
+				a_pass.Version(a_scene.treeWindRows[1]) };
+			a_out.Add([prepared = std::move(prepared), held = std::move(held), frame = a_scene.treeFrameBuffer](rhi::CommandList& a_commands) { RecordWind(a_commands, prepared); });
+		}
+
 		static void Record(const TreeWindBindings&, const TreeWindFramePrepared& a_frame, org::PassRecordContext& a_recording)
+		{
+			RecordWind(a_recording.Commands(), a_frame);
+		}
+
+		// The dispatch (Record's and the CPU mode's).
+		static void RecordWind(rhi::CommandList& a_commands, const TreeWindFramePrepared& a_frame)
 		{
 			if (!a_frame.program || !a_frame.groups)
 				return;
-			auto& commands = a_recording.Commands();
+			auto& commands = a_commands;
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->Pipeline());
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::TreeWind::kTreeWindConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
@@ -115,12 +150,17 @@ namespace DCLF::Features::TreeWind
 		{
 			return std::make_shared<Draws::TreeWindPass>(a_context.State<TreeWindScene>());
 		}
+		void DirectWind(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
+		{
+			if (const auto scene = a_pass.State<TreeWindScene>())
+				Draws::TreeWindPass::Direct(*scene, a_pass, a_out);
+		}
 	}
 
 	void RegisterPass(Api::InstallContext& a_context)
 	{
 		// Tree wind for the next frame, beside the depth epoch's raster work.
 		a_context.RegisterPass({ .key = "tree-wind.next-frame", .passName = "cs.dclf.z.tree-wind", .queue = Api::PassQueue::Compute, .make = &MakePass,
-			.setup = &Setup });
+			.setup = &Setup, .direct = &DirectWind });
 	}
 }

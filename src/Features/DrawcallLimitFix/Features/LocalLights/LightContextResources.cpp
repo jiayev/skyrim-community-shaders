@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Uploads.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
@@ -17,6 +18,7 @@
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 #include "Features/DrawcallLimitFix/Features/LocalLights/LightSelection.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalContextAtlas.h"
+#include "Features/DrawcallLimitFix/Features/Portals/PortalProgramsCpu.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
 #include "Features/DrawcallLimitFix/Features/Portals/StrictGates.h"
 
@@ -51,6 +53,8 @@ namespace DCLF::Features::LocalLights
 			std::uint64_t columnKey = 0;
 			bool columnBuilt = false;
 			std::vector<std::uint32_t> column;  // by object slot: the GPU column's words
+			// The column as last built, immutable: the CPU pipeline's culls read it off the render thread (FrameStrictGates).
+			std::shared_ptr<const std::vector<std::uint32_t>> published;
 			std::uint64_t unmodelled = 0, rootless = 0;
 
 			void Reset()
@@ -155,6 +159,7 @@ namespace DCLF::Features::LocalLights
 					++a_gates.rootless;
 				}
 			}
+			a_gates.published = std::make_shared<const std::vector<std::uint32_t>>(a_gates.column);
 		}
 
 		/**
@@ -292,8 +297,28 @@ namespace DCLF::Features::LocalLights
 		}
 	}
 
+	namespace
+	{
+		/**
+		 * @brief The CPU pipeline's strict gates (Direct::StrictGatesSource): this frame's verdicts and atlas (the publication's gateWords and
+		 * words, the GPU's StrictGates and LightContexts bindings) and the object column, as the GPU path binds them. None without a
+		 * portal-strict context.
+		 */
+		Direct::StrictGates FrameStrictGatesOf(const Draws::SceneBuffers& a_scene, std::uint32_t a_frame)
+		{
+			const auto publication = CurrentLightContexts(a_scene, a_frame);
+			const auto* scene = Extensions::SceneResourcesOf<Scene>(a_scene, sceneId);
+			if (!publication || !publication->gatesDescriptor || !scene || !scene->gates.published)
+				return {};
+			using Hold = std::pair<std::shared_ptr<const LightContextPublication>, std::shared_ptr<const std::vector<std::uint32_t>>>;
+			auto hold = std::make_shared<const Hold>(publication, scene->gates.published);
+			return DCLF::Portals::StrictGatesOf(hold->first->gateWords, hold->first->words, *hold->second, hold);
+		}
+	}
+
 	void RegisterLightContexts(Api::InstallContext& a_context)
 	{
+		Direct::SetStrictGatesSource(&FrameStrictGatesOf);
 		sceneId = a_context.RegisterSceneResources({ .name = "point-light contexts", .setup = &Setup, .registerGraph = &RegisterGraph, .require = &Require, .fit = &Fit });
 		a_context.RegisterCommitHook({ .name = "point-light contexts", .commit = &Commit });
 		a_context.RegisterCullBinding({ .slot = Api::CullBindingSlot::LightContexts, .name = "cs.dclf.light-contexts", .select = &SelectContexts<false> });

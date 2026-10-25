@@ -3,6 +3,7 @@
 // the frame blocks taken from the capture.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ExecutionOwners.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
@@ -133,10 +134,19 @@ namespace DCLF
 		if (a_submit.prepare) {
 			result.optional = a_submit.prepare(a_submit.context, impl->resources.get(), shape.get());
 		}
-		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(traits.segment, [&](org::RenderGraph&) {
-			impl->SubmitRevisionRecording(a_epoch, *revision.recordings, 0);
+		// The CPU pipeline's graph: the forward site, from this frame's colour commit (Direct/Sites.h), in place of the recording.
+		bool drawn = true;
+		const bool ok = Direct::ExecuteEpoch(traits.segment, [&] {
+			if (revision.direct)
+				drawn = Direct::ForwardReached(result.optional);
+			else
+				impl->SubmitRevisionRecording(a_epoch, *revision.recordings, 0);
 			owners.Seal(impl->scene.get());
 		}, owners.Handle());
+		if (!drawn) {
+			++f.noSharedPayload;
+			return {};
+		}
 		if (!ok) {
 			++f.failed;
 			return {};
@@ -284,7 +294,8 @@ namespace DCLF
 			++stats.notReady;
 			return;
 		}
-		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(segment, [&](org::RenderGraph&) {
+		// The CPU pipeline's graph runs the commit here and its site draws (Direct::ExecuteEpoch; CommitMainPayload opens the site).
+		const bool ok = Direct::ExecuteEpoch(segment, [&] {
 			// The lookups hold still for the whole frame: the installed publication's, which its payloads were built with.
 			const auto& lookups = Scene::FrameView::Get().GetLookups();
 			in.lookupGeneration = lookups.generation;

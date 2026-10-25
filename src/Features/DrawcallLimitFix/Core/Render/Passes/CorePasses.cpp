@@ -59,6 +59,25 @@ namespace DCLF::Draws
 				&resources->latchedTargets);
 		}
 
+		// The CPU mode's (Api::PassDef::direct): the same copies from the committed shapes, the epoch's own list, then each hosted view's
+		// that committed in it this frame (DirectPass::hosted: the others' are absent, as in the recording without their work).
+		void LatchedCopiesDirect(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
+		{
+			const auto frame = CurrentFrame(a_pass.shapes, a_pass.segment);
+			if (!frame)
+				return;
+			auto targets = MainLatchedTargets(*a_pass.Main());
+			LatchedSource source{ frame->generation, frame, std::span(&frame->latched, 1) };
+			for (const auto& view : a_pass.hosted) {
+				const auto viewTargets = ViewLatchedTargets(*view);
+				targets.insert(targets.end(), viewTargets.begin(), viewTargets.end());
+				auto& out = source.hosted.emplace_back();
+				if (const auto& viewFrame = a_pass.shapes.views[ViewIndex(view->traits->kind)])
+					out = { viewFrame->generation, viewFrame, viewFrame->latched };
+			}
+			DirectLatchedCopies(a_pass, targets, std::move(source), a_out);
+		}
+
 		std::shared_ptr<org::RenderPass> BuildDraws(const Api::PassContext& a_context)
 		{
 			return MakeBuildDrawsPass(a_context.Main(), a_context.segment);
@@ -80,6 +99,17 @@ namespace DCLF::Draws
 				const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
 				return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
 			}));
+		}
+
+		// The CPU mode's: the depth commit's dispatch when it gave out ranges (the inputs' depthWithoutIndexPool says it did not).
+		void IndexPoolCopiesDirect(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
+		{
+			if (a_pass.shapes.depthWithoutIndexPool)
+				return;
+			const auto frame = CurrentFrame(a_pass.shapes, RenderGraphRuntime::Segment::ZPrepass);
+			if (!frame)
+				return;
+			IndexPoolPass::Direct(a_pass, a_pass.Main()->pool, { frame->generation, frame->latch, frame->latchLayout.PoolOffset() }, a_out);
 		}
 
 			// The two-phase tail, in the depth segment, in this order: build-draws (phase 1, last frame's HZB), depth draw, hzb (rebuilt from
@@ -175,14 +205,14 @@ namespace DCLF::Draws
 
 		constexpr Api::PassDef kCorePasses[] = {
 			// The main view's culling and copies (the main extension's resources).
-			{ .key = "core.z.latched-copies", .passName = "cs.dclf.z.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies },
-			{ .key = "core.latched-copies", .passName = "cs.dclf.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies },
+			{ .key = "core.z.latched-copies", .passName = "cs.dclf.z.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies, .direct = &LatchedCopiesDirect },
+			{ .key = "core.latched-copies", .passName = "cs.dclf.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies, .direct = &LatchedCopiesDirect },
 			{ .key = "core.z.portal-queries", .passName = "cs.dclf.z.member-portal-queries", .make = &MemberQueries },
 			{ .key = "core.z.build-draws", .passName = "cs.dclf.z.build-draws", .make = &BuildDraws },
 			{ .key = "core.build-draws", .passName = "cs.dclf.build-draws", .make = &BuildDraws },
-			{ .key = "core.z.index-pool", .passName = "cs.dclf.z.index-pool", .make = &IndexPoolCopies },
+			{ .key = "core.z.index-pool", .passName = "cs.dclf.z.index-pool", .make = &IndexPoolCopies, .direct = &IndexPoolCopiesDirect },
 			{ .key = "core.build-draws-phase2", .passName = "cs.dclf.build-draws-phase2", .make = &BuildDrawsPhaseTwo },
-			{ .key = "core.local-shadow-masks", .passName = "cs.dclf.local-shadow-masks", .make = &LocalShadowMasks },
+			{ .key = "core.local-shadow-masks", .passName = "cs.dclf.local-shadow-masks", .make = &LocalShadowMasks, .direct = &DirectLocalShadowMasks },
 			{ .key = "core.z.visibility-events", .passName = "cs.dclf.z.visibility-events", .make = &VisibilityEvents },
 			{ .key = "core.z.visibility-readback", .passName = "cs.dclf.z.visibility-readback", .kind = PassKind::Copy, .make = &VisibilityEventsCopy },
 			{ .key = "core.sort-scan", .passName = "cs.dclf.sort-scan", .make = &SortScan },

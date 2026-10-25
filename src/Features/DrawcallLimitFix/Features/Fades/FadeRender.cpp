@@ -7,14 +7,20 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
 
 namespace DCLF::Features::Fades
 {
 	namespace
 	{
-		// t120: the states a frame's draws read (the previous frame's published); t119: the roots' static rows.
+		// t120: the states a frame's draws read (the previous frame's published; a CPU frame's, its CPU stage's: a pool's backing, which
+		// only a frame record's commit names); t119: the roots' static rows.
 		void SelectStatesBinding(Api::FrameBindingSelect& a_select)
 		{
+			if (a_select.renderThread && Direct::CpuRootStatesFor(a_select.frame)) {
+				a_select.index = CpuStatesIndex();
+				return;
+			}
 			if (const auto* fades = SceneOf(a_select.scene))
 				a_select.buffer = &fades->FadeStatesRead(a_select.frame);
 		}
@@ -50,6 +56,10 @@ namespace DCLF::Features::Fades
 
 		void SelectRootStates(Api::CullBindingSelect& a_select)
 		{
+			if (Direct::CpuRootStatesFor(a_select.frame)) {
+				a_select.Index(CpuStatesIndex());
+				return;
+			}
 			if (const auto* fades = SceneOf(a_select.scene))
 				a_select.Versioned(fades->FadeStatesRead(a_select.frame));
 		}
@@ -76,6 +86,8 @@ namespace DCLF::Features::Fades
 	{
 		// The seeds: the last frame value pool (after every feature's).
 		RegisterSeeds(a_context);
+		// The CPU-driven pipeline's fade stage: the pool after the seeds' (its sample reads them).
+		RegisterCpuStage(a_context);
 		// The buffers, after every feature's scene resources (the visibility readback, made after them, reads their rows).
 		RegisterResources(a_context);
 		// The depth commit's rows, inputs, write-back and root programs, after every feature's hook (Portals' programs among them).

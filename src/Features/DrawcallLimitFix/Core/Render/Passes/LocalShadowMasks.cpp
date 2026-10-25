@@ -3,6 +3,9 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/ShadowSite.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 
 #include <Resources/GloballyIndexedResource.h>
 
@@ -62,18 +65,34 @@ namespace DCLF::Draws
 
 		LocalShadowMaskFrame Prepare(const LocalShadowMaskBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 		{
-			LocalShadowMaskFrame prepared{};
 			const auto frame = CurrentFrame(a_preparation, segment);
 			if (!frame || !frame->latch || !resources->localShadowMasks || !resources->frameConstantsAddress)
-				return prepared;
+				return {};
+			std::array<std::uint32_t, 4> views{};
+			views[0] = CaptureViewIndex(a_preparation, a_bindings.mask);
+			views[1] = CaptureViewIndex(a_preparation, a_bindings.depth);
+			for (std::uint32_t i = 0; i < 2; ++i)
+				views[2 + i] = CaptureViewIndex(a_preparation, a_bindings.maps[i]);
+			return Fill(*resources, *frame, views);
+		}
+
+		/**
+		 * @brief The prepared values from the segment's shape a_frame and the views' descriptors a_views (the mask, the depth, the two
+		 * shadow maps): Prepare's and the CPU mode's (DirectLocalShadowMasks).
+		 */
+		static LocalShadowMaskFrame Fill(const Resources& a_resources, const PassFrame& a_frame, const std::array<std::uint32_t, 4>& a_views)
+		{
+			LocalShadowMaskFrame prepared{};
+			const auto* resources = &a_resources;
+			const auto* frame = &a_frame;
 			prepared.program = resources->localShadowMasks;
 			prepared.latch = frame->latch;
 			auto& constants = prepared.constants;
 			constants.latchIndex = frame->latch->SrvIndex();
-			constants.maskIndex = CaptureViewIndex(a_preparation, a_bindings.mask);
-			constants.depthIndex = CaptureViewIndex(a_preparation, a_bindings.depth);
+			constants.maskIndex = a_views[0];
+			constants.depthIndex = a_views[1];
 			for (std::uint32_t i = 0; i < 2; ++i)
-				constants.shadowMapsIndex[i] = CaptureViewIndex(a_preparation, a_bindings.maps[i]);
+				constants.shadowMapsIndex[i] = a_views[2 + i];
 			const std::uint64_t frameBlock = resources->frameConstantsAddress + FrameSlotOffset(true, 12);
 			constants.frameBlock[0] = static_cast<std::uint32_t>(frameBlock);
 			constants.frameBlock[1] = static_cast<std::uint32_t>(frameBlock >> 32);
@@ -96,11 +115,17 @@ namespace DCLF::Draws
 
 		static void Record(const LocalShadowMaskBindings&, const LocalShadowMaskFrame& a_frame, org::PassRecordContext& a_recording)
 		{
+			RecordMasks(a_recording.Commands(), a_frame, a_recording.FrameSlot());
+		}
+
+		// The dispatch, from the latch's region of a_frameSlot (Record's and the CPU mode's).
+		static void RecordMasks(rhi::CommandList& a_commands, const LocalShadowMaskFrame& a_frame, std::uint32_t a_frameSlot)
+		{
 			if (!a_frame.program || !a_frame.latch || !a_frame.groupsX || !a_frame.groupsY)
 				return;
 			auto constants = a_frame.constants;
-			constants.latchRegion = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
-			auto& commands = a_recording.Commands();
+			constants.latchRegion = static_cast<std::uint32_t>(a_frame.latch->Offset(a_frameSlot));
+			auto& commands = a_commands;
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->Pipeline());
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kLocalShadowMaskConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
@@ -118,5 +143,32 @@ namespace DCLF::Draws
 		if (!a_resources->shadowMask || !a_resources->localShadowMasks || !shadow || !shadow->depth[0] || !shadow->depth[1])
 			return nullptr;
 		return std::make_shared<LocalShadowMaskPass>(std::move(a_resources), a_segment);
+	}
+
+	void DirectLocalShadowMasks(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
+	{
+		// The CPU pipeline: only on a frame its shadow site ran (its commit latched the views, its pre-work copied their blocks). A frame
+		// whose local shadow records name views DCLF did not draw faulted the GPU resolving them (an MMU read fault in LocalShadowMaskCS,
+		// the colour site's pre-work, while the site was not live): on such a frame the engine's mask stands.
+		if (Direct::CpuFrame() && !Direct::ShadowSiteRan())
+			return;
+		const auto& resources = a_pass.Main();
+		const auto& shadow = resources->shadow;
+		if (!resources->shadowMask || !resources->localShadowMasks || !shadow || !shadow->depth[0] || !shadow->depth[1] || !resources->nativeDepth)
+			return;
+		const auto frame = CurrentFrame(a_pass.shapes, a_pass.segment);
+		if (!frame || !frame->latch || !resources->frameConstantsAddress)
+			return;
+		// The views Declare asks for, by their default descriptors: the mask's UAV, the depth's SRV, each map's (every slice of an array).
+		// The images are DXVK's, imported in GENERAL (ImportImage): the pre-work's memory barriers order them, no layout changes.
+		std::array<std::uint32_t, 4> views{};
+		views[0] = resources->shadowMask->GetUAVShaderVisibleInfo(0).slot.index;
+		views[1] = resources->nativeDepth->GetSRVInfo(0).slot.index;
+		for (std::uint32_t i = 0; i < 2; ++i)
+			views[2 + i] = shadow->depthLayers[i] > 1 ? shadow->depth[i]->GetSRVInfo(org::SRVViewType::Texture2DArrayFull, 0).slot.index : shadow->depth[i]->GetSRVInfo(0).slot.index;
+		auto prepared = LocalShadowMaskPass::Fill(*resources, *frame, views);
+		// The images held with the work, as a preparation's bindings hold them.
+		a_out.Add([prepared = std::move(prepared), images = std::array<std::shared_ptr<const void>, 4>{ resources->shadowMask, resources->nativeDepth, shadow->depth[0], shadow->depth[1] },
+					  slot = a_pass.frameSlot](rhi::CommandList& a_commands) { LocalShadowMaskPass::RecordMasks(a_commands, prepared, slot); });
 	}
 }

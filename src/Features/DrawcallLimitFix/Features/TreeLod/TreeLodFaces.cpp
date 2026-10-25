@@ -11,6 +11,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
 #include "Features/DrawcallLimitFix/Core/Render/DrawFamilies/FamilySlots.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBufferSet.h"
@@ -117,14 +118,52 @@ namespace DCLF::Draws
 				return prepared;
 			}
 
+			/**
+			 * @brief The CPU mode's (Api::PassDef::direct): Prepare's values from the view's committed shape (a_pass.shapes; none: the
+			 * view did not commit this frame) and the frame's adopted set.
+			 */
+			static void Direct(const ViewResources& a_resources, const Features::TreeLod::TreeLodTables& a_tables, const Api::DirectPass& a_pass, Api::DirectWork& a_out)
+			{
+				const auto& frame = a_pass.shapes.views[ViewIndex(a_resources.traits->kind)];
+				if (!frame || !frame->latch || !frame->faces[kFamily].groups || !a_tables.cull)
+					return;
+				TreePrepared prepared{};
+				prepared.program = a_tables.cull;
+				prepared.latch = frame->latch;
+				prepared.groups = frame->faces[kFamily].groups;
+				prepared.faces = a_resources.traits->faces;
+				auto& constants = prepared.constants;
+				constants.shapesIndex = a_pass.Srv(a_tables.shapes);
+				constants.instancesIndex = a_pass.Srv(a_tables.instances);
+				constants.latchIndex = frame->latch->SrvIndex();
+				constants.phase = 1;
+				constants.retestOffset = static_cast<std::uint32_t>(sizeof(TreeInstances::VisibleHeader));  // never written: no occlusion test
+				std::vector<std::shared_ptr<org::Buffer>> held{ a_pass.Version(a_tables.shapes), a_pass.Version(a_tables.instances) };
+				for (std::uint32_t f = 0; f < prepared.faces; ++f) {
+					prepared.rowIndex[f] = Api::DirectPass::Srv(a_resources.faceRows[kFamily][f]);
+					prepared.visibleIndex[f] = a_pass.Uav(a_resources.faceLists[kFamily][f]);
+					held.push_back(a_resources.faceRows[kFamily][f]);
+					held.push_back(a_pass.Version(a_resources.faceLists[kFamily][f]));
+				}
+				a_out.Add([prepared = std::move(prepared), held = std::move(held), slot = a_pass.frameSlot](rhi::CommandList& a_commands) {
+					RecordFaces(a_commands, prepared, slot);
+				});
+			}
+
 			static void Record(const TreeBindings&, const TreePrepared& a_prepared, org::PassRecordContext& a_recording)
+			{
+				RecordFaces(a_recording.Commands(), a_prepared, a_recording.FrameSlot());
+			}
+
+			// A dispatch per face, from the latch's region of a_frameSlot (Record's and the CPU mode's).
+			static void RecordFaces(rhi::CommandList& a_commands, const TreePrepared& a_prepared, std::uint32_t a_frameSlot)
 			{
 				if (!a_prepared.program || !a_prepared.groups || !a_prepared.latch)
 					return;
-				auto& commands = a_recording.Commands();
+				auto& commands = a_commands;
 				commands.BindLayout(a_prepared.program->layout->GetHandle());
 				commands.BindPipeline(a_prepared.program->Pipeline());
-				const auto region = static_cast<std::uint32_t>(a_prepared.latch->Offset(a_recording.FrameSlot()));
+				const auto region = static_cast<std::uint32_t>(a_prepared.latch->Offset(a_frameSlot));
 				for (std::uint32_t f = 0; f < a_prepared.faces; ++f) {
 					auto constants = a_prepared.constants;
 					constants.latchOffset = region + f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
@@ -160,6 +199,19 @@ namespace DCLF::Features::TreeLod
 			if (!tables)
 				return nullptr;
 			return std::make_shared<Draws::TreeCullPass>(resources, std::move(tables));
+		}
+
+		// The CPU mode's (Api::PassDef::direct): FacesCull's conditions, then the faces' cull from the view's committed shape.
+		void FacesCullDirect(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
+		{
+			if (Draws::CurrentGraphConditions().interior)
+				return;
+			const auto& resources = a_pass.View();
+			constexpr std::size_t family = static_cast<std::size_t>(Api::DrawFamily::TreeInstances);
+			if (!resources->traits->trees || !resources->faceLists[family][0])
+				return;
+			if (const auto tables = SharedTablesOf(*resources->main->scene))
+				Draws::TreeCullPass::Direct(*resources, *tables, a_pass, a_out);
 		}
 
 		// The tables and the faces' rows and lists.
@@ -264,7 +316,7 @@ namespace DCLF::Features::TreeLod
 
 	void RegisterFacesCull(Api::InstallContext& a_context)
 	{
-		a_context.RegisterPass({ .key = "tree-lod.faces-cull", .passName = "{view}.tree-lod-cull", .make = &FacesCull });
+		a_context.RegisterPass({ .key = "tree-lod.faces-cull", .passName = "{view}.tree-lod-cull", .make = &FacesCull, .direct = &FacesCullDirect });
 	}
 
 	static_assert(sizeof(TreeInstances::DrawRow) == 64 && sizeof(TreeInstances::VisibleHeader) == 64 && TreeInstances::kMaxGroupInstances == 75 &&

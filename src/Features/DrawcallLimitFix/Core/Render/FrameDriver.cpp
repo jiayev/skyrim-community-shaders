@@ -10,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameData.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
@@ -234,6 +235,8 @@ namespace DCLF
 		}
 		const auto start = std::chrono::steady_clock::now();
 		PrimaryCull::Get().EndFrame();
+		// The CPU pipeline's frame signal, behind its sites' callbacks, first: the retirement points bound below cover it.
+		Direct::EndFrame();
 		// The growable versions and the payload the frame read: kept from reuse until what it submitted retires.
 		IndirectDraws::Get().BindAdopted();
 		// What the frame submitted: the GPU point its frame values' buffer is free again after.
@@ -343,7 +346,9 @@ namespace DCLF
 	{
 		auto& capture = PassCapture::Get();
 		capture.SetOcclusionPhase(0);
-		if (!a_running || a_map >= Extensions::kOcclusionMaps || !Extensions::OcclusionOn(ActiveToggles(), a_map))
+		// The CPU pipeline's graph: the shadow site draws the maps with the shadow views while it is live (Direct::ShadowSiteLive); until
+		// then the engine renders them.
+		if (!a_running || a_map >= Extensions::kOcclusionMaps || !Extensions::OcclusionOn(ActiveToggles(), a_map) || (Direct::CpuFrame() && !Direct::ShadowSiteLive()))
 			return false;
 		// At the shadow maps, before the engine draws them: DCLF draws the map's members of the set in this frame's shadow epoch when the
 		// selected revision's shadow shape has the map's view, and the frame's set draws its phase (none until then: a frame after the first

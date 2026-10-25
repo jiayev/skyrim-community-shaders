@@ -5,6 +5,9 @@
 // roots its faces draw: ViewRoots.cpp.)
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
@@ -220,15 +223,88 @@ namespace DCLF
 		return ViewSubmit::Submitted;
 	}
 
+	void IndirectDraws::Impl::PostHostedView(ViewKind a_view, std::uint32_t a_epoch, std::span<const ViewFace> a_faces)
+	{
+		using R = SceneRevisions;
+		const auto fragment = revisions.active ? revisions.active->Fragment(R::kShapeSlot + a_epoch) : nullptr;
+		const auto& state = View(a_view);
+		if (!fragment || !state.resources)
+			return;
+		const auto shape = fragment->Value<ViewFrame>();
+		const auto& traits = TraitsOf(a_view);
+		const auto type = a_view == Api::EngineView::Reflection ? Direct::ViewType::Reflection : Direct::ViewType::FirstPerson;
+		// Each drawn face's cull, from what its latch carries (CommitView's BuildDrawsLatch: its view-projection with the eye folded in,
+		// the frustum alone or nothing, the frame's stamp).
+		std::vector<Direct::CullView> faces;
+		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
+		for (std::uint32_t f = 0; f < a_faces.size() && f < traits.faces; ++f) {
+			if (!a_faces[f].drawn)
+				continue;
+			BuildDrawsLatch latch{};
+			latch.cullFlags = traits.frustumCull ? 1u : 0u;
+			latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;
+			FoldEyeIntoViewProj(a_faces[f].viewProj, a_faces[f].eye, latch.viewProj);
+			faces.push_back(type == Direct::ViewType::Reflection ? Direct::ReflectionCullView(f, latch) : Direct::FirstPersonCullView(latch));
+		}
+		// A trees view's draw families per drawn face (the faces' draw: the shape's pipeline, the face's row and its list's version).
+		std::vector<Direct::HostedFaceDraw> families;
+		auto keep = std::make_shared<std::vector<std::shared_ptr<const void>>>();
+		const auto& view = *state.resources;
+		const auto& adopted = Adopted();
+		for (std::size_t d = 0; traits.trees && d < Extensions::kDrawFamilies; ++d) {
+			const auto& drawn = shape->faces[d];
+			if (!Extensions::DrawFamilyHasFaces(static_cast<Api::DrawFamily>(d)) || !drawn.pipeline.valid() || !drawn.groups)
+				continue;
+			for (const auto& face : faces) {
+				const auto& list = view.faceLists[d][face.viewIndex];
+				if (!list || !adopted.Names(list))
+					continue;
+				const auto& version = adopted.Of(list).version;
+				if (!version || !version->buffer)
+					continue;
+				families.push_back({ static_cast<std::uint32_t>(d), face.viewIndex, view.faceRowsAddress[d][face.viewIndex], version->buffer->GetAPIResource().GetHandle(),
+					drawn.pipeline, drawn.signature });
+				keep->push_back(version);
+			}
+		}
+		Direct::HostedViewCommit commit{ type, shape, state.resources, faces, families, std::move(keep) };
+		Direct::HostedViewCommitted(commit);
+	}
+
+	IndirectDraws::ViewSubmit IndirectDraws::Impl::SubmitDirectViewEpoch(std::uint32_t a_epoch, RenderGraphRuntime::Segment a_segment,
+		const IndirectDraws::ViewListed& a_listed, std::span<const ViewFace> a_faces)
+	{
+		if (!a_faces.empty() || !EpochCovered(a_epoch))
+			return IndirectDraws::ViewSubmit::NoRevision;
+		const std::span<const MainPayload* const> payloads(a_listed.owners.data(), a_listed.ownerCount);
+		auto owners = EpochOwners(payloads);
+		if (!owners)
+			return IndirectDraws::ViewSubmit::NoOwners;
+		bool reached = false;
+		const bool ok = Direct::ExecuteEpoch(a_segment, [&] {
+			reached = Direct::FirstPersonColourReached();
+			owners.Seal(scene.get());
+		}, owners.Handle());
+		if (!ok)
+			return IndirectDraws::ViewSubmit::Failed;
+		return reached ? IndirectDraws::ViewSubmit::Submitted : IndirectDraws::ViewSubmit::NoRevision;
+	}
+
 	IndirectDraws::ViewSubmit IndirectDraws::SubmitViewEpoch(Api::EngineView a_view, std::uint32_t a_epoch, const ViewListed& a_listed,
 		std::span<const ViewFace> a_faces, std::uint32_t* a_drawn, std::array<std::uint64_t, 2>* a_nullTextures)
 	{
 		const auto& epochs = ViewEpochsOf(a_view);
 		const std::uint32_t epoch = epochs.epochs[a_epoch];
 		// A hosted epoch (the reflection's, first person's depth: the depth epoch runs their passes) commits into its host's commit, from
-		// inside it; the host's recording, submitted after, carries its passes.
-		if (EpochTraitsOf(epoch).hostedBy != kNoEpoch)
-			return impl->CommitHostedView(a_view, epoch, a_listed, a_faces, a_drawn, a_nullTextures);
+		// inside it; the host's recording, submitted after, carries its passes. In CPU mode the commit is the same (its latch, its frame
+		// values, its owners with the host's), and the view is posted for the depth site (Direct/ViewSites.h), which draws it.
+		if (EpochTraitsOf(epoch).hostedBy != kNoEpoch) {
+			const auto submitted = impl->CommitHostedView(a_view, epoch, a_listed, a_faces, a_drawn, a_nullTextures);
+			if (!Direct::CpuFrame() || submitted != ViewSubmit::Submitted || a_faces.empty())
+				return submitted;
+			impl->PostHostedView(a_view, epoch, a_faces);
+			return submitted;
+		}
 		// An epoch of its own is never submitted from inside another's commit (the view work a host's commit runs is its hosted epochs').
 		if (impl->hostedCommit.host != kNoEpoch) {
 			static bool logged = false;
@@ -237,6 +313,10 @@ namespace DCLF
 					EpochTraitsOf(impl->hostedCommit.host).name);
 			return ViewSubmit::Failed;
 		}
+		// The CPU pipeline: an epoch of its own is first person's colour (no faces: it draws what the frame's first-person depth culled),
+		// covered by its shape (DecideEpochCoverage); its body opens the first-person colour site, whose callback follows it.
+		if (Direct::CpuFrame())
+			return impl->SubmitDirectViewEpoch(epoch, epochs.segments[a_epoch], a_listed, a_faces);
 		// The selected revision's shape and recording (DecideCoverage covered the view): trusted, its map, buckets and latch are what the
 		// values go into.
 		const auto revision = impl->RevisionOf(epoch);

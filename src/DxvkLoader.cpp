@@ -186,8 +186,8 @@ namespace DxvkLoader
 			return false;
 		}
 
-		// The render graph adopts DXVK's device; the features it needs must be requested
-		// before the game creates that device.
+		// The render graph adopts DXVK's device; the features it needs, and the descriptor
+		// binding model negotiation callback, must be registered before the game creates that device.
 		RenderGraphRuntime::RequestDeviceFeatures(d3d11Mod);
 
 		// Frame generation enables synchronous present when it takes ownership.

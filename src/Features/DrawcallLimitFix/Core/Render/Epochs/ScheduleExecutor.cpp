@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
+#include "Features/DrawcallLimitFix/Core/Render/Passes/DrawHelpers.h"
 
 #include <algorithm>
 #include <array>
@@ -27,6 +28,7 @@ namespace DCLF::Draws
 			decltype(Api::PassDef::setup) setup = nullptr;
 			decltype(Api::PassDef::latchWord) latchWord = nullptr;
 			decltype(Api::PassDef::animatedRows) animatedRows = nullptr;
+			decltype(Api::PassDef::direct) direct = nullptr;
 			bool viewName = false;  // passName names "{view}"
 		};
 
@@ -293,7 +295,7 @@ namespace DCLF::Draws
 			if (entry.key == a_pass.key)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered pass {}, which {} has", a_who, a_pass.key, entry.who));
 		state.passes.push_back({ std::string(a_pass.key), std::string(a_pass.passName), std::string(a_who), a_pass.kind, a_pass.queue, a_pass.make, a_pass.emit,
-			a_pass.setup, a_pass.latchWord, a_pass.animatedRows, a_pass.passName.find(kViewToken) != std::string_view::npos });
+			a_pass.setup, a_pass.latchWord, a_pass.animatedRows, a_pass.direct, a_pass.passName.find(kViewToken) != std::string_view::npos });
 	}
 
 	Api::TriggerId FindTrigger(const Api::FrameSchedule& a_schedule, std::string_view a_id, std::string_view a_who)
@@ -469,6 +471,10 @@ namespace DCLF::Draws
 	void GatherScheduled(Api::EpochShape a_shape, Api::EngineView a_view, const Api::PassContext& a_base, std::vector<org::RenderGraph::ExternalPassDesc>& a_out)
 	{
 		const auto& state = State();
+		// The CPU pipeline's graph (GraphConditions::cpuPipeline): no DCLF epoch has a pass; the direct sites draw at their triggers. The
+		// epochs' latched copies are the direct pre-work's (PreWork.h), so each latched copies pass is made and not added: it publishes what
+		// its Declare would (Resources::latchedTargets, ShadowResources::latchedTargets: a commit latches only those, and stages the rest).
+		const bool cpu = CurrentGraphConditions().cpuPipeline;
 		for (const auto& epoch : state.epochs[static_cast<std::size_t>(a_shape)]) {
 			if (a_shape == Api::EpochShape::View && epoch.view != a_view)
 				continue;
@@ -506,8 +512,11 @@ namespace DCLF::Draws
 						continue;
 					context.view = &view;
 				}
+				if (cpu && !entry.key.ends_with("latched-copies"))
+					continue;
 				if (entry.emit) {
-					entry.emit(context, out);
+					if (!cpu)
+						entry.emit(context, out);
 					continue;
 				}
 				// A pass with a setup only with its state (SetUpPassStates); the others get none.
@@ -518,9 +527,76 @@ namespace DCLF::Draws
 						continue;
 					context.state = states[index];
 				}
-				if (auto pass = entry.make(context))
-					AddPass(a_out, entry.kind, NameOf(entry, context), std::move(pass), context.epoch, entry.queue);
+				if (auto pass = entry.make(context)) {
+					if (cpu)
+						(void)PublishLatchedTargets(*pass);
+					else
+						AddPass(a_out, entry.kind, NameOf(entry, context), std::move(pass), context.epoch, entry.queue);
+				}
 			}
+		}
+	}
+}
+
+namespace DCLF::Draws
+{
+	void PrepareDirectPasses(std::uint32_t a_epoch, const Api::DirectPass& a_base, Api::DirectWork& a_out)
+	{
+		const auto& state = State();
+		if (a_epoch >= state.epochCount)
+			return;
+		const std::string_view id = state.ids[a_epoch];
+		const ResolvedEpoch* found = nullptr;
+		std::size_t shape = 0;
+		for (std::size_t s = 0; s < state.epochs.size() && !found; ++s)
+			for (const auto& epoch : state.epochs[s])
+				if (epoch.id == id) {
+					found = &epoch;
+					shape = s;
+					break;
+				}
+		if (!found)
+			return;
+		const auto& epoch = *found;
+		auto context = a_base;
+		context.epochId = epoch.id;
+		context.segment = epoch.segment;
+		// The views it hosts that committed in it this frame (their shapes in a_base.shapes), each while its passes can be added
+		// (ViewPassesReady), as GatherScheduled makes their passes: the others' passes have no work, as in the recording without them.
+		std::array<std::shared_ptr<ViewResources>, kViews> hostedViews{};
+		std::vector<std::shared_ptr<ViewResources>> hosted;
+		for (std::uint32_t row = 0; shape == static_cast<std::size_t>(Api::EpochShape::Main) && context.main && row < state.epochCount; ++row) {
+			if (!((epoch.hosts >> row) & 1))
+				continue;
+			const auto view = state.traits[row].index;
+			auto resources = context.Main()->views[view].lock();
+			if (resources && a_base.shapes.views[view] && ViewPassesReady(*resources, *context.Main()))
+				hosted.push_back(hostedViews[view] = std::move(resources));
+		}
+		context.hosted = hosted;
+		for (const auto& [index, hostedEpoch] : epoch.passes) {
+			const auto& entry = state.passes[index];
+			if (!entry.direct || Draws::PassCut(entry.key))
+				continue;
+			context.view = a_base.view;
+			if (hostedEpoch != kNoEpoch) {
+				const auto& view = hostedViews[state.traits[hostedEpoch].index];
+				if (!view)
+					continue;
+				context.view = &view;
+			}
+			// A pass with a setup only with its state, as at the graph's build.
+			context.state = nullptr;
+			if (entry.setup) {
+				const auto& states = context.Main()->scene->passStates;
+				if (index >= states.size() || !states[index])
+					continue;
+				context.state = states[index];
+			}
+			const auto before = a_out.records.size();
+			entry.direct(context, a_out);
+			if (a_out.records.size() != before)
+				a_out.passEnds.push_back(static_cast<std::uint32_t>(a_out.records.size()));
 		}
 	}
 }

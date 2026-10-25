@@ -18,4 +18,10 @@ namespace DCLF::Reports
 	void PassStatsLine(const std::array<std::array<std::uint64_t, 4>, 4>& a_totals, const std::array<std::uint32_t, 4>& a_samples);
 	/** @brief The colour commits of the report window whose sun test ran without the sun's cascades (a_empty), logged. */
 	void ColourSunTestLine(std::uint32_t a_empty);
+	/**
+	 * @brief The CPU-driven pipeline's window (Direct/Sites.h: TakeWindowCounters), or empty when no CPU frame ran: per view a frame's cull
+	 * time, batches and draws, per site its callback's record time on DXVK's CS thread, the secondaries, the callbacks' waits for a batch
+	 * and the frame slots' waits; a site whose callbacks drew nothing all window tagged (the GPU path's "sequences > 0").
+	 */
+	std::string CpuPipelineLine();
 }
