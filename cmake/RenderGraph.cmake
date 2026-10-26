@@ -118,6 +118,18 @@ if(CS_HAS_RENDER_GRAPH AND CS_HAS_ORG_MODULE_SERVICES)
     # The plugin's source glob also finds these two; they are compiled only in their independently testable libraries, without
     # the game's PCH.
     list(FILTER _cs_dclf_plugin_sources EXCLUDE REGEX "/(SceneExecutor|SceneGraph)\.cpp$")
+    # The CPU cull's wide kernels (Core/Render/Direct/CullSimd.h): each file built for its instruction set alone, without the game's PCH
+    # (built for the baseline), and chosen at run time by what the CPU supports.
+    set(_cs_dclf_simd ${CMAKE_SOURCE_DIR}/src/Features/DrawcallLimitFix/Core/Render/Direct)
+    if(MSVC)
+        set(_cs_dclf_avx2 /arch:AVX2)
+        set(_cs_dclf_avx512 /arch:AVX512)
+    else()
+        set(_cs_dclf_avx2 -mavx2)
+        set(_cs_dclf_avx512 -mavx512f -mavx512bw -mavx512vl)
+    endif()
+    set_source_files_properties(${_cs_dclf_simd}/CullAvx2.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_OPTIONS "${_cs_dclf_avx2}")
+    set_source_files_properties(${_cs_dclf_simd}/CullAvx512.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_OPTIONS "${_cs_dclf_avx512}")
     message(STATUS "Drawcall Limit Fix: built")
 else()
     list(FILTER _cs_dclf_plugin_sources EXCLUDE REGEX "/src/Features/DrawcallLimitFix/")

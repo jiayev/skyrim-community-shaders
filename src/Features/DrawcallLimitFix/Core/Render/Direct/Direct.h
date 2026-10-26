@@ -82,16 +82,31 @@ namespace DCLF::Direct
 		kExpPortalEarly = 1u << 1,  // Features/Portals' CPU plane set test stopped at the plane that decides it
 		kExpParabolicPass = 1u << 3,  // CullBatch: a paraboloid view's sphere test over the lanes, four at a time, before the lanes' own tests
 		kExpPrefillLive = 1u << 4,  // MakeViewBatches fills both live columns (the producer's first fill a set and parity skipped)
-		kExpPortalBatch = 1u << 2,
+		kExpPortalBatch = 1u << 2,  // CullBatch: the main camera lists' portal tests made over the batch's lanes, four at a time (portalTestBatch)
 		kExpIncremental = 1u << 5,  // the view batch sets from the incremental scene lists (Snapshot/SceneLists.cpp), not a full build each
+		// CullBatch's frustum pass in the widest kernel the CPU has (CullSimd.h: AVX2's 8 lanes, or AVX-512's 16 with kExpCullAvx512), a group
+		// of lanes stopping at the plane all are outside of, with the tombstones folded in; off, the SSE pass of four.
+		kExpCullWide = 1u << 6,
+		kExpCullAvx512 = 1u << 7,  // kExpCullWide may take AVX-512 (else AVX2 at most)
+		// CullBatch's loop over the lanes the pass kept alone (with kExpCullEarly), sixteen bytes of the pass at a time; off, every lane read.
+		kExpCullPassedLanes = 1u << 8,
+		// Features/Portals' batch test walks the program once a call, each operator over every 16-bound chunk routed to it (a group of any
+		// size visits nearly every operator); off, a walk per group of 16 bounds.
+		kExpPortalOpMajor = 1u << 9,
+		// Not a change: kExpCullProfile's per-lane sections (gather, keep, LOD, word), a TSC read each; without it the loop is one span a
+		// batch ("lanes"), the reads' own cost otherwise a large part of what they time. Off by default.
+		kExpCullProfileLanes = 1u << 27,
+		// Not a change: kExpCullWide's verdicts (the frustum's against the SSE pass, the paraboloid's against ParabolicRejected) checked
+		// (mismatches on the [CPU] line). Off by default.
+		kExpCullWideCheck = 1u << 28,
 		// Not a change: every other incremental set checked against a full build of its snapshot (Snapshot/SceneLists.cpp, CompareSets).
-		kExpIncrementalCheck = 1u << 29,  // CullBatch: the main camera lists' portal tests made over the batch's lanes, four at a time (portalTestBatch)
+		kExpIncrementalCheck = 1u << 29,
 		// Not a change: kExpPortalBatch's verdicts checked against the per-lane test (mismatches on the [CPU] line). Off by default.
 		kExpPortalCheck = 1u << 30,
 		// Not a change: CullBatch's sections timed by view (TSC cycles), reported on the [CPU] line (Direct::TakeCullProfileLine). Off by default.
 		kExpCullProfile = 1u << 31,
 	};
-	inline std::atomic<std::uint32_t> experimentBits{ ~(kExpCullProfile | kExpPortalCheck | kExpIncrementalCheck) };  // constant-initialised: no guard on the hot paths that read it
+	inline std::atomic<std::uint32_t> experimentBits{ ~(kExpCullProfile | kExpPortalCheck | kExpIncrementalCheck | kExpCullWideCheck | kExpCullProfileLanes) };  // constant-initialised: no guard on the hot paths that read it
 	inline std::atomic<std::uint32_t>& ExperimentBits() { return experimentBits; }
 	inline bool ExperimentOn(std::uint32_t a_bit) { return (experimentBits.load(std::memory_order_relaxed) & a_bit) != 0; }
 

@@ -339,11 +339,19 @@ namespace DCLF
 						return;
 					}
 					// The CPU-driven pipeline's toggles (CS_DCLF_PIPELINE's, CS_DCLF_CPU_RECORD's and CS_DCLF_CPU_CADENCE's live values):
-					// "dclf:pipeline=gpu|cpu" (from the next build point: it changes the graph's conditions), "dclf:cpu-record=serial|parallel",
+					// "dclf:pipeline=auto|manual|gpu|cpu" (ApplyPipeline; from the next build point: it changes the graph's conditions),
+					// "dclf:pipeline-interior=gpu|cpu" and "dclf:pipeline-exterior=gpu|cpu" (Manual's), "dclf:cpu-record=serial|parallel",
 					// "dclf:cpu-cadence-<view>=frame|snapshot" ("dclf:cpu-cadence=frame|snapshot": every view but main), "dclf:cpu-batch=<lanes>"
 					// (CS_DCLF_CPU_BATCH's: from the next snapshot).
 					if (command.rfind("dclf:pipeline=", 0) == 0) {
-						DCLF::Toggles::Get().Requested().cpuPipeline = command.substr(14) == "cpu";
+						if (!DCLF::ApplyPipeline(DCLF::Toggles::Get().Requested(), command.substr(14)))
+							logger::warn("[DCLF] test command {}: not a pipeline (auto, manual, gpu, cpu)", command);
+						return;
+					}
+					if (command.rfind("dclf:pipeline-interior=", 0) == 0 || command.rfind("dclf:pipeline-exterior=", 0) == 0) {
+						auto& requested = DCLF::Toggles::Get().Requested();
+						const bool cpu = command.substr(command.find('=') + 1) == "cpu";
+						(command[14] == 'i' ? requested.interiorCpu : requested.exteriorCpu) = cpu;
 						return;
 					}
 					if (command.rfind("dclf:cpu-batch=", 0) == 0) {

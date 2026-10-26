@@ -2632,7 +2632,9 @@ unwalked light keeps its entry.
 
 ## The CPU-driven pipeline (experiment)
 
-A second pipeline, switched live against the GPU one (`dclf:pipeline=gpu|cpu`), to measure how much of DCLF's GPU overhead goes
+A second pipeline, switched live against the GPU one (`dclf:pipeline=auto|manual|gpu|cpu`; Auto draws exteriors GPU-driven and interiors
+CPU-driven, Manual takes a choice per kind of cell, `ToggleSet::interiorCpu` and `exteriorCpu`, resolved at the build point by
+`RefreshGraphConditions`), to measure how much of DCLF's GPU overhead goes
 when the CPU culls and records instead: the GPU cull (BuildDrawsCS, the HZB, the sorts), the epochs' entry and exit barriers and
 DXVK's list splits at each epoch. The GPU path is unchanged; with `pipeline=gpu` the schedule dump is the same. The contract is
 `Core/Render/Direct/Direct.h`.
@@ -2666,6 +2668,24 @@ stand-ins and the engine boundary are the GPU path's: the same objects are DCLF'
     costs 1-2 ms on the builder against ~18 ms whole, and uploads ~440 KB against ~20 MB. Bit 29 (`kExpIncrementalCheck`,
     opt-in) builds every 2nd set whole as well and compares the two per view as multisets of lanes and sequences ("check: N sets,
     M lanes differ" on the scene lists line). Bit 5 off is the whole build per set, for A/B in one launch.
+-   **Wide cull kernels** (`Core/Render/Direct/CullSimd.h`). The frustum pass and the portal programs' plane set test (16 bounds a group)
+    run in the widest kernels the CPU and OS support: AVX-512 (F and BW) or AVX2, else SSE. Each kernel lives in a file built for its
+    instruction set alone (`CullAvx2.cpp`, `CullAvx512.cpp`; `cmake/RenderGraph.cmake` gives them their `/arch` and leaves the game's
+    PCH out). The CPU's support is detected in `Cull.cpp`, which is built for the baseline. A group stops testing planes once every lane
+    in it is decided, and the frustum pass folds in the tombstones. The kernels keep the SSE pass's and the shader's operation order (no
+    FMA), so their verdicts match bit for bit: `dclf:cpu-exp` bit 28 checks the frustum, bit 30 the portal batch. Bit 6 off is SSE, bit
+    7 off caps them at AVX2. A paraboloid view (the point lights' faces) gets its whole verdict from the wide pass (the per-lane
+    `ParabolicRejected` is skipped). The lane loop then visits only the lanes the pass kept, found 16 pass bytes at a time (bit 8). In
+    the heavy exterior on a Zen 5 CPU, the cull costs about 55-60% of the SSE path's cycles: the frustum about a third, the
+    paraboloid half, the portal pass three quarters. The portal batch reads the producer's programs in place, trusting them: no walk
+    check or decode a call. It walks the program once a call (bit 9, `kExpPortalOpMajor`): each operator over every 16-bound chunk routed
+    to it, its planes read once and all of them evaluated (a predictable loop). The heavy exterior's one program has 42-54 operators: a
+    group of 16 bounds visited about 36 of them, against about 12 for one bound, and a group of 32 hardly more, so walking per group paid
+    the walk's overhead once a group. Tried and dropped: the sun entry drop as a gathered wide pass (the gathers cost more than the loop
+    saved); grouping a call's bounds spatially (a group still visited as many operators); culling the views of one list together (the sun's
+    cascades and a point light's faces pass nearly disjoint lanes, so a lane's work is rarely shared).
+    `dclf:cpu-exp` bit 31 profiles the cull by view, the loop as one span a batch; bit 27 adds per-lane sections, whose TSC reads
+    are a large part of what they time.
 -   **Relative rows.** A direct draw's sequence holds its rows as offsets (`kDirectFlagRelativeRows`). The list pushes the set's
     row bases once (`kDirectDrawPushRowBases`: the pipeline and material rows', or the shadow rows'), so resident sequences
     outlive the payload's row versions. The list also pushes the frame's copy of the animated material rows

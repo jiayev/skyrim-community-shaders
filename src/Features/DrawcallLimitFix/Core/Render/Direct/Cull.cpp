@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
 
 #include "Features/DrawcallLimitFix/Core/Render/Readback/Readbacks.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/CullSimd.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
@@ -196,6 +197,7 @@ namespace DCLF::Direct
 		struct Spheres
 		{
 			const float *x, *y, *z, *r;
+			Simd::Spheres simd{ x, y, z, r };
 		};
 
 		/**
@@ -230,6 +232,42 @@ namespace DCLF::Direct
 				}
 				a_pass[i] = keep || a_spheres.r[i] < 0.0f ? 1u : 0u;
 			}
+		}
+
+		/** @brief The wide frustum kernel kExpCullWide takes (the widest the CPU has, AVX-512 with kExpCullAvx512), null: the SSE pass. */
+		Simd::FrustumFn WideFrustum()
+		{
+			const Simd::Level level = Simd::Chosen();
+			return level == Simd::Level::Avx512 ? &Simd::FrustumAvx512 : level == Simd::Level::Avx2 ? &Simd::FrustumAvx2 : nullptr;
+		}
+
+		/** @brief The wide paraboloid kernel kExpCullWide takes, null: the SSE pre-pass (kExpParabolicPass) and the per-lane test. */
+		Simd::ParabolicFn WideParabolic()
+		{
+			const Simd::Level level = Simd::Chosen();
+			return level == Simd::Level::Avx512 ? &Simd::ParabolicAvx512 : level == Simd::Level::Avx2 ? &Simd::ParabolicAvx2 : nullptr;
+		}
+
+		std::uint32_t ParabolicFlagsOf(const CullView& a_view)
+		{
+			return ((a_view.cullFlags & Draws::kCullParabolicBothSides) ? Simd::kParabolicBothSides : 0u) | ((a_view.cullFlags & Draws::kCullParabolicBack) ? Simd::kParabolicBack : 0u);
+		}
+
+		std::atomic<std::uint64_t> wideChecked{ 0 }, wideMismatches{ 0 };
+
+		/** @brief kExpCullWideCheck: a_pass (the wide kernel's, tombstones folded) against the SSE pass of the same lanes. */
+		void CheckWideFrustum(const Spheres& a_spheres, std::uint32_t a_count, const PlaneSet& a_planes, const std::uint64_t* a_dead, const std::uint8_t* a_pass)
+		{
+			thread_local std::vector<std::uint8_t> sse;
+			sse.assign(a_count, 1u);
+			FrustumPass(a_spheres, a_count, a_planes, sse.data());
+			std::uint64_t mismatches = 0;
+			for (std::uint32_t i = 0; i < a_count; ++i) {
+				const bool dead = a_dead && ((a_dead[i >> 6] >> (i & 63)) & 1u);
+				mismatches += (sse[i] && !dead) != (a_pass[i] != 0) ? 1u : 0u;
+			}
+			wideChecked.fetch_add(a_count, std::memory_order_relaxed);
+			wideMismatches.fetch_add(mismatches, std::memory_order_relaxed);
 		}
 
 		/**
@@ -274,6 +312,19 @@ namespace DCLF::Direct
 				return false;
 			const std::uint32_t code = ParabolicSphereMask(a_bound, a_view.planes[0], a_view.planes[1], (a_view.cullFlags & Draws::kCullParabolicBothSides) != 0);
 			return (a_view.cullFlags & Draws::kCullParabolicBack) ? (code & 2u) == 0 : (code & 1u) == 0;
+		}
+
+		/** @brief kExpCullWideCheck: a_pass (the wide paraboloid pass's, tombstones folded) against ParabolicRejected of each lane. */
+		void CheckWideParabolic(const CullView& a_view, const Spheres& a_spheres, std::uint32_t a_count, const std::uint64_t* a_dead, const std::uint8_t* a_pass)
+		{
+			std::uint64_t mismatches = 0;
+			for (std::uint32_t i = 0; i < a_count; ++i) {
+				const bool dead = a_dead && ((a_dead[i >> 6] >> (i & 63)) & 1u);
+				const float bound[4]{ a_spheres.x[i], a_spheres.y[i], a_spheres.z[i], a_spheres.r[i] };
+				mismatches += (!dead && !ParabolicRejected(a_view, bound)) != (a_pass[i] != 0) ? 1u : 0u;
+			}
+			wideChecked.fetch_add(a_count, std::memory_order_relaxed);
+			wideMismatches.fetch_add(mismatches, std::memory_order_relaxed);
 		}
 
 		/** @brief LocalShadowMask: the local shadow lights whose sphere the bound meets and whose planes it is inside (strict lights gated). */
@@ -479,7 +530,7 @@ namespace DCLF::Direct
 		}
 
 		/** @brief Any other view's lane (shadow, occlusion, reflection, first person): its drops, then its frustum or paraboloid, then its strict gates. */
-		bool ViewKept(const CullView& a_view, const CullFrame& a_frame, const Lane& a_lane, bool a_inFrustum)
+		bool ViewKept(const CullView& a_view, const CullFrame& a_frame, const Lane& a_lane, bool a_inFrustum, bool a_parabolicDecided)
 		{
 			if (a_lane.flags & kLaneCullOnly)
 				return false;
@@ -487,7 +538,8 @@ namespace DCLF::Direct
 				return false;
 			if (!a_view.frustumCull)
 				return true;
-			const bool rejected = (a_view.cullFlags & Draws::kCullParabolic) ? ParabolicRejected(a_view, a_lane.bound) : !a_inFrustum;
+			// The wide paraboloid pass decides it whole (a_inFrustum its verdict); else the per-lane test.
+			const bool rejected = (a_view.cullFlags & Draws::kCullParabolic) && !a_parabolicDecided ? ParabolicRejected(a_view, a_lane.bound) : !a_inFrustum;
 			if (rejected)
 				return false;
 			if (a_view.strictContext && a_view.strict && a_view.strict->rejects && a_lane.bound[3] >= 0.0f &&
@@ -540,7 +592,11 @@ namespace DCLF::Direct
 			// firsts[p + 1] is now program p's end, firsts[p] its first.
 			for (std::uint32_t p = 0; p < programs; ++p)
 				if (const std::uint32_t first = firsts[p], end = firsts[std::size_t(p) + 1]; end > first)
+				{
 					a_frame.portalTestBatch(a_frame.programs, p, a_spheres.x, a_spheres.y, a_spheres.z, a_spheres.r, lanes.data() + first, end - first, a_rejected);
+					// kExpCullProfile: the batch's calls, one a program it holds lanes of (the report's "portal tests").
+					portalCalls += profilePortals ? 1u : 0u;
+				}
 		}
 
 		Spheres SpheresOf(const ViewBatch& a_batch, bool a_live, std::uint32_t a_parity)
@@ -571,7 +627,7 @@ namespace DCLF::Direct
 		/** @brief kExpCullProfile: CullBatch's sections' TSC cycles and its lanes, by view type (TakeCullProfileLine). */
 		struct CullProfile
 		{
-			enum Section { kFrustum, kGather, kKeep, kLod, kWord, kSections };
+			enum Section { kFrustum, kPortal, kGather, kKeep, kLod, kWord, kSections };
 			enum Count { kLanes, kPassed, kKeptTest, kKept, kPortalCalls, kPortalCycles, kCounts };
 			std::atomic<std::uint64_t> cycles[kViewTypes][kSections]{};
 			std::atomic<std::uint64_t> counts[kViewTypes][kCounts]{};
@@ -716,7 +772,113 @@ namespace DCLF::Direct
 		return frame;
 	}
 
+	// ---- The wide kernels' support (here, built for the baseline: CullAvx2.cpp's code may use AVX anywhere) ----
+
+	namespace Simd
+	{
+		namespace
+		{
+			Level Detect()
+			{
+				int info[4]{};
+				__cpuid(info, 0);
+				const int leaves = info[0];
+				__cpuid(info, 1);
+				const bool osxsave = (info[2] & (1 << 27)) != 0, avx = (info[2] & (1 << 28)) != 0;
+				if (!osxsave || !avx || leaves < 7)
+					return Level::Sse;
+				const unsigned long long xcr0 = _xgetbv(0);
+				if ((xcr0 & 0x6) != 0x6)
+					return Level::Sse;  // the OS does not keep the YMM state
+				__cpuidex(info, 7, 0);
+				const bool avx2 = (info[1] & (1 << 5)) != 0;
+				const bool avx512 = (info[1] & (1 << 16)) != 0 && (info[1] & (1 << 30)) != 0;  // F and BW
+				if (!avx2)
+					return Level::Sse;
+				return avx512 && (xcr0 & 0xE6) == 0xE6 ? Level::Avx512 : Level::Avx2;  // the opmask and ZMM state kept too
+			}
+		}
+
+		Level Supported()
+		{
+			static const Level level = [] {
+				const Level detected = Detect();
+				logger::info("[DCLF] CPU pipeline: the cull's widest kernels: {}", NameOf(detected));
+				return detected;
+			}();
+			return level;
+		}
+
+		const char* NameOf(Level a_level)
+		{
+			return a_level == Level::Avx512 ? "AVX-512" : a_level == Level::Avx2 ? "AVX2" : "SSE";
+		}
+
+		Level Chosen()
+		{
+			if (!ExperimentOn(kExpCullWide))
+				return Level::Sse;
+			const Level level = Supported();
+			return level == Level::Avx512 && !ExperimentOn(kExpCullAvx512) ? Level::Avx2 : level;
+		}
+	}
+
 	// ---- The cull ----
+
+	namespace
+	{
+		/**
+		 * @brief CullBatch's first stage: a_view's frustum or paraboloid over a_batch's lanes into a_pass (all 1 on entry), the tombstones in
+		 * it. True: a_pass holds a paraboloid view's whole verdict (ViewKept takes it as is).
+		 */
+		bool PassOf(const ViewBatch& a_batch, const Spheres& a_spheres, std::uint32_t a_count, const CullView& a_view, std::uint8_t* a_pass)
+		{
+			// A view without a frustum test (cull mode 0, or first person drawing every member) keeps every lane past its other tests.
+			bool deadFolded = false, parabolicDecided = false;
+			if (a_view.frustumCull && !(a_view.cullFlags & Draws::kCullParabolic)) {
+				const PlaneSet planes = PlanesOf(a_view);
+				if (const auto wide = WideFrustum()) {
+					// The tombstones folded into the wide pass.
+					wide(a_spheres.simd, a_count, reinterpret_cast<const float (*)[4]>(planes.planes.data()), planes.count, a_batch.dead, a_pass);
+					deadFolded = true;
+					if (ExperimentOn(kExpCullWideCheck))
+						CheckWideFrustum(a_spheres, a_count, planes, a_batch.dead, a_pass);
+				} else {
+					FrustumPass(a_spheres, a_count, planes, a_pass);
+				}
+			} else if (a_view.frustumCull) {
+				if (const auto wide = WideParabolic()) {
+					wide(a_spheres.simd, a_count, a_view.planes[0].data(), a_view.planes[1].data(), ParabolicFlagsOf(a_view), a_batch.dead, a_pass);
+					deadFolded = parabolicDecided = true;
+					if (ExperimentOn(kExpCullWideCheck))
+						CheckWideParabolic(a_view, a_spheres, a_count, a_batch.dead, a_pass);
+				} else if (ExperimentOn(kExpParabolicPass)) {
+					ParabolicPass(a_spheres, a_count, a_view.planes[0], a_pass);
+				}
+			}
+			// The incremental lists' tombstones: a lane gone from this set passes nothing (the portal pass skips it; the loop drops it).
+			if (a_batch.dead && !deadFolded)
+				for (std::uint32_t i = 0; i < a_count; ++i)
+					if ((a_batch.dead[i >> 6] >> (i & 63)) & 1u)
+						a_pass[i] = 0;
+			return parabolicDecided;
+		}
+
+		/** @brief Calls a_test(i) for each lane a_pass keeps, found sixteen pass bytes (0 or 1) at a time. */
+		template <class Test>
+		void ForEachPassed(const std::uint8_t* a_pass, std::uint32_t a_count, Test&& a_test)
+		{
+			std::uint32_t base = 0;
+			for (; base + 16 <= a_count; base += 16) {
+				const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(a_pass + base));
+				for (auto bits = static_cast<std::uint32_t>(_mm_movemask_epi8(_mm_cmpgt_epi8(bytes, _mm_setzero_si128()))); bits; bits &= bits - 1)
+					a_test(base + static_cast<std::uint32_t>(std::countr_zero(bits)));
+			}
+			for (; base < a_count; ++base)
+				if (a_pass[base])
+					a_test(base);
+		}
+	}
 
 	const CulledBatch& CullBatch(const ViewBatch& a_batch, bool a_live, std::uint32_t a_parity, const CullView& a_view, const CullFrame& a_frame, CullArena& a_arena)
 	{
@@ -736,6 +898,7 @@ namespace DCLF::Direct
 		profilePortals = profile;
 		if (profile)
 			portalCalls = portalCycles = 0;
+		const bool laneLaps = profile && ExperimentOn(kExpCullProfileLanes);
 		const auto lap = [&](CullProfile::Section a_section) {
 			if (!profile)
 				return;
@@ -743,16 +906,7 @@ namespace DCLF::Direct
 			cycles[a_section] += now - at;
 			at = now;
 		};
-		// A view without a frustum test (cull mode 0, or first person drawing every member) keeps every lane past its other tests.
-		if (a_view.frustumCull && !(a_view.cullFlags & Draws::kCullParabolic))
-			FrustumPass(spheres, count, PlanesOf(a_view), pass.data());
-		else if (a_view.frustumCull && ExperimentOn(kExpParabolicPass))
-			ParabolicPass(spheres, count, a_view.planes[0], pass.data());
-		// The incremental lists' tombstones: a lane gone from this set passes nothing (the portal pass skips it; the loop drops it).
-		if (a_batch.dead)
-			for (std::uint32_t i = 0; i < count; ++i)
-				if ((a_batch.dead[i >> 6] >> (i & 63)) & 1u)
-					pass[i] = 0;
+		const bool parabolicDecided = PassOf(a_batch, spheres, count, a_view, pass.data());
 		lap(CullProfile::kFrustum);
 		const bool mainCamera = MainCamera(a_view.type);
 		const bool mainFamily = mainCamera || a_view.type == ViewType::Reflection || a_view.type == ViewType::FirstPerson;
@@ -765,6 +919,7 @@ namespace DCLF::Direct
 		if (portalBatch) {
 			portalRejected.resize(count);
 			PortalPass(a_frame, a_batch, spheres, pass.data(), count, portalRejected.data());
+			lap(CullProfile::kPortal);
 			if (ExperimentOn(kExpPortalCheck)) {
 				std::uint64_t checked = 0, mismatches = 0;
 				for (std::uint32_t i = 0; i < count; ++i)
@@ -779,36 +934,48 @@ namespace DCLF::Direct
 		}
 		std::uint32_t kept = 0;
 		ZoneScopedN("CS.DCLF.Cpu.CullLanes");
-		for (std::uint32_t i = 0; i < count; ++i) {
-			if (early && !pass[i])
-				continue;
-			if (a_batch.dead && ((a_batch.dead[i >> 6] >> (i & 63)) & 1u))
-				continue;  // gone from this set (a view without a frustum test keeps every lane it has)
+		const auto laneLap = [&](CullProfile::Section a_section) {
+			if (laneLaps)
+				lap(a_section);
+		};
+		const auto test = [&](std::uint32_t i) {
+			if (!early && a_batch.dead && ((a_batch.dead[i >> 6] >> (i & 63)) & 1u))
+				return;  // gone from this set (with kExpCullEarly the pass holds the tombstones)
 			if (profile)
 				++counts[CullProfile::kPassed];
 			const Lane lane = LaneOf(a_batch, spheres, i);
 			// A focus view's casters: its target's members alone (an input's root word against the latch's root + 1).
 			if (a_view.focusRoot != 0 && lane.root != a_view.focusRoot - 1)
-				continue;
-			lap(CullProfile::kGather);
+				return;
+			laneLap(CullProfile::kGather);
 			const bool keep = mainCamera ? MainCameraKept(a_view, a_frame, lane, pass[i] != 0, a_live, portalBatch ? &portalRejected[i] : nullptr) :
-			                               ViewKept(a_view, a_frame, lane, pass[i] != 0);
-			lap(CullProfile::kKeep);
+			                               ViewKept(a_view, a_frame, lane, pass[i] != 0, parabolicDecided);
+			laneLap(CullProfile::kKeep);
 			if (!keep)
-				continue;
+				return;
 			if (profile)
 				++counts[CullProfile::kKeptTest];
 			std::uint32_t mask = kDrawAll;
 			const bool lod = !a_batch.lodPartitions || LodMask(a_frame, a_batch.lodPartitions[i], a_batch.partitions ? a_batch.partitions[i] : 0u, lane.root, mainFamily, mask);
-			lap(CullProfile::kLod);
+			laneLap(CullProfile::kLod);
 			if (!lod)
-				continue;
+				return;
 			lanes[kept] = static_cast<std::uint16_t>(i);
 			words[kept] = ObjectWordOf(a_view, lane.object, lane.flags, lane.bound);
 			masks[kept] = mask;
 			++kept;
-			lap(CullProfile::kWord);
+			laneLap(CullProfile::kWord);
+		};
+		if (early && ExperimentOn(kExpCullPassedLanes)) {
+			// The passed lanes alone: the shadow views pass a few in a hundred.
+			ForEachPassed(pass.data(), count, test);
+		} else {
+			for (std::uint32_t i = 0; i < count; ++i)
+				if (!early || pass[i])
+					test(i);
 		}
+		if (!laneLaps)
+			lap(CullProfile::kGather);  // the loop whole ("lanes")
 		if (profile) {
 			const std::size_t v = static_cast<std::size_t>(a_view.type);
 			counts[CullProfile::kLanes] = count;
@@ -834,9 +1001,14 @@ namespace DCLF::Direct
 	std::string TakeCullProfileLine()
 	{
 		std::string line;
+		if (const auto checked = wideChecked.exchange(0, std::memory_order_relaxed)) {
+			const auto mismatches = wideMismatches.exchange(0, std::memory_order_relaxed);
+			line += fmt::format("{}wide frustum check ({}): {} lanes, {} verdicts differ{}", line.empty() ? "" : " | ", Simd::NameOf(Simd::Chosen()), checked, mismatches,
+				mismatches ? " <- WIDE FRUSTUM DIFFERS" : "");
+		}
 		if (const auto checked = portalChecked.exchange(0, std::memory_order_relaxed)) {
 			const auto mismatches = portalMismatches.exchange(0, std::memory_order_relaxed);
-			line = fmt::format("portal batch check: {} lanes, {} verdicts differ{}", checked, mismatches, mismatches ? " <- PORTAL BATCH DIFFERS" : "");
+			line += fmt::format("{}portal batch check: {} lanes, {} verdicts differ{}", line.empty() ? "" : " | ", checked, mismatches, mismatches ? " <- PORTAL BATCH DIFFERS" : "");
 		}
 		for (std::size_t v = 0; v < kViewTypes; ++v) {
 			std::uint64_t cycles[CullProfile::kSections], counts[CullProfile::kCounts];
@@ -848,10 +1020,10 @@ namespace DCLF::Direct
 				continue;
 			// Each section's cycles a lane: gather and the keep test per lane passed, the LOD mask per lane the test kept, the word per lane kept.
 			const auto per = [](std::uint64_t a_cycles, std::uint64_t a_n) { return a_n ? static_cast<double>(a_cycles) / static_cast<double>(a_n) : 0.0; };
-			line += fmt::format("{}{}: {} lanes, {} passed, {} kept by the test, {} kept; Mcycles frustum {:.1f}, gather {:.1f}, keep {:.1f}, lod {:.1f}, word {:.1f}; "
+			line += fmt::format("{}{}: {} lanes, {} passed, {} kept by the test, {} kept; Mcycles frustum {:.1f}, portal {:.1f}, lanes/gather {:.1f}, keep {:.1f}, lod {:.1f}, word {:.1f}; "
 								"cycles a lane: gather {:.0f}, keep {:.0f}, lod {:.0f}, word {:.0f}; portal tests {}, {:.0f} cycles each",
 				line.empty() ? "" : " | ", CpuViewName(v), counts[CullProfile::kLanes], counts[CullProfile::kPassed], counts[CullProfile::kKeptTest], counts[CullProfile::kKept],
-				cycles[CullProfile::kFrustum] / 1e6, cycles[CullProfile::kGather] / 1e6, cycles[CullProfile::kKeep] / 1e6, cycles[CullProfile::kLod] / 1e6,
+				cycles[CullProfile::kFrustum] / 1e6, cycles[CullProfile::kPortal] / 1e6, cycles[CullProfile::kGather] / 1e6, cycles[CullProfile::kKeep] / 1e6, cycles[CullProfile::kLod] / 1e6,
 				cycles[CullProfile::kWord] / 1e6, per(cycles[CullProfile::kGather], counts[CullProfile::kPassed]), per(cycles[CullProfile::kKeep], counts[CullProfile::kPassed]),
 				per(cycles[CullProfile::kLod], counts[CullProfile::kKeptTest]), per(cycles[CullProfile::kWord], counts[CullProfile::kKept]), counts[CullProfile::kPortalCalls],
 				per(counts[CullProfile::kPortalCycles], counts[CullProfile::kPortalCalls]));
