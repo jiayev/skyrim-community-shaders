@@ -72,8 +72,14 @@ namespace DCLF::Features::Grass
 		void Owned(bool a_owned)
 		{
 			GrassShared::SetDclfOwned(a_owned);
-			if (a_owned)
-				GrassShared::RunStoodDownFrame();
+			if (!a_owned)
+				return;
+			// The main view's eye, as the draw row's (SampleCull): the renderer's posAdjust is the last pass's here, not the main view's.
+			auto* camera = RE::Main::WorldRootCamera();
+			if (!camera)
+				return;
+			const auto& eye = camera->world.translate;
+			GrassShared::RunStoodDownFrame({ .eye = { eye.x, eye.y, eye.z } });
 		}
 
 		// stage 0: the BSGrassShader singleton; before it is known, the first grass pass's shader GrassShared saw.

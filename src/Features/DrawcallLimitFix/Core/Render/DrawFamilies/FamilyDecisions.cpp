@@ -19,7 +19,12 @@ namespace DCLF::Api
 		const auto* catalog = FrameCatalog();
 		FamilyPipelines pipelines;
 		const bool built = CatalogFamilyPipelines(catalog, family, pipelines);
-		const bool owned = built && a_drawable;
+		// The adopted revision's recordings draw the family with these pipelines (its shapes', PassFrame::families): until a revision made
+		// from a catalog that has them is adopted, the engine draws the family, so no frame withholds it with nothing recorded to draw it.
+		const auto adopted = IndirectDraws::Get().AdoptedFamilyPipelines(family);
+		const bool recorded = adopted && Draws::SameHandle(adopted->depth, pipelines.depth) && Draws::SameHandle(adopted->colour, pipelines.colour) &&
+		                      Draws::SameHandle(adopted->colour2, pipelines.colour2);
+		const bool owned = built && a_drawable && recorded;
 		if (owned) {
 			auto& published = scene->familyPipelines[static_cast<std::size_t>(family)];
 			const auto current = published.load(std::memory_order_acquire);

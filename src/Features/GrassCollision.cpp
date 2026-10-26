@@ -153,7 +153,7 @@ void GrassCollision::QueueCollisions()
 	queuedCollisions = std::move(collisionsData);
 }
 
-void GrassCollision::Update()
+void GrassCollision::Update(const RE::NiPoint3& a_eye)
 {
 	static Util::FrameChecker frameChecker;
 	if (frameChecker.IsNewFrame()) {
@@ -163,7 +163,7 @@ void GrassCollision::Update()
 
 		static float2 prevCellID = { 0, 0 };
 
-		auto eyePosNI = Util::GetEyePosition();
+		auto eyePosNI = a_eye;
 		static auto prevEyePosNI = eyePosNI;
 
 		auto eyePos = float2{ eyePosNI.x, eyePosNI.y };
@@ -254,13 +254,13 @@ void GrassCollision::PostPostLoad()
 	GrassShared::OnStoodDownFrame(&GrassCollision::StoodDownUpdate);
 }
 
-void GrassCollision::StoodDownUpdate()
+void GrassCollision::StoodDownUpdate(const GrassShared::StoodDownFrame& a_frame)
 {
 	auto& self = globals::features::grassCollision;
 	if (!self.collisionTexture || !self.perFrame)
 		return;
 
-	self.Update();
+	self.Update(RE::NiPoint3(a_frame.eye[0], a_frame.eye[1], a_frame.eye[2]));
 
 	static_assert(sizeof(PerFrame) <= sizeof(GrassShared::Collision::perFrame));
 	GrassShared::Collision published;
@@ -360,7 +360,7 @@ void GrassCollision::Hooks::MainUpdate_QueueCollisions::thunk()
 
 void GrassCollision::Hooks::BSGrassShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
-	globals::features::grassCollision.Update();
+	globals::features::grassCollision.Update(Util::GetEyePosition());
 	func(This, Pass, RenderFlags);
 }
 

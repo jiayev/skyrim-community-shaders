@@ -409,6 +409,7 @@ namespace DCLF
 			frame->resourceHeap = a_in.resourceHeap;
 			frame->samplerHeap = a_in.samplerHeap;
 			frame->indirect = a_in.indirect;
+			frame->families = a_in.families;
 			frame->cullMode = a_in.cullMode;
 			frame->latch = a_in.latch;
 			frame->latchLayout = a_in.latchLayout;
@@ -1013,6 +1014,9 @@ namespace DCLF
 			RequireSceneTables(a_build, *inputs.scene, tables);
 		// The request's catalog's set version first: the main layout's colour sub-ranges are its state classes' (RequireMain).
 		a_make.indirect = a_make.catalog ? GetIndirectState(*a_make.catalog, inputs.targetsGeneration) : IndirectState{};
+		// The draw families' pipelines as the catalog has them for its targets: the main shapes' (PassFrame::families) and the views' faces'.
+		for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
+			a_make.familyOn[d] = CatalogFamilyPipelines(a_make.catalog, static_cast<Api::DrawFamily>(d), inputs.targetsGeneration, a_make.familyPipelines[d]);
 		RequireMain(a_build, r, a_make);
 		if (inputs.scene)
 			RequireIndexPool(a_build, *inputs.scene, tables, a_make.publication.tablesGeneration);
@@ -1035,9 +1039,7 @@ namespace DCLF
 		// The views' forward pipelines (and the faces' draw families'), as the request's catalog has them for its tables, and each view's plan
 		// from the one main layout, its buffers required to hold that plan: the shape made below from the same layout and the set sealed
 		// with those requirements can never index past its buffers. Their maps for every pipeline slot the tables have, as the
-		// Z-prepass's (above).
-		for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
-			a_make.familyOn[d] = CatalogFamilyPipelines(a_make.catalog, static_cast<Api::DrawFamily>(d), inputs.targetsGeneration, a_make.familyPipelines[d]);
+		// Z-prepass's (above). The faces' draw families' pipelines are the main participant's (RequireRevisionSet, before this).
 		auto& viewOn = a_make.viewOn;
 		for (const auto& slot : kViewSlots) {
 			const auto kind = slot.view;
@@ -1101,6 +1103,11 @@ namespace DCLF
 		const auto& handles = producer.latchHandles;
 		// The heaps every recording binds: the graph's own, as built (posted at the build point).
 		const rhi::DescriptorHeapHandle resourceHeap = inputs.resourceHeap, samplerHeap = inputs.samplerHeap;
+		// The draw families both segments draw, as the request's catalog has them (RequireRevisionSet).
+		std::array<std::shared_ptr<const FamilyPipelines>, Extensions::kDrawFamilies> families{};
+		for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
+			if (a_make.familyOn[d])
+				families[d] = std::make_shared<const FamilyPipelines>(a_make.familyPipelines[d]);
 		for (const std::size_t shape : { kDepthShape, kColourShape }) {
 			auto& mainShape = producer.made.main[shape];
 			mainShape = nullptr;
@@ -1115,6 +1122,7 @@ namespace DCLF
 			in.resourceHeap = resourceHeap;
 			in.samplerHeap = samplerHeap;
 			in.indirect = a_make.indirect;
+			in.families = families;
 			in.zCalls = a_make.zPlans[shape].calls;
 			in.zPlan = std::make_shared<const ZBucketPlan>(std::move(a_make.zPlans[shape]));
 			in.classPlan = a_make.classPlan;
@@ -1261,6 +1269,20 @@ namespace DCLF
 		mix(a_make.indirect.refraction.index);
 		mix(a_make.indirect.refraction.generation);
 		mix(static_cast<std::uint64_t>(a_make.indirect.refractionFormat));
+		// The draw families' pipelines the main shapes carry (PassFrame::families): a catalog that gains or rebuilds a family's makes new
+		// shapes, and with them the epochs' recordings with its draws.
+		for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d) {
+			mix(a_make.familyOn[d] ? 1u : 0u);
+			if (!a_make.familyOn[d])
+				continue;
+			const auto& family = a_make.familyPipelines[d];
+			for (const auto& pipeline : { family.depth, family.colour, family.colour2 }) {
+				mix(pipeline.index);
+				mix(pipeline.generation);
+			}
+			mix(family.drawSignature.index);
+			mix(family.drawSignature.generation);
+		}
 		// The main segments': their latch's layout, latched targets, and what their commits captured (viewport, frame blocks). The
 		// blocks are the set's (its serial).
 		group = kKeyMain;

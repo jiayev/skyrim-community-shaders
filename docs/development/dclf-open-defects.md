@@ -210,7 +210,9 @@ both ways (no overlap, no hole). **Check:** a turn-only run's first `grass draws
     exterior, `CS_DCLF_PERSISTENT_PARITY`), the first two windows only: 97 of 1111 and 39 of 1391 objects, largest difference
     262144, first samples `Block (3, 0)` (component 2: completed -30720, reference -4710.4) and `objsnowHD-LargeRef`
     (component 7: completed 0, reference -49152); every later window 0. The first window ended before the run's first pipeline
-    switch, so the CPU/GPU toggling there is not its cause. Not seen in v3-full on the same save. Not investigated.
+    switch, so the CPU/GPU toggling there is not its cause. Not seen in v3-full on the same save. Seen again in run fix-full
+    (2026-10-26, the 1.6.1170 heavy setup's grass save, turning, persistent and set parity): two windows, 57 of 591 and 167 of 701
+    objects, first samples `objsnow` and `Alpha` (component 7). Not investigated.
 -   **Build parity's decal check reads only the classes' decal sub-ranges.** With the plain decal buckets on
     (`CS_DCLF_DECAL_PLAIN`) the decals go to the class plan's decal buckets, which `DrawnDecal` does not read, so the check reports
     every slot culled ("87 slots, 87 culled"). The colour and terrain draws' plain buckets were added to the comparison on 2026-10-22

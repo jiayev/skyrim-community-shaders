@@ -506,10 +506,10 @@ namespace DCLF::Draws
 			a_out.push_back(static_cast<std::uint64_t>(now));
 			a_out.push_back(phaseTwo ? 1 : 0);
 			a_out.push_back(resources->pool ? NamedSerial(a_preparation, resources->pool->indices) : 0);
-			// The draw families' (their slots' pipelines: built late, rebuilt on a target change; tree LOD's).
+			// The draw families' (their pipelines as the revision's shape has them: built late, rebuilt on a target change).
 			for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
 				if (const auto& family = Extensions::DrawFamilies()[f]; family.taken) {
-					const std::shared_ptr<const void> pipelines = FamilyPipelinesOf(*resources->scene, static_cast<Api::DrawFamily>(f));
+					const std::shared_ptr<const void> pipelines = frame ? frame->families[f] : nullptr;
 					family.contribution.main.revision({ a_preparation, *resources->scene, pipelines }, a_out);
 				}
 		}
@@ -531,10 +531,10 @@ namespace DCLF::Draws
 			if (!prepared.zPrepass)
 				prepared.preprocess = resources->preprocessMain.get();
 			prepared.framePushWords = MainFramePushWords(resources->frameConstantsAddress);
-			// The draw families set up: their slots' pipelines (null until published: nothing drawn) and draw rows.
+			// The draw families set up: their pipelines as the revision's shape has them (PassFrame::families; null: not drawn) and draw rows.
 			for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
 				if (const auto family = static_cast<Api::DrawFamily>(f); FamilySetUp(*resources->scene, family))
-					prepared.families[f] = { FamilyPipelinesOf(*resources->scene, family), a_bindings.familyRows[f] };
+					prepared.families[f] = { frame->families[f], a_bindings.familyRows[f] };
 			prepared.frame = std::move(frame);
 			prepared.targetCount = resources->targetCount;
 			for (std::uint32_t i = 0; i < prepared.targetCount; ++i)

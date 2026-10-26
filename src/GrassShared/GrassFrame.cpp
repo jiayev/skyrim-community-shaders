@@ -10,7 +10,7 @@ namespace GrassShared
 		std::atomic<uint64_t> nativeDrawsWhileOwned{ 0 };
 
 		// Filled during PostPostLoad, then only read; the count publishes each entry.
-		std::array<void (*)(), kMaxStoodDownCallbacks> stoodDownCallbacks{};
+		std::array<void (*)(const StoodDownFrame&), kMaxStoodDownCallbacks> stoodDownCallbacks{};
 		std::atomic<uint32_t> stoodDownCount{ 0 };
 
 		// Written by the settings UI and the render thread, read by DCLF: each publish swaps in a whole snapshot.
@@ -39,7 +39,7 @@ namespace GrassShared
 		return nativeDrawsWhileOwned.exchange(0, std::memory_order_relaxed);
 	}
 
-	void OnStoodDownFrame(void (*callback)())
+	void OnStoodDownFrame(void (*callback)(const StoodDownFrame& frame))
 	{
 		if (!callback)
 			return;
@@ -52,11 +52,11 @@ namespace GrassShared
 		stoodDownCount.store(n + 1, std::memory_order_release);
 	}
 
-	void RunStoodDownFrame()
+	void RunStoodDownFrame(const StoodDownFrame& frame)
 	{
 		const uint32_t n = stoodDownCount.load(std::memory_order_acquire);
 		for (uint32_t i = 0; i < n; ++i)
-			stoodDownCallbacks[i]();
+			stoodDownCallbacks[i](frame);
 	}
 
 	void PublishSettings(const CullSettings& published)

@@ -322,6 +322,7 @@ namespace DCLF::Draws
 		MainViewport viewport;
 		rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 		IndirectState indirect{};
+		std::array<std::shared_ptr<const FamilyPipelines>, Extensions::kDrawFamilies> families{};  // PassFrame::families
 		std::uint32_t cullMode = 0;
 		std::shared_ptr<const org::LatchBlock> latch;  // the one the revision's set names (RequireLatches)
 		MainLatchLayout latchLayout;

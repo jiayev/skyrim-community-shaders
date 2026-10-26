@@ -31,6 +31,7 @@ namespace DCLF
 	}
 	struct Lookups;
 	struct LookupsResolveState;
+	struct FamilyPipelines;
 	struct PipelineCatalog;
 	struct SceneTables;
 	struct ForwardTargets;
@@ -310,6 +311,13 @@ namespace DCLF
 		void DecideDrawFamilies(std::uint32_t a_frame);
 		/** @brief Render thread: whether a_family's draws are DCLF's this frame (DecideDrawFamilies; false before the implementation). */
 		bool DrawFamilyOwned(Api::DrawFamily a_family) const;
+		/**
+		 * @brief Render thread, after the frame's coverage (DecideCoverage): a_family's pipelines as the adopted snapshot's revision draws it
+		 * (its depth shape's PassFrame::families; null: the revision does not draw it, or nothing is adopted). A frame owns a family only
+		 * while this names the pipelines its catalog has (DrawFamilyFrame::Pipelines), so a frame withholding the engine's draws of a
+		 * family always runs recordings that draw it.
+		 */
+		std::shared_ptr<const FamilyPipelines> AdoptedFamilyPipelines(Api::DrawFamily a_family) const;
 		/**
 		 * @brief The view engine (Views/ViewEngine.cpp): Core's calls for the features that take an engine view (Api/Views.h,
 		 * Extensions::Views) - their state, targets, pipelines and resources at their frame's start, and their epochs' inputs and
