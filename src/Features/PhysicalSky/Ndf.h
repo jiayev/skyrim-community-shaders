@@ -199,6 +199,8 @@ struct NdfManager
 
 	const std::array<ID3D11ShaderResourceView*, 4>& GetNoiseInputs() const { return noiseInputs; }
 	uint64_t GetRevision() const { return generatedRevision; }
+	/// Tracks noise input changes independently of weather-field advection.
+	uint64_t GetNoiseRevision() const { return noiseRevision; }
 	float2 GetWeatherOffset() const { return generatedData.windOffset; }
 	float4 GetHeightAuxiliaryRange() const { return generatedData.heightAuxiliaryRange; }
 	/// Channel picker plus a preview of the generated weather map. Debug and the Clouds page share it.
@@ -220,6 +222,7 @@ private:
 	std::array<ID3D11ShaderResourceView*, 7> generatedSources = {};
 	std::array<std::string, 9> sourcePaths = {};
 	uint64_t generatedRevision = 0;
+	uint64_t noiseRevision = 0;
 	uint64_t textureRevision = 0;
 	std::array<ID3D11ShaderResourceView*, 4> noiseInputs = {};
 	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 4> noiseInputResources;

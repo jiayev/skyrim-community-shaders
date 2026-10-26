@@ -85,7 +85,8 @@ Only height R changes; G stays at its base/local value. Final height RG and
 modeling RGB are saturated. Before saturation, top type drives
 `heightAuxiliary = saturate(R(topType, heightAuxiliaryRange))`. Internal height B
 stores this value; A stays zero. The default output interval is [0, 0], so it
-preserves the previous density until intentionally enabled. Storms are omitted.
+preserves the previous density until intentionally enabled. The optional [storm core](cloud-storms.md)
+is evaluated in world space during density queries, independently of this repeating generator.
 
 The density sampler reads auxiliary height at the unsheared height-map UV.
 Only bottom shaping uses `saturate((h - auxiliary) / max(1 - auxiliary, 1e-6))`;

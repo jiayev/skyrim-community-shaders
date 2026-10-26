@@ -51,6 +51,8 @@ struct CloudLayer
 	float highestAltitude;
 };
 
+#include "PhysicalSky/StormData.hlsli"
+
 struct VolumetricCloudData
 {
 	float rayMarchRange;
@@ -127,15 +129,10 @@ struct VolumetricCloudData
 	float4 localNdfAltitude;
 	float4 localNdfAuxiliary;
 	float4 lowCloudPhase;
+	uint stormCount;
+	uint voxelCount;
+	float2 voxelAltitude;
 };
-
-CloudLayer GetCloudLayer(VolumetricCloudData info)
-{
-	CloudLayer cloud;
-	cloud.lowestAltitude = info.lowCloudTraceBottomAltitude;
-	cloud.highestAltitude = info.shadowVolumeTop;
-	return cloud;
-}
 
 cbuffer VolumetricCloudConstants : register(b1)
 {
@@ -160,13 +157,36 @@ TextureCube<float4> TexCloudGroundReflection : register(t39);
 
 Texture2D<float4> TexCloudBoundary : register(t15);
 Texture2D<float2> TexCloudHeightBounds : register(t16);
-Texture2D<float2> TexCloudHeightBoundsTiles : register(t54);
+Texture2D<float4> TexCloudHeightBoundsTiles : register(t54);
+Texture2D<float2> TexCloudWeatherBounds : register(t89);
+
+CloudLayer GetCloudLayer(VolumetricCloudData info)
+{
+	CloudLayer cloud;
+	cloud.lowestAltitude = info.lowCloudTraceBottomAltitude;
+	cloud.highestAltitude = info.shadowVolumeTop;
+#ifdef CLOUD_MAIN_DISPATCH
+	// Share the weather support with primary and light probes, including probes
+	// inside a storm. Local modeling is not part of the weather-map reduction.
+	if (info.localNdfAltitude.z <= 0.0) {
+		const float2 altitude = lerp(info.lowCloudBaseAltitude, info.lowCloudTopAltitude, TexCloudWeatherBounds[uint2(0, 0)]);
+		cloud.lowestAltitude = max(cloud.lowestAltitude, altitude.x - GAME_UNITS_PER_METER);
+		cloud.highestAltitude = min(cloud.highestAltitude, altitude.y + GAME_UNITS_PER_METER);
+	}
+#endif
+	return cloud;
+}
+
 Texture2D<float> TexVolHistoryTr : register(t17);
 Texture2D<float4> TexVolHistoryLum : register(t18);
 Texture2D<float4> TexVolHistoryAux : register(t19);
 Texture2D<float> TexVolLowTr : register(t20);
 Texture2D<float4> TexVolLowLum : register(t21);
 Texture2D<float4> TexVolLowAux : register(t22);
+Texture2D<float4> TexVolLowStormMotion : register(t58);
+TextureCube<float4> TexCubeStormMotion : register(t59);
+RWTexture2D<float4> RWStormMotion : register(u6);
+RWTexture2DArray<float4> RWCubeStormMotion : register(u7);
 TextureCube<float> TexCubeHistoryTr : register(t23);
 TextureCube<float4> TexCubeHistoryLum : register(t24);
 TextureCube<float4> TexCubeHistoryAux : register(t25);
@@ -177,6 +197,24 @@ Texture2DArray<float4> TexLocalNdfHeight : register(t32);
 Texture2DArray<float4> TexLocalNdfModeling : register(t33);
 Texture2DArray<float4> TexLocalNdfMaximum : register(t34);
 StructuredBuffer<float4> LocalNdfWeights : register(t35);
+uint CloudStormCount()
+{
+#ifdef NO_CLOUD_STORMS
+	return 0u;
+#elif defined(SINGLE_CLOUD_STORM)
+	return 1u;
+#else
+	return VolumetricCloudBuffer[0].stormCount;
+#endif
+}
+
+Texture2DArray<float4> TexStormHeight : register(t55);
+Texture2DArray<float4> TexStormModeling : register(t56);
+#ifdef SINGLE_CLOUD_STORM
+cbuffer StormInstanceConstants : register(b0) { CloudStormData CloudStorms[1]; };
+#else
+StructuredBuffer<CloudStormData> CloudStorms : register(t57);
+#endif
 
 float2 LocalNdfUV(float2 worldXY, VolumetricCloudData info)
 {
@@ -346,11 +384,9 @@ float4 SampleCloudAerialPerspective(float3 viewDir, float distance, float shadow
 	return ap;
 }
 
-groupshared sh2 gCloudAmbientSHR[256];
-groupshared sh2 gCloudAmbientSHG[256];
-groupshared sh2 gCloudAmbientSHB[256];
-groupshared float3 gCloudGroundRadiance[256];
-groupshared float3 gCloudGroundIrradiance[256];
+RWTexture2D<float4> RWCloudAmbientPartial : register(u1);
+Texture2D<float4> TexCloudAmbientPartial : register(t90);
+groupshared float4 gCloudAmbientPartial[8][32];
 
 float3 CloudAmbientAtmosphereSource(float3 position, float3 direction, float3 lightDirection, float3 color, float3 rayleigh, float3 mie)
 {
@@ -430,11 +466,16 @@ float3 CloudAmbientGround(float3 direction, float3 groundRadiance, float altitud
 	return radiance;
 }
 
-[numthreads(16, 16, 1)] void buildCloudAmbientSH(uint3 tid : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex) {
+// Keep the same 256 directions, distributed over eight independent groups.
+// Ground reflection is linear in the transport integral, so its average can
+// be applied after reduction rather than serializing every direction on it.
+[numthreads(32, 1, 1)] void buildCloudAmbientSH(uint lane : SV_GroupIndex, uint3 group : SV_GroupID) {
+	const uint directionIndex = group.x * 32u + lane;
+	const uint2 tid = uint2(directionIndex % 16u, directionIndex / 16u);
 	uint reflectionWidth, reflectionHeight;
 	TexCloudGroundReflection.GetDimensions(reflectionWidth, reflectionHeight);
 	const float2 faceSize = max(float2(reflectionWidth, reflectionHeight), 1.0);
-	const float2 faceTexel = floor((float2(tid.xy) + 0.5) * faceSize / 16.0);
+	const float2 faceTexel = floor((float2(tid) + 0.5) * faceSize / 16.0);
 	const float2 faceUv = 2.0 * (faceTexel + 0.5) / faceSize - 1.0;
 	const float3 reflectionDirection = float3(-faceUv.x, -faceUv.y, -1.0);
 	const float inverseLength = rsqrt(1.0 + dot(faceUv, faceUv));
@@ -444,55 +485,76 @@ float3 CloudAmbientGround(float3 direction, float3 groundRadiance, float altitud
 		groundRadiance = ColorManagement::SceneToLinear(max(TexCloudGroundReflection.SampleLevel(TileableSampler, reflectionDirection, 0).rgb, 0.0));
 	else
 		groundRadiance = ColorManagement::SceneToLinear(Color::Ambient(max(SharedData::GetAmbient(float3(0, 0, -1)), 0.0)));
-	gCloudGroundRadiance[groupIndex] = groundRadiance * solidAngleWeight;
-	gCloudGroundIrradiance[groupIndex] = solidAngleWeight;
-	GroupMemoryBarrierWithGroupSync();
-	[unroll] for (uint stride = 128u; stride > 0u; stride >>= 1u)
-	{
-		if (groupIndex < stride) {
-			gCloudGroundRadiance[groupIndex] += gCloudGroundRadiance[groupIndex + stride];
-			gCloudGroundIrradiance[groupIndex] += gCloudGroundIrradiance[groupIndex + stride];
-		}
-		GroupMemoryBarrierWithGroupSync();
-	}
-	groundRadiance = gCloudGroundRadiance[0] / max(gCloudGroundIrradiance[0].x, 1e-6);
-	if (groupIndex == 0u)
-		RWCloudAmbientSH[int2(5, 0)] = float4(groundRadiance, 0.0);
-	GroupMemoryBarrierWithGroupSync();
+	gCloudAmbientPartial[7][lane] = float4(groundRadiance * solidAngleWeight, solidAngleWeight);
 
-	const float2 sampleCoord = (float2(tid.xy) + 0.5) / 16.0;
+	const float2 sampleCoord = (float2(tid) + 0.5) / 16.0;
 	const float elevationCoordinate = 1.0 - sampleCoord.y;
 	const float3 shSampleDir = SphericalHarmonics::GetUniformSphereSample(sampleCoord.x, 0.5 * (1.0 - elevationCoordinate * elevationCoordinate));
 	const float3 rayDir = shSampleDir.xzy;
 	const float3 skyColor = CloudAmbientSky(rayDir, VolumetricCloudBuffer[0].highestCloudAltitude);
 	const float shFactor = 4.0 * Math::PI * elevationCoordinate / 256.0;
 	const sh2 sh = SphericalHarmonics::Evaluate(shSampleDir);
-	gCloudAmbientSHR[groupIndex] = SphericalHarmonics::Scale(sh, skyColor.r * shFactor);
-	gCloudAmbientSHG[groupIndex] = SphericalHarmonics::Scale(sh, skyColor.g * shFactor);
-	gCloudAmbientSHB[groupIndex] = SphericalHarmonics::Scale(sh, skyColor.b * shFactor);
+	gCloudAmbientPartial[0][lane] = SphericalHarmonics::Scale(sh, skyColor.r * shFactor);
+	gCloudAmbientPartial[1][lane] = SphericalHarmonics::Scale(sh, skyColor.g * shFactor);
+	gCloudAmbientPartial[2][lane] = SphericalHarmonics::Scale(sh, skyColor.b * shFactor);
 	const float3 groundDirection = rayDir * float3(1.0, 1.0, -1.0);
-	const float3 ground = CloudAmbientGround(groundDirection, groundRadiance, VolumetricCloudBuffer[0].lowestCloudAltitude);
-	gCloudGroundRadiance[groupIndex] = ground * (2.0 * elevationCoordinate / 256.0);
-	gCloudGroundIrradiance[groupIndex] = gCloudGroundRadiance[groupIndex] * (-2.0 * groundDirection.z);
+	const SharedData::PhysSkyData sky = SharedData::physSkyData;
+	const float radius = sky.rPlanet + max(VolumetricCloudBuffer[0].lowestCloudAltitude, GAME_UNITS_PER_METER);
+	const float probeRadius = clamp(sky.zCameraPlanet, sky.rPlanet, radius);
+	float3 transmission;
+	float boundaryDistance;
+	const float3 ground = CloudAmbientAtmosphere(radius, probeRadius, groundDirection, 16u, transmission, boundaryDistance);
+	transmission *= boundaryDistance >= 0.0 ? 1.0 : 0.0;
+	const float weight = 2.0 * elevationCoordinate / 256.0;
+	const float cosine = -2.0 * groundDirection.z;
+	gCloudAmbientPartial[3][lane] = float4(ground * weight, 0.0);
+	gCloudAmbientPartial[4][lane] = float4(ground * weight * cosine, 0.0);
+	gCloudAmbientPartial[5][lane] = float4(transmission * weight, 0.0);
+	gCloudAmbientPartial[6][lane] = float4(transmission * weight * cosine, 0.0);
 	GroupMemoryBarrierWithGroupSync();
-
-	[unroll] for (uint shStride = 128u; shStride > 0u; shStride >>= 1u)
+	[unroll] for (uint stride = 16u; stride > 0u; stride >>= 1u)
 	{
-		if (groupIndex < shStride) {
-			gCloudAmbientSHR[groupIndex] += gCloudAmbientSHR[groupIndex + shStride];
-			gCloudAmbientSHG[groupIndex] += gCloudAmbientSHG[groupIndex + shStride];
-			gCloudAmbientSHB[groupIndex] += gCloudAmbientSHB[groupIndex + shStride];
-			gCloudGroundRadiance[groupIndex] += gCloudGroundRadiance[groupIndex + shStride];
-			gCloudGroundIrradiance[groupIndex] += gCloudGroundIrradiance[groupIndex + shStride];
+		if (lane < stride) {
+			[unroll] for (uint coefficient = 0u; coefficient < 8u; ++coefficient)
+			{
+				gCloudAmbientPartial[coefficient][lane] += gCloudAmbientPartial[coefficient][lane + stride];
+			}
 		}
 		GroupMemoryBarrierWithGroupSync();
 	}
-	if (groupIndex == 0u) {
-		RWCloudAmbientSH[int2(0, 0)] = gCloudAmbientSHR[0];
-		RWCloudAmbientSH[int2(1, 0)] = gCloudAmbientSHG[0];
-		RWCloudAmbientSH[int2(2, 0)] = gCloudAmbientSHB[0];
-		RWCloudAmbientSH[int2(3, 0)] = float4(gCloudGroundRadiance[0], 0.0);
-		RWCloudAmbientSH[int2(4, 0)] = float4(gCloudGroundIrradiance[0], 0.0);
+	if (lane == 0u) {
+		[unroll] for (uint coefficient = 0u; coefficient < 8u; ++coefficient)
+		{
+			RWCloudAmbientPartial[uint2(coefficient, group.x)] = gCloudAmbientPartial[coefficient][0];
+		}
+	}
+}
+
+	[numthreads(8, 1, 1)] void reduceCloudAmbientSH(uint lane : SV_GroupIndex)
+{
+	[unroll] for (uint coefficient = 0u; coefficient < 8u; ++coefficient)
+	{
+		gCloudAmbientPartial[coefficient][lane] = TexCloudAmbientPartial[uint2(coefficient, lane)];
+	}
+	GroupMemoryBarrierWithGroupSync();
+	[unroll] for (uint stride = 4u; stride > 0u; stride >>= 1u)
+	{
+		if (lane < stride) {
+			[unroll] for (uint coefficient = 0u; coefficient < 8u; ++coefficient)
+			{
+				gCloudAmbientPartial[coefficient][lane] += gCloudAmbientPartial[coefficient][lane + stride];
+			}
+		}
+		GroupMemoryBarrierWithGroupSync();
+	}
+	if (lane == 0u) {
+		const float3 reflection = gCloudAmbientPartial[7][0].rgb / max(gCloudAmbientPartial[7][0].w, 1e-6);
+		RWCloudAmbientSH[int2(0, 0)] = gCloudAmbientPartial[0][0];
+		RWCloudAmbientSH[int2(1, 0)] = gCloudAmbientPartial[1][0];
+		RWCloudAmbientSH[int2(2, 0)] = gCloudAmbientPartial[2][0];
+		RWCloudAmbientSH[int2(3, 0)] = float4(gCloudAmbientPartial[3][0].rgb + reflection * gCloudAmbientPartial[5][0].rgb, 0.0);
+		RWCloudAmbientSH[int2(4, 0)] = float4(gCloudAmbientPartial[4][0].rgb + reflection * gCloudAmbientPartial[6][0].rgb, 0.0);
+		RWCloudAmbientSH[int2(5, 0)] = float4(reflection, 0.0);
 	}
 }
 
@@ -548,7 +610,12 @@ float CloudSpatialMarchHash(float2 position)
 
 float CloudDepthWeight(float transmittance, float density, float distance)
 {
+#ifdef CLOUD_REFLECTION
+	// Raw transmission makes moments associative across ordered ray segments.
+	return transmittance * density * (1.0 - exp2(distance * GAME_UNIT_TO_M * -0.36067376));
+#else
 	return saturate((transmittance - 0.1) * 1.1111112) * density * (1.0 - exp2(distance * GAME_UNIT_TO_M * -0.36067376));
+#endif
 }
 
 float2 LowNdfUV(float2 worldXY, VolumetricCloudData info)
@@ -577,18 +644,29 @@ struct NDFInfo
 	float2 altitude;
 	float top_type;
 	float bottom_type;
+	float storm;
+	float rawStorm;
+	bool stormVolume;
+	uint stormIndex;
+	float stormBlend;
+	float replacement;
+#ifdef CLOUD_VOXELS
+	float voxelBlend;
+	float voxelDensityScale;
+#endif
+#ifndef NO_CLOUD_STORMS
+	float plumeCoordinate;
+	float plumeDensity;
+	float2 plumeEnvelope;
+#endif
 };
 
 void initNDFInfo(out NDFInfo ndf)
 {
-	ndf.in_layer = false;
-	ndf.dimension_profile = 0.0;
-	ndf.coverage = 0.0;
-	ndf.height_fraction = 0.0;
-	ndf.shaping_start = 0.0;
-	ndf.altitude = 0.0;
-	ndf.top_type = 0.0;
-	ndf.bottom_type = 0.0;
+	ndf = (NDFInfo)0;
+#ifndef NO_CLOUD_STORMS
+	ndf.plumeDensity = 1.0;
+#endif
 }
 
 float3 SampleCloudHeights(float2 worldXY, float2 anchoredXY)
@@ -599,6 +677,8 @@ float3 SampleCloudHeights(float2 worldXY, float2 anchoredXY)
 	return LocalNdfHeight(heights, anchoredXY, info);
 }
 
+bool IsVolcanic(CloudStormData storm);
+
 float CloudNdfProfile(inout NDFInfo ndf)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
@@ -607,9 +687,14 @@ float CloudNdfProfile(inout NDFInfo ndf)
 	[branch] if (info.topExpansion > 0.0)
 		expandedTop = TexCloudAdjustmentLUT.SampleLevel(TransmittanceSampler, float2(ndf.top_type, ndf.height_fraction), 0).r;
 	const float bottom = TexCloudProfileLUT.SampleLevel(TransmittanceSampler, float2(ndf.bottom_type, ndf.height_fraction), 0).r;
-	const float verticalProfile = max(lerp(top, max(top, expandedTop), info.topExpansion) * bottom, 0.0);
+	// The eruption's authored top types must not inherit the weather's anvil
+	// expansion, which otherwise turns low type values into full-height columns.
+	float topProfile = ndf.stormVolume && IsVolcanic(CloudStorms[ndf.stormIndex]) ? top : lerp(top, max(top, expandedTop), info.topExpansion);
+	[branch] if (ndf.storm > 0.15 && (!ndf.stormVolume || !IsVolcanic(CloudStorms[ndf.stormIndex])))
+		topProfile = max(top, TexCloudProfileLUT.SampleLevel(TransmittanceSampler, float2(ndf.top_type, 1.0 - ndf.height_fraction), 0).g);
+	const float verticalProfile = max(topProfile * bottom, 0.0);
 	const float heightFade = saturate(ndf.height_fraction / info.coverageHeightRange);
-	const float exponent = lerp(lerp(info.coverageBottomPower, 1.0, heightFade), 1.0, heightFade);
+	const float exponent = lerp(lerp(lerp(info.coverageBottomPower, 1.0, heightFade), 1.0, saturate((ndf.storm - 0.15) * 20.0)), 1.0, heightFade);
 	const float coverageProfile = pow(ndf.coverage, exponent);
 	return verticalProfile * coverageProfile;
 }
@@ -664,26 +749,77 @@ struct CloudDensityContext
 	NDFInfo ndf;
 	float3 noise_coordinates;
 	float eye_distance;
+	float light_density;
+	float weather_height_fraction;
+	float3 storm_displacement;
 };
+
+float4 SampleCloudStormNoise(float3 positionMeters, float height, float mip, uint index, NDFInfo ndf);
 
 float sampleCloudDensityFromContext(
 	inout CloudDensityContext density_context, float mipBias, float minimumMip)
 {
+	density_context.light_density = 0.0;
 	const NDFInfo ndf = density_context.ndf;
 	if (!ndf.in_layer || ndf.dimension_profile <= 1e-10)
 		return 0.0;
 
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float profileMip = floor(ndf.dimension_profile * 3.0);
+#ifdef NO_CLOUD_STORMS
+	const bool risingBillows = false;
+#else
+	const bool risingBillows = ndf.stormVolume && IsVolcanic(CloudStorms[ndf.stormIndex]);
+#endif
+	const float profileMip = ndf.dimension_profile * 3.0;
 	// Density is nonlinear in noise; coarse averages must not erase the cloud shape.
-	const float biasedMip = profileMip + mipBias;
+	// The dense eruption needs its cellular surface at full detail. Cone/footprint
+	// filtering still applies, but density alone must not blur the noise first.
+#ifdef NO_CLOUD_STORMS
+	const float biasedMip = floor(profileMip) + mipBias;
+#else
+	const float biasedMip = risingBillows ? mipBias : (ndf.stormVolume ? floor(profileMip + mipBias) : floor(profileMip) + mipBias);
+#endif
 	const float mip = max(biasedMip, min(minimumMip, biasedMip + 1.0));
-	const float4 noise = TexCloudShapeNoise.SampleLevel(TileableSampler, density_context.noise_coordinates, mip);
-	const float eroded = ReconstructCloudNoiseDensity(noise, ndf.dimension_profile, ndf.top_type, ndf.height_fraction, density_context.eye_distance);
-	return ShapeCloudBaseDensity(eroded, ndf.height_fraction, info.bottomDensityWidth, info.bottomDensityPower, ndf.shaping_start) * info.lowDensityScale;
+	float4 noise;
+#ifndef NO_CLOUD_STORMS
+	[branch] if (ndf.stormVolume)
+		noise = SampleCloudStormNoise(density_context.noise_coordinates, ndf.height_fraction, mip, ndf.stormIndex, ndf);
+	else
+#endif
+		noise = TexCloudShapeNoise.SampleLevel(TileableSampler, density_context.noise_coordinates, mip);
+	float profile = ndf.dimension_profile;
+#ifndef NO_CLOUD_STORMS
+	if (risingBillows) {
+		// G is generated by the local Alligator kernel. Use its large cells to
+		// displace the carrier surface in both directions, before fine erosion.
+		// A clipped gain makes every value above .4 the same displacement,
+		// flattening the lobe tips onto an offset copy of the carrier surface.
+		// Keep the full Alligator range; sqrt also matches the rounded noise mix.
+		const float lobe = ndf.plumeEnvelope.y * (sqrt(noise.g) - .35);
+		profile *= saturate((lobe - ndf.plumeEnvelope.x) / 90.0 + .5);
+		density_context.ndf.dimension_profile = profile;
+		density_context.ndf.replacement *= smoothstep(0.0, .1, profile);
+	}
+#endif
+	const float eroded = ReconstructCloudNoiseDensity(noise, profile, ndf.top_type, ndf.height_fraction, density_context.eye_distance, ndf.storm, risingBillows);
+#ifdef NO_CLOUD_STORMS
+	const float densityScale = info.lowDensityScale;
+#else
+	const float densityScale = ndf.stormVolume ? CloudStorms[ndf.stormIndex].driftDensity.z * ndf.plumeDensity : info.lowDensityScale;
+#endif
+	float lightDensity;
+	const float density = ShapeCloudBaseDensity(eroded, ndf.height_fraction, info.bottomDensityWidth, info.bottomDensityPower, ndf.shaping_start, ndf.rawStorm, lightDensity, risingBillows) * densityScale;
+	// The HFW supercell's enhanced shadow density belongs to its anvil model.
+	// An opaque eruption shades the same eroded surface that the view ray sees.
+#ifdef NO_CLOUD_STORMS
+	density_context.light_density = density;
+#else
+	density_context.light_density = ndf.stormVolume && !risingBillows ? lightDensity * densityScale : density;
+#endif
+	return density;
 }
 
-float sampleCloudDensity(
+float sampleWeatherCloudDensity(
 	float3 pos, CloudLayer cloud, float mipBias, float viewDistance, float minimumMip,
 	out CloudDensityContext density_context)
 {
@@ -691,6 +827,9 @@ float sampleCloudDensity(
 	initNDFInfo(density_context.ndf);
 	density_context.noise_coordinates = 0.0;
 	density_context.eye_distance = 0.0;
+	density_context.light_density = 0.0;
+	density_context.weather_height_fraction = 0.0;
+	density_context.storm_displacement = 0.0;
 
 	const float profileAltitude = CloudProfileAltitude(pos, FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
 	if (profileAltitude < cloud.lowestAltitude || profileAltitude > cloud.highestAltitude)
@@ -698,6 +837,7 @@ float sampleCloudDensity(
 
 	const float2 fieldMeters = CloudFieldPosition((pos.xy - info.noiseWindOffset) * GAME_UNIT_TO_M, info.cloudEvolution.xy);
 	density_context.ndf = sampleNDF(fieldMeters * GAME_UNITS_PER_METER, pos.xy, profileAltitude);
+	density_context.weather_height_fraction = density_context.ndf.height_fraction;
 	if (!density_context.ndf.in_layer || density_context.ndf.dimension_profile <= 0.0)
 		return 0;
 
@@ -714,6 +854,15 @@ float sampleCloudDensity(
 	density_context.eye_distance = viewDistance;
 	return sampleCloudDensityFromContext(density_context, mipBias, minimumMip);
 }
+
+#ifdef CLOUD_VOXELS
+#	define sampleCloudDensity sampleNdfCloudDensity
+#endif
+#include "PhysicalSky/CloudStorm.hlsli"
+#ifdef CLOUD_VOXELS
+#	undef sampleCloudDensity
+#endif
+#include "PhysicalSky/CloudVoxel.hlsli"
 
 float3 sampleExternalSunTransmittance(float3 pos, float3 sun_dir)
 {
@@ -733,6 +882,12 @@ struct VolumetricCloudResult
 	float3 lum;
 	float cloud_depth;
 	float2 motionMetadata;
+	float4 stormMotion;
+#ifdef CLOUD_REFLECTION
+	float3 transportLum;
+	float2 rawTransmission;
+	float4 integralWeights;
+#endif
 };
 
 float CirrusDensity(float2 position, out float profile)
@@ -746,12 +901,22 @@ float CirrusDensity(float2 position, out float profile)
 	return (profile * 2.0) * info.cirrusDensityScale;
 }
 
+// Delta-scaled forward transport belongs to the incident background, whether
+// that is sky, terrain, or another cloud sheet. Keep it in the transmission
+// coefficient instead of substituting sky radiance into the scattering output.
+float CloudBackgroundTransmittance(float direct, float transport)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float forwardWeight = saturate(info.ambientStrength * info.cloudLightingScale);
+	return lerp(direct, max(direct, transport), forwardWeight);
+}
+
 void IntegrateCirrus(float3 position, float3 direction, float distance, float phase, CloudAmbient cloudAmbient,
 	inout float3 radiance, inout float transmittance, inout float ambientTransmittance,
 	inout float depthSum, inout float weightSum, inout float cirrusWeight)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const bool ambientEnabled = info.ambientStrength > 0.0 && info.msAlbedo > 0.0;
+	const bool ambientEnabled = info.ambientStrength > 0.0 && (info.msAlbedo > 0.0 || CloudStormCount() > 0u);
 	if (max(transmittance, ambientEnabled ? ambientTransmittance : 0.0) <= 0.1)
 		return;
 	float profile;
@@ -785,8 +950,7 @@ void IntegrateCirrus(float3 position, float3 direction, float distance, float ph
 	const float3 ambientRadiance = CloudAmbientRadiance(position + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), cloudAmbient) * ambientResponse;
 	const float stepTransmittance = exp(-viewDepth);
 	// The collapsed forward peak transports sheet radiance as well as sky radiance.
-	const float forwardTransmittance = ambientEnabled ? max(ambientTransmittance - transmittance, 0.0) * info.ambientStrength * info.cloudLightingScale : 0.0;
-	const float weight = (transmittance + forwardTransmittance) * (1.0 - stepTransmittance);
+	const float weight = CloudBackgroundTransmittance(transmittance, ambientEnabled ? ambientTransmittance : transmittance) * (1.0 - stepTransmittance);
 	radiance += weight * info.cloudLightingScale * (sun * sunlight + ambientRadiance);
 	const float depthWeight = CloudDepthWeight(transmittance, density, distance);
 	depthSum += depthWeight * distance;
@@ -795,6 +959,31 @@ void IntegrateCirrus(float3 position, float3 direction, float distance, float ph
 	transmittance *= stepTransmittance;
 	ambientTransmittance *= stepTransmittance;
 }
+
+#ifdef CLOUD_REFLECTION
+// Resolve the sheet once with unit incident transmission, then retain the two
+// transport terms separately until the ray segments have been composed.
+void IntegrateReflectionCirrus(float3 position, float3 direction, float distance, float phase, CloudAmbient ambient,
+	inout VolumetricCloudResult result, inout float transmission, inout float transportTransmission,
+	inout float depthSum, inout float weightSum, inout float cirrusWeight)
+{
+	float3 source = 0.0;
+	float sheetTransmission = 1.0, sheetTransport = 1.0;
+	float sheetDepth = 0.0, sheetWeight = 0.0, sheetCirrusWeight = 0.0;
+	IntegrateCirrus(position, direction, distance, phase, ambient, source, sheetTransmission, sheetTransport,
+		sheetDepth, sheetWeight, sheetCirrusWeight);
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const bool ambientEnabled = info.ambientStrength > 0.0 && (info.msAlbedo > 0.0 || CloudStormCount() > 0u);
+	const float forwardWeight = ambientEnabled ? saturate(info.ambientStrength * info.cloudLightingScale) : 0.0;
+	result.lum += (1.0 - forwardWeight) * transmission * source;
+	result.transportLum += forwardWeight * transportTransmission * source;
+	depthSum += transmission * sheetDepth;
+	weightSum += transmission * sheetWeight;
+	cirrusWeight += transmission * sheetCirrusWeight;
+	transmission *= sheetTransmission;
+	transportTransmission *= sheetTransport;
+}
+#endif
 
 bool CloudIntervalContains(CloudRaySegments segments, float distance)
 {
@@ -831,7 +1020,7 @@ float2 CloudReflectionInterval(float3 eye, float3 direction, float begin, float 
 		[unroll] for (int x = -1; x <= 1; ++x)
 		{
 			const int2 address = ((cell + int2(x, y)) % int2(tiles) + int2(tiles)) % int2(tiles);
-			const float2 tile = TexCloudHeightBoundsTiles.Load(int3(address, 0));
+			const float2 tile = TexCloudHeightBoundsTiles.Load(int3(address, 0)).xy;
 			heights = float2(min(heights.x, tile.x), max(heights.y, tile.y));
 		}
 	}
@@ -860,13 +1049,22 @@ float2 ClipCloudBoundary(float2 segment, float4 boundary)
 	return segment;
 }
 
-VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, float sceneDistance, float2 jitter, float apShadow, float4 boundary, float angularFootprint)
+VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, float sceneDistance, float2 jitter, float apShadow, float4 boundary, float angularFootprint, float2 raySegment = float2(0.0, 1.0))
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	VolumetricCloudResult result;
 	result.transmittance = 1.0;
 	result.lum = 0.0;
+#ifdef CLOUD_REFLECTION
+	result.transportLum = 0.0;
+	result.rawTransmission = 1.0;
+	result.integralWeights = 0.0;
+	const float stopTransmission = 0.0001;
+#else
+	const float stopTransmission = 0.1;
+#endif
 	result.motionMetadata = 0.0;
+	result.stormMotion = 0.0;
 	bool sceneLimited = sceneDistance > 0.0;
 	const float3 planetEye = eye + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
 	const float2 ground = IntersectSpherePair(planetEye, direction, info.planetRadius);
@@ -880,6 +1078,12 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 	const float3 cloudEye = float3(eye.xy - FrameBuffer::CameraPosAdjust.xy, eye.z);
 	const CloudRaySegments bounds = GetCloudRaySegments(cloudEye, direction, traceBottom, traceTop, info);
 	CloudRaySegments low = bounds;
+	float2 stormInterval = CloudStormRayInterval(eye, direction);
+	const float2 voxelInterval = CloudVoxelInterval(eye, direction, 0.0, false);
+	const bool voxelRay = voxelInterval.y > voxelInterval.x;
+	if (voxelRay)
+		stormInterval = stormInterval.y > stormInterval.x ? float2(min(stormInterval.x, voxelInterval.x), max(stormInterval.y, voxelInterval.y)) : voxelInterval;
+	const bool stormRay = stormInterval.y > stormInterval.x;
 	if (angularFootprint > 0.0) {
 		const float2 heights = TexCloudHeightBounds[uint2(0, 0)];
 		float2 altitude = lerp(info.lowCloudBaseAltitude, info.lowCloudTopAltitude, heights);
@@ -897,10 +1101,49 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 	}
 	low.nearSegment = ClipCloudBoundary(low.nearSegment, boundary);
 	low.farSegment = ClipCloudBoundary(low.farSegment, boundary);
+	const CloudRaySegments weatherSegments = low;
+#ifdef CLOUD_MAIN_DISPATCH
+	CloudRaySegments weatherCandidate = bounds;
+	// Local modeling may reach this ray through the upstream/shear samples.
+	// Its separate field is not included in the weather-map reduction.
+	if (info.localNdfAltitude.z <= 0.0) {
+		const float2 altitude = lerp(info.lowCloudBaseAltitude, info.lowCloudTopAltitude, TexCloudWeatherBounds[uint2(0, 0)]);
+		weatherCandidate = GetCloudRaySegments(cloudEye, direction, max(traceBottom, altitude.x - GAME_UNITS_PER_METER),
+			min(traceTop, altitude.y + GAME_UNITS_PER_METER), info);
+	}
+#endif
+	if (stormRay) {
+		// The world-anchored storm is not represented by the curved weather boundary mesh.
+		float start = stormInterval.x;
+		if (low.nearSegment.y > low.nearSegment.x)
+			start = min(start, low.nearSegment.x);
+		if (low.farSegment.y > low.farSegment.x)
+			start = min(start, low.farSegment.x);
+		const float end = max(stormInterval.y, max(low.nearSegment.y, low.farSegment.y));
+		low.nearSegment = float2(start, end);
+		low.farSegment = 0.0;
+	}
 	if (sceneLimited) {
 		low.nearSegment.y = max(low.nearSegment.x, min(low.nearSegment.y, sceneDistance));
 		low.farSegment.y = max(low.farSegment.x, min(low.farSegment.y, sceneDistance));
 	}
+#ifdef CLOUD_REFLECTION
+	// Allocate reflection samples over occupied ray intervals. The logarithmic
+	// coordinate follows the distance-based march spacing without serial steps.
+	const float offset = (3.0 / (60.0 / 16384.0)) * GAME_UNITS_PER_METER;
+	const float4 arc = log2(1.0 + max(float4(low.nearSegment, low.farSegment), 0.0) / offset);
+	const float nearArc = max(arc.y - arc.x, 0.0);
+	const float farArc = max(arc.w - arc.z, 0.0);
+	const float2 coordinate = raySegment * (nearArc + farArc);
+	const float2 mapped = (exp2(coordinate <= nearArc ? arc.xx + coordinate : arc.zz + coordinate - nearArc) - 1.0) * offset;
+	// Include a cirrus sheet outside the finite low-cloud intervals in the first
+	// or last segment, without integrating an infinite volume step.
+	raySegment = float2(raySegment.x == 0.0 ? 0.0 : mapped.x, raySegment.y == 1.0 ? 1e30 : mapped.y);
+	low.nearSegment = float2(max(low.nearSegment.x, raySegment.x), min(low.nearSegment.y, raySegment.y));
+	low.farSegment = float2(max(low.farSegment.x, raySegment.x), min(low.farSegment.y, raySegment.y));
+	low.nearSegment.y = max(low.nearSegment.y, low.nearSegment.x);
+	low.farSegment.y = max(low.farSegment.y, low.farSegment.x);
+#endif
 	low.nearLength = low.nearSegment.y - low.nearSegment.x;
 	low.length = low.nearLength + (low.farSegment.y - low.farSegment.x);
 	result.cloud_depth = info.rayMarchRange;
@@ -910,6 +1153,8 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 	const bool hasBoundaryDepth = boundary.w > 0.0 && boundaryDepth > 0.0;
 	if (hasBoundaryDepth)
 		result.cloud_depth = boundaryDepth;
+	if (stormRay)
+		result.cloud_depth = min(result.cloud_depth, stormInterval.x);
 	float cirrusDistance = sceneDistance;
 	bool cirrusPending = false;
 	if (info.cirrusEnabled != 0u) {
@@ -919,6 +1164,9 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 		if (cirrusDistance >= 0.0)
 			result.cloud_depth = bounds.length > 0.0 || hasBoundaryDepth ? min(result.cloud_depth, cirrusDistance) : cirrusDistance;
 		cirrusPending = cirrusDistance >= 0.0 && (!sceneLimited || cirrusDistance < sceneDistance);
+#ifdef CLOUD_REFLECTION
+		cirrusPending = cirrusPending && cirrusDistance >= raySegment.x && cirrusDistance < raySegment.y;
+#endif
 	}
 	if (low.length <= 0.0 && !cirrusPending)
 		return result;
@@ -937,9 +1185,8 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 	const float phase = CloudLowPhase(lightCosine);
 	const float cirrusPhase = cirrusPending ? CloudCirrusPhase(lightCosine) : 0.0;
 	const CloudAmbient ambient = MakeCloudAmbient();
-	const bool ambientEnabled = info.ambientStrength > 0.0 && info.msAlbedo > 0.0;
+	const bool ambientEnabled = info.ambientStrength > 0.0 && (info.msAlbedo > 0.0 || CloudStormCount() > 0u);
 	float ambientTransmittance = 1.0;
-	float ambientBoundaryAltitude = info.highestCloudAltitude;
 	const CloudLayer layer = GetCloudLayer(info);
 	float noiseTexelsPerMeter = 0.0;
 	float maximumNoiseMip = 0.0;
@@ -954,103 +1201,258 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 	float cirrusWeight = 0.0;
 	float heightSum = 0.0;
 	float transmittance = 1.0;
-	[loop] for (uint interval = 0u; interval < 4u && max(transmittance, ambientEnabled ? ambientTransmittance : 0.0) > 0.1; ++interval)
+#if defined(CLOUD_MAIN_DISPATCH) && !defined(CLOUD_VOXELS)
+	float lightDepth = 0.0;
+	float lightDepthEnd = -1.0;
+	uint lightMaterial = 0xffffffffu;
+#endif
+	[loop] for (uint interval = 0u; interval < 4u && max(transmittance, ambientEnabled ? ambientTransmittance : 0.0) > stopTransmission; ++interval)
 	{
 		const float begin = interval == 0u ? boundaries.x : (interval == 1u ? boundaries.y : (interval == 2u ? boundaries.z : boundaries.w));
 		const float end = interval == 0u ? boundaries.y : (interval == 1u ? boundaries.z : (interval == 2u ? boundaries.w : lastBoundary));
 		if (cirrusPending && cirrusDistance <= begin) {
+#ifdef CLOUD_REFLECTION
+			IntegrateReflectionCirrus(eye + direction * cirrusDistance, direction, cirrusDistance, cirrusPhase, ambient,
+				result, transmittance, ambientTransmittance, depthSum, weightSum, cirrusWeight);
+#else
 			IntegrateCirrus(eye + direction * cirrusDistance, direction, cirrusDistance, cirrusPhase, ambient,
 				result.lum, transmittance, ambientTransmittance, depthSum, weightSum, cirrusWeight);
+#endif
 			cirrusPending = false;
 		}
 		if (end <= begin || !CloudIntervalContains(low, 0.5 * (begin + end)))
 			continue;
 		float distance = begin;
 		float reflectionEnd = begin;
-		[loop] while (distance < end && max(transmittance, ambientEnabled ? ambientTransmittance : 0.0) > 0.1)
+		float2 stormPiece = 0.0;
+		float2 voxelPiece = 0.0;
+		[loop] while (distance < end && max(transmittance, ambientEnabled ? ambientTransmittance : 0.0) > stopTransmission)
 		{
-			if (angularFootprint > 0.0 && !localRay && distance >= reflectionEnd) {
+#ifdef CLOUD_REFLECTION
+			// A stratum represents its complete finite interval. Use the same
+			// extinction and material blend as the view, with footprint-filtered
+			// noise and the coarse voxel field supplied by CLOUD_VOXEL_COARSE.
+			const float step = end - distance;
+			const float sampleDistance = distance + jitter.x * step;
+			const float3 pos = eye + direction * sampleDistance;
+			const float viewDistance = sampleDistance * GAME_UNIT_TO_M;
+			const float minimumMip = min(log2(max(viewDistance * angularFootprint * noiseTexelsPerMeter, 1.0)), maximumNoiseMip);
+			CloudDensityContext densityContext;
+			const float extinction = sampleCloudDensity(pos, layer, 0.0, viewDistance, minimumMip, densityContext);
+			const float depthDistance = sampleDistance;
+			distance = end;
+#else
+#	ifdef CLOUD_MAIN_DISPATCH
+			if (!voxelRay && !CloudIntervalContains(weatherCandidate, distance) &&
+				!(stormRay && distance >= stormInterval.x && distance < stormInterval.y)) {
+				float limit = end;
+				if (weatherCandidate.nearSegment.y > weatherCandidate.nearSegment.x && weatherCandidate.nearSegment.x > distance)
+					limit = min(limit, weatherCandidate.nearSegment.x);
+				if (weatherCandidate.farSegment.y > weatherCandidate.farSegment.x && weatherCandidate.farSegment.x > distance)
+					limit = min(limit, weatherCandidate.farSegment.x);
+				if (stormRay && stormInterval.x > distance)
+					limit = min(limit, stormInterval.x);
+				// Preserve the original sample sequence. Advancing through proven
+				// empty space needs no density, noise, motion or lighting evaluation.
+				float emptyStep = min(CloudViewStep(distance, angularFootprint), end - distance);
+				[loop] while (distance + emptyStep * 2.0 < limit)
+				{
+					distance += emptyStep * 2.0;
+					emptyStep = min(CloudViewStep(distance, angularFootprint), end - distance);
+				}
+			}
+#	endif
+			if (voxelRay && distance >= voxelPiece.y)
+				voxelPiece = CloudVoxelInterval(eye, direction, distance, true);
+			if (stormRay && !CloudIntervalContains(weatherSegments, distance)) {
+				if (distance >= stormPiece.y)
+					stormPiece = CloudStormNextInterval(eye, direction, distance);
+				if (!(distance >= stormPiece.x && distance < stormPiece.y) && !(distance >= voxelPiece.x && distance < voxelPiece.y)) {
+					float next = end;
+					if (weatherSegments.nearSegment.y > weatherSegments.nearSegment.x && weatherSegments.nearSegment.x > distance)
+						next = min(next, weatherSegments.nearSegment.x);
+					if (weatherSegments.farSegment.y > weatherSegments.farSegment.x && weatherSegments.farSegment.x > distance)
+						next = min(next, weatherSegments.farSegment.x);
+					if (stormPiece.x > distance)
+						next = min(next, stormPiece.x);
+#	ifdef CLOUD_VOXELS
+					if (voxelPiece.x > distance)
+						next = min(next, voxelPiece.x);
+#	endif
+					distance = next;
+					if (distance >= end)
+						break;
+				}
+			}
+			if (angularFootprint > 0.0 && !localRay && !stormRay && distance >= reflectionEnd) {
 				const float2 reflectionInterval = CloudReflectionInterval(eye, direction, distance, end);
 				distance = reflectionInterval.x;
 				reflectionEnd = reflectionInterval.y;
 				if (reflectionEnd <= distance)
 					continue;
 			}
-			const float marchEnd = angularFootprint > 0.0 && !localRay ? reflectionEnd : end;
-			const float step = min(CloudViewStep(distance, angularFootprint), marchEnd - distance);
+			const float marchEnd = angularFootprint > 0.0 && !localRay && !stormRay ? reflectionEnd : end;
+			float step = min(CloudViewStep(distance, angularFootprint), marchEnd - distance);
+#	ifdef CLOUD_VOXELS
+			const bool inVoxel = distance >= voxelPiece.x && distance < voxelPiece.y;
+			uint2 occupiedVoxels = 0u;
+			const bool ndfOccupied = CloudIntervalContains(weatherSegments, distance) || (distance >= stormPiece.x && distance < stormPiece.y);
+			if (inVoxel) {
+				const float voxelStep = CloudVoxelStep(eye + direction * distance, distance, angularFootprint, occupiedVoxels);
+				step = min(ndfOccupied ? min(step, voxelStep) : voxelStep, min(marchEnd, voxelPiece.y) - distance);
+				// A positive voxel SDF says nothing about weather or storm density.
+				// End an empty-space jump before entering either of those media.
+				if (!ndfOccupied) {
+					if (weatherSegments.nearSegment.y > weatherSegments.nearSegment.x && weatherSegments.nearSegment.x > distance)
+						step = min(step, weatherSegments.nearSegment.x - distance);
+					if (weatherSegments.farSegment.y > weatherSegments.farSegment.x && weatherSegments.farSegment.x > distance)
+						step = min(step, weatherSegments.farSegment.x - distance);
+					if (stormPiece.x > distance)
+						step = min(step, stormPiece.x - distance);
+				}
+			} else if (voxelPiece.x > distance)
+				step = min(step, voxelPiece.x - distance);
+#	endif
 			const float sampleDistance = distance + (distance * GAME_UNIT_TO_M < 250.0 ? jitter.x : jitter.y) * step;
 			const float3 pos = eye + direction * sampleDistance;
 			CloudDensityContext densityContext = (CloudDensityContext)0;
 			const float viewDistance = distance * GAME_UNIT_TO_M;
 			const float minimumMip = min(log2(max(viewDistance * angularFootprint * noiseTexelsPerMeter, 1.0)), maximumNoiseMip);
+#	ifdef CLOUD_VOXELS
+			// Keep NDF out of voxel-only segments; the original voxel marcher has
+			// no weather-density or weather-lighting probes in its inner loop.
+			float extinction = 0.0;
+			[branch] if (ndfOccupied)
+				extinction = sampleNdfCloudDensity(pos, layer, 0.0, viewDistance, minimumMip, densityContext);
+			if (any(occupiedVoxels != 0u))
+				extinction = AddVoxelDensity(pos, 0.0, viewDistance, 0.0, occupiedVoxels, extinction, densityContext);
+#	else
 			const float extinction = sampleCloudDensity(pos, layer, 0.0, viewDistance, minimumMip, densityContext);
+#	endif
 			const float depthDistance = distance;
-			distance += step * (densityContext.ndf.dimension_profile > 0.05 ? 1.0 : 2.0);
-			if (angularFootprint > 0.0 && !localRay)
+			distance += step * (densityContext.ndf.dimension_profile > 0.05 || voxelRay ? 1.0 : 2.0);
+			if (angularFootprint > 0.0 && !localRay && !stormRay)
 				distance = min(distance, marchEnd);
+#endif
 			if (extinction <= 0.0)
 				continue;
 			const float viewDepth = extinction * info.viewExtinction * step * GAME_UNIT_TO_M;
 			const float stepTransmittance = exp(-viewDepth);
 			const float opacity = viewDepth < 0.001 ? CloudOpacity(viewDepth) : 1.0 - stepTransmittance;
-			if (transmittance > 0.1) {
+			if (transmittance > stopTransmission) {
+#if defined(CLOUD_MAIN_DISPATCH) && !defined(CLOUD_VOXELS)
+				// The light cone spans 120--240 m. Share its integral over nearby
+				// view samples; density, erosion and scattering remain per-sample.
+				const uint material = densityContext.ndf.stormVolume ? densityContext.ndf.stormIndex + 1u : 0u;
+				if (viewDistance >= lightDepthEnd || material != lightMaterial) {
+					lightDepth = CloudLightOpticalDepth(pos, direction, densityContext.ndf, extinction, viewDistance, minimumMip);
+					lightDepthEnd = viewDistance + min(4.0 * step * GAME_UNIT_TO_M, 64.0);
+					lightMaterial = material;
+				}
+				const float3 source = ShadeCloudLighting(pos, densityContext.ndf, extinction, viewDepth, opacity, phase, lightDepth);
+#else
 				const float3 source = CloudLighting(pos, direction, densityContext.ndf, extinction, viewDepth, opacity,
 					viewDistance, minimumMip, phase);
+#endif
 				result.lum += transmittance * source;
+				if (densityContext.ndf.stormVolume) {
+					const float height = StormHeight(pos.z * GAME_UNIT_TO_M, CloudStorms[densityContext.ndf.stormIndex]);
+					const float glow = exp(-height / CloudStorms[densityContext.ndf.stormIndex].emission.w) * saturate(densityContext.ndf.coverage);
+					result.lum += transmittance * opacity * CloudStorms[densityContext.ndf.stormIndex].emission.rgb * glow * densityContext.ndf.stormBlend;
+				}
 			}
 			[branch] if (ambientEnabled)
 			{
-				const float reducedDepth = CloudAmbientPhase.x * viewDepth;
+				const float2 ambientPhase = CloudMaterialAmbient(densityContext.ndf);
+				float transport = ambientPhase.x;
+#ifdef CLOUD_VOXELS
+				// NVDF opacity is the native density integral, not the NDF forward
+				// transport integral. Otherwise details become translucent and the
+				// marcher continues through already opaque voxel interiors.
+				transport = lerp(transport, 1.0, densityContext.ndf.voxelBlend);
+#endif
+				const float reducedDepth = transport * viewDepth;
 				const float reducedOpacity = CloudOpacity(reducedDepth);
-				result.lum += ambientTransmittance * reducedOpacity * CloudAmbientPhase.y * info.ambientStrength * info.cloudLightingScale *
-				              CloudAmbientTransport::ViewSource(pos);
+#ifdef CLOUD_REFLECTION
+				result.transportLum += ambientTransmittance * reducedOpacity * ambientPhase.y * info.ambientStrength * info.cloudLightingScale *
+#else
+				result.lum += ambientTransmittance * reducedOpacity * ambientPhase.y * info.ambientStrength * info.cloudLightingScale *
+#endif
+				                       CloudAmbientTransport::ViewSource(pos);
 				ambientTransmittance *= exp(-reducedDepth);
-				ambientBoundaryAltitude = pos.z;
 			}
 
 			const float depthWeight = CloudDepthWeight(transmittance, extinction, depthDistance);
 			depthSum += depthWeight * depthDistance;
 			weightSum += depthWeight;
+			if (densityContext.ndf.stormVolume) {
+				result.stormMotion.xyz += depthWeight * densityContext.storm_displacement;
+				result.stormMotion.w += depthWeight * densityContext.ndf.stormBlend;
+			}
+#ifdef CLOUD_VOXELS
+			// The authored field is stationary. Only its detail noise follows wind;
+			// do not apply the weather's height shear to this local volume.
+			result.stormMotion.xy += depthWeight * densityContext.ndf.voxelBlend * info.cloudWindDelta;
+			result.stormMotion.w += depthWeight * densityContext.ndf.voxelBlend;
+#endif
+#if defined(NO_CLOUD_STORMS) && !defined(CLOUD_VOXELS)
 			heightSum += depthWeight * densityContext.ndf.height_fraction;
+#else
+			float weatherWeight = 1.0 - densityContext.ndf.stormBlend;
+#	ifdef CLOUD_VOXELS
+			weatherWeight -= densityContext.ndf.voxelBlend;
+#	endif
+			heightSum += depthWeight * weatherWeight * densityContext.weather_height_fraction;
+#endif
 			transmittance *= stepTransmittance;
 		}
 	}
 	if (cirrusPending) {
+#ifdef CLOUD_REFLECTION
+		IntegrateReflectionCirrus(eye + direction * cirrusDistance, direction, cirrusDistance, cirrusPhase, ambient,
+			result, transmittance, ambientTransmittance, depthSum, weightSum, cirrusWeight);
+#else
 		IntegrateCirrus(eye + direction * cirrusDistance, direction, cirrusDistance, cirrusPhase, ambient,
 			result.lum, transmittance, ambientTransmittance, depthSum, weightSum, cirrusWeight);
+#endif
 	}
-	if (ambientEnabled)
-		result.lum += max(ambientTransmittance - transmittance, 0.0) * info.ambientStrength * info.cloudLightingScale *
-		              CloudAmbientTransport::Environment(direction, ambientBoundaryAltitude);
+#ifdef CLOUD_REFLECTION
+	result.rawTransmission = float2(transmittance, ambientEnabled ? ambientTransmittance : transmittance);
+	result.integralWeights = float4(depthSum, weightSum, cirrusWeight, heightSum);
+#else
+	transmittance = CloudBackgroundTransmittance(transmittance, ambientEnabled ? ambientTransmittance : transmittance);
 	result.transmittance = saturate((transmittance - 0.1) / 0.9);
 	// Keep radiance premultiplied by the remapped opacity.
 	result.lum /= 1.0 - min(transmittance, 0.1);
 	if (weightSum > 0.0) {
 		result.cloud_depth = depthSum / weightSum;
+		result.stormMotion *= (1.0 - result.transmittance.x) / weightSum;
 		result.motionMetadata = float2(saturate(cirrusWeight / weightSum), saturate(heightSum / weightSum));
-#ifdef CLOUD_AP_SHADOW
+#	ifdef CLOUD_AP_SHADOW
 		if (!ViewAtmosphere::Enabled()) {
 			// Foreground air must not inherit visibility averaged through the scene behind the cloud.
 			if (SharedData::physSkyData.apLumMix > 0.0)
 				apShadow = AtmosphereShadow::TraceShadow(direction, result.cloud_depth, jitter.x);
-#endif
+#	endif
 			const float4 ap = SampleCloudAerialPerspective(direction, result.cloud_depth, apShadow);
 			result.lum = result.lum * ap.a + ap.rgb * (1.0 - result.transmittance);
-#ifdef CLOUD_AP_SHADOW
+#	ifdef CLOUD_AP_SHADOW
 		}
-#endif
+#	endif
 	}
+#endif
 	return result;
 }
 
 #include "PhysicalSky/CloudBlur.hlsli"
 #include "PhysicalSky/CloudBounds.hlsli"
 #include "PhysicalSky/CloudTemporal.hlsli"
+#include "PhysicalSky/CloudVoxelView.hlsli"
 
 // Match the largest shadow-volume dimension (kShadowVolW/H in PhysicalSky.h).
 #define NTHREADS 256
 groupshared float g_density[2 * NTHREADS];
-groupshared int4 g_density_segment[NTHREADS];
+groupshared uint g_density_segment[NTHREADS];
 
 // Accumulate the low-cloud extinction column along the light direction into the
 // camera-centred shadow volume. Each thread group walks one light ray through the
@@ -1119,7 +1521,10 @@ groupshared int4 g_density_segment[NTHREADS];
 
 		accumulated_density = density;
 	}
-	const int4 segment = int4(int3(floor(raw_thread_uv)), int(column));
+	// At 256 x 256 x 64 the ray wraps at most four times per axis.
+	// Pack the exact segment identity into one shared word instead of int4.
+	const uint3 wrap = asuint(int3(floor(raw_thread_uv))) & 255u;
+	const uint segment = wrap.x | (wrap.y << 8u) | (wrap.z << 16u) | (column << 24u);
 	g_density_segment[gtid] = segment;
 
 	// Ping-pong scan storage lets each step publish its input with one barrier.
@@ -1133,7 +1538,7 @@ groupshared int4 g_density_segment[NTHREADS];
 		g_density[read_base + gtid] = accumulated_density;
 		GroupMemoryBarrierWithGroupSync();
 		if (is_valid && gtid >= offset) {
-			if (all(g_density_segment[gtid - offset] == segment))  // no wraparound happened
+			if (g_density_segment[gtid - offset] == segment)  // no wraparound happened
 			{
 				accumulated_density += g_density[read_base + gtid - offset];
 			}

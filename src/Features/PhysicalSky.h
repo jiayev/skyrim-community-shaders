@@ -6,15 +6,12 @@
 #include "PhysicalSky/CloudNoiseGenerator.h"
 #include "PhysicalSky/LocalNdf.h"
 #include "PhysicalSky/Ndf.h"
+#include "PhysicalSky/Storm.h"
+#include "PhysicalSky/VoxelCloud.h"
 
 struct PhysicalSky final : public Feature
 {
 	////////////////////////////////////////////////// Boilerplate
-	static PhysicalSky* GetSingleton()
-	{
-		static PhysicalSky singleton;
-		return &singleton;
-	}
 
 	// Metadata
 	inline std::string GetName() override { return "Physical Sky"; }
@@ -56,6 +53,7 @@ struct PhysicalSky final : public Feature
 	void DrawWeatherMapSection();
 	void DrawLowCloudSection();
 	void DrawCloudMotionSection();
+	void DrawCloudStormSection();
 	void DrawCloudLightingSection();
 	void DrawCirrusSection();
 	void DrawCloudQualitySection();
@@ -163,6 +161,7 @@ struct PhysicalSky final : public Feature
 		NdfSettings cloudMap = {};
 		CloudLayer cloudLayer = {};
 		CloudNoiseSettings cloudNoise = {};
+		SceneBlend voxelClouds;
 
 		Aerosol::Optics GetAerosolOptics() const;
 		void ApplyAerosolOptics();
@@ -255,6 +254,8 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texCloudBoundary = nullptr;
 	eastl::unique_ptr<Texture2D> texCloudHeightBounds = nullptr;
 	eastl::unique_ptr<Texture2D> texCloudHeightBoundsTiles = nullptr;
+	eastl::unique_ptr<Texture2D> texCloudWeatherBounds = nullptr;
+	eastl::unique_ptr<Texture2D> texStormTiles = nullptr;
 	winrt::com_ptr<ID3D11Buffer> cloudBoundaryIndices = nullptr;
 	winrt::com_ptr<ID3D11BlendState> cloudBoundaryBlend = nullptr;
 	winrt::com_ptr<ID3D11RasterizerState> cloudBoundaryRasterizer = nullptr;
@@ -407,9 +408,12 @@ struct PhysicalSky final : public Feature
 		float4 localNdfAltitude;
 		float4 localNdfAuxiliary;
 		float4 lowCloudPhase;
+		uint32_t stormCount;
+		uint32_t voxelCount;
+		float2 voxelAltitude;
 		std::array<float4, kCloudMsCalibrationSize> msCalibration;
 	};
-	static_assert(sizeof(VolumetricCloudCB) == 1216);
+	static_assert(sizeof(VolumetricCloudCB) == 1232);
 	static_assert(offsetof(VolumetricCloudCB, dirlightDir) == 48);
 	static_assert(offsetof(VolumetricCloudCB, previousCamera) == 64);
 	static_assert(offsetof(VolumetricCloudCB, lowNdfFrequency) == 128);
@@ -419,10 +423,15 @@ struct PhysicalSky final : public Feature
 	static_assert(offsetof(VolumetricCloudCB, previousViewProj) == 288);
 	static_assert(offsetof(VolumetricCloudCB, localNdfRect) == 368);
 	static_assert(offsetof(VolumetricCloudCB, lowCloudPhase) == 416);
-	static_assert(offsetof(VolumetricCloudCB, msCalibration) == 432);
+	static_assert(offsetof(VolumetricCloudCB, stormCount) == 432);
+	static_assert(offsetof(VolumetricCloudCB, msCalibration) == 448);
 	eastl::unique_ptr<ConstantBuffer> volCloudCb = nullptr;
+	eastl::unique_ptr<ConstantBuffer> cloudDispatchCb;
+	eastl::unique_ptr<Texture2D> texVolStormMotion, texVolCubeStormMotion;
+	eastl::unique_ptr<Texture2D> texVoxelViewColor, texVoxelViewDepth, texVoxelCompositeTr, texVoxelCompositeLum, texVoxelCompositeAux;
 
 	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
+	eastl::unique_ptr<Texture2D> texCloudAmbientPartial;
 	eastl::unique_ptr<Texture2D> texCloudAmbientLighting = nullptr;
 	static constexpr uint32_t kCloudAmbientVolumeWidth = 32;
 	static constexpr uint32_t kCloudAmbientVolumeDepth = 16;
@@ -459,6 +468,7 @@ struct PhysicalSky final : public Feature
 		double phase = 0.0;
 		float2 shear = {};
 		float disturbance = 0.f;
+		double stormTime = 0.0;
 	};
 	CloudWindState volWind;
 	CloudWindState volHistoryWind;
@@ -485,6 +495,11 @@ struct PhysicalSky final : public Feature
 	static_assert(sizeof(CloudCrossSectionCB) == 64);
 
 	winrt::com_ptr<ID3D11ComputeShader> csVolMainView = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolMainWithoutStorm = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csStormTiles = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolMainVolcanic, csVolCubemapVolcanic, csVolShadowVolcanic, csCloudAmbientDensityVolcanic;
+	winrt::com_ptr<ID3D11ComputeShader> csVolMainSingleVolcanic;
+	winrt::com_ptr<ID3D11ComputeShader> csVoxelView, csVoxelViewSingle, csVoxelComposite, csVolCubemapVoxel, csVolShadowVoxel, csCloudAmbientDensityVoxel, csVoxelLighting;
 	winrt::com_ptr<ID3D11ComputeShader> csVolFilter = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolReproject = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubeReproject = nullptr;
@@ -492,6 +507,7 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowResample = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolAmbientSH = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientReduce;
 	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientLighting = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientDensity = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientBoundary = nullptr;
@@ -516,6 +532,12 @@ struct PhysicalSky final : public Feature
 	void RenderCloudBoundary(const CloudBoundaryCB& a_data, NdfTextureSet a_textures);
 	void LoadCloudTextures();
 	void UpdateCloudWind();
+	/// Resolves the worldspace-scoped storm and rejects invalid authored parameters.
+	void UpdateCloudStorm(const std::string& worldspace);
+	/// Identifies geometry owned by the configured reference while its cloud replacement is ready.
+	bool IsReplacedSkyGeometry(const RE::BSGeometry* geometry) const;
+	CloudStormManager cloudStormManager;
+	VoxelCloudManager voxelCloudManager;
 	void RenderVolumetricClouds(VolumetricCloudPass a_pass);
 	/// Rebuilds the low-cloud slab preview used by DrawCloudLayerProfile().
 	void RenderCloudCrossSection();
@@ -547,6 +569,18 @@ struct PhysicalSky final : public Feature
 	void RestoreWaterSampler();
 	struct Hooks
 	{
+		struct BSCullingProcess_AppendVirtual
+		{
+			static void thunk(RE::BSCullingProcess* process, RE::BSGeometry& geometry, std::int32_t alphaGroupIndex);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSEffectShaderProperty_GetRenderPasses
+		{
+			static RE::BSShaderProperty::RenderPassArray* thunk(RE::BSEffectShaderProperty* property, RE::BSGeometry* geometry, std::uint32_t renderMode, RE::BSShaderAccumulator* accumulator);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		struct BSSkyShader_SetupGeometry
 		{
 			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
@@ -585,6 +619,8 @@ struct PhysicalSky final : public Feature
 
 		static void Install()
 		{
+			stl::write_vfunc<0x18, BSCullingProcess_AppendVirtual>(RE::VTABLE_BSCullingProcess[0]);
+			stl::write_vfunc<0x2A, BSEffectShaderProperty_GetRenderPasses>(RE::VTABLE_BSEffectShaderProperty[0]);
 			stl::write_vfunc<0x6, BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
 			stl::write_vfunc<0x7, BSSkyShader_RestoreGeometry>(RE::VTABLE_BSSkyShader[0]);
 			stl::write_vfunc<0x6, BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);

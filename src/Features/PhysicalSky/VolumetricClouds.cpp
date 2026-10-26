@@ -426,11 +426,11 @@ void PhysicalSky::SetupVolumetricResources()
 	debugCubeFaceSrvs.clear();
 	texturePreview.ClearShaderCache();
 	{
-		auto createBounds = [](uint32_t size, const char* name) {
+		auto createBounds = [](uint32_t size, const char* name, DXGI_FORMAT format = DXGI_FORMAT_R32G32_FLOAT) {
 			D3D11_TEXTURE2D_DESC desc{};
 			desc.Width = desc.Height = size;
 			desc.MipLevels = desc.ArraySize = 1;
-			desc.Format = DXGI_FORMAT_R32G32_FLOAT;
+			desc.Format = format;
 			desc.SampleDesc.Count = 1;
 			desc.Usage = D3D11_USAGE_DEFAULT;
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -447,7 +447,8 @@ void PhysicalSky::SetupVolumetricResources()
 			return texture;
 		};
 		texCloudHeightBounds = createBounds(1, "PhysicalSky::CloudHeightBounds");
-		texCloudHeightBoundsTiles = createBounds(16, "PhysicalSky::CloudHeightBoundsTiles");
+		texCloudHeightBoundsTiles = createBounds(16, "PhysicalSky::CloudHeightBoundsTiles", DXGI_FORMAT_R32G32B32A32_FLOAT);
+		texCloudWeatherBounds = createBounds(1, "PhysicalSky::CloudWeatherBounds");
 	}
 
 	// Tileable sampler (wrap all axes)
@@ -466,6 +467,7 @@ void PhysicalSky::SetupVolumetricResources()
 	// Volumetric cloud constants
 	{
 		volCloudCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<VolumetricCloudCB>());
+		cloudDispatchCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<std::array<uint32_t, 4>>(), "PhysicalSky::CloudDispatch");
 	}
 
 	// Static low-cloud cross-section shown in the Clouds page.
@@ -521,6 +523,12 @@ void PhysicalSky::SetupVolumetricResources()
 		texVolCloudAmbientSH = eastl::make_unique<Texture2D>(texDesc, "PhysicalSky::VolumetricCloudAmbientSH");
 		texVolCloudAmbientSH->CreateSRV(srvDesc);
 		texVolCloudAmbientSH->CreateUAV(uavDesc);
+		texDesc.Width = 8;
+		texDesc.Height = 8;
+		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+		texCloudAmbientPartial = eastl::make_unique<Texture2D>(texDesc, "PhysicalSky::CloudAmbientPartial");
+		texCloudAmbientPartial->CreateSRV(srvDesc);
+		texCloudAmbientPartial->CreateUAV(uavDesc);
 	}
 
 	// Get main render target dimensions for TR/Lum textures
@@ -589,7 +597,7 @@ void PhysicalSky::SetupVolumetricResources()
 			texture->CreateUAV(uav);
 			return texture;
 		};
-		texCloudAmbientDensity = createVolume(kCloudAmbientVolumeWidth, kCloudAmbientVolumeWidth, kCloudAmbientVolumeDepth, DXGI_FORMAT_R16_FLOAT, "PhysicalSky::CloudAmbientDensity");
+		texCloudAmbientDensity = createVolume(kCloudAmbientVolumeWidth, kCloudAmbientVolumeWidth, kCloudAmbientVolumeDepth, DXGI_FORMAT_R16G16_FLOAT, "PhysicalSky::CloudAmbientDensity");
 		texCloudAmbientSweep = createVolume(2 * kCloudAmbientVolumeWidth, 2 * kCloudAmbientVolumeWidth, 26 * kCloudAmbientVolumeWidth, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::CloudAmbientIntervals");
 		for (uint32_t cascade = 0; cascade < kCloudAmbientCascadeCount; ++cascade) {
 			const uint32_t width = cascade == 0 ? kCloudAmbientVolumeWidth : kCloudAmbientVolumeWidth / 2;
@@ -607,6 +615,8 @@ void PhysicalSky::SetupVolumetricResources()
 	texVolLowTr = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16_FLOAT, "PhysicalSky::CloudTraceTr");
 	texVolLowLum = createCloudTexture(lowW, lowH, historyRadianceFormat, "PhysicalSky::CloudTraceLum");
 	texVolLowAux = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::CloudTraceAux");
+	texVolStormMotion = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::CloudStormMotion");
+	texStormTiles = createCloudTexture((lowW + 7u) / 8u, (lowH + 7u) / 8u, DXGI_FORMAT_R32_UINT, "PhysicalSky::StormTiles");
 	{
 		D3D11_TEXTURE2D_DESC desc = texVolLowAux->desc;
 		desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
@@ -663,6 +673,11 @@ void PhysicalSky::SetupVolumetricResources()
 		cloudBoundaryDepth = nullptr;
 		DX::ThrowIfFailed(device->CreateDepthStencilState(&depth, cloudBoundaryDepth.put()));
 	}
+	texVoxelViewColor = createCloudTexture((mainDesc.Width + 1u) / 2u, (mainDesc.Height + 1u) / 2u, historyRadianceFormat, "PhysicalSky::VoxelViewColor");
+	texVoxelViewDepth = createCloudTexture((mainDesc.Width + 1u) / 2u, (mainDesc.Height + 1u) / 2u, DXGI_FORMAT_R32G32_FLOAT, "PhysicalSky::VoxelViewDepth");
+	texVoxelCompositeTr = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16_FLOAT, "PhysicalSky::VoxelCompositeTr");
+	texVoxelCompositeLum = createCloudTexture(mainDesc.Width, mainDesc.Height, historyRadianceFormat, "PhysicalSky::VoxelCompositeLum");
+	texVoxelCompositeAux = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VoxelCompositeAux");
 	texVolFilteredTr = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16_FLOAT, "PhysicalSky::CloudFilteredTr");
 	texVolFilteredLum = createCloudTexture(mainDesc.Width, mainDesc.Height, historyRadianceFormat, "PhysicalSky::CloudFilteredLum");
 	texVolFilteredAux = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::CloudFilteredAux");
@@ -710,6 +725,7 @@ void PhysicalSky::SetupVolumetricResources()
 	texVolCubeTraceTr = createCube(kVolCubeSize / 4u, DXGI_FORMAT_R16_FLOAT, "PhysicalSky::VolCubeTraceTr");
 	texVolCubeTraceLum = createCube(kVolCubeSize / 4u, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolCubeTraceLum");
 	texVolCubeTraceAux = createCube(kVolCubeSize / 4u, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolCubeTraceAux");
+	texVolCubeStormMotion = createCube(kVolCubeSize / 4u, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolCubeStormMotion");
 	const float clearTr[4] = { 1.f, 1.f, 1.f, 1.f };
 	const float clearLum[4] = {};
 	context->ClearUnorderedAccessViewFloat(texVolCubeTr->uav.get(), clearTr);
@@ -758,6 +774,7 @@ void PhysicalSky::SetupVolumetricResources()
 	ndfManager.SetupResources();
 	localNdfManager.SetupResources();
 	cirrusMapManager.SetupResources();
+	cloudStormManager.SetupResources();
 	cloudNoiseGenerator.SetupResources();
 
 	CompileVolumetricShaders();
@@ -768,6 +785,7 @@ void PhysicalSky::CompileVolumetricShaders()
 	cloudAmbientValid = false;
 	volMainHistoryValid = false;
 	logger::debug("Compiling volumetric cloud shaders...");
+	cloudStormManager.CompileShaders();
 
 	struct ShaderInfo
 	{
@@ -781,6 +799,7 @@ void PhysicalSky::CompileVolumetricShaders()
 		ShaderInfo{ &csCloudHeightBounds, "Volumetrics.cs.hlsl", {}, "buildCloudHeightBounds" },
 		ShaderInfo{ &csCloudHeightBoundsReduce, "Volumetrics.cs.hlsl", {}, "reduceCloudHeightBounds" },
 		ShaderInfo{ &csVolAmbientSH, "Volumetrics.cs.hlsl", {}, "buildCloudAmbientSH" },
+		ShaderInfo{ &csCloudAmbientReduce, "Volumetrics.cs.hlsl", {}, "reduceCloudAmbientSH" },
 		ShaderInfo{ &csCloudAmbientLighting, "Volumetrics.cs.hlsl", {}, "buildCloudAmbientLighting" },
 		ShaderInfo{ &csCloudAmbientDensity, "Volumetrics.cs.hlsl", {}, "buildCloudAmbientDensity" },
 		ShaderInfo{ &csCloudAmbientBoundary, "Volumetrics.cs.hlsl", {}, "buildCloudAmbientBoundary" },
@@ -789,13 +808,27 @@ void PhysicalSky::CompileVolumetricShaders()
 		ShaderInfo{ &csCloudAmbientProject, "Volumetrics.cs.hlsl", {}, "projectCloudAmbient" },
 		ShaderInfo{ &csCloudAmbientLayout, "Volumetrics.cs.hlsl", {}, "updateCloudAmbientLayout" },
 		ShaderInfo{ &csCloudAmbientView, "Volumetrics.cs.hlsl", {}, "resolveCloudAmbientView" },
-		ShaderInfo{ &csVolMainView, "Volumetrics.cs.hlsl", { { "CLOUD_AP_SHADOW", "" } } },
+		ShaderInfo{ &csVolMainView, "Volumetrics.cs.hlsl", { { "CLOUD_AP_SHADOW", "" }, { "CLOUD_MAIN_DISPATCH", "" } } },
+		ShaderInfo{ &csStormTiles, "Volumetrics.cs.hlsl", {}, "classifyStormTiles" },
+		ShaderInfo{ &csVolMainWithoutStorm, "Volumetrics.cs.hlsl", { { "CLOUD_AP_SHADOW", "" }, { "CLOUD_MAIN_DISPATCH", "" }, { "NO_CLOUD_STORMS", "" } } },
+		ShaderInfo{ &csVolMainVolcanic, "Volumetrics.cs.hlsl", { { "CLOUD_AP_SHADOW", "" }, { "CLOUD_MAIN_DISPATCH", "" }, { "VOLCANIC_STORMS_ONLY", "" } } },
+		ShaderInfo{ &csVolMainSingleVolcanic, "Volumetrics.cs.hlsl", { { "CLOUD_AP_SHADOW", "" }, { "CLOUD_MAIN_DISPATCH", "" }, { "VOLCANIC_STORMS_ONLY", "" }, { "SINGLE_CLOUD_STORM", "" } } },
+		ShaderInfo{ &csVolCubemapVolcanic, "Volumetrics.cs.hlsl", { { "CLOUD_REFLECTION", "" }, { "VOLCANIC_STORMS_ONLY", "" } }, "renderCubemap" },
+		ShaderInfo{ &csVolShadowVolcanic, "Volumetrics.cs.hlsl", { { "VOLCANIC_STORMS_ONLY", "" } }, "renderShadowVolume" },
+		ShaderInfo{ &csCloudAmbientDensityVolcanic, "Volumetrics.cs.hlsl", { { "VOLCANIC_STORMS_ONLY", "" } }, "buildCloudAmbientDensity" },
+		ShaderInfo{ &csVoxelView, "Volumetrics.cs.hlsl", { { "CLOUD_VOXELS", "" }, { "CLOUD_VOXEL_VIEW", "" }, { "NO_CLOUD_STORMS", "" } }, "renderVoxelView" },
+		ShaderInfo{ &csVoxelViewSingle, "Volumetrics.cs.hlsl", { { "CLOUD_VOXELS", "" }, { "CLOUD_VOXEL_SINGLE", "" }, { "CLOUD_VOXEL_VIEW", "" }, { "NO_CLOUD_STORMS", "" } }, "renderVoxelView" },
+		ShaderInfo{ &csVoxelComposite, "Volumetrics.cs.hlsl", { { "CLOUD_VOXELS", "" }, { "CLOUD_VOXEL_VIEW", "" }, { "NO_CLOUD_STORMS", "" } }, "compositeVoxelView" },
+		ShaderInfo{ &csVoxelLighting, "Volumetrics.cs.hlsl", { { "CLOUD_VOXELS", "" } }, "buildVoxelLighting" },
+		ShaderInfo{ &csVolCubemapVoxel, "Volumetrics.cs.hlsl", { { "CLOUD_REFLECTION", "" }, { "CLOUD_VOXELS", "" }, { "CLOUD_VOXEL_COARSE", "" } }, "renderCubemap" },
+		ShaderInfo{ &csVolShadowVoxel, "Volumetrics.cs.hlsl", { { "CLOUD_VOXELS", "" } }, "renderShadowVolume" },
+		ShaderInfo{ &csCloudAmbientDensityVoxel, "Volumetrics.cs.hlsl", { { "CLOUD_VOXELS", "" } }, "buildCloudAmbientDensity" },
 		ShaderInfo{ &csVolFilter, "Volumetrics.cs.hlsl", {}, "filterCloud" },
 		ShaderInfo{ &csVolReproject, "Volumetrics.cs.hlsl", {}, "reproject" },
 		ShaderInfo{ &csVolCubeReproject, "Volumetrics.cs.hlsl", {}, "reprojectCubemap" },
 		ShaderInfo{ &csVolShadowVolume, "Volumetrics.cs.hlsl", {}, "renderShadowVolume" },
 		ShaderInfo{ &csVolShadowResample, "Volumetrics.cs.hlsl", {}, "resampleShadowVolume" },
-		ShaderInfo{ &csVolCubemap, "Volumetrics.cs.hlsl", {}, "renderCubemap" },
+		ShaderInfo{ &csVolCubemap, "Volumetrics.cs.hlsl", { { "CLOUD_REFLECTION", "" } }, "renderCubemap" },
 		ShaderInfo{ &csCloudCrossSection, "CloudCrossSection.cs.hlsl", {} }
 	};
 
@@ -926,6 +959,19 @@ void PhysicalSky::RenderCloudBoundary(const CloudBoundaryCB& a_data, NdfTextureS
 	}
 }
 
+void CloudStormManager::UpdateLighting(float dropletDiameter)
+{
+	if (lightingRevision == revision && lightingDiameter == dropletDiameter)
+		return;
+	const CloudMiePhase phase(dropletDiameter);
+	for (auto& instance : active) {
+		instance.ambientPhase = phase.AmbientPhase(instance.driftDensity.w);
+		instance.msCalibration = CloudMsCoefficients(instance.driftDensity.w, phase);
+	}
+	lightingRevision = revision;
+	lightingDiameter = dropletDiameter;
+}
+
 void PhysicalSky::UpdateCloudWind()
 {
 	auto* ui = globals::game::ui;
@@ -943,6 +989,7 @@ void PhysicalSky::UpdateCloudWind()
 	volWind.highOffset[0] += highVelocity.x * elapsed;
 	volWind.highOffset[1] += highVelocity.y * elapsed;
 	volWind.phase += CloudUnitParameter(layer.wind.development) * 0.03 * elapsed;
+	volWind.stormTime += elapsed;
 	const float2 altitude = layer.low.GetNdfAltitudeRangeKm();
 	const float span = altitude.y - altitude.x;
 	const float heightFraction = span / std::max(layer.cirrus.GetAltitudeKm() - (altitude.x + altitude.y) * 0.5f, span);
@@ -1033,6 +1080,16 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const auto localAltitude = localNdfManager.GetAltitude();
 	const float lowCloudTraceBottomKm = localAltitude.y > 0.f ? std::min(lowCloudBaseKm, localAltitude.x * 0.001f) : lowCloudBaseKm;
 	const float lowCloudTraceTopKm = localAltitude.y > 0.f ? std::max(lowCloudTopKm, (localAltitude.x + localAltitude.y) * 0.001f) : lowCloudTopKm;
+	const auto stormAltitude = cloudStormManager.Altitude();
+	const bool stormActive = cloudStormManager.Count() > 0;
+	float volumeBottomKm = stormActive ? std::min(lowCloudTraceBottomKm, stormAltitude.x * 0.001f) : lowCloudTraceBottomKm;
+	float volumeTopKm = stormActive ? std::max(lowCloudTraceTopKm, stormAltitude.y * 0.001f) : lowCloudTraceTopKm;
+	const bool voxelActive = voxelCloudManager.Count() > 0;
+	if (voxelActive) {
+		const auto altitude = voxelCloudManager.Altitude();
+		volumeBottomKm = std::min(volumeBottomKm, altitude.x * .001f);
+		volumeTopKm = std::max(volumeTopKm, altitude.y * .001f);
+	}
 
 	const uint32_t lowW = (renderW + 3u) / 4u;
 	const uint32_t lowH = (renderH + 3u) / 4u;
@@ -1064,8 +1121,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.previousCamera = volHistoryCamera,
 		.planetRadius = cbData.rPlanet,
 
-		.lowestCloudAltitude = KilometersToGameUnits(lowCloudTraceBottomKm),
-		.highestCloudAltitude = KilometersToGameUnits(lowCloudTraceTopKm),
+		.lowestCloudAltitude = KilometersToGameUnits(volumeBottomKm),
+		.highestCloudAltitude = KilometersToGameUnits(volumeTopKm),
 		.lowCloudBaseAltitude = KilometersToGameUnits(lowCloudBaseKm),
 		.lowCloudTopAltitude = KilometersToGameUnits(lowCloudTopKm),
 
@@ -1074,8 +1131,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.cloudCurvatureRadius = cloudCurvatureRadius,
 		.cloudEvolutionDelta = static_cast<float>((volWind.phase - previousWind.phase) / (phasePeriod * 0.0034834063 * Util::Units::GAME_UNIT_TO_M)),
 
-		.shadowVolumeBottom = KilometersToGameUnits(low.GetShadowBottomKm(lowCloudTraceBottomKm, settings.shadowVolumeRange, kShadowVolW)),
-		.shadowVolumeTop = KilometersToGameUnits(lowCloudTraceTopKm),
+		.shadowVolumeBottom = KilometersToGameUnits(low.GetShadowBottomKm(volumeBottomKm, settings.shadowVolumeRange, kShadowVolW)),
+		.shadowVolumeTop = KilometersToGameUnits(volumeTopKm),
 		.historyValid = volMainHistoryValid ? 1u : 0u,
 		.cirrusEnabled = renderCirrus ? 1u : 0u,
 
@@ -1122,7 +1179,14 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.localNdfAltitude = localAltitude,
 		.localNdfAuxiliary = ndfManager.GetHeightAuxiliaryRange(),
 		.lowCloudPhase = lowCloudPhase.coefficients,
+		.stormCount = cloudStormManager.Count(),
+		.voxelCount = voxelCloudManager.Count(),
+		.voxelAltitude = voxelCloudManager.Altitude(),
 	};
+	cloudStormManager.UpdateLighting(lighting.dropletDiameter);
+	cloudStormManager.UpdateMotion(volWind.stormTime, previousWind.stormTime,
+		CloudVelocity(settings.cloudLayer.wind.lowVelocity), CloudVelocity(settings.cloudLayer.wind.highVelocity),
+		(lowAltitudeRange.x + lowAltitudeRange.y) * 500.f, settings.cloudLayer.cirrus.GetAltitudeKm() * 1000.f);
 	cloudData.msTransportExtinction = 1.f - cloudData.msAlbedo * static_cast<float>(lowCloudPhase.MeanCosine());
 	cloudData.msBoundaryWidth = std::clamp(lighting.msBoundaryWidth, 1.f, 200.f);
 	cloudData.msCalibration = CloudMsCoefficients(cloudData.msAlbedo, lowCloudPhase);
@@ -1139,6 +1203,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 	auto* cloudConstants = volCloudCb->CB();
 	context->CSSetConstantBuffers(1, 1, &cloudConstants);
+	if (voxelActive)
+		voxelCloudManager.Bind();
 	std::array<ID3D11ShaderResourceView*, 12> srvs = {
 		texTrLut->srv.get(),                                                  // t1
 		texApLut->srv.get(),                                                  // t2
@@ -1156,24 +1222,34 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	ID3D11ShaderResourceView* ambientShSrv = texVolCloudAmbientSH ? texVolCloudAmbientSH->srv.get() : nullptr;
 	std::array<ID3D11SamplerState*, 3> samplers = { sampTileable.get(), sampTr.get(), sampSv.get() };
 	context->CSSetSamplers(2, (uint)samplers.size(), samplers.data());
+	if (voxelActive && a_pass == VolumetricCloudPass::kMainViewAndCubemap)
+		voxelCloudManager.UpdateLighting(csVoxelLighting.get(), cloudData.dirlightDir);
 	if (a_pass == VolumetricCloudPass::kMainViewAndCubemap && texVolCloudAmbientSH) {
 		state->BeginPerfEvent("Volumetric Clouds: Ambient SH");
 		ID3D11ShaderResourceView* nullAmbientSrv = nullptr;
 		context->CSSetShaderResources(13, 1, &nullAmbientSrv);
 		auto* groundReflection = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS].SRV;
 		context->CSSetShaderResources(39, 1, &groundReflection);
-		std::array<ID3D11UnorderedAccessView*, 1> ambientUavs = { texVolCloudAmbientSH->uav.get() };
+		auto* partialOutput = texCloudAmbientPartial->uav.get();
 		context->CSSetShaderResources(1, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)ambientUavs.size(), ambientUavs.data(), nullptr);
+		context->CSSetUnorderedAccessViews(1, 1, &partialOutput, nullptr);
 		context->CSSetShader(csVolAmbientSH.get(), nullptr, 0);
 		globals::profiler->BeginPass("PhysicalSky::VolumetricCloudAmbientSH");
+		context->Dispatch(8, 1, 1);
+		ID3D11UnorderedAccessView* nullUav = nullptr;
+		context->CSSetUnorderedAccessViews(1, 1, &nullUav, nullptr);
+		auto* partialInput = texCloudAmbientPartial->srv.get();
+		context->CSSetShaderResources(90, 1, &partialInput);
+		auto* ambientShOutput = texVolCloudAmbientSH->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &ambientShOutput, nullptr);
+		context->CSSetShader(csCloudAmbientReduce.get(), nullptr, 0);
 		context->Dispatch(1, 1, 1);
 		globals::profiler->EndPass();
+		context->CSSetShaderResources(90, 1, &nullAmbientSrv);
 		context->CSSetShaderResources(39, 1, &nullAmbientSrv);
 
-		ID3D11UnorderedAccessView* nullUav = nullptr;
 		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-		if (cloudData.ambientStrength > 0.f && cloudData.msAlbedo > 0.f) {
+		if (cloudData.ambientStrength > 0.f && (cloudData.msAlbedo > 0.f || cloudData.stormCount > 0u)) {
 			context->CSSetShaderResources(13, 1, &ambientShSrv);
 			auto* ambientOutput = texCloudAmbientLighting->uav.get();
 			context->CSSetUnorderedAccessViews(0, 1, &ambientOutput, nullptr);
@@ -1193,6 +1269,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const auto localMaps = localNdfManager.GetTextures();
 	ID3D11ShaderResourceView* localSrvs[] = { localMaps.height, localMaps.modeling, localNdfManager.GetMaximum(), localNdfManager.GetWeights() };
 	context->CSSetShaderResources(32, 4, localSrvs);
+	ID3D11ShaderResourceView* stormSrvs[] = { cloudStormManager.Height(), cloudStormManager.Modeling(), cloudStormManager.Data() };
+	context->CSSetShaderResources(55, 3, stormSrvs);
 
 	if (a_pass == VolumetricCloudPass::kShadowVolume) {
 		// Shadow path: accumulate the cloud extinction column into the 3D shadow
@@ -1204,7 +1282,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 		context->CSSetShaderResources(1, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(csVolShadowVolume.get(), nullptr, 0);
+		context->CSSetShader(voxelActive ? csVolShadowVoxel.get() : (cloudStormManager.VolcanicOnly() && csVolShadowVolcanic ? csVolShadowVolcanic.get() : csVolShadowVolume.get()), nullptr, 0);
 
 		// Dispatch based on dominant light direction component
 		const float shadowRangeGu = KilometersToGameUnits(settings.shadowVolumeRange);
@@ -1257,18 +1335,24 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			context->CSSetUnorderedAccessViews(6, 1, &nullBoundsUav, nullptr);
 			auto* boundsInput = texCloudHeightBoundsTiles->srv.get();
 			context->CSSetShaderResources(16, 1, &boundsInput);
+			context->CSSetShaderResources(54, 1, &boundsInput);
 			boundsOutput = texCloudHeightBounds->uav.get();
 			context->CSSetUnorderedAccessViews(6, 1, &boundsOutput, nullptr);
+			auto* weatherBoundsOutput = texCloudWeatherBounds->uav.get();
+			context->CSSetUnorderedAccessViews(5, 1, &weatherBoundsOutput, nullptr);
 			context->CSSetShader(csCloudHeightBoundsReduce.get(), nullptr, 0);
 			context->Dispatch(1, 1, 1);
 			context->CSSetUnorderedAccessViews(6, 1, &nullBoundsUav, nullptr);
+			context->CSSetUnorderedAccessViews(5, 1, &nullBoundsUav, nullptr);
 			globals::profiler->EndPass();
 			state->EndPerfEvent();
 		}
 		auto* heightBounds = texCloudHeightBounds->srv.get();
 		context->CSSetShaderResources(16, 1, &heightBounds);
+		auto* weatherBounds = texCloudWeatherBounds->srv.get();
+		context->CSSetShaderResources(89, 1, &weatherBounds);
 
-		if (cloudData.ambientStrength > 0.f && cloudData.msAlbedo > 0.f) {
+		if (cloudData.ambientStrength > 0.f && (cloudData.msAlbedo > 0.f || cloudData.stormCount > 0u)) {
 			state->BeginPerfEvent("Volumetric Clouds: Ambient Transport");
 			globals::profiler->BeginPass("PhysicalSky::CloudAmbientTransport");
 			ID3D11ShaderResourceView* nullSrv = nullptr;
@@ -1308,7 +1392,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 			output = texCloudAmbientDensity->uav.get();
 			context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
-			context->CSSetShader(csCloudAmbientDensity.get(), nullptr, 0);
+			context->CSSetShader(voxelActive ? csCloudAmbientDensityVoxel.get() : (cloudStormManager.VolcanicOnly() && csCloudAmbientDensityVolcanic ? csCloudAmbientDensityVolcanic.get() : csCloudAmbientDensity.get()), nullptr, 0);
 			context->Dispatch(width / 4, width / 4, depth / 4);
 			context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
 			auto* density = texCloudAmbientDensity->srv.get();
@@ -1379,6 +1463,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		context->PSSetShaderResources(114, 2, nullOutputs);
 		context->PSSetShaderResources(116, 1, nullOutputs);
 		texVolCubeTr.swap(texVolCubeHistoryTr);
+		const auto voxelRect = voxelCloudManager.ScreenRect(cloudData.bottomZ, (renderW + 1u) / 2u, (renderH + 1u) / 2u);
+		const bool voxelVisible = voxelRect[2] > voxelRect[0] && voxelRect[3] > voxelRect[1] && !state->isMapMenuOpen;
 		texVolCubeLum.swap(texVolCubeHistoryLum);
 		texVolCubeAux.swap(texVolCubeHistoryAux);
 		context->CSSetShaderResources(1, (uint)srvs.size(), srvs.data());
@@ -1421,11 +1507,66 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			texVolAux.swap(texVolHistoryAux);
 			uavs = { texVolLowTr->uav.get(), texVolLowLum->uav.get(), texVolLowAux->uav.get() };
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-			context->CSSetShader(csVolMainView.get(), nullptr, 0);
+			auto* stormMotionOutput = texVolStormMotion->uav.get();
+			context->CSSetUnorderedAccessViews(6, 1, &stormMotionOutput, nullptr);
+			auto stormRect = cloudStormManager.ScreenRect(cloudData.bottomZ, lowW, lowH);
+			const bool stormVisible = stormRect[2] > stormRect[0] && stormRect[3] > stormRect[1];
+			cloudDispatchCb->Update(stormRect);
+			auto* dispatchConstants = cloudDispatchCb->CB();
+			context->CSSetConstantBuffers(3, 1, &dispatchConstants);
 			globals::profiler->BeginPass("PhysicalSky::VolumetricMainView");
+			if (stormVisible) {
+				auto* tilesOutput = texStormTiles->uav.get();
+				context->CSSetUnorderedAccessViews(7, 1, &tilesOutput, nullptr);
+				context->CSSetShader(csStormTiles.get(), nullptr, 0);
+				context->Dispatch((lowW + 63u) / 64u, (lowH + 63u) / 64u, 1);
+				context->CSSetUnorderedAccessViews(7, 1, nullUavs, nullptr);
+				auto* tilesInput = texStormTiles->srv.get();
+				context->CSSetShaderResources(88, 1, &tilesInput);
+			}
+			// Ordinary pixels retain the small, storm-free shader even while a storm
+			// is visible. The two dispatches write disjoint pixels of the same outputs.
+			context->CSSetShader(csVolMainWithoutStorm.get(), nullptr, 0);
 			context->Dispatch((lowW + 7u) >> 3, (lowH + 7u) >> 3, 1);
+			if (stormVisible) {
+				const bool volcanic = cloudStormManager.VolcanicOnly() && csVolMainVolcanic;
+				auto* singleConstants = volcanic && csVolMainSingleVolcanic ? cloudStormManager.SingleData() : nullptr;
+				winrt::com_ptr<ID3D11Buffer> previousConstants;
+				if (singleConstants) {
+					context->CSGetConstantBuffers(0, 1, previousConstants.put());
+					context->CSSetConstantBuffers(0, 1, &singleConstants);
+				}
+				context->CSSetShader(singleConstants ? csVolMainSingleVolcanic.get() : (volcanic ? csVolMainVolcanic.get() : csVolMainView.get()), nullptr, 0);
+				const uint32_t groupWidth = volcanic ? 16u : 8u;
+				const uint32_t groupHeight = volcanic && !singleConstants ? 4u : 8u;
+				context->Dispatch((stormRect[2] - stormRect[0] + groupWidth - 1u) / groupWidth,
+					(stormRect[3] - stormRect[1] + groupHeight - 1u) / groupHeight, 1);
+				if (singleConstants) {
+					auto* previous = previousConstants.get();
+					context->CSSetConstantBuffers(0, 1, &previous);
+				}
+			}
 			globals::profiler->EndPass();
+			context->CSSetShaderResources(88, 1, nullOutputs);
+			stormMotionOutput = nullptr;
+			context->CSSetUnorderedAccessViews(6, 1, &stormMotionOutput, nullptr);
+			dispatchConstants = nullptr;
+			context->CSSetConstantBuffers(3, 1, &dispatchConstants);
 			context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
+			if (voxelVisible) {
+				cloudDispatchCb->Update(voxelRect);
+				dispatchConstants = cloudDispatchCb->CB();
+				context->CSSetConstantBuffers(3, 1, &dispatchConstants);
+				std::array<ID3D11UnorderedAccessView*, 2> voxelOutputs = { texVoxelViewColor->uav.get(), texVoxelViewDepth->uav.get() };
+				context->CSSetUnorderedAccessViews(0, 2, voxelOutputs.data(), nullptr);
+				context->CSSetShader(voxelCloudManager.Count() == 1 && csVoxelViewSingle ? csVoxelViewSingle.get() : csVoxelView.get(), nullptr, 0);
+				globals::profiler->BeginPass("PhysicalSky::VoxelMainView");
+				context->Dispatch((voxelRect[2] - voxelRect[0] + 7u) / 8u, (voxelRect[3] - voxelRect[1] + 7u) / 8u, 1);
+				globals::profiler->EndPass();
+				context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
+				dispatchConstants = nullptr;
+				context->CSSetConstantBuffers(3, 1, &dispatchConstants);
+			}
 			context->CSSetShaderResources(14, 1, nullOutputs);
 			context->CSSetShaderResources(36, (uint)apShadowSrvs.size(), nullTemporalSrvs);
 			context->CSSetShaderResources(98, 1, nullOutputs);
@@ -1440,6 +1581,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			context->CSSetShaderResources(20, (uint)traceSrvs.size(), traceSrvs.data());
 			uavs = { texVolTr->uav.get(), texVolLum->uav.get(), texVolAux->uav.get() };
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			auto* stormMotionInput = texVolStormMotion->srv.get();
+			context->CSSetShaderResources(58, 1, &stormMotionInput);
 			context->CSSetShader(csVolReproject.get(), nullptr, 0);
 			globals::profiler->BeginPass("PhysicalSky::VolumetricReproject");
 			context->Dispatch((renderW + 7u) >> 3, (renderH + 7u) >> 3, 1);
@@ -1447,6 +1590,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 			context->CSSetShaderResources(17, (uint)historySrvs.size(), nullTemporalSrvs);
 			context->CSSetShaderResources(20, (uint)traceSrvs.size(), nullTemporalSrvs);
+			context->CSSetShaderResources(58, 1, nullTemporalSrvs);
 
 			std::array<ID3D11ShaderResourceView*, 3> resultSrvs = {
 				texVolTr->srv.get(), texVolLum->srv.get(), texVolAux->srv.get()
@@ -1474,16 +1618,47 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		}
 		outputSrvs[0] = texVolFilteredTr->srv.get();
 		outputSrvs[1] = texVolFilteredLum->srv.get();
+		if (voxelVisible) {
+			cloudDispatchCb->Update(voxelRect);
+			auto* constants = cloudDispatchCb->CB();
+			context->CSSetConstantBuffers(3, 1, &constants);
+			std::array<ID3D11ShaderResourceView*, 3> ndfOutputs = { texVolFilteredTr->srv.get(), texVolFilteredLum->srv.get(), texVolFilteredAux->srv.get() };
+			std::array<ID3D11ShaderResourceView*, 2> voxelInputs = { texVoxelViewColor->srv.get(), texVoxelViewDepth->srv.get() };
+			std::array<ID3D11UnorderedAccessView*, 3> combinedOutputs = { texVoxelCompositeTr->uav.get(), texVoxelCompositeLum->uav.get(), texVoxelCompositeAux->uav.get() };
+			context->CSSetShaderResources(29, 3, ndfOutputs.data());
+			context->CSSetShaderResources(86, 2, voxelInputs.data());
+			context->CSSetUnorderedAccessViews(3, 3, combinedOutputs.data(), nullptr);
+			context->CSSetShader(csVoxelComposite.get(), nullptr, 0);
+			globals::profiler->BeginPass("PhysicalSky::VoxelComposite");
+			context->Dispatch((renderW + 7u) / 8u, (renderH + 7u) / 8u, 1);
+			globals::profiler->EndPass();
+			context->CSSetShaderResources(29, 3, nullTemporalSrvs);
+			context->CSSetShaderResources(86, 2, nullTemporalSrvs);
+			context->CSSetUnorderedAccessViews(3, 3, nullUavs, nullptr);
+			constants = nullptr;
+			context->CSSetConstantBuffers(3, 1, &constants);
+			// Publish the complete result through the same textures consumed by
+			// ViewAtmosphere and later transparent draws. Raw NDF history is separate.
+			std::swap(texVolFilteredTr, texVoxelCompositeTr);
+			std::swap(texVolFilteredLum, texVoxelCompositeLum);
+			std::swap(texVolFilteredAux, texVoxelCompositeAux);
+			outputSrvs[0] = texVolFilteredTr->srv.get();
+			outputSrvs[1] = texVolFilteredLum->srv.get();
+		}
 
 		uavs = { texVolCubeTraceTr->uav.get(), texVolCubeTraceLum->uav.get(), texVolCubeTraceAux->uav.get() };
 		auto* reflectionBounds = texCloudHeightBoundsTiles->srv.get();
 		context->CSSetShaderResources(54, 1, &reflectionBounds);
+		auto* stormMotionOutput = texVolCubeStormMotion->uav.get();
+		context->CSSetUnorderedAccessViews(7, 1, &stormMotionOutput, nullptr);
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(csVolCubemap.get(), nullptr, 0);
+		context->CSSetShader(voxelActive ? csVolCubemapVoxel.get() : (cloudStormManager.VolcanicOnly() && csVolCubemapVolcanic ? csVolCubemapVolcanic.get() : csVolCubemap.get()), nullptr, 0);
 		globals::profiler->BeginPass("PhysicalSky::VolumetricCubemap");
-		context->Dispatch((kVolCubeSize / 4u + 15u) >> 4, (kVolCubeSize / 4u + 1u) >> 1, 6);
+		context->Dispatch(kVolCubeSize / 4u, kVolCubeSize / 4u, 6);
 		globals::profiler->EndPass();
 		context->CSSetShaderResources(54, 1, nullTemporalSrvs);
+		stormMotionOutput = nullptr;
+		context->CSSetUnorderedAccessViews(7, 1, &stormMotionOutput, nullptr);
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 		std::array<ID3D11ShaderResourceView*, 6> cubeSrvs = {
 			texVolCubeHistoryTr->srv.get(), texVolCubeHistoryLum->srv.get(), texVolCubeHistoryAux->srv.get(),
@@ -1492,14 +1667,18 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		context->CSSetShaderResources(23, (uint)cubeSrvs.size(), cubeSrvs.data());
 		uavs = { texVolCubeTr->uav.get(), texVolCubeLum->uav.get(), texVolCubeAux->uav.get() };
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		auto* stormMotionInput = texVolCubeStormMotion->srv.get();
+		context->CSSetShaderResources(59, 1, &stormMotionInput);
 		context->CSSetShader(csVolCubeReproject.get(), nullptr, 0);
 		globals::profiler->BeginPass("PhysicalSky::VolumetricCubeReproject");
 		context->Dispatch((kVolCubeSize + 7u) >> 3, (kVolCubeSize + 7u) >> 3, 6);
 		globals::profiler->EndPass();
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 		context->CSSetShaderResources(23, (uint)cubeSrvs.size(), nullTemporalSrvs);
+		context->CSSetShaderResources(59, 1, nullTemporalSrvs);
 		volMainHistoryValid = true;
 		volHistoryWind = volWind;
+		cloudStormManager.CommitMotion();
 		volHistoryViewProj = globals::game::frameBufferCached.GetCameraViewProj();
 		volHistoryCamera = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
 		volHistoryCurvatureRadius = cloudCurvatureRadius;
@@ -1509,11 +1688,12 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 	// Cleanup
 	{
-		ID3D11ShaderResourceView* nullSrvs[54] = {};
+		ID3D11ShaderResourceView* nullSrvs[86] = {};
 		ID3D11UnorderedAccessView* nullUavs[3] = {};
 		ID3D11Buffer* nullCb[1] = {};
 		ID3D11SamplerState* nullSamplers[3] = {};
 		context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
+		context->CSSetShaderResources(89, 1, nullSrvs);
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 		context->CSSetUnorderedAccessViews(3, 3, nullUavs, nullptr);
 		context->CSSetConstantBuffers(1, 1, nullCb);

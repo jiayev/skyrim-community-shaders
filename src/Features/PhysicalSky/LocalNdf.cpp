@@ -424,7 +424,7 @@ void LocalNdfManager::DrawSettings(NdfSettings& settings, const std::string& wor
 		ImGui::TextWrapped("%s", T(TKEY("local_ndf_maximum_hint"), "Maximum combines coverage and profile types independently, so they may come from different maps. It never clears background clouds and ignores modeling alpha for RGB. Height blending still uses alpha when enabled."));
 	ImGui::EndDisabled();
 	if (changed && editable) {
-		PhysicalSky::GetSingleton()->volMainHistoryValid = false;
+		globals::features::physicalSky.volMainHistoryValid = false;
 		SceneBlend selection;
 		selection.states.push_back({ { "value", state }, { "weight", 1.f } });
 		if (scene && entryIndex) {
@@ -446,7 +446,7 @@ void LocalNdfManager::DrawDebug(TextureManager& textures, float scale)
 	ImGui::Text("%s: %zu", T(TKEY("local_ndf_active"), "Active transition endpoints"), activeAssets.size());
 	ImGui::Text("%s: %.2f", T(TKEY("local_ndf_effective_texel"), "Effective texel size (m), atlas limited to 2048"), effectiveTexelSize);
 	ImGui::Text("XY: %.2f, %.2f; Z: %.2f .. %.2f", rect.x, rect.y, altitude.x, altitude.x + altitude.y);
-	auto* sky = PhysicalSky::GetSingleton();
+	auto& sky = globals::features::physicalSky;
 	for (size_t i = 0; i < activeAssets.size(); ++i) {
 		ImGui::PushID(static_cast<int>(i));
 		ImGui::Text("%s: %.4f", activeAssets[i].c_str(), layerWeights[i].x);
@@ -464,7 +464,7 @@ void LocalNdfManager::DrawDebug(TextureManager& textures, float scale)
 			}
 			globals::d3d::context->CopySubresourceRegion(preview->resource.get(), 0, 0, 0, 0, maps[map]->resource.get(), static_cast<UINT>(i), nullptr);
 			const auto id = "localState" + std::to_string(i) + "Map" + std::to_string(map);
-			sky->DrawDebugCloudTexture(preview->srv.get(), id.c_str(), labels[map], scale);
+			sky.DrawDebugCloudTexture(preview->srv.get(), id.c_str(), labels[map], scale);
 		}
 		ImGui::PopID();
 	}
@@ -478,9 +478,9 @@ void LocalNdfManager::DrawDebug(TextureManager& textures, float scale)
 			continue;
 		ImGui::PushID(static_cast<int>(i));
 		ImGui::TextUnformatted(sources[i].c_str());
-		sky->DrawDebugCloudTexture(textures.Query((path / "Height.dds").string()), "heightInput", T(TKEY("local_ndf_height_input"), "Height input"), scale);
-		sky->DrawDebugCloudTexture(textures.Query((path / "Modeling.dds").string()), "modelInput", T(TKEY("local_ndf_model_input"), "Modeling input / alpha mask"), scale);
-		sky->DrawDebugCloudTexture(textures.Query((path / "Mask.dds").string()), "maskInput", T(TKEY("local_ndf_mask_input"), "Optional mask input"), scale, true);
+		sky.DrawDebugCloudTexture(textures.Query((path / "Height.dds").string()), "heightInput", T(TKEY("local_ndf_height_input"), "Height input"), scale);
+		sky.DrawDebugCloudTexture(textures.Query((path / "Modeling.dds").string()), "modelInput", T(TKEY("local_ndf_model_input"), "Modeling input / alpha mask"), scale);
+		sky.DrawDebugCloudTexture(textures.Query((path / "Mask.dds").string()), "maskInput", T(TKEY("local_ndf_mask_input"), "Optional mask input"), scale, true);
 		ImGui::PopID();
 	}
 	ImGui::TreePop();
