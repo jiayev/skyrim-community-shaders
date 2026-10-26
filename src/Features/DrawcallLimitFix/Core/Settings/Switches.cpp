@@ -53,7 +53,7 @@ namespace DCLF
 		// One row per switch, in Switch order (checked below).
 		constexpr Entry kRegistry[] = {
 			{ Dclf, "CS_DCLF", F, Reduced::Zero, false, "0: DCLF does not install" },
-			{ AsyncPriority, "CS_DCLF_ASYNC_PRIORITY", F, N, false, "normal: the coordinator and scene threads keep normal priority instead of above normal; noboost: workers are not raised to a ParallelFor caller's priority while they hold its chunks" },
+			{ AsyncPriority, "CS_DCLF_ASYNC_PRIORITY", F, N, false, "normal: the coordinator and scene threads keep normal priority instead of above normal (and frame-critical jobs run at normal); noboost: workers are not raised to a ParallelFor caller's priority while they hold its chunks, nor for frame-critical jobs (the CPU pipeline's culls)" },
 			{ AsyncCompute, "CS_DCLF_ASYNC_COMPUTE", F, Reduced::Zero, false,
 				"0: the passes that prefer the compute queue (build-draws' queries, fades, portal batches, tree wind) run on the graphics queue" },
 			{ ForwardPlain, "CS_DCLF_FORWARD_PLAIN", F, Reduced::Zero, false,
@@ -69,6 +69,7 @@ namespace DCLF
 			{ LazyRows, "CS_DCLF_LAZY_ROWS", F, Reduced::Zero, false,
 				"0: a pulled build reads every row block member into a static at entry (live through the shader) instead of loading each where it is used" },
 			{ Workers, "CS_DCLF_WORKERS", F, N, false, "the preparation pool's threads (default hardware threads - 2, at least 1)" },
+			{ FrameWorkers, "CS_DCLF_FRAME_WORKERS", F, N, false, "the frame-critical threads (default a quarter of the preparation pool, at least 2; 0: none, the preparation workers alone take frame-critical jobs)" },
 			{ SceneCopies, "CS_DCLF_SCENE_COPIES", F, N, false,
 				"the copies a frame's scene values keep per pool class (FrameValues' rows; default 3, 2 to the frames in flight): a frame's producer reuses the copy the oldest in-flight frame bound, its uploads waiting on the GPU for that frame" },
 			{ Fanout, "CS_DCLF_FANOUT", F, N, false,
@@ -80,7 +81,7 @@ namespace DCLF
 			{ CpuRecord, "CS_DCLF_CPU_RECORD", F, N, false, "serial (default)|parallel: the CPU pipeline's per-frame views recorded by DXVK's CS thread, or into a secondary list per batch on the pool (live toggle's seed)" },
 			{ CpuCadence, "CS_DCLF_CPU_CADENCE", F, N, false,
 				"frame|snapshot, or <view>=frame|snapshot,...: the CPU pipeline's views culled and recorded every frame (default) or once per snapshot (main is always per frame; live toggles' seeds)" },
-			{ CpuBatch, "CS_DCLF_CPU_BATCH", F, N, false, "the CPU pipeline's batch lanes (default 256, rounded up to a multiple of 8), at startup" },
+			{ CpuBatch, "CS_DCLF_CPU_BATCH", F, N, false, "the CPU pipeline's batch lanes (default 4096, rounded up to a multiple of 8; the live setting's seed: dclf:cpu-batch, the menu)" },
 			// (Features/Skins' CS_DCLF_SKINNED, then its CS_DCLF_SKIN_PARTITIONS, are listed here, after CS_DCLF_CULL; Features/Actors',
 			// Features/TreeWind's and Features/Decals' switches after CS_DCLF_SKIN_PARTITIONS; then Features/Landscape's CS_DCLF_MTLAND and
 			// Integrations/TerrainBlending's CS_DCLF_TB_TERRAIN, before Features/Forward's CS_DCLF_FORWARD; then Features/Effects'

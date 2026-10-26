@@ -21,6 +21,7 @@
 #include <deque>
 #include <memory>
 #include <vector>
+#include <Tracy/Tracy.hpp>
 
 namespace DCLF::Direct::detail
 {
@@ -177,6 +178,7 @@ namespace DCLF::Direct
 
 	void ShadowCommitted(const ShadowCommitInputs& a_inputs)
 	{
+		ZoneScopedN("CS.DCLF.Cpu.ShadowCommitted");
 		auto& s = S();
 		auto* slot = s.current;
 		if (!slot || !slot->set || !a_inputs.shape || !a_inputs.resources || !a_inputs.adopted)

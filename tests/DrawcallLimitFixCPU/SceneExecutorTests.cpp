@@ -293,6 +293,63 @@ void TestParallelForPriority()
 	fakePriority = 0;
 }
 
+// A frame-critical job is taken before the preparation jobs queued ahead of it, at ThreadPriority::frameCritical, and the worker goes
+// back to its own priority after it.
+void TestFrameCritical()
+{
+	std::atomic_uint sets{ 0 };
+	auto priority = FakePriority(sets);
+	priority.frameCritical = 2;
+	Executor executor(1, FakeStart(), std::move(priority));
+	const auto scope = executor.CreateScope("frame critical");
+	std::promise<void> release, blocking;
+	const auto gate = release.get_future().share();
+	auto blocked = blocking.get_future();
+	assert(executor.SubmitCpu(scope, 0, 1, "blocking", [&](const auto&) {
+		blocking.set_value();
+		gate.wait();
+	}));
+	Ready(blocked);
+	std::mutex orderMutex;
+	std::vector<std::pair<char, int>> order;  // (job, its priority)
+	const auto note = [&](char a_job) {
+		std::lock_guard lock(orderMutex);
+		order.emplace_back(a_job, fakePriority);
+	};
+	assert(executor.SubmitCpu(scope, 0, 1, "queued first", [&](const auto&) { note('a'); }));
+	assert(executor.DispatchFrameCritical(scope, "critical", [&](const auto&) { note('c'); }));
+	assert(!executor.DispatchFrameCritical(scope, "no task", {}));
+	release.set_value();
+	scope->Wait();
+	assert(order.size() == 2 && order[0] == std::make_pair('c', 2) && order[1] == std::make_pair('a', -1));
+	assert(sets.load() == 2);
+	for (const int seen : WorkerPriorities(executor, 1))
+		assert(seen == -1);
+	assert(executor.GetStatistics().rejected == 1);
+	// A frame-critical thread takes it while every preparation worker is busy, and takes no other job.
+	std::atomic_uint frameStarts{ 0 };
+	Executor withThreads(1, [&](org::async::TaskClass a_class, unsigned) { frameStarts += a_class.domain == Executor::FrameCriticalThread.domain; }, {}, 1);
+	const auto busy = withThreads.CreateScope("busy");
+	std::promise<void> free, held;
+	const auto hold = free.get_future().share();
+	auto holding = held.get_future();
+	assert(withThreads.SubmitCpu(busy, 0, 1, "holding the worker", [&](const auto&) {
+		held.set_value();
+		hold.wait();
+	}));
+	Ready(holding);
+	std::promise<std::thread::id> ran;
+	auto ranOn = ran.get_future();
+	std::atomic_bool queuedRan{ false };
+	assert(withThreads.SubmitCpu(busy, 0, 1, "behind the held worker", [&](const auto&) { queuedRan = true; }));
+	assert(withThreads.DispatchFrameCritical(busy, "critical", [&](const auto&) { ran.set_value(std::this_thread::get_id()); }));
+	const auto criticalThread = Ready(ranOn);
+	assert(criticalThread != std::this_thread::get_id() && !queuedRan.load() && frameStarts.load() == 1);
+	free.set_value();
+	busy->Wait();
+	assert(queuedRan.load());
+}
+
 // The caller waits only for a chunk a helper holds, and that wait is reported under its name; helpers that start late do nothing.
 void TestParallelForWaitAndLateHelpers()
 {
@@ -355,4 +412,5 @@ int main()
 	TestParallelForCoverage();
 	TestParallelForPriority();
 	TestParallelForWaitAndLateHelpers();
+	TestFrameCritical();
 }

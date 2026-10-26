@@ -27,6 +27,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
@@ -286,7 +287,7 @@ namespace DCLF::Features::Fades
 			return word;
 		}
 
-		/** @brief The frame's producer state a root's step reads. */
+		/** @brief The frame's producer state a root's step reads; events and marked are its chunk's own (StepRoots). */
 		struct StepContext
 		{
 			const CpuStageInput& input;
@@ -295,6 +296,7 @@ namespace DCLF::Features::Fades
 			FrameStorage& storage;
 			std::vector<FadeNodeState>& states;
 			std::vector<FadeEvent>& events;
+			std::vector<std::uint32_t>& marked;  // the slots whose state changed, for cpuStates.Mark (not thread-safe)
 			std::size_t animatedAt = 0;
 		};
 
@@ -356,7 +358,7 @@ namespace DCLF::Features::Fades
 					if (updates)
 						state.verdict |= kFadeVerdictAnimated | (updates << 5);
 					state.frame = input.sceneFrame;
-					cpuStates.Mark(a_slot);
+					a_context.marked.push_back(a_slot);
 					Report(a_context, a_slot, root, state);
 				}
 			}
@@ -394,6 +396,7 @@ namespace DCLF::Features::Fades
 			frame->rootPrograms = s.rootPrograms;
 			frame->programs = s.programs;
 			frame->portalTest = &::DCLF::Portals::PortalTestCpu;
+			frame->portalTestBatch = &::DCLF::Portals::PortalTestCpuBatch;
 			frame->fadeEye = a_input.fadeEye;
 			frame->treeHeight = a_input.treeHeight;
 			frame->tables = a_input.tables;
@@ -432,10 +435,28 @@ namespace DCLF::Features::Fades
 				if ((*input->rootPrograms)[r] < count)
 					storage->rootPrograms[r] = (*input->rootPrograms)[r];
 			storage->programs = input->programs;
+			// The roots in chunks on the pool (a root's step touches its own slot alone; the culls wait for this stage): each chunk's
+			// events and marks kept apart, then taken in root order, as one pass would make them.
+			constexpr std::size_t kRootGrain = 1024;
+			const std::size_t chunks = (roots + kRootGrain - 1) / kRootGrain;
+			std::vector<std::vector<FadeEvent>> chunkEvents(chunks);
+			std::vector<std::vector<std::uint32_t>> chunkMarked(chunks);
+			const auto& seeds = ProducerSeeds();
+			SceneScheduler::Executor().ParallelFor("CS.DCLF.FadeCpuStage.Roots", roots, kRootGrain, [&](std::size_t a_begin, std::size_t a_end) {
+				const std::size_t chunk = a_begin / kRootGrain;
+				StepContext context{ *input, list, seeds, *storage, states, chunkEvents[chunk], chunkMarked[chunk] };
+				context.animatedAt = static_cast<std::size_t>(std::lower_bound(input->animated.begin(), input->animated.end(), a_begin,
+																	[](const auto& a_entry, std::size_t a_slot) { return a_entry.first < a_slot; }) -
+															  input->animated.begin());
+				for (std::size_t r = a_begin; r < a_end; ++r)
+					StepRoot(context, static_cast<std::uint32_t>(r));
+			});
 			std::vector<FadeEvent> events;
-			StepContext context{ *input, list, ProducerSeeds(), *storage, states, events };
-			for (std::uint32_t r = 0; r < roots; ++r)
-				StepRoot(context, r);
+			for (std::size_t c = 0; c < chunks; ++c) {
+				events.insert(events.end(), chunkEvents[c].begin(), chunkEvents[c].end());
+				for (const std::uint32_t slot : chunkMarked[c])
+					cpuStates.Mark(slot);
+			}
 			if (input->scene && input->scene->fadeWriteBack)
 				PostCpuFadeEvents(*input->scene->fadeWriteBack, input->sceneFrame, std::move(events));
 			Direct::PublishCullFrame(MakeCullFrame(*input, a_producer.seq, storage));

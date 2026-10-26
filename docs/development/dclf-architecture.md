@@ -176,6 +176,13 @@ DCLF is persistent: once a frame installs claims, no frame hands drawing back to
     resources is posted at the `Setup` that made them (`PostResourcesAhead`; a work item made for other resources builds from it,
     `RefreshWorkContext`); the publication gate's scene-pass half is open while the frame waits; the owner thread's requests
     (shadow view slots, a build, the tickets a recording waits for) are served in the wait.
+-   **Nothing the builder waits for needs the next frame.** A payload version may need a backing that only the last frames'
+    retirement frees, so the wait keeps the GPU side moving as frames would: DXVK's stream is flushed when something was queued
+    since its last flush (`Direct::SubmitQueued`: a CPU frame's signal is queued after its Present, into DXVK's next list), the
+    host's submissions are reported retired once its submitted point is reached (`PollHostRetirement`: the host reports them only
+    when it reuses a slot), and CPU frame slots whose work is done are released (`Direct::ReleaseCompletedSlots`: their batch
+    sets hold their payloads' versions). After CPU frames no frame waits for their signals; their slots are released as they
+    complete.
 -   **Five seconds without a snapshot**, or a frame its adopted snapshot does not cover after the wait, is a defect
     (`stl::report_and_fail` with what it waited for or the coverage state), never a fallback.
 -   **The one uncoverable frame** is the one whose colour pass made new main resources: no revision it adopted at its start is
@@ -2637,10 +2644,35 @@ stand-ins and the engine boundary are the GPU path's: the same objects are DCLF'
 **The frame.**
 -   **View batches.** The snapshot builder makes, with each snapshot made for a CPU graph, one immutable `ViewBatchSet`
     (`Core/Render/Snapshot/ViewBatches.cpp`, `MakeViewBatches`): a list per view type (main, decal, forward, refraction, sun, spot,
-    point, the two occluder maps, reflection, first person) of fixed-size SoA batches (256 lanes, `CS_DCLF_CPU_BATCH`), ordered
+    point, the two occluder maps, reflection, first person) of fixed-size SoA batches (4096 lanes by default: `CS_DCLF_CPU_BATCH`, the menu, `dclf:cpu-batch`), ordered
     by pipeline bucket then object, with resident sequences (one resolved `DrawSequence` per drawn object, partition and view
     class) in a pooled version of their own. FrameValues' producer writes the movers' spheres into the batches' live column of
     its parity.
+-   **Scene lists, kept between sets** (`Core/Render/Snapshot/SceneLists.cpp`, `dclf:cpu-exp` bit 5, on by default). A set is
+    not built whole per snapshot. It is assembled from three segments per view:
+    -   a **base**, sorted, shared by every set until the next compaction, with a dead bitmap per set (`ViewBatch::dead`, which the
+        cull ANDs into its pass);
+    -   a **delta**, the lanes appended since the base;
+    -   a **volatile** segment, rebuilt per set: the tails' inputs, inputs with a stream row, and the decals, whose order matters.
+
+    The resident region's journal (`ChangeJournal::Snapshot::ForEachRun`, keyed by object slot, since region indices swap on
+    removal) gives the changed objects. The geometry slots' journal, the snapshot spheres and the mover flag re-emit the objects
+    that depend on them. A changed object's lanes are tombstoned and its new lanes appended. The sequences are an append-only
+    persistent store, then the set's volatile ones. Each set's version is built from its predecessor's: a GPU copy, plus a delta
+    upload of the appends and the volatile region. Compaction rebuilds the base. It runs synchronously when a global input
+    changes (the batch lanes, the Z groups, a shadow slot key, the main-ness, a full journal resync) and asynchronously on the
+    pool at thresholds (delta above a quarter of the base, dead lanes above a quarter, dead sequences above a half). The
+    asynchronous result is adopted at a later set and caught up from its snapshot's epochs. In the heavy exterior, turning, a set
+    costs 1-2 ms on the builder against ~18 ms whole, and uploads ~440 KB against ~20 MB. Bit 29 (`kExpIncrementalCheck`,
+    opt-in) builds every 2nd set whole as well and compares the two per view as multisets of lanes and sequences ("check: N sets,
+    M lanes differ" on the scene lists line). Bit 5 off is the whole build per set, for A/B in one launch.
+-   **Relative rows.** A direct draw's sequence holds its rows as offsets (`kDirectFlagRelativeRows`). The list pushes the set's
+    row bases once (`kDirectDrawPushRowBases`: the pipeline and material rows', or the shadow rows'), so resident sequences
+    outlive the payload's row versions. The list also pushes the frame's copy of the animated material rows
+    (`kDirectDrawPushAnimatedRows`, the latch's `animatedRows`). A row whose header names an animated row is drawn from that copy
+    (`DCLFSequenceRows`), as `BuildDrawsCS`'s `MaterialRowAddress` does for the GPU path. Without it, texture transforms
+    (scrolling water, waterfalls) froze in CPU mode. The copy is written by the depth site's pre-work from the depth latch, which
+    needs the colour commit's own slot (Lifetime, below). A view recorded per snapshot pushes 0 and draws the captured transforms.
 -   **The graph.** `GraphConditions::cpuPipeline` leaves every DCLF epoch's passes out (the draws, the HZB and phase 2, the
     visibility and fade-event readbacks, `fades.state`, tree wind's compute pass); their latched copies' targets are still
     published (`Draws::PublishLatchedTargets`). The build posts it with the revision inputs (`RevisionInputs::cpuPipeline`):
@@ -2649,7 +2681,7 @@ stand-ins and the engine boundary are the GPU path's: the same objects are DCLF'
     as built ([The frame start and the wait](#the-frame-start-and-the-wait)).
 -   **The sites** (`Core/Render/Direct/Sites.cpp`) replace the draw epochs at the same triggers. The commits run on the render
     thread as in the GPU path (`Direct::ExecuteEpoch` runs the epoch's body outside any ORG epoch); at the point the GPU path
-    submits its recording the site culls its views on DCLF's pool (`Cull.cpp`, `CullBatch`, a job per 8 batches) and queues one
+    submits its recording the site culls its views on DCLF's pool (`Cull.cpp`, `CullBatch`, a frame-critical job per 2048 lanes of whole batches) and queues one
     callback into DXVK's command stream (`RenderGraphRuntime::EmitExternalCommands`, waiting for the frame values). On DXVK's
     CS thread the callback adopts DXVK's command buffer, executes the commits' staged uploads (recorded on the render thread
     into a secondary outside any rendering, so DXVK's list is not ended), records the pre-work (`PreWork.cpp`: latched copies,
@@ -2673,8 +2705,12 @@ stand-ins and the engine boundary are the GPU path's: the same objects are DCLF'
     main camera's lists (main, decal, forward, refraction) are culled every frame and their verdicts diffed into the
     visibility decoder.
 -   **Lifetime.** A CPU frame's state (arenas, secondaries, the adopted buffer's wrapper, the executions' owners) is its frame
-    slot's, one per host frame slot. Each frame ends with a signal on DCLF's CPU-frame timeline behind its callbacks; the
+    slot's, one per two host frame slots. Each frame ends with a signal on DCLF's CPU-frame timeline behind its callbacks; the
     slot's next frame waits for it before it reuses the slot and its latch regions (`PersistentGraphHost::BeginExternalFrameSlot`).
+    The colour commit writes at the slot's second host slot (`FrameSlot::colourSlot`, switched in `Direct::ExecuteEpoch`): the
+    depth and colour commits share the main latch block, and the GPU reads the depth latch when the depth site's work runs, after
+    the colour commit. With one region the depth site's GPU readers (the texture transforms' stage word among them) read the colour
+    latch; the GPU path's epochs take a slot each.
     DCLF's retirement clock counts those signals with the host's submissions (`Core/Runtime/FrameRetirement.h`).
 
 **The modes and cadences.**
@@ -2705,7 +2741,8 @@ slot's sequences only while the index pool's range for it is of the same index b
 report counts such slots ("geometry slots a frame changed since their set").
 
 **Open.** The view batch set is made again about every 20 ms (a snapshot each), which bounds how often a per-snapshot recording
-is reused.
+is reused. A per-snapshot view (the reflection, under `dclf:cpu-cadence-reflection=snapshot`) draws its materials' captured
+texture transforms, not the frame's.
 
 **Accepted differences.** The frustum test is a sphere against the view's planes (the GPU projects the sphere's AABB): the CPU
 keeps a subset of the GPU's draws. No HZB: more overdraw in colour, which draws exactly the depth pass's set (EQUAL holds).

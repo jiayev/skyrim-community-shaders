@@ -9,9 +9,13 @@
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 
+#include <Tracy/Tracy.hpp>
+
 #include <emmintrin.h>
+#include <intrin.h>
 
 #include <algorithm>
 #include <bit>
@@ -228,6 +232,29 @@ namespace DCLF::Direct
 			}
 		}
 
+		/**
+		 * @brief ParabolicSphereMask's first test over a batch's lanes, four at a time: a_pass[i] 0 where the bound misses the view's sphere
+		 * (code 0: rejected on either side), in the scalar test's order; a radius below 0 (ParabolicRejected keeps it) passes.
+		 */
+		void ParabolicPass(const Spheres& a_spheres, std::uint32_t a_count, const std::array<float, 4>& a_sphere, std::uint8_t* a_pass)
+		{
+			const __m128 sx = _mm_set1_ps(a_sphere[0]), sy = _mm_set1_ps(a_sphere[1]), sz = _mm_set1_ps(a_sphere[2]), sr = _mm_set1_ps(a_sphere[3]);
+			std::uint32_t i = 0;
+			for (; i + 4 <= a_count; i += 4) {
+				const __m128 r = _mm_loadu_ps(a_spheres.r + i);
+				const __m128 dx = _mm_sub_ps(_mm_loadu_ps(a_spheres.x + i), sx), dy = _mm_sub_ps(_mm_loadu_ps(a_spheres.y + i), sy),
+							 dz = _mm_sub_ps(_mm_loadu_ps(a_spheres.z + i), sz);
+				const __m128 reach = _mm_sub_ps(_mm_sub_ps(_mm_sqrt_ps(_mm_add_ps(_mm_add_ps(_mm_mul_ps(dx, dx), _mm_mul_ps(dy, dy)), _mm_mul_ps(dz, dz))), r), sr);
+				const int bits = _mm_movemask_ps(_mm_or_ps(_mm_cmplt_ps(reach, _mm_setzero_ps()), _mm_cmplt_ps(r, _mm_setzero_ps())));
+				for (std::uint32_t k = 0; k < 4; ++k)
+					a_pass[i + k] = static_cast<std::uint8_t>((bits >> k) & 1);
+			}
+			for (; i < a_count; ++i) {
+				const float dx = a_spheres.x[i] - a_sphere[0], dy = a_spheres.y[i] - a_sphere[1], dz = a_spheres.z[i] - a_sphere[2];
+				a_pass[i] = a_spheres.r[i] < 0.0f || (std::sqrt((dx * dx + dy * dy) + dz * dz) - a_spheres.r[i]) - a_sphere[3] < 0.0f ? 1u : 0u;
+			}
+		}
+
 		/** @brief ParabolicPrograms.hlsli's ParabolicSphereMask (FUN_14151a1e0): the sqrt, the subtraction order and the strict comparisons. */
 		std::uint32_t ParabolicSphereMask(const float a_bound[4], const std::array<float, 4>& a_sphere, const std::array<float, 4>& a_plane, bool a_bothSides)
 		{
@@ -305,6 +332,10 @@ namespace DCLF::Direct
 		 * @brief MainFrustumRejected past the frustum: the portal program the member's root is culled through, tested with the member's own
 		 * bound (the member batch's query; no node flags). A root without a program: the frustum alone.
 		 */
+		// kExpCullProfile: the calling thread's portal tests (calls, cycles) while its CullBatch profiles.
+		thread_local bool profilePortals = false;
+		thread_local std::uint64_t portalCalls = 0, portalCycles = 0;
+
 		bool PortalRejected(const CullFrame& a_frame, std::uint32_t a_root, const float a_bound[4])
 		{
 			if (a_root == kNoRoot || a_root >= a_frame.rootPrograms.size() || a_frame.programs.empty() || !a_frame.portalTest)
@@ -312,7 +343,13 @@ namespace DCLF::Direct
 			const std::uint32_t program = a_frame.rootPrograms[a_root];
 			if (program == kNoProgram)
 				return false;
-			return a_frame.portalTest(a_frame.programs, program, a_bound, a_bound[3], 0u) != 1;
+			if (!profilePortals)
+				return a_frame.portalTest(a_frame.programs, program, a_bound, a_bound[3], 0u) != 1;
+			const std::uint64_t start = __rdtsc();
+			const bool rejected = a_frame.portalTest(a_frame.programs, program, a_bound, a_bound[3], 0u) != 1;
+			portalCycles += __rdtsc() - start;
+			++portalCalls;
+			return rejected;
 		}
 
 		/**
@@ -417,9 +454,9 @@ namespace DCLF::Direct
 		 * then the draw verdict: Main's phase 1 (the stamp's verdict, the height test), the colour segment's for the others (the frustum
 		 * alone; a refraction lane also its root's stopped OnVisible).
 		 */
-		bool MainCameraKept(const CullView& a_view, const CullFrame& a_frame, const Lane& a_lane, bool a_inFrustum, bool a_live)
+		bool MainCameraKept(const CullView& a_view, const CullFrame& a_frame, const Lane& a_lane, bool a_inFrustum, bool a_live, const std::uint8_t* a_portalRejected)
 		{
-			const bool portalPassed = a_inFrustum && !PortalRejected(a_frame, a_lane.root, a_lane.bound);
+			const bool portalPassed = a_inFrustum && !(a_portalRejected ? *a_portalRejected != 0 : PortalRejected(a_frame, a_lane.root, a_lane.bound));
 			bool fadeHidden = false;
 			// Only a per-frame cull stamps: a per-snapshot one's verdicts are not the frame's (its lists get a stamp-only pass a frame).
 			if (portalPassed && a_live)
@@ -459,6 +496,53 @@ namespace DCLF::Direct
 			return true;
 		}
 
+		/**
+		 * @brief The main camera lists' portal tests over a batch's lanes in the frustum (kExpPortalBatch): PortalRejected's verdict by lane
+		 * into a_rejected, the lanes grouped by their root's program (a counting sort) and each group handed to portalTestBatch.
+		 */
+		void PortalPass(const CullFrame& a_frame, const ViewBatch& a_batch, const Spheres& a_spheres, const std::uint8_t* a_pass, std::uint32_t a_count,
+			std::uint8_t* a_rejected)
+		{
+			std::memset(a_rejected, 0, a_count);
+			if (a_frame.programs.empty() || !a_batch.fadeRoot)
+				return;
+			const std::uint32_t programs = a_frame.programs.size() > 32 ? a_frame.programs[28] : 0u;  // the header's program count (word 112 / 4)
+			if (!programs)
+				return;
+			thread_local std::vector<std::uint32_t> firsts;
+			thread_local std::vector<std::uint16_t> lanes;
+			thread_local std::vector<std::uint32_t> programOf;
+			firsts.assign(std::size_t(programs) + 2, 0u);
+			programOf.resize(a_count);
+			// Pass 1: each lane's program (programs: none tested, rejected as PortalTestCpu's -1), counted.
+			for (std::uint32_t i = 0; i < a_count; ++i) {
+				std::uint32_t program = kNoProgram;
+				if (a_pass[i]) {
+					const std::uint32_t root = a_batch.fadeRoot[i] ? a_batch.fadeRoot[i] - 1 : kNoRoot;
+					if (root != kNoRoot && root < a_frame.rootPrograms.size())
+						program = a_frame.rootPrograms[root];
+				}
+				programOf[i] = program;
+				if (program == kNoProgram)
+					continue;
+				if (program >= programs) {
+					a_rejected[i] = 1;
+					continue;
+				}
+				++firsts[std::size_t(program) + 2];
+			}
+			for (std::size_t p = 2; p < firsts.size(); ++p)
+				firsts[p] += firsts[p - 1];
+			lanes.resize(firsts.back());
+			for (std::uint32_t i = 0; i < a_count; ++i)
+				if (programOf[i] < programs)
+					lanes[firsts[std::size_t(programOf[i]) + 1]++] = static_cast<std::uint16_t>(i);
+			// firsts[p + 1] is now program p's end, firsts[p] its first.
+			for (std::uint32_t p = 0; p < programs; ++p)
+				if (const std::uint32_t first = firsts[p], end = firsts[std::size_t(p) + 1]; end > first)
+					a_frame.portalTestBatch(a_frame.programs, p, a_spheres.x, a_spheres.y, a_spheres.z, a_spheres.r, lanes.data() + first, end - first, a_rejected);
+		}
+
 		Spheres SpheresOf(const ViewBatch& a_batch, bool a_live, std::uint32_t a_parity)
 		{
 			if (a_live) {
@@ -483,6 +567,17 @@ namespace DCLF::Direct
 		}
 
 		void DiffVisibility(const CullFrame& a_frame);
+
+		/** @brief kExpCullProfile: CullBatch's sections' TSC cycles and its lanes, by view type (TakeCullProfileLine). */
+		struct CullProfile
+		{
+			enum Section { kFrustum, kGather, kKeep, kLod, kWord, kSections };
+			enum Count { kLanes, kPassed, kKeptTest, kKept, kPortalCalls, kPortalCycles, kCounts };
+			std::atomic<std::uint64_t> cycles[kViewTypes][kSections]{};
+			std::atomic<std::uint64_t> counts[kViewTypes][kCounts]{};
+		};
+		CullProfile cullProfile;
+		std::atomic<std::uint64_t> portalChecked{ 0 }, portalMismatches{ 0 };  // kExpPortalCheck
 	}
 
 	// ---- CullArena ----
@@ -635,27 +730,96 @@ namespace DCLF::Direct
 		thread_local std::vector<std::uint8_t> pass;
 		pass.assign(count, 1u);
 		const Spheres spheres = SpheresOf(a_batch, a_live, a_parity);
+		const bool profile = ExperimentOn(kExpCullProfile);
+		std::uint64_t cycles[CullProfile::kSections]{}, counts[CullProfile::kCounts]{};
+		std::uint64_t at = profile ? __rdtsc() : 0;
+		profilePortals = profile;
+		if (profile)
+			portalCalls = portalCycles = 0;
+		const auto lap = [&](CullProfile::Section a_section) {
+			if (!profile)
+				return;
+			const std::uint64_t now = __rdtsc();
+			cycles[a_section] += now - at;
+			at = now;
+		};
 		// A view without a frustum test (cull mode 0, or first person drawing every member) keeps every lane past its other tests.
 		if (a_view.frustumCull && !(a_view.cullFlags & Draws::kCullParabolic))
 			FrustumPass(spheres, count, PlanesOf(a_view), pass.data());
+		else if (a_view.frustumCull && ExperimentOn(kExpParabolicPass))
+			ParabolicPass(spheres, count, a_view.planes[0], pass.data());
+		// The incremental lists' tombstones: a lane gone from this set passes nothing (the portal pass skips it; the loop drops it).
+		if (a_batch.dead)
+			for (std::uint32_t i = 0; i < count; ++i)
+				if ((a_batch.dead[i >> 6] >> (i & 63)) & 1u)
+					pass[i] = 0;
+		lap(CullProfile::kFrustum);
 		const bool mainCamera = MainCamera(a_view.type);
 		const bool mainFamily = mainCamera || a_view.type == ViewType::Reflection || a_view.type == ViewType::FirstPerson;
+		// A lane outside the frustum is kept by no view (MainCameraKept and ViewKept both drop it, and only a lane inside stamps); a view
+		// without the frustum pass has every lane passed.
+		const bool early = ExperimentOn(kExpCullEarly);
+		// The main camera lists' portal tests, made over the batch before the lanes' other tests.
+		thread_local std::vector<std::uint8_t> portalRejected;
+		const bool portalBatch = mainCamera && a_frame.portalTestBatch && ExperimentOn(kExpPortalBatch);
+		if (portalBatch) {
+			portalRejected.resize(count);
+			PortalPass(a_frame, a_batch, spheres, pass.data(), count, portalRejected.data());
+			if (ExperimentOn(kExpPortalCheck)) {
+				std::uint64_t checked = 0, mismatches = 0;
+				for (std::uint32_t i = 0; i < count; ++i)
+					if (pass[i]) {
+						const Lane lane = LaneOf(a_batch, spheres, i);
+						++checked;
+						mismatches += PortalRejected(a_frame, lane.root, lane.bound) != (portalRejected[i] != 0) ? 1u : 0u;
+					}
+				portalChecked.fetch_add(checked, std::memory_order_relaxed);
+				portalMismatches.fetch_add(mismatches, std::memory_order_relaxed);
+			}
+		}
 		std::uint32_t kept = 0;
+		ZoneScopedN("CS.DCLF.Cpu.CullLanes");
 		for (std::uint32_t i = 0; i < count; ++i) {
+			if (early && !pass[i])
+				continue;
+			if (a_batch.dead && ((a_batch.dead[i >> 6] >> (i & 63)) & 1u))
+				continue;  // gone from this set (a view without a frustum test keeps every lane it has)
+			if (profile)
+				++counts[CullProfile::kPassed];
 			const Lane lane = LaneOf(a_batch, spheres, i);
 			// A focus view's casters: its target's members alone (an input's root word against the latch's root + 1).
 			if (a_view.focusRoot != 0 && lane.root != a_view.focusRoot - 1)
 				continue;
-			const bool keep = mainCamera ? MainCameraKept(a_view, a_frame, lane, pass[i] != 0, a_live) : ViewKept(a_view, a_frame, lane, pass[i] != 0);
+			lap(CullProfile::kGather);
+			const bool keep = mainCamera ? MainCameraKept(a_view, a_frame, lane, pass[i] != 0, a_live, portalBatch ? &portalRejected[i] : nullptr) :
+			                               ViewKept(a_view, a_frame, lane, pass[i] != 0);
+			lap(CullProfile::kKeep);
 			if (!keep)
 				continue;
+			if (profile)
+				++counts[CullProfile::kKeptTest];
 			std::uint32_t mask = kDrawAll;
-			if (a_batch.lodPartitions && !LodMask(a_frame, a_batch.lodPartitions[i], a_batch.partitions ? a_batch.partitions[i] : 0u, lane.root, mainFamily, mask))
+			const bool lod = !a_batch.lodPartitions || LodMask(a_frame, a_batch.lodPartitions[i], a_batch.partitions ? a_batch.partitions[i] : 0u, lane.root, mainFamily, mask);
+			lap(CullProfile::kLod);
+			if (!lod)
 				continue;
 			lanes[kept] = static_cast<std::uint16_t>(i);
 			words[kept] = ObjectWordOf(a_view, lane.object, lane.flags, lane.bound);
 			masks[kept] = mask;
 			++kept;
+			lap(CullProfile::kWord);
+		}
+		if (profile) {
+			const std::size_t v = static_cast<std::size_t>(a_view.type);
+			counts[CullProfile::kLanes] = count;
+			counts[CullProfile::kKept] = kept;
+			counts[CullProfile::kPortalCalls] = std::exchange(portalCalls, 0);
+			counts[CullProfile::kPortalCycles] = std::exchange(portalCycles, 0);
+			profilePortals = false;
+			for (std::size_t c = 0; c < CullProfile::kSections; ++c)
+				cullProfile.cycles[v][c].fetch_add(cycles[c], std::memory_order_relaxed);
+			for (std::size_t c = 0; c < CullProfile::kCounts; ++c)
+				cullProfile.counts[v][c].fetch_add(counts[c], std::memory_order_relaxed);
 		}
 		out.count = kept;
 		out.lanes = lanes;
@@ -665,6 +829,34 @@ namespace DCLF::Direct
 		if (mainCamera && a_live && a_frame.pendingStamps.fetch_sub(1, std::memory_order_acq_rel) == 1)
 			DiffVisibility(a_frame);
 		return out;
+	}
+
+	std::string TakeCullProfileLine()
+	{
+		std::string line;
+		if (const auto checked = portalChecked.exchange(0, std::memory_order_relaxed)) {
+			const auto mismatches = portalMismatches.exchange(0, std::memory_order_relaxed);
+			line = fmt::format("portal batch check: {} lanes, {} verdicts differ{}", checked, mismatches, mismatches ? " <- PORTAL BATCH DIFFERS" : "");
+		}
+		for (std::size_t v = 0; v < kViewTypes; ++v) {
+			std::uint64_t cycles[CullProfile::kSections], counts[CullProfile::kCounts];
+			for (std::size_t c = 0; c < CullProfile::kSections; ++c)
+				cycles[c] = cullProfile.cycles[v][c].exchange(0, std::memory_order_relaxed);
+			for (std::size_t c = 0; c < CullProfile::kCounts; ++c)
+				counts[c] = cullProfile.counts[v][c].exchange(0, std::memory_order_relaxed);
+			if (!counts[CullProfile::kLanes])
+				continue;
+			// Each section's cycles a lane: gather and the keep test per lane passed, the LOD mask per lane the test kept, the word per lane kept.
+			const auto per = [](std::uint64_t a_cycles, std::uint64_t a_n) { return a_n ? static_cast<double>(a_cycles) / static_cast<double>(a_n) : 0.0; };
+			line += fmt::format("{}{}: {} lanes, {} passed, {} kept by the test, {} kept; Mcycles frustum {:.1f}, gather {:.1f}, keep {:.1f}, lod {:.1f}, word {:.1f}; "
+								"cycles a lane: gather {:.0f}, keep {:.0f}, lod {:.0f}, word {:.0f}; portal tests {}, {:.0f} cycles each",
+				line.empty() ? "" : " | ", CpuViewName(v), counts[CullProfile::kLanes], counts[CullProfile::kPassed], counts[CullProfile::kKeptTest], counts[CullProfile::kKept],
+				cycles[CullProfile::kFrustum] / 1e6, cycles[CullProfile::kGather] / 1e6, cycles[CullProfile::kKeep] / 1e6, cycles[CullProfile::kLod] / 1e6,
+				cycles[CullProfile::kWord] / 1e6, per(cycles[CullProfile::kGather], counts[CullProfile::kPassed]), per(cycles[CullProfile::kKeep], counts[CullProfile::kPassed]),
+				per(cycles[CullProfile::kLod], counts[CullProfile::kKeptTest]), per(cycles[CullProfile::kWord], counts[CullProfile::kKept]), counts[CullProfile::kPortalCalls],
+				per(counts[CullProfile::kPortalCycles], counts[CullProfile::kPortalCalls]));
+		}
+		return line;
 	}
 
 	const CulledBatch& ColourObjectWords(const CulledBatch& a_depth, const CullView& a_colour, const CullFrame& a_frame, CullArena& a_arena)
@@ -736,6 +928,7 @@ namespace DCLF::Direct
 
 		void DiffVisibility(const CullFrame& a_frame)
 		{
+			ZoneScopedN("CS.DCLF.Cpu.DiffVisibility");
 			auto& diff = visibilityDiff;
 			if (bool idle = false; !diff.running.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
 				if (a_frame.visibilityReset)

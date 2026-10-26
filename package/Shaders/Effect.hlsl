@@ -582,7 +582,7 @@ void DCLFPermutationStatics()
 VS_OUTPUT DCLFPulledVertex(uint index, uint a_instance)
 {
 	const uint64_t sequence = DCLFDrawSequence(a_instance);
-	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
+	const uint4 rows = DCLFSequenceRows(sequence);  // the pipeline row's address, the material row's
 	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
 	DCLFPipelineRowAddress = DCLFAddress(rows.xy);
 	DCLFMaterialRowAddress = DCLFAddress(rows.zw);
@@ -1348,7 +1348,7 @@ void DCLFPermutationStatics()
 PS_OUTPUT DCLFPulledPixel(PS_INPUT input, uint a_instance)
 {
 	const uint64_t sequence = DCLFDrawSequence(a_instance);
-	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
+	const uint4 rows = DCLFSequenceRows(sequence);  // the pipeline row's address, the material row's
 	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
 	DCLFPipelineRowAddress = DCLFAddress(rows.xy);
 	DCLFMaterialRowAddress = DCLFAddress(rows.zw);

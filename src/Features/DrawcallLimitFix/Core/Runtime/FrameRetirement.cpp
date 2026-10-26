@@ -112,6 +112,30 @@ namespace DCLF
 		State().cpuSignalled.store(a_value, std::memory_order_release);
 	}
 
+	void PollHostRetirement()
+	{
+		if (const auto* host = RenderGraphRuntime::Get().Host()) {
+			const std::uint64_t made = host->SubmissionsMade();
+			if (made > State().hostRetired.load(std::memory_order_acquire) && host->SubmittedPoint().Reached()) {
+				NoteGraphSubmissionsRetired(made);
+				return;
+			}
+		}
+		PollRetirement();
+	}
+
+	std::string RetirementState()
+	{
+		auto& s = State();
+		const auto* host = RenderGraphRuntime::Get().Host();
+		const std::uint64_t cpu = s.cpuTimeline && *s.cpuTimeline ? (*s.cpuTimeline)->GetCompletedValue() : 0;
+		const auto front = s.pending.empty() ? TakenPoint{} : s.pending.front();
+		return fmt::format("clock {} ({} waiting), last point taken {}, {} pending (first {}: host {} cpu {}), host retired {} of {} made, CPU frames "
+						   "completed {} signalled {} open {}",
+			FrameRetirement()->Completed(), FrameRetirement()->Waiting(), s.lastTaken.load(), s.pending.size(), front.point, front.host, front.cpu,
+			s.hostRetired.load(), host ? host->SubmissionsMade() : 0, cpu, s.cpuSignalled.load(), s.cpuOpen.load());
+	}
+
 	void PollRetirement()
 	{
 		auto& s = State();

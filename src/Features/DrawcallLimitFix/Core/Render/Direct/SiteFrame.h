@@ -57,6 +57,14 @@ namespace DCLF::Direct::detail
 		void Reset();
 	};
 
+	/**
+	 * @brief Any thread: a_pool reset on DCLF's pool (none of its lists in use: its frame's signal completed, or its recording released), then
+	 * ready for TakeResetPool. Off the render thread: a reset is a driver call per pool.
+	 */
+	void ResetLater(ListPool&& a_pool);
+	/** @brief Render thread: a pool ResetLater made ready (or a new one when none is): nothing recorded in it. */
+	ListPool TakeResetPool();
+
 	/** @brief A pool worker's state for one frame slot: its cull arena and its secondaries. */
 	struct Worker
 	{
@@ -145,7 +153,12 @@ namespace DCLF::Direct::detail
 	struct FrameSlot
 	{
 		std::uint32_t index = 0;
+		// The host frame slot the colour commit writes its latch regions at; the frame's other commits write at index. The depth and colour
+		// commits share the main latch block, whose region the GPU reads when the site's work runs, after both commits: one region would
+		// hand the depth site's readers the colour latch (the GPU path's epochs take a slot each).
+		std::uint32_t colourSlot = 0;
 		std::uint64_t signal = 0;  // the CPU-frame timeline's value of the frame that used it last (0: none)
+		bool used = false;         // a frame used it since its last Release
 		std::unique_ptr<Worker[]> workers;
 		std::uint32_t workerCount = 0;
 		Worker render, cs;  // the render thread's (the uploads) and DXVK's CS thread's
@@ -188,13 +201,13 @@ namespace DCLF::Direct::detail
 		std::shared_ptr<rhi::TimelinePtr> timeline;
 		VkSemaphore semaphore = VK_NULL_HANDLE;
 		std::uint64_t signalled = 0;  // the timeline's last value queued
+		std::uint64_t submitted = 0;  // the last value known submitted (SubmitQueued's flush, or a frame's own work after it)
+		std::uint64_t hostSubmitted = 0;  // the host's submissions made at SubmitQueued's last flush
 		std::vector<std::unique_ptr<FrameSlot>> slots;
 		std::uint64_t frames = 0;
 		FrameSlot* current = nullptr;  // the frame's (FrameStart to EndFrame)
 		SiteRun* pending = nullptr;    // the site the epoch body being run opened (ExecuteEpoch)
-		// The per-snapshot views' recordings of the newest set (PrepareSnapshotView), and the command pools of released ones, reused (the
-		// spares first: a recording's release returns its pool to them).
-		std::vector<std::unique_ptr<ListPool>> spareLists;
+		// The per-snapshot views' recordings of the newest set (PrepareSnapshotView; a released one's pool goes to ResetLater).
 		std::vector<std::shared_ptr<SnapshotRecording>> snapshots;
 		bool wasCpu = false;
 		std::shared_ptr<const TargetViews> targets;

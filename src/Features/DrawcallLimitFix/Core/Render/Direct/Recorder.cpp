@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace DCLF::Direct
@@ -83,9 +84,14 @@ namespace DCLF::Direct
 			if (a_context.pass == RecordPass::Refraction || a_bucket == a_context.boundBucket)
 				return a_context.boundPipeline.valid();  // the refraction's: BeginList's
 			a_context.boundBucket = a_bucket;
+			const rhi::PipelineHandle previous = a_context.boundPipeline;
 			a_context.boundPipeline = BucketPipeline(a_context, a_bucket, a_context.boundVertexLayout);
-			if (a_context.boundPipeline.valid())
+			if (a_context.boundPipeline.valid()) {
 				a_context.list.BindPipeline(a_context.boundPipeline);
+				++a_context.binds;
+				if (previous.index == a_context.boundPipeline.index && previous.generation == a_context.boundPipeline.generation)
+					++a_context.sameBinds;
+			}
 			return a_context.boundPipeline.valid();
 		}
 
@@ -98,9 +104,10 @@ namespace DCLF::Direct
 		{
 			const auto& set = a_context.set;
 			const auto& bindings = a_context.bindings;
-			if (a_sequence >= set.sequenceArgs.size())
+			const DrawArgs* found = set.Args(a_sequence);
+			if (!found)
 				return false;
-			const DrawArgs& args = set.sequenceArgs[a_sequence];
+			const DrawArgs& args = *found;
 			if (!args.indexCount || args.geometrySlot >= bindings.poolFirsts.size())
 				return false;
 			const std::uint32_t poolFirst = bindings.poolFirsts[args.geometrySlot];
@@ -121,9 +128,10 @@ namespace DCLF::Direct
 				break;
 			}
 			words[kDirectDrawPushObjectWord] = a_objectWord;
-			words[kDirectDrawPushFlags] = kDirectFlagObjectWord;
+			words[kDirectDrawPushFlags] = kDirectFlagObjectWord | kDirectFlagRelativeRows;
 			auto& list = a_context.list;
 			list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDirectDrawWords, words);
+			++a_context.pushes;
 			list.DrawIndexed(args.indexCount, 1, poolFirst + args.firstIndex, 0, 0);
 			return true;
 		}
@@ -174,8 +182,18 @@ namespace DCLF::Direct
 
 		void CountDrawn(RecordContext& a_context, std::uint32_t a_drawn)
 		{
-			if (a_context.counters && a_drawn)
-				std::atomic_ref<std::uint32_t>(a_context.counters->drawn[static_cast<std::size_t>(a_context.view)]).fetch_add(a_drawn, std::memory_order_relaxed);
+			if (!a_context.counters)
+				return;
+			auto& counters = *a_context.counters;
+			if (a_drawn)
+				std::atomic_ref<std::uint32_t>(counters.drawn[static_cast<std::size_t>(a_context.view)]).fetch_add(a_drawn, std::memory_order_relaxed);
+			const auto flush = [](std::uint32_t& a_counter, std::uint32_t a_value, std::uint32_t& a_counted) {
+				if (a_value != a_counted)
+					std::atomic_ref<std::uint32_t>(a_counter).fetch_add(a_value - std::exchange(a_counted, a_value), std::memory_order_relaxed);
+			};
+			flush(counters.binds, a_context.binds, a_context.countedBinds);
+			flush(counters.sameBinds, a_context.sameBinds, a_context.countedSameBinds);
+			flush(counters.pushes, a_context.pushes, a_context.countedPushes);
 		}
 
 		/** @brief A forward draw's sort key (ForwardSortCS.hlsl, SortKey) and what records it. */
@@ -255,6 +273,22 @@ namespace DCLF::Direct
 		// The draw range whole, once: each draw then pushes its first kDirectDrawWords.
 		const std::uint32_t zeros[kDrawPushWords]{};
 		list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, zeros);
+		// The set's row bases (its sequences' rows are relative), kept by every draw's push of its first words.
+		std::uint32_t bases[4]{};
+		const auto& set = a_context.set;
+		if (a_context.pass == RecordPass::Shadow) {
+			Split(bases + 2, set.shadowRowsBase);
+		} else {
+			Split(bases, set.pipelineRowsBase);
+			Split(bases + 2, set.materialRowsBase);
+		}
+		list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, kDirectDrawPushRowBases, 4, bases);
+		// The main rows' animated rows read from the frame's copy (the texture transforms' TexcoordOffset).
+		if (a_context.pass != RecordPass::Shadow && bindings.animatedRows) {
+			std::uint32_t animated[2]{};
+			Split(animated, bindings.animatedRows);
+			list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, kDirectDrawPushAnimatedRows, 2, animated);
+		}
 		list.SetIndexBuffer(rhi::IndexBufferView{ bindings.indexPool, 0, 0, rhi::Format::R16_UInt });  // the whole buffer
 		if (a_context.pass == RecordPass::Refraction) {
 			a_context.boundBucket = 0;
@@ -335,8 +369,9 @@ namespace DCLF::Direct
 					if (!SequenceDrawn(mask, s, laneWord, draw.objectWord))
 						continue;
 					draw.sequence = batch.sequence[lane] + s;
-					draw.first = draw.sequence < set.sequenceArgs.size() ? set.sequenceArgs[draw.sequence].firstIndex : 0u;
-					const std::uint32_t slot = draw.sequence < set.sequenceArgs.size() ? set.sequenceArgs[draw.sequence].geometrySlot : ~0u;
+					const DrawArgs* args = set.Args(draw.sequence);
+					draw.first = args ? args->firstIndex : 0u;
+					const std::uint32_t slot = args ? args->geometrySlot : ~0u;
 					if (slot < bindings.poolFirsts.size() && bindings.poolFirsts[slot] != Draws::IndexPool::kNoRange)
 						draw.first += bindings.poolFirsts[slot];
 					draws.push_back(draw);

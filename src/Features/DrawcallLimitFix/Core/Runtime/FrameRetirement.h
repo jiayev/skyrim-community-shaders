@@ -3,6 +3,7 @@
 #include <OpenRenderGraph/PersistentGraphHost.h>
 
 #include <cstdint>
+#include <string>
 #include <memory>
 
 namespace org::services
@@ -63,4 +64,12 @@ namespace DCLF
 	 * catches up), so nobody waits.
 	 */
 	void PollRetirement();
+	/**
+	 * @brief The host's submitting thread (the render thread), while it waits for GPU work submitting nothing: the host's submissions
+	 * retired once everything it submitted is done (SubmittedPoint reached), then PollRetirement. The host reports them only when it
+	 * reuses a slot (its next submission), so a wait for a point they cover would otherwise wait for itself.
+	 */
+	void PollHostRetirement();
+	/** @brief Any thread, read racily (for a stall's message): the clock, the points noted and both sources' counts. */
+	std::string RetirementState();
 }

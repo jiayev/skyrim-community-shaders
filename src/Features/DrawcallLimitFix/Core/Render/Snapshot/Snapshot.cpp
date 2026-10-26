@@ -4,6 +4,7 @@
 // (FitsScene) are the coordinator's.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatches.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
@@ -899,6 +900,8 @@ namespace DCLF
 		// The frame adopts whatever is posted next: the publication gate's scene pass half open (this frame's pass is woken only when its
 		// start ends), and the builder told to make its snapshot again for the inputs the build point posted.
 		s.frameWaiting.store(true, std::memory_order_seq_cst);
+		// What the snapshot's payload may wait for on the GPU (a backing the last frame read) reaches it while this frame waits.
+		Direct::SubmitQueued();
 		(void)s.SnapshotPump();
 		s.snapshotInputsMoved.store(true, std::memory_order_release);
 		WakeSnapshotBuilder();
@@ -906,13 +909,18 @@ namespace DCLF
 		for (;;) {
 			// The owner thread's part of the build point, served while it waits: the shadow view slots a make asks for (sealed only once
 			// the inputs carry their build) and an extension added or removed (built here, still before anything decides what the frame's
-			// recordings cover); and the ready tickets a recording's slot waits for given back now and then (a released ticket is prepared
-			// again, so not every poll).
+			// recordings cover); and now and then the ready tickets a recording's slot waits for given back (a released ticket is prepared
+			// again, so not every poll), what was queued in DXVK's stream meanwhile submitted, the CPU frames' slots done released, and the
+			// retirement clock advanced (the host's submissions and the CPU frames' timeline are otherwise polled only as frames go on): a
+			// payload version may wait for a backing the last frames read or hold.
 			s.ServeRevisionRequests();
 			if (s.revisions.explicitBuilds && host->RebuildRequested())
 				s.BuildIfAsked(*host);
 			if (const auto now = Clock::now(); now - ticketsAt >= kTicketPeriod) {
 				s.ReleaseTicketsForRecordings(*host, 0);
+				Direct::SubmitQueued();
+				Direct::ReleaseCompletedSlots();
+				PollHostRetirement();
 				ticketsAt = now;
 			}
 			if (const std::uint64_t posted = s.snapshotsPosted.load(std::memory_order_acquire); posted != seen) {
@@ -931,6 +939,8 @@ namespace DCLF
 			if (waited > (catalogWait ? kCatalogTimeout : kTimeout)) {
 				const auto& adopted = s.adoptedSnapshot;
 				const auto pumpStats = s.SnapshotPump().GetStats();
+				const auto assembler = s.revisions.assembler.GetStats();
+				const auto active = s.revisions.assembler.AcquireActive();
 				std::string stale;
 				for (std::size_t k = 0; k < Impl::kStaleKinds; ++k)
 					stale += fmt::format("{}{}", k ? "/" : "", s.snapshotsStale[k] - staleBefore[k]);
@@ -940,7 +950,9 @@ namespace DCLF
 					"generation {}. Stale snapshots taken meanwhile (build/targets/shadow format/main): {}; snapshots posted {}, recordings outstanding {}, "
 					"inputs moved {}, publication gated {}, build ahead running {}. Adopted snapshot: serial {}, revision {}, draws complete {}, build "
 					"generation {}, main generation {}, payload {}. The builder (read racily, for this message): stage {}, passes {} ({} idle), work {}, draws {}, "
-					"payload {}; its pump: runner active {}, requested epoch {}, drained {}, notifications {}, passes {}, rejected {}",
+					"payload {} (failed {}, source in flight {}, parts in flight: {}), sealed sequence {}, assembler latest {} pending {} (sealed {}, published {}, "
+					"failed {}, superseded {}, abandoned {}), active {}; its pump: runner active {}, requested epoch {}, drained {}, notifications {}, passes {}, "
+					"rejected {}; retirement: {}",
 					frame, std::chrono::duration_cast<std::chrono::seconds>(waited).count(), host->BuildGeneration(), host->RebuildRequested(),
 					s.postedInputs.mainGeneration, DrawPipelines::Get().Generation(), stale, seen, s.recordingsOutstanding.load(std::memory_order_acquire),
 					s.snapshotInputsMoved.load(std::memory_order_acquire), s.publicationGated.load(std::memory_order_acquire),
@@ -948,8 +960,10 @@ namespace DCLF
 					adopted ? adopted->buildGeneration : 0, adopted ? adopted->mainGeneration : 0,
 					!s.installedPayload ? "none" : "installed", static_cast<int>(s.snapshotBuilder.stage),
 					s.snapshotBuilder.passes, s.snapshotBuilder.idlePasses, s.snapshotBuilder.work != nullptr, s.snapshotBuilder.draws != nullptr,
-					s.snapshotBuilder.payload != nullptr, pumpStats.runnerActive, pumpStats.requestedEpoch, pumpStats.drainedEpoch, pumpStats.notifications,
-					pumpStats.drainPasses, pumpStats.rejected));
+					s.snapshotBuilder.payload != nullptr, s.snapshotBuilder.payloadFailed, s.snapshotBuilder.payloadSource != nullptr, PayloadPools::PendingParts(),
+					s.snapshotBuilder.sealedSequence, s.revisions.assembler.LatestSequence(), s.revisions.assembler.Pending(), assembler.sealed, assembler.published,
+					assembler.failed, assembler.superseded, assembler.abandoned, active ? active->Sequence() : 0, pumpStats.runnerActive, pumpStats.requestedEpoch, pumpStats.drainedEpoch, pumpStats.notifications,
+					pumpStats.drainPasses, pumpStats.rejected, RetirementState()));
 			}
 			if (waited < kSpin)
 				std::this_thread::yield();

@@ -23,6 +23,11 @@ namespace DCLF
 	struct DrawSequence;
 }
 
+namespace DCLF::Draws::detail
+{
+	class SceneLists;
+}
+
 namespace DCLF::Draws
 {
 	struct ScenePayload;
@@ -76,11 +81,15 @@ namespace DCLF::Draws
 
 	private:
 		const void* payload = nullptr;  // the payload the set or the pending one is for
+		std::uint32_t lanes = 0;        // ... and the batch lanes it is made with (BatchLanes when made)
 		std::shared_ptr<Direct::ViewBatchSet> set, building;
 		std::shared_ptr<Pending> pending;
 		std::shared_ptr<const Direct::SnapshotSpheres> spheres;  // the newest taken
 		std::uint64_t versions = 0;  // the sequences' versions numbered
 		bool failed = false;         // this payload's set cannot be made (logged): Ready with none until another payload
+		// The incremental lists (Direct::kExpIncremental; kept across payloads), and their report and check counters.
+		std::unique_ptr<detail::SceneLists> lists;
+		std::uint64_t listSets = 0, checks = 0, checkedSets = 0, differingLanes = 0;
 	};
 
 	/**
@@ -90,6 +99,14 @@ namespace DCLF::Draws
 	 */
 	std::shared_ptr<Direct::ViewBatchSet> MakeViewBatches(const ViewBatchInputs& a_in, const Direct::SnapshotSpheres* a_spheres,
 		std::vector<DrawSequence>& a_sequences);
+
+	/**
+	 * @brief Any thread: the lanes the next view batch sets are made with (CS_DCLF_CPU_BATCH seeds it; default Direct::kDefaultBatchLanes).
+	 * More lanes a batch coalesce more draws into each culled batch (and, in Parallel mode, each secondary).
+	 */
+	std::uint32_t BatchLanes();
+	/** @brief Any thread: sets them, rounded up to a multiple of 8 within [8, 65528]; the builder makes its set again at the next snapshot. */
+	void SetBatchLanes(std::uint32_t a_lanes);
 
 	/**
 	 * @brief Render thread: a_set's sequences' backing is not reused before a_point (SubmittedRetirementPoint): wherever the installed

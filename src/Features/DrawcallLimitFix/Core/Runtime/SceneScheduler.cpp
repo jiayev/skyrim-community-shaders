@@ -24,15 +24,27 @@ namespace DCLF
 		return workers;
 	}
 
+	unsigned SceneScheduler::FrameCriticalWorkers()
+	{
+		static const unsigned workers = [] {
+			if (const auto value = SwitchValue(Switch::FrameWorkers); !value.empty())
+				return static_cast<unsigned>(std::strtoul(value.c_str(), nullptr, 10));
+			return std::max(2u, PreparationWorkers() / 4);
+		}();
+		return workers;
+	}
+
 	namespace
 	{
 		// A worker running an above-normal caller's ParallelFor chunk is raised to it for that chunk, so the engine's job threads do
-		// not preempt work the scene lane or coordinator waits on. CS_DCLF_ASYNC_PRIORITY=noboost leaves workers where they are (A/B).
+		// not preempt work the scene lane or coordinator waits on; one running a frame-critical job (the CPU pipeline's culls) is raised
+		// to the coordinator's priority for that job. CS_DCLF_ASYNC_PRIORITY=noboost leaves workers where they are (A/B).
 		SceneExecutor::ThreadPriority WorkerBoost()
 		{
 			if (SwitchValue(Switch::AsyncPriority) == "noboost")
 				return {};
-			return { [] { return GetThreadPriority(GetCurrentThread()); }, [](int a_priority) { SetThreadPriority(GetCurrentThread(), a_priority); } };
+			return { [] { return GetThreadPriority(GetCurrentThread()); }, [](int a_priority) { SetThreadPriority(GetCurrentThread(), a_priority); },
+				SwitchValue(Switch::AsyncPriority) == "normal" ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_ABOVE_NORMAL };
 		}
 	}
 
@@ -58,9 +70,15 @@ namespace DCLF
 					SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 				return;
 			}
+			if (a_class.domain == SceneExecutor::FrameCriticalThread.domain) {
+				// Waiting at the frame-critical priority: a frame-critical job starts while the engine's threads hold every core.
+				SetThreadDescription(GetCurrentThread(), (L"CS DCLF frame worker " + std::to_wstring(a_index)).c_str());
+				SetThreadPriority(GetCurrentThread(), SwitchValue(Switch::AsyncPriority) == "normal" ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_ABOVE_NORMAL);
+				return;
+			}
 			SetThreadDescription(GetCurrentThread(), (L"CS DCLF worker " + std::to_wstring(a_index)).c_str());
 			SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-		}, WorkerBoost());
+		}, WorkerBoost(), FrameCriticalWorkers());
 		return *executor;
 	}
 
