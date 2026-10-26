@@ -77,7 +77,7 @@ namespace DCLF
 			{ Precompile, "CS_DCLF_PRECOMPILE", F, Reduced::Zero, false, "0: DCLF's SPIR-V programs compile on first use instead of alongside the engine's shaders" },
 			{ Cull, "CS_DCLF_CULL", F, Reduced::Cull, false, "off|frustum|occlusion (default): GPU culling, the live toggle's seed" },
 			// The CPU-driven pipeline (an experiment; dclf-architecture.md, "The CPU-driven pipeline"): the live toggles' seeds.
-			{ CpuPipeline, "CS_DCLF_PIPELINE", F, N, false, "gpu (default)|cpu: the draws culled and recorded on the GPU, or culled on the CPU and recorded as direct draws into DXVK's command buffer (live toggle's seed)" },
+			{ CpuPipeline, "CS_DCLF_PIPELINE", F, N, false, "auto (default: exteriors GPU-driven, interiors CPU-driven)|manual|gpu|cpu: the draws culled and recorded on the GPU, or culled on the CPU and recorded as direct draws into DXVK's command buffer; gpu and cpu are manual with both kinds of cell (live toggle's seed)" },
 			{ CpuRecord, "CS_DCLF_CPU_RECORD", F, N, false, "serial (default)|parallel: the CPU pipeline's per-frame views recorded by DXVK's CS thread, or into a secondary list per batch on the pool (live toggle's seed)" },
 			{ CpuCadence, "CS_DCLF_CPU_CADENCE", F, N, false,
 				"frame|snapshot, or <view>=frame|snapshot,...: the CPU pipeline's views culled and recorded every frame (default) or once per snapshot (main is always per frame; live toggles' seeds)" },

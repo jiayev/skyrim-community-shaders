@@ -20,7 +20,7 @@ namespace DCLF::Draws
 	{
 		bool interior = false;         // the current cell is an interior: no grass and no tree LOD (their passes are left out)
 		bool twoPassOcclusion = true;  // the cull mode tests occlusion (cullMode 2): the HZB and the depth epoch's phase 2 block
-		// The CPU-driven pipeline (dclf:pipeline=cpu; Core/Render/Direct): every DCLF epoch's passes are left out - the draws (main
+		// The CPU-driven pipeline (CpuPipelineFor the cell: Toggles.h; Core/Render/Direct): every DCLF epoch's passes are left out - the draws (main
 		// depth and colour, shadow and occlusion maps, forward, the reflection's faces, first person's depth and colour), the HZB and
 		// phase 2, the visibility and fade-event readbacks, fade state, and tree wind's compute pass. The direct sites draw at the
 		// epochs' triggers in DXVK's command buffer and record what they still need there (Direct/PreWork); no revision records them.

@@ -292,6 +292,21 @@ Small pieces still on the render thread, each with its route off it:
     the pools' census and leak watch miss them. `GrowableBufferSet::Register` should make the first version through the
     registration's pool. Fixed setup-time buffers stay.
 
+### 2.7 The CPU pipeline's sun cull: a sun entry sphere column
+
+-   **Goal.** The sun's lane loop in the CPU pipeline's cull runs as a wide pass, like the frustum and portal passes.
+-   **Why.** In the heavy exterior on a Zen 5 CPU, the sun costs about 125 cycles a lane and view, and it is the largest view
+    left after the main camera (about 0.35 ms of pool time a frame). Most of that is scalar work on scattered memory: each
+    passed lane reads its object's sun entry spheres (`CullFrame::sunEntry[lane.object]`, `Draws::OutsideSunEntryProcesses`)
+    and its cascade inputs through the object index.
+-   **State.** Not started. Tried and dropped: the sun entry drop as a gathered wide pass over the existing layout
+    (`Core/Render/Direct/Cull.cpp`, `ShadowDropped`); the gathers cost more than the loop saved.
+-   **Design.** The view batch builder (`Core/Render/Snapshot/ViewBatches.cpp`, `SceneLists.cpp`) writes a column per batch
+    with each lane's sun entry sphere, contiguous by lane like the frustum's sphere columns, so the sun entry and cascade tests
+    load it directly in `CullSimd.h` kernels. The column follows the lanes through the scene lists' deltas and compaction. The
+    verdicts must match the current loop bit for bit (a `dclf:cpu-exp` check bit, as the frustum and portal kernels have).
+-   **Needs.** Nothing.
+
 ---
 
 ## 3. GPU cost

@@ -26,6 +26,7 @@
 #	include "DrawcallLimitFix/Core/Shading/MaterialSources.h"
 #	include "DrawcallLimitFix/Diagnostics/TestHarness.h"
 #	include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#	include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #	include "DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #	include "Features/Skylighting.h"
@@ -592,16 +593,29 @@ void DrawcallLimitFix::DrawSettings()
 		int cull = toggles.cullMode;
 		if (ImGui::Combo("GPU culling", &cull, "off\0frustum\0frustum + occlusion\0"))
 			toggles.cullMode = static_cast<std::uint8_t>(cull);
-		// The CPU-driven pipeline (an experiment; Core/Render/Direct/Direct.h): its pipeline, record mode and per-view cadences, the test
-		// harness's dclf:pipeline, dclf:cpu-record and dclf:cpu-cadence-<view>. Not saved: seeded at startup by their switches alone.
-		int pipeline = toggles.cpuPipeline ? 1 : 0;
-		if (ImGui::Combo("Pipeline", &pipeline, "GPU-driven\0CPU-driven (experiment)\0"))
-			toggles.cpuPipeline = pipeline == 1;
+		// The pipeline (Core/Render/Direct/Direct.h for the CPU-driven one): auto or manual (per kind of cell), the CPU-driven one's record
+		// mode and per-view cadences; the test harness's dclf:pipeline, dclf:pipeline-interior/-exterior, dclf:cpu-record and
+		// dclf:cpu-cadence-<view>. Save Settings keeps the pipeline choice; the CPU-driven one's options are seeded by their switches alone.
+		int pipelineMode = toggles.pipelineMode == DCLF::PipelineMode::Manual ? 1 : 0;
+		if (ImGui::Combo("Pipeline", &pipelineMode, "Auto\0Manual\0"))
+			toggles.pipelineMode = pipelineMode == 1 ? DCLF::PipelineMode::Manual : DCLF::PipelineMode::Auto;
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(
 				"GPU-driven: the draws culled and recorded on the GPU. CPU-driven: culled on DCLF's worker threads and drawn with direct draws "
-				"recorded into DXVK's command buffer. Takes effect at the next graph build; not kept by Save Settings (CS_DCLF_PIPELINE seeds it).");
-		if (toggles.cpuPipeline) {
+				"recorded into DXVK's command buffer. Auto draws exteriors GPU-driven and interiors CPU-driven; Manual chooses for each. Takes "
+				"effect at the next graph build (entering or leaving an interior builds it); Save Settings keeps it (CS_DCLF_PIPELINE seeds it).");
+		if (toggles.pipelineMode == DCLF::PipelineMode::Manual) {
+			ImGui::Indent();
+			int interior = toggles.interiorCpu ? 1 : 0, exterior = toggles.exteriorCpu ? 1 : 0;
+			if (ImGui::Combo("Interiors", &interior, "GPU-driven\0CPU-driven\0"))
+				toggles.interiorCpu = interior == 1;
+			if (ImGui::Combo("Exteriors", &exterior, "GPU-driven\0CPU-driven\0"))
+				toggles.exteriorCpu = exterior == 1;
+			ImGui::Unindent();
+		}
+		ImGui::Text("Now: %s-driven (%s)", DCLF::Draws::CurrentGraphConditions().cpuPipeline ? "CPU" : "GPU", DCLF::Draws::CurrentGraphConditions().interior ? "interior" : "exterior");
+		// The CPU-driven pipeline's options, while it draws some kind of cell.
+		if (toggles.pipelineMode == DCLF::PipelineMode::Auto || toggles.interiorCpu || toggles.exteriorCpu) {
 			ImGui::Indent();
 			int record = toggles.cpuRecord;
 			if (ImGui::Combo("CPU recording", &record, "serial\0parallel\0"))
@@ -655,7 +669,9 @@ void DrawcallLimitFix::DrawSettings()
 		return;
 	drawTools();
 	if (ImGui::TreeNodeEx("This frame", ImGuiTreeNodeFlags_DefaultOpen)) {
-		std::string flags = fmt::format("Active: cull {}, pipeline {}", active.cullMode, active.cpuPipeline ? (active.cpuRecord ? "cpu parallel" : "cpu serial") : "gpu");
+		const auto pipelineOf = [&](bool a_interior) { return DCLF::CpuPipelineFor(active, a_interior) ? (active.cpuRecord ? "cpu parallel" : "cpu serial") : "gpu"; };
+		std::string flags = fmt::format("Active: cull {}, pipeline {} (interiors {}, exteriors {})", active.cullMode,
+			active.pipelineMode == DCLF::PipelineMode::Manual ? "manual" : "auto", pipelineOf(true), pipelineOf(false));
 		for (const auto& toggle : DCLF::ToggleTable())
 			flags += fmt::format(", {} {}", toggle.name, DCLF::ToggleValue(active, toggle) ? 1 : 0);
 		ImGui::TextWrapped("%s", flags.c_str());
@@ -698,6 +714,9 @@ void DrawcallLimitFix::SaveSettings(json& o_json)
 		toggles[std::string(toggle.name)] = DCLF::ToggleValue(requested, toggle);
 	o_json["Toggles"] = std::move(toggles);
 	o_json["CullMode"] = requested.cullMode;
+	o_json["Pipeline"] = requested.pipelineMode == DCLF::PipelineMode::Manual ? "manual" : "auto";
+	o_json["InteriorPipeline"] = requested.interiorCpu ? "cpu" : "gpu";
+	o_json["ExteriorPipeline"] = requested.exteriorCpu ? "cpu" : "gpu";
 	o_json["CompatibilityMonitor"] = DCLF::Diagnostics::PlayerParity::Requested();
 	savedSettings = o_json;
 }
@@ -728,6 +747,24 @@ void DrawcallLimitFix::ApplySavedSettings()
 														  cull->get<std::uint32_t>() <= 2 && cull->get<std::uint8_t>() != requested.cullMode) {
 		requested.cullMode = cull->get<std::uint8_t>();
 		applied += fmt::format("{}cull {}", applied.empty() ? "" : ", ", requested.cullMode);
+	}
+	// The pipeline choice, unless CS_DCLF_PIPELINE set it.
+	if (DCLF::SwitchValue(DCLF::Switch::CpuPipeline).empty()) {
+		const auto stringOf = [&](const char* a_key) {
+			const auto found = savedSettings.find(a_key);
+			return found != savedSettings.end() && found->is_string() ? found->get<std::string>() : std::string();
+		};
+		const auto mode = stringOf("Pipeline"), interior = stringOf("InteriorPipeline"), exterior = stringOf("ExteriorPipeline");
+		const auto before = std::tuple(requested.pipelineMode, requested.interiorCpu, requested.exteriorCpu);
+		if (mode == "auto" || mode == "manual")
+			requested.pipelineMode = mode == "manual" ? DCLF::PipelineMode::Manual : DCLF::PipelineMode::Auto;
+		if (interior == "cpu" || interior == "gpu")
+			requested.interiorCpu = interior == "cpu";
+		if (exterior == "cpu" || exterior == "gpu")
+			requested.exteriorCpu = exterior == "cpu";
+		if (std::tuple(requested.pipelineMode, requested.interiorCpu, requested.exteriorCpu) != before)
+			applied += fmt::format("{}pipeline {} (interiors {}, exteriors {})", applied.empty() ? "" : ", ", requested.pipelineMode == DCLF::PipelineMode::Manual ? "manual" : "auto",
+				requested.interiorCpu ? "cpu" : "gpu", requested.exteriorCpu ? "cpu" : "gpu");
 	}
 	if (const auto monitor = savedSettings.find("CompatibilityMonitor"); monitor != savedSettings.end() && monitor->is_boolean() &&
 																		 DCLF::SwitchValue(DCLF::Switch::PlayerParity).empty() && monitor->get<bool>() != DCLF::Diagnostics::PlayerParity::Requested()) {

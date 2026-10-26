@@ -5,6 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Features/Portals/PortalPrograms.h"
 #include "Features/DrawcallLimitFix/Features/Portals/StrictGates.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/CullSimd.h"
 
 #include <atomic>
 #include <bit>
@@ -168,112 +169,129 @@ namespace DCLF::Portals
 
 	namespace
 	{
-		// The bounds one walk carries: four SSE vectors of four.
-		constexpr std::uint32_t kVectors = 4, kGroup = kVectors * 4;
+		// The most bounds a group walk carries (without kExpPortalOpMajor: 16; the kernels take up to 32).
+		constexpr std::uint32_t kGroup = 32;
 
-		/** @brief A group's bounds: their centres and radii, by vector. */
-		struct BoundsGroup
+		/** @brief Simd::PlaneGroupFn in SSE: eight vectors of four, a vector only while a bound of a_lanes is in it. */
+		std::uint32_t PlaneGroupSse(const std::uint32_t* a_set, std::uint32_t a_kind, const float* a_x, const float* a_y, const float* a_z, const float* a_r,
+			std::uint32_t a_lanes)
 		{
-			__m128 x[kVectors], y[kVectors], z[kVectors], r[kVectors], minusR[kVectors];
-		};
-
-		/** @brief A plane set decoded once a call: its active planes' {n, d} (Distance's words as floats, in plane order) in the call's planes. */
-		struct DecodedSet
-		{
-			std::uint32_t first = 0, count = 0;
-		};
-
-		/**
-		 * @brief PlaneSetTest (or ViewTest: a_kind 7) for a group, as a mask of its bounds: only the vectors with a bound in a_lanes, and only
-		 * until every bound in a_lanes is decided (the verdict is an OR over the planes: the planes after cannot change it).
-		 */
-		std::uint32_t PlaneSetGroup(const float* a_planes, const DecodedSet& a_set, std::uint32_t a_kind, const BoundsGroup& a_b, std::uint32_t a_lanes)
-		{
-			__m128 outside[kVectors], notContained[kVectors];
-			for (std::uint32_t v = 0; v < kVectors; ++v)
-				outside[v] = notContained[v] = _mm_setzero_ps();
-			std::uint32_t decided = 0;
-			for (std::uint32_t p = 0; p < a_set.count; ++p) {
-				const float* plane = a_planes + std::size_t(a_set.first + p) * 4;
-				const __m128 nx = _mm_set1_ps(plane[0]), ny = _mm_set1_ps(plane[1]), nz = _mm_set1_ps(plane[2]), d0 = _mm_set1_ps(plane[3]);
-				decided = 0;
-				for (std::uint32_t v = 0; v < kVectors; ++v) {
+			std::uint32_t outside = 0, notContained = 0;
+			for (std::uint32_t rest = a_set[kMaskWord] & 0x3Fu; rest; rest &= rest - 1) {
+				const std::uint32_t* plane = a_set + std::size_t(std::countr_zero(rest)) * 4;
+				const __m128 nx = _mm_set1_ps(std::bit_cast<float>(plane[0])), ny = _mm_set1_ps(std::bit_cast<float>(plane[1])),
+							 nz = _mm_set1_ps(std::bit_cast<float>(plane[2])), d0 = _mm_set1_ps(std::bit_cast<float>(plane[3]));
+				for (std::uint32_t v = 0; v < kGroup / 4; ++v) {
 					if (!((a_lanes >> (4 * v)) & 0xFu))
 						continue;
+					const __m128 x = _mm_loadu_ps(a_x + 4 * v), y = _mm_loadu_ps(a_y + 4 * v), z = _mm_loadu_ps(a_z + 4 * v), r = _mm_loadu_ps(a_r + 4 * v);
 					// PortalDistance: ((n.y * c.y + n.x * c.x) + c.z * n.z) - d, the shader's order.
-					const __m128 d = _mm_sub_ps(_mm_add_ps(_mm_add_ps(_mm_mul_ps(ny, a_b.y[v]), _mm_mul_ps(nx, a_b.x[v])), _mm_mul_ps(a_b.z[v], nz)), d0);
-					const __m128 behind = _mm_cmple_ps(d, a_b.minusR[v]);
-					outside[v] = _mm_or_ps(outside[v], behind);
-					notContained[v] = _mm_or_ps(notContained[v], _mm_or_ps(behind, _mm_cmplt_ps(d, a_b.r[v])));
-					decided |= static_cast<std::uint32_t>(_mm_movemask_ps(a_kind == 7u ? outside[v] : notContained[v])) << (4 * v);
+					const __m128 d = _mm_sub_ps(_mm_add_ps(_mm_add_ps(_mm_mul_ps(ny, y), _mm_mul_ps(nx, x)), _mm_mul_ps(z, nz)), d0);
+					const auto behind = static_cast<std::uint32_t>(_mm_movemask_ps(_mm_cmple_ps(d, _mm_sub_ps(_mm_setzero_ps(), r))));
+					outside |= behind << (4 * v);
+					notContained |= (behind | static_cast<std::uint32_t>(_mm_movemask_ps(_mm_cmplt_ps(d, r)))) << (4 * v);
 				}
-				if ((decided & a_lanes) == a_lanes)
+				if (((a_kind == 7u ? outside : notContained) & a_lanes) == a_lanes)
 					break;
 			}
 			// Kind 7 passes the bounds not outside; kind 8 those not contained (no active plane: none outside, none not contained).
-			return (a_kind == 7u ? ~decided : decided) & a_lanes;
+			return (a_kind == 7u ? ~outside : notContained) & a_lanes;
+		}
+
+		/** @brief Simd::PlaneChunksFn in SSE: each chunk's PlaneGroupSse. */
+		void PlaneChunksSse(const std::uint32_t* a_set, std::uint32_t a_kind, const float* a_x, const float* a_y, const float* a_z, const float* a_r,
+			const std::uint16_t* a_lanes, std::uint16_t* a_pass, std::uint32_t a_chunks)
+		{
+			for (std::uint32_t c = 0; c < a_chunks; ++c)
+				a_pass[c] = a_lanes[c] ? static_cast<std::uint16_t>(PlaneGroupSse(a_set, a_kind, a_x + 16 * c, a_y + 16 * c, a_z + 16 * c, a_r + 16 * c, a_lanes[c])) : 0u;
+		}
+
+		Direct::Simd::PlaneChunksFn PlaneChunksOf(Direct::Simd::Level a_level)
+		{
+			return a_level == Direct::Simd::Level::Avx512 ? &Direct::Simd::PlaneChunksAvx512 :
+			       a_level == Direct::Simd::Level::Avx2   ? &Direct::Simd::PlaneChunksAvx2 :
+			                                                &PlaneChunksSse;
 		}
 
 		/**
-		 * @brief Whether a program's walk can be made as one pass over its operators: each test's next operators after it (or past the
-		 * operators: false), and its longest path within its step bound (ProgramRun's: a walk past it is false).
+		 * @brief The batch test walked once over all a_count bounds: the program's operators in order (each mask it sets is an operator after
+		 * the one setting it), each over every 16-bound chunk routed to it.
 		 */
-		bool Walkable(const Words& a_w, std::size_t a_entry, std::size_t a_recordsBase, std::vector<std::uint32_t>& a_depth)
+		void WalkOpMajor(const std::uint32_t* a_w, const std::uint32_t* a_records, const std::uint32_t* a_programSets, std::uint32_t a_sets, std::uint32_t a_ops,
+			std::uint32_t a_first, std::uint32_t a_flags, bool a_viewOnly, Direct::Simd::PlaneChunksFn a_chunksTest, const float* a_x, const float* a_y, const float* a_z,
+			const float* a_r, const std::uint16_t* a_lanes, std::uint32_t a_count, std::uint8_t* a_rejected)
 		{
-			const std::uint32_t ops = a_w[a_entry + 1], first = a_w[a_entry + 3], steps = a_w[a_entry + 7];
-			if (first >= ops)
-				return true;  // false for every bound at the first step, as ProgramRun
-			a_depth.assign(ops, 0u);
-			a_depth[first] = 1;
-			for (std::uint32_t op = first; op < ops; ++op) {
-				const std::uint32_t depth = a_depth[op];
-				if (!depth)
-					continue;
-				if (depth > steps)
-					return false;
-				const std::size_t record = a_recordsBase + std::size_t(op) * kOpWords;
-				const std::uint32_t kind = a_w[record];
-				if (kind != 7u && kind != 8u)
-					continue;
-				for (const std::uint32_t next : { a_w[record + 2], a_w[record + 3] }) {
-					if (next >= ops)
-						continue;
-					if (next <= op)
-						return false;
-					a_depth[next] = std::max(a_depth[next], depth + 1);
-				}
+			const std::uint32_t chunks = (a_count + 15) / 16;
+			thread_local std::vector<float> x, y, z, r;
+			thread_local std::vector<std::uint16_t> live, inView, pass, routes;
+			x.assign(std::size_t(chunks) * 16, 0.0f), y.assign(x.size(), 0.0f), z.assign(x.size(), 0.0f), r.assign(x.size(), 0.0f);
+			live.assign(chunks, 0u), inView.assign(chunks, 0u), pass.resize(chunks);
+			for (std::uint32_t k = 0; k < a_count; ++k) {
+				const std::uint16_t i = a_lanes[k];
+				x[k] = a_x[i], y[k] = a_y[i], z[k] = a_z[i], r[k] = a_r[i];
+				if (r[k] != 0.0f)
+					live[k / 16] |= static_cast<std::uint16_t>(1u << (k % 16));  // a zero radius: culled
 			}
-			return true;
-		}
-
-		/** @brief A plane set's active planes appended to a_planes. */
-		DecodedSet DecodeSet(const Words& a_w, std::size_t a_set, std::vector<float>& a_planes)
-		{
-			DecodedSet set{ static_cast<std::uint32_t>(a_planes.size() / 4), 0 };
-			const std::uint32_t mask = a_w[a_set + kMaskWord];
-			for (std::uint32_t p = 0; p < 6; ++p)
-				if (mask & (1u << p)) {
-					for (std::uint32_t c = 0; c < 4; ++c)
-						a_planes.push_back(a_w.Float(a_set + p * 4 + c));
-					++set.count;
+			// The camera's view planes (the header's plane set), then the walk from the first operator.
+			a_chunksTest(a_w, 7u, x.data(), y.data(), z.data(), r.data(), live.data(), pass.data(), chunks);
+			if (a_viewOnly) {
+				inView.assign(pass.begin(), pass.end());
+			} else if (a_first < a_ops) {
+				// Each operator's chunk masks (routes[op * chunks + c]), cleared as the walk takes them: zero between calls.
+				if (routes.size() < std::size_t(a_ops) * chunks)
+					routes.resize(std::size_t(a_ops) * chunks, 0u);
+				std::uint16_t* firstRoute = routes.data() + std::size_t(a_first) * chunks;
+				bool any = false;
+				for (std::uint32_t c = 0; c < chunks; ++c) {
+					firstRoute[c] = (a_flags & kPortalSkipView) ? live[c] : pass[c];
+					any |= firstRoute[c] != 0;
 				}
-			return set;
+				for (std::uint32_t op = a_first; op < a_ops && any; ++op) {
+					std::uint16_t* m = routes.data() + std::size_t(op) * chunks;
+					bool reached = false;
+					for (std::uint32_t c = 0; c < chunks && !reached; ++c)
+						reached = m[c] != 0;
+					if (!reached)
+						continue;
+					const std::uint32_t* record = a_records + std::size_t(op) * kOpWords;
+					const std::uint32_t kind = record[0], set = record[1];
+					if (kind == 2u)
+						for (std::uint32_t c = 0; c < chunks; ++c)
+							inView[c] |= m[c];
+					if ((kind == 7u || kind == 8u) && set < a_sets) {
+						a_chunksTest(a_programSets + std::size_t(set) * kSetWords, kind, x.data(), y.data(), z.data(), r.data(), m, pass.data(), chunks);
+						std::uint16_t* passRoute = record[2] < a_ops ? routes.data() + std::size_t(record[2]) * chunks : nullptr;
+						std::uint16_t* failRoute = record[3] < a_ops ? routes.data() + std::size_t(record[3]) * chunks : nullptr;
+						for (std::uint32_t c = 0; c < chunks; ++c) {
+							if (passRoute)
+								passRoute[c] |= pass[c];
+							if (failRoute)
+								failRoute[c] |= static_cast<std::uint16_t>(m[c] & ~pass[c]);
+						}
+					}
+					for (std::uint32_t c = 0; c < chunks; ++c)
+						m[c] = 0;
+				}
+				// Operators the walk stopped before (any was false: none reached) hold none; those past the last reached were cleared.
+			}
+			for (std::uint32_t k = 0; k < a_count; ++k)
+				a_rejected[a_lanes[k]] = (inView[k / 16] >> (k % 16)) & 1u ? 0u : 1u;
 		}
 
-		/** @brief An operator decoded once a call: its kind (0: invalid, false), plane set and next operators. */
-		struct DecodedOp
+		Direct::Simd::PlaneGroupFn PlaneGroupOf(Direct::Simd::Level a_level)
 		{
-			std::uint32_t kind = 0;
-			DecodedSet set;
-			std::uint32_t next[2]{};
-		};
+			return a_level == Direct::Simd::Level::Avx512 ? &Direct::Simd::PlaneGroupAvx512 :
+			       a_level == Direct::Simd::Level::Avx2   ? &Direct::Simd::PlaneGroupAvx2 :
+			                                                &PlaneGroupSse;
+		}
 	}
 
 	void PortalTestCpuBatch(std::span<const std::uint32_t> a_programs, std::uint32_t a_program, const float* a_x, const float* a_y, const float* a_z, const float* a_r,
 		const std::uint16_t* a_lanes, std::uint32_t a_count, std::uint8_t* a_rejected)
 	{
-		const Words w{ a_programs };
-		const std::uint32_t count = w[kSetWords];
+		// The producer's programs are trusted (PortalPrograms.h): forward-only operators within their bounds, read in place.
+		const std::uint32_t* w = a_programs.data();
+		const std::uint32_t count = a_programs.size() > kSetWords ? w[kSetWords] : 0u;
 		if (a_program == kPortalNoProgram || a_program >= count) {
 			for (std::uint32_t k = 0; k < a_count; ++k)
 				a_rejected[a_lanes[k]] = 1;  // -1
@@ -284,8 +302,8 @@ namespace DCLF::Portals
 		const std::size_t recordsBase = kHeaderWords + std::size_t(count) * kEntryWords;
 		const std::size_t setsBase = recordsBase + std::size_t(w[kSetWords + 1]) * kOpWords;
 		const std::uint32_t sets = w[entry + 2], first = w[entry + 3];
-		const std::size_t records = recordsBase + std::size_t(w[entry + 4]) * kOpWords;
-		const std::size_t setBase = setsBase + std::size_t(w[entry + 5]) * kSetWords;
+		const std::uint32_t* records = w + recordsBase + std::size_t(w[entry + 4]) * kOpWords;
+		const std::uint32_t* programSets = w + setsBase + std::size_t(w[entry + 5]) * kSetWords;
 		// The whole program's verdict, whatever the bound (PortalTestCpuAt's order; a zero radius is culled before them).
 		int whole = -1;
 		if (a_program != 0u && !(flags & kPortalReached))
@@ -295,44 +313,23 @@ namespace DCLF::Portals
 		else if (cullMode == 1u)
 			whole = 1;
 		const bool viewOnly = cullMode == 3u || ops == 0u;
-		thread_local std::vector<std::uint32_t> depth;
-		thread_local std::vector<std::uint16_t> masks;
-		thread_local std::vector<float> planes;
-		thread_local std::vector<DecodedOp> decoded;
-		if (whole < 0 && !viewOnly && !Walkable(w, entry, records, depth)) {
-			for (std::uint32_t k = 0; k < a_count; ++k) {
-				const std::uint16_t i = a_lanes[k];
-				const float centre[3]{ a_x[i], a_y[i], a_z[i] };
-				a_rejected[i] = PortalTestCpu(a_programs, a_program, centre, a_r[i], 0u) != 1 ? 1u : 0u;
-			}
+		const auto planeGroup = PlaneGroupOf(Direct::Simd::Chosen());
+		if (whole < 0 && Direct::ExperimentOn(Direct::kExpPortalOpMajor)) {
+			WalkOpMajor(w, records, programSets, sets, ops, first, flags, viewOnly, PlaneChunksOf(Direct::Simd::Chosen()), a_x, a_y, a_z, a_r, a_lanes, a_count, a_rejected);
 			return;
 		}
-		// The camera's view planes and the program's operators, decoded once.
-		planes.clear();
-		const DecodedSet view = DecodeSet(w, 0, planes);
-		if (whole < 0 && !viewOnly) {
-			decoded.assign(ops, DecodedOp{});
-			for (std::uint32_t op = first; op < ops; ++op) {
-				const std::size_t record = records + std::size_t(op) * kOpWords;
-				auto& d = decoded[op];
-				const std::uint32_t kind = w[record], set = w[record + 1];
-				if (kind == 2u || kind == 3u) {
-					d.kind = kind;
-				} else if ((kind == 7u || kind == 8u) && set < sets) {
-					d.kind = kind;
-					d.set = DecodeSet(w, setBase + std::size_t(set) * kSetWords, planes);
-					d.next[0] = w[record + 2];
-					d.next[1] = w[record + 3];
-				}
-			}
-			masks.assign(ops, 0u);
-		}
-		for (std::uint32_t k = 0; k < a_count; k += kGroup) {
-			const std::uint32_t n = std::min(kGroup, a_count - k);
-			alignas(16) float x[kGroup]{}, y[kGroup]{}, z[kGroup]{}, r[kGroup]{};
+		const std::uint32_t group = 16u;
+		// Each operator's bounds, cleared as the walk takes them (every mask it sets is an operator after the one setting it): zero between calls.
+		thread_local std::vector<std::uint32_t> masks;
+		if (masks.size() < ops)
+			masks.resize(ops, 0u);
+		const std::uint16_t* lanes = a_lanes;
+		for (std::uint32_t k = 0; k < a_count; k += group) {
+			const std::uint32_t n = std::min(group, a_count - k);
+			alignas(64) float x[kGroup]{}, y[kGroup]{}, z[kGroup]{}, r[kGroup]{};
 			std::uint32_t live = 0;  // the group's bounds with a radius (a zero radius: culled)
 			for (std::uint32_t j = 0; j < n; ++j) {
-				const std::uint16_t i = a_lanes[k + j];
+				const std::uint16_t i = lanes[k + j];
 				x[j] = a_x[i], y[j] = a_y[i], z[j] = a_z[i], r[j] = a_r[i];
 				if (r[j] != 0.0f)
 					live |= 1u << j;
@@ -341,40 +338,37 @@ namespace DCLF::Portals
 			if (whole >= 0) {
 				inView = whole == 1 ? live : 0u;
 			} else if (live) {
-				BoundsGroup b;
-				for (std::uint32_t v = 0; v < kVectors; ++v) {
-					b.x[v] = _mm_load_ps(x + 4 * v), b.y[v] = _mm_load_ps(y + 4 * v), b.z[v] = _mm_load_ps(z + 4 * v), b.r[v] = _mm_load_ps(r + 4 * v);
-					b.minusR[v] = _mm_sub_ps(_mm_setzero_ps(), b.r[v]);
-				}
-				const std::uint32_t inCamera = PlaneSetGroup(planes.data(), view, 7u, b, live);
+				// The camera's view planes: the header's plane set.
+				const std::uint32_t inCamera = planeGroup(w, 7u, x, y, z, r, live);
 				if (viewOnly) {
 					inView = inCamera;
 				} else {
 					const std::uint32_t walk = (flags & kPortalSkipView) ? live : inCamera;
 					// ProgramRun for the group at once: each operator in order, its bounds' mask to the operator its test sends each to.
 					if (walk && first < ops) {
-						masks[first] = static_cast<std::uint16_t>(walk);
+						masks[first] = walk;
 						for (std::uint32_t op = first; op < ops; ++op) {
 							const std::uint32_t m = masks[op];
 							if (!m)
 								continue;
 							masks[op] = 0;
-							const DecodedOp& d = decoded[op];
-							if (d.kind == 2u)
+							const std::uint32_t* record = records + std::size_t(op) * kOpWords;
+							const std::uint32_t kind = record[0], set = record[1];
+							if (kind == 2u)
 								inView |= m;
-							if (d.kind != 7u && d.kind != 8u)
+							if ((kind != 7u && kind != 8u) || set >= sets)
 								continue;  // a terminal, or false
-							const std::uint32_t pass = PlaneSetGroup(planes.data(), d.set, d.kind, b, m);
-							if (pass && d.next[0] < ops)
-								masks[d.next[0]] |= static_cast<std::uint16_t>(pass);
-							if ((m & ~pass) && d.next[1] < ops)
-								masks[d.next[1]] |= static_cast<std::uint16_t>(m & ~pass);
+							const std::uint32_t pass = planeGroup(programSets + std::size_t(set) * kSetWords, kind, x, y, z, r, m);
+							if (pass && record[2] < ops)
+								masks[record[2]] |= pass;
+							if ((m & ~pass) && record[3] < ops)
+								masks[record[3]] |= m & ~pass;
 						}
 					}
 				}
 			}
 			for (std::uint32_t j = 0; j < n; ++j)
-				a_rejected[a_lanes[k + j]] = (inView >> j) & 1u ? 0u : 1u;
+				a_rejected[lanes[k + j]] = (inView >> j) & 1u ? 0u : 1u;
 		}
 	}
 

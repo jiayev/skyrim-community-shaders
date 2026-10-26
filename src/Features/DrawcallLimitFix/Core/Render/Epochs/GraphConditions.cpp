@@ -55,7 +55,8 @@ namespace DCLF::Draws
 		// The pipeline from the newest applied toggles, as the cull mode: the rebuild here makes every recording of the old graph stale, so
 		// the frame waits at its start for a snapshot made for the graph as built (AdoptCurrentSnapshot), whose revision records the
 		// epochs (GPU) or none (CPU: RevisionInputs::cpuPipeline).
-		next.cpuPipeline = Toggles::Get().Active().cpuPipeline;
+		// Which one draws this kind of cell (Auto: interiors CPU-driven): entering or leaving an interior rebuilds the graph anyway.
+		next.cpuPipeline = CpuPipelineFor(Toggles::Get().Active(), next.interior);
 		{
 			std::lock_guard lock(cutsMutex);
 			next.cuts = requestedCuts;

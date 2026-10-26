@@ -41,8 +41,8 @@ namespace DCLF
 		constexpr std::uint32_t kFirstFlagBit = 2;
 		constexpr std::uint32_t kFirstRegisteredBit = kFirstFlagBit + static_cast<std::uint32_t>(std::size(kToggles));
 		static_assert(kFirstRegisteredBit < 32);
-		// The high word: the CPU pipeline's state (cpuPipeline, cpuRecord, then cpuCadence's bits by Direct::ViewType).
-		constexpr std::uint32_t kCpuPipelineBit = 32, kCpuRecordBit = 33, kFirstCadenceBit = 34;
+		// The high word: the pipeline's state (pipelineMode, interiorCpu, exteriorCpu, cpuRecord, then cpuCadence's bits by Direct::ViewType).
+		constexpr std::uint32_t kPipelineModeBit = 32, kInteriorCpuBit = 33, kExteriorCpuBit = 34, kCpuRecordBit = 35, kFirstCadenceBit = 36;
 		static_assert(kFirstCadenceBit + Direct::kViewTypes <= 64 && Direct::kViewTypes <= 16, "the cadences fit the word and ToggleSet::cpuCadence");
 		// Main's cadence is always per frame.
 		constexpr std::uint16_t kCadenceMask = static_cast<std::uint16_t>(((1u << Direct::kViewTypes) - 1u) & ~(1u << static_cast<std::uint32_t>(Direct::ViewType::Main)));
@@ -99,7 +99,8 @@ namespace DCLF
 			ToggleSet set;
 			const auto& cull = SwitchValue(Switch::Cull);
 			set.cullMode = (cull.empty() || cull == "occlusion") ? 2 : cull == "frustum" ? 1 : 0;
-			set.cpuPipeline = SwitchValue(Switch::CpuPipeline) == "cpu";
+			if (const auto& pipeline = SwitchValue(Switch::CpuPipeline); !pipeline.empty() && !ApplyPipeline(set, pipeline))
+				logger::warn("[DCLF] CS_DCLF_PIPELINE={}: not a pipeline (auto, manual, gpu, cpu); auto", pipeline);
 			set.cpuRecord = SwitchValue(Switch::CpuRecord) == "parallel" ? static_cast<std::uint8_t>(Direct::RecordMode::Parallel) : static_cast<std::uint8_t>(Direct::RecordMode::Serial);
 			if (const auto& cadence = SwitchValue(Switch::CpuCadence); !cadence.empty() && !ApplyCpuCadence(set, cadence))
 				logger::warn("[DCLF] CS_DCLF_CPU_CADENCE={}: a view or value it names is unknown (views: main, decal, forward, refraction, sun, spot, point, sky, "
@@ -207,11 +208,23 @@ namespace DCLF
 	Direct::Mode ModeOf(const ToggleSet& a_set)
 	{
 		Direct::Mode mode;
-		mode.cpu = a_set.cpuPipeline;
 		mode.record = a_set.cpuRecord ? Direct::RecordMode::Parallel : Direct::RecordMode::Serial;
 		for (std::size_t v = 0; v < Direct::kViewTypes; ++v)
 			mode.cadence[v] = ((a_set.cpuCadence & kCadenceMask) >> v) & 1u ? Direct::Cadence::PerSnapshot : Direct::Cadence::PerFrame;
 		return mode;
+	}
+
+	bool ApplyPipeline(ToggleSet& a_set, std::string_view a_value)
+	{
+		if (a_value == "auto" || a_value == "manual") {
+			a_set.pipelineMode = a_value == "auto" ? PipelineMode::Auto : PipelineMode::Manual;
+			return true;
+		}
+		if (a_value != "gpu" && a_value != "cpu")
+			return false;
+		a_set.pipelineMode = PipelineMode::Manual;
+		a_set.interiorCpu = a_set.exteriorCpu = a_value == "cpu";
+		return true;
 	}
 
 	std::string_view CpuViewName(std::size_t a_view)
@@ -354,7 +367,9 @@ namespace DCLF
 			bits |= (a_set.*kToggles[i].member ? 1u : 0u) << (kFirstFlagBit + i);
 		bits |= (a_set.registered & RegisteredMask()) << kFirstRegisteredBit;
 		std::uint64_t word = bits;
-		word |= static_cast<std::uint64_t>(a_set.cpuPipeline ? 1u : 0u) << kCpuPipelineBit;
+		word |= static_cast<std::uint64_t>(a_set.pipelineMode == PipelineMode::Manual ? 1u : 0u) << kPipelineModeBit;
+		word |= static_cast<std::uint64_t>(a_set.interiorCpu ? 1u : 0u) << kInteriorCpuBit;
+		word |= static_cast<std::uint64_t>(a_set.exteriorCpu ? 1u : 0u) << kExteriorCpuBit;
 		word |= static_cast<std::uint64_t>(a_set.cpuRecord & 1u) << kCpuRecordBit;
 		word |= static_cast<std::uint64_t>(a_set.cpuCadence & kCadenceMask) << kFirstCadenceBit;
 		return word;
@@ -368,7 +383,9 @@ namespace DCLF
 		for (std::uint32_t i = 0; i < std::size(kToggles); ++i)
 			set.*kToggles[i].member = ((bits >> (kFirstFlagBit + i)) & 1u) != 0;
 		set.registered = (bits >> kFirstRegisteredBit) & RegisteredMask();
-		set.cpuPipeline = ((a_word >> kCpuPipelineBit) & 1u) != 0;
+		set.pipelineMode = ((a_word >> kPipelineModeBit) & 1u) != 0 ? PipelineMode::Manual : PipelineMode::Auto;
+		set.interiorCpu = ((a_word >> kInteriorCpuBit) & 1u) != 0;
+		set.exteriorCpu = ((a_word >> kExteriorCpuBit) & 1u) != 0;
 		set.cpuRecord = static_cast<std::uint8_t>((a_word >> kCpuRecordBit) & 1u);
 		set.cpuCadence = static_cast<std::uint16_t>((a_word >> kFirstCadenceBit) & kCadenceMask);
 		return set;

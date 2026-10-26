@@ -286,6 +286,23 @@ namespace DCLF::Direct::detail
 	 * @brief A pool job: a_view's batches [a_first, a_end) culled (and, in Parallel mode, each recorded into a secondary of the worker's),
 	 * each pushed to the view's queue; the main list's depth batches noted for the colour words.
 	 */
+	/** @brief A culled batch of a_view's list (index a_index) as its site takes it: its own copy, its list's end marked, recorded in Parallel mode. */
+	CulledBatch* FinishCulled(FrameSlot& a_slot, SiteRun& a_run, SiteView& a_view, Worker& a_worker, std::size_t a_index, const CulledBatch& a_culled, bool a_secondary,
+		const RecordBindings& a_bindings)
+	{
+		auto* out = a_worker.arena.Make<CulledBatch>(1);
+		*out = a_culled;
+		out->last = a_index + 1 == a_view.list->size();
+		out->commands = nullptr;
+		if (a_secondary && out->count)
+			if (auto* commands = a_worker.lists.Next(a_run.device)) {
+				RecordContext context{ *commands, *a_slot.set, a_view.type, a_view.view.viewIndex, a_run.site, a_view.depthPass, a_bindings, &a_slot.counters };
+				if (RecordSecondary(context, a_view.inheritance, *out, *commands))
+					out->commands = commands;
+			}
+		return out;
+	}
+
 	void CullJob(FrameSlot& a_slot, SiteRun& a_run, SiteView& a_view, const CullFrame& a_frame, std::size_t a_first, std::size_t a_end)
 	{
 		ZoneScopedN("CS.DCLF.Cpu.Cull");
@@ -294,7 +311,6 @@ namespace DCLF::Direct::detail
 		const auto start = Clock::now();
 		auto& worker = WorkerOf(a_slot);
 		const auto& list = *a_view.list;
-		const auto& set = *a_slot.set;
 		const std::uint32_t parity = static_cast<std::uint32_t>(LiveParity(a_frame.frameValuesSeq));
 		const bool depthMain = a_run.site == Site::Depth && a_view.type == ViewType::Main;
 		// Parallel mode records the batches of the views with secondaries (the plain lists: main depth and colour, the shadow views...)
@@ -312,18 +328,9 @@ namespace DCLF::Direct::detail
 			} else {
 				culled = &CullBatch(batch, true, parity, a_view.view, a_frame, worker.arena);
 			}
-			auto* out = worker.arena.Make<CulledBatch>(1);
-			*out = *culled;
-			out->last = i + 1 == list.size();
-			out->commands = nullptr;
+			auto* out = FinishCulled(a_slot, a_run, a_view, worker, i, *culled, secondary, bindings);
 			if (depthMain && i < a_slot.mainDepthCount)
 				a_slot.mainDepth[i].store(out, std::memory_order_release);
-			if (secondary && out->count)
-				if (auto* commands = worker.lists.Next(a_run.device)) {
-					RecordContext context{ *commands, set, a_view.type, a_view.view.viewIndex, a_run.site, a_view.depthPass, bindings, &a_slot.counters };
-					if (RecordSecondary(context, a_view.inheritance, *out, *commands))
-						out->commands = commands;
-				}
 			if (!a_view.view.stampOnly)
 				a_view.queue->Push(out);
 		}

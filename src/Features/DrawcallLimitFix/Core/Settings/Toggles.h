@@ -17,13 +17,20 @@ namespace DCLF::Direct
 
 namespace DCLF
 {
+	/** @brief How the pipeline is chosen (ToggleSet::pipelineMode): by the cell (Auto), or per kind of cell (Manual). */
+	enum class PipelineMode : std::uint8_t
+	{
+		Auto,    // exteriors GPU-driven, interiors CPU-driven
+		Manual,  // ToggleSet::interiorCpu, exteriorCpu
+	};
+
 	/**
 	 * @brief The feature switches that can change while the game runs, for live A/B comparisons.
 	 *
 	 * Each is seeded from its `CS_DCLF_*` switch (Switches.h) and then edited from the feature's menu. Unset,
 	 * they default to the tested configuration: everything on, both ownerships static, occlusion culling.
-	 * kToggles describes every Core flag (the features register theirs: RegisterToggle); cullMode and the CPU pipeline's three (cpuPipeline,
-	 * cpuRecord, cpuCadence), which are not flags of the table, are handled beside it.
+	 * kToggles describes every Core flag (the features register theirs: RegisterToggle); cullMode and the CPU pipeline's state (pipelineMode,
+	 * interiorCpu, exteriorCpu, cpuRecord, cpuCadence), which are not flags of the table, are handled beside it.
 	 */
 	struct ToggleSet
 	{
@@ -31,10 +38,13 @@ namespace DCLF
 		// the HZB. The inputs are the whole tracked set, so the culling has real work to do.
 		std::uint8_t cullMode = 0;
 
-		// The CPU-driven pipeline (an experiment; Core/Render/Direct/Direct.h), handled beside cullMode: not flags of the table.
-		// dclf:pipeline=cpu: the draws culled on the CPU and recorded as direct draws into DXVK's command buffer (it changes the graph's
-		// conditions: from the next build point, GraphConditions::cpuPipeline).
-		bool cpuPipeline = false;
+		// The pipeline (Core/Render/Direct/Direct.h for the CPU-driven one), handled beside cullMode: not flags of the table. CPU-driven:
+		// the draws culled on the CPU and recorded as direct draws into DXVK's command buffer. Which one draws a cell (CpuPipelineFor)
+		// changes the graph's conditions: from the next build point, GraphConditions::cpuPipeline. dclf:pipeline=auto|manual|gpu|cpu.
+		PipelineMode pipelineMode = PipelineMode::Auto;
+		// Manual's: the pipeline of interiors and of exteriors (true: CPU-driven).
+		bool interiorCpu = true;
+		bool exteriorCpu = false;
 		// dclf:cpu-record: the per-frame views' Direct::RecordMode (0 Serial, 1 Parallel).
 		std::uint8_t cpuRecord = 0;
 		// dclf:cpu-cadence-<view>: a bit per Direct::ViewType, set for a view culled and recorded once per snapshot (Main's never set).
@@ -68,8 +78,22 @@ namespace DCLF
 		bool operator==(const ToggleSet&) const = default;
 	};
 
-	/** @brief The CPU pipeline's state in a_set (Direct::Mode): its pipeline, record mode and cadences (Main's always per frame). */
+	/** @brief The CPU pipeline's state in a_set (Direct::Mode): its record mode and cadences (Main's always per frame; cpu: the graph's). */
 	Direct::Mode ModeOf(const ToggleSet& a_set);
+
+	/** @brief Whether a_set draws a cell of a_interior CPU-driven: Auto, interiors (exteriors GPU-driven); Manual, its own per kind. */
+	inline bool CpuPipelineFor(const ToggleSet& a_set, bool a_interior)
+	{
+		if (a_set.pipelineMode == PipelineMode::Auto)
+			return a_interior;
+		return a_interior ? a_set.interiorCpu : a_set.exteriorCpu;
+	}
+
+	/**
+	 * @brief Applies a pipeline value to a_set (CS_DCLF_PIPELINE's and dclf:pipeline's): "auto", "manual" (the per-cell choices kept),
+	 * "gpu" or "cpu" (Manual, both kinds). False for one it does not know (a_set unchanged).
+	 */
+	bool ApplyPipeline(ToggleSet& a_set, std::string_view a_value);
 
 	/**
 	 * @brief A Direct::ViewType's name in the CPU pipeline's toggles and reports (dclf:cpu-cadence-<name>): main, decal, forward,
