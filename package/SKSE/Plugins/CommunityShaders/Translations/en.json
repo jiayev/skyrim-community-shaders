@@ -1541,6 +1541,7 @@
     "feature.light_limit_fix.local_shadow_samples": "Shadow Filter Samples",
     "feature.light_limit_fix.local_shadow_samples_tooltip": "Filter taps per shadow lookup. More taps give softer edges at a higher cost per shadowed light.",
     "feature.light_limit_fix.local_shadow_slots": "Shadow Cache Slots",
+    "feature.light_limit_fix.local_shadow_slots_format": "%d ({} MB)",
     "feature.light_limit_fix.local_shadow_slots_tooltip": "Maximum number of lights that can hold a cached shadow map at the same time. Each slot costs video memory at the cache resolution.",
     "feature.light_limit_fix.local_shadows": "Local Light Shadows",
     "feature.light_limit_fix.local_shadows_restart_to_enable": "Requires restart to enable Local Light Shadows.",
