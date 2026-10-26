@@ -2223,6 +2223,15 @@ keeps on the node. One hidden without a visible full tree leaves a hole.
 -   **Ownership**: the `TreeInstances` family's decision (`IndirectDraws::DecideDrawFamilies`) at the frame's start, before the main
     camera's cull: the toggle, programs, pipelines, tables and atlas (`TreeLodAtlasReady`). On it, `PassCapture::WithholdMain`
     withholds every tree LOD pass into the main camera's views; otherwise the draw row names no slot and both passes draw nothing.
+-   **A family's pipelines come from the revision** (every draw family: tree LOD, grass). The revision make reads them from its
+    catalog (`RequireRevisionSet`: `RevisionMake::familyPipelines`), the main shapes carry them (`PassFrame::families`) and the main
+    shapes key mixes them, so a catalog that gains or rebuilds a family's pipelines makes new shapes and new recordings. The main
+    view's depth and colour passes key and prepare their family draws from the shape alone. A frame owns a family only while the
+    adopted revision's depth shape carries the pipelines the frame's catalog has (`IndirectDraws::AdoptedFamilyPipelines`, in
+    `DrawFamilyFrame::Pipelines`), so no frame withholds a family's engine draws with no recording to draw it. Before 2026-10-26 the
+    passes read the render thread's published pipelines (`SceneBuffers::familyPipelines`, still the CPU pipeline's source): a revision
+    prepared just before grass's pipelines were published recorded no grass draws, and in a still scene no later revision re-keyed it,
+    so grass stayed undrawn (and the engine's withheld) until any graph rebuild.
     DCLF draws every instance the mirror holds this frame.
 -   Measured: mirror parity 0 missing, stale or differing with up to 597 shapes and 10,139 instances; 6-25% of instances in view
     occluded.

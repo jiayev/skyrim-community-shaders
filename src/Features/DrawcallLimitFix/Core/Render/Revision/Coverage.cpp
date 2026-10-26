@@ -249,6 +249,24 @@ namespace DCLF
 			adoptedSnapshot ? adoptedSnapshot->serial : 0, adoptedSnapshot && adoptedSnapshot->drawsComplete, snapshotStale, payload, versions != nullptr, current });
 	}
 
+	std::shared_ptr<const FamilyPipelines> IndirectDraws::AdoptedFamilyPipelines(Api::DrawFamily a_family) const
+	{
+		if (!impl)
+			return nullptr;
+		const auto& active = impl->revisions.active;
+		if (!active)
+			return nullptr;
+		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e) {
+			const auto& traits = EpochTraitsOf(e);
+			if (traits.shape != ShapeKind::Main || traits.index != kDepthShape)
+				continue;
+			const auto& fragment = active->Fragment(Impl::SceneRevisions::kShapeSlot + e);
+			const auto frame = fragment ? fragment->Value<PassFrame>() : nullptr;
+			return frame ? frame->families[static_cast<std::size_t>(a_family)] : nullptr;
+		}
+		return nullptr;
+	}
+
 	void IndirectDraws::Impl::DecideViewCoverage(ViewKind a_kind, org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame)
 	{
 		// What a registered view's coverage is decided from (Api::ViewCoverage), every input read whatever the others: its feature's

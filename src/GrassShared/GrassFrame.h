@@ -24,11 +24,21 @@ namespace GrassShared
 	void CountNativeDraw();
 	uint64_t TakeNativeDrawsWhileOwned();
 
+	/**
+	 * @brief The frame a stood-down callback runs for. The engine's renderer state is not the main view's at DCLF's frame point
+	 * (the shadow state's posAdjust holds whatever the last pass set), so what the callbacks would read from it inside the grass pass
+	 * comes from here.
+	 */
+	struct StoodDownFrame
+	{
+		float eye[3]{};  // the main view's eye (the world root camera's world translation): posAdjust inside the main view's grass pass
+	};
+
 	/** @brief Registers a callback for frames DCLF owns grass. Holds at most four; register during PostPostLoad. */
-	void OnStoodDownFrame(void (*callback)());
+	void OnStoodDownFrame(void (*callback)(const StoodDownFrame& frame));
 
 	/** @brief Runs every stood-down callback in registration order. DCLF calls it on the frames it owns grass. */
-	void RunStoodDownFrame();
+	void RunStoodDownFrame(const StoodDownFrame& frame);
 
 	/** @brief Grass Optimizations' cull settings. The defaults are the vanilla-equivalent ones used without it. */
 	struct CullSettings

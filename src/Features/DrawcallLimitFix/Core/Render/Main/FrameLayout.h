@@ -6,6 +6,7 @@
 
 // volk must precede every Vulkan header in this translation unit.
 #include <rhi_interop_vulkan.h>
+#include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
@@ -77,6 +78,10 @@ namespace DCLF::Draws
 		rhi::DescriptorHeapHandle resourceHeap{};
 		rhi::DescriptorHeapHandle samplerHeap{};
 		IndirectState indirect{};
+		// The draw families' pipelines as the revision's catalog has them (RevisionMake::familyPipelines; null: the family is not drawn in this
+		// revision). The main passes record a family's draws from these alone, so an epoch's recording is its revision's whatever the render
+		// thread has published since; the frame owns a family only while its adopted revision draws it (IndirectDraws::AdoptedFamilyPipelines).
+		std::array<std::shared_ptr<const FamilyPipelines>, Extensions::kDrawFamilies> families{};
 		// The latch block the epoch wrote (the one the revision's set names): a layout grown (ReserveMainLatch) is a new block of the
 		// next set, and a frame in flight keeps reading its own.
 		std::shared_ptr<const org::LatchBlock> latch;
