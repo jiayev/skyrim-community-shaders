@@ -165,7 +165,7 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 #		if defined(SKYLIGHTING)
 				float3 positionMS = positionWS.xyz;
 				sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, normalWS);
-				float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, normalWS);
+				float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, normalWS, Skylighting::GetFadeOutFactor(positionMS));
 				directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(vanillaDALC, -normalWS, skylightingDiffuse, positionWS.xyz) * albedo;
 #		else
 				directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(vanillaDALC, -normalWS, positionWS.xyz) * albedo;
@@ -228,8 +228,9 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 #	if defined(SKYLIGHTING)
 			float3 positionMS = positionWS.xyz;
 
-			sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, R);
-			float skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, specularLobe);
+			sh2 skylightingSH = Skylighting::Sample(Skylighting::ClampToArrayHeight(positionMS), R);
+			float skylightingFadeOut = Skylighting::GetHorizontalFadeOutFactor(positionMS);
+			float skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, specularLobe, skylightingFadeOut);
 #	endif
 
 #	if defined(IBL)

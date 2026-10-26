@@ -302,6 +302,8 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 
 	data.Enable = enableEffect;
 	data.ColorPow = settingManager.GetInterpolatedTimeOfDayValue("ColorPow", "ENVIRONMENT");
+	if (enableEffect)
+		data.SkyScaleMultiplier = settingManager.GetValue<bool>("DisableWrongSkyMath", "SKY") ? 0.0f : settingManager.GetInterpolatedTimeOfDayValue("GradientIntensity", "SKY");
 
 	data.CloudsCurve = settingManager.GetInterpolatedTimeOfDayValue("CloudsCurve", "SKY");
 	data.CloudsDesaturation = settingManager.GetInterpolatedTimeOfDayValue("CloudsDesaturation", "SKY");
@@ -471,6 +473,9 @@ void Effects11::Reset()
 		// UseEffect with no compiled preset has nothing to run, so fall back to the game's own post processing.
 		PostProcessingMode::Set(PostProcessingMode::Mode::Vanilla);
 	}
+	// CheckCommonData only clears this when a hook calls it, which may not happen outside the world.
+	if (!presetActive)
+		enableEffect = false;
 }
 
 void Effects11::ClearShaderCache()
@@ -500,27 +505,6 @@ void Effects11::ClearShaderCache()
 
 	if (EffectManager::GetSingleton().IsInitialized())
 		EffectManager::GetSingleton().ReloadShaders();
-}
-
-void Effects11::Prepass()
-{
-	if (!enableEffect) {
-		return;
-	}
-
-	auto& settingManager = SettingManager::GetSingleton();
-
-	auto imageSpaceManager = globals::game::imageSpaceManager;
-	if (!imageSpaceManager) {
-		return;
-	}
-
-	auto& data = imageSpaceManager->GetRuntimeData().data;
-
-	float gradientIntensity = settingManager.GetInterpolatedTimeOfDayValue("GradientIntensity", "SKY");
-	float skyScaleIntensity = settingManager.GetValue<bool>("DisableWrongSkyMath", "SKY") ? 0.0f : gradientIntensity;
-
-	data.baseData.hdr.skyScale *= skyScaleIntensity;
 }
 
 float3 Curve(float3 color, float power)

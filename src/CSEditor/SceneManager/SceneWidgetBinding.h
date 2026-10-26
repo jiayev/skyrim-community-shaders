@@ -186,6 +186,9 @@ namespace SceneWidgetBinding
 		/** @brief Double-click / Ctrl+click / Shift+click on a greyed control ticks the override on.
 		 *  @return True when the gesture fired and the override was enabled. */
 		bool TryEnableOverrideFromGesture();
+		/** @brief Middle-click on a main-menu control writes back the feature's code default.
+		 *  @return True when the gesture fired and changed the value. */
+		bool TryResetFromGesture();
 
 		/** @brief Writes an edit into this control's entries, reviving a tombstone and creating missing entries first. */
 		void Commit();
@@ -263,8 +266,8 @@ namespace SceneWidgetBinding
 		 *  highest lower layer supplying it, else the feature's base.
 		 *  @return Null when the live member already holds that base. */
 		const json* ResolveFallbackValue(const Component& a_component) const;
-		/** @brief Writes a stored value into the component's slot of the holding storage, in widget scale. */
-		void WriteHoldingComponent(const Component& a_component, const json& a_stored);
+		/** @brief Writes a stored value into the component's slot of a_storage, in widget scale. */
+		void WriteComponent(void* a_storage, const Component& a_component, const json& a_stored) const;
 
 		/// The caller's post-call storage, as the primitive one component persists.
 		json ReadEditedValue(const Component& a_component) const;

@@ -174,6 +174,29 @@ namespace Util
 		return !debugSectionsHidden;
 	}
 
+	void StepFade(float& fade, bool visible, float deltaTime)
+	{
+		const float step = deltaTime / ThemeManager::Constants::UI_FADE_SECONDS;
+		fade = std::clamp(fade + (visible ? step : -step), 0.0f, 1.0f);
+	}
+
+	FadeScope::FadeScope(float fade) :
+		context(*ImGui::GetCurrentContext()),
+		hoveredWindow(context.HoveredWindow),
+		hoveredWindowUnderMoving(context.HoveredWindowUnderMovingWindow)
+	{
+		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * fade);
+		if (fade < 1.0f)
+			context.HoveredWindow = context.HoveredWindowUnderMovingWindow = nullptr;
+	}
+
+	FadeScope::~FadeScope()
+	{
+		context.HoveredWindow = hoveredWindow;
+		context.HoveredWindowUnderMovingWindow = hoveredWindowUnderMoving;
+		ImGui::PopStyleVar();
+	}
+
 	void TextUnformattedDisabled(const char* a_text, const char* a_textEnd)
 	{
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -439,7 +462,8 @@ namespace Util
 		labels.reserve(static_cast<size_t>(a_count));
 		for (int i = 0; i < a_count; ++i)
 			labels.emplace_back(a_labels[i] ? a_labels[i] : "");
-		return DrawGlassPillStrip(a_id, labels, a_selected, a_marked, a_muted);
+		return SceneWidgetInterceptor::InterceptInt(a_id, a_selected,
+			[&](int& a_bound) { return DrawGlassPillStrip(a_id, labels, a_bound, a_marked, a_muted); });
 	}
 
 	bool IsInsidePillTabBar()
@@ -547,7 +571,7 @@ namespace Util
 		return std::max(iconSize.x, iconSize.y) + kPad * 2.0f * scale;
 	}
 
-	void DrawLockStatusBadge(ImVec2 a_min, bool a_locked, ImDrawList* a_drawList)
+	void DrawLockStatusBadge(ImVec2 a_min, bool a_locked, ImDrawList* a_drawList, bool a_hovered, bool a_held)
 	{
 		if (!a_drawList)
 			a_drawList = ImGui::GetWindowDrawList();
@@ -563,6 +587,8 @@ namespace Util
 
 		const ImVec2 max(a_min.x + size, a_min.y + size);
 		const float rounding = std::min(ImGui::GetStyle().FrameRounding, size * 0.35f);
+		auto _style = TransparentIconButtonStyle();
+		DrawRoundedButtonHighlight(a_min, max, a_hovered, a_held, rounding, a_drawList);
 		a_drawList->AddRectFilled(a_min, max, ImGui::GetColorU32(fill), rounding);
 		a_drawList->AddRect(a_min, max, ImGui::GetColorU32(border), rounding);
 		Icons::DrawCenteredGlyph(a_drawList, a_min, ImVec2(size, size),
@@ -586,7 +612,7 @@ namespace Util
 		bool hovered = false;
 		bool held = false;
 		const bool clicked = ImGui::ButtonBehavior(bb, id, &hovered, &held);
-		DrawLockStatusBadge(min, a_locked);
+		DrawLockStatusBadge(min, a_locked, nullptr, hovered, held);
 		if (a_tooltip)
 			AddTooltip(a_tooltip);
 		return clicked;
@@ -1357,10 +1383,10 @@ namespace Util
 
 	float GetEditorChromeTextCursorOffsetY(float rowHeight)
 	{
-		// ImGui's text cursor is the top of the FontSize line box. Capitals occupy ~[0, Ascent],
-		// so centre that ink band in the row: offset = rowHeight/2 - Ascent/2.
-		const float ascent = ImGui::GetFontBaked()->Ascent;
-		return rowHeight * 0.5f - ascent * 0.5f;
+		// Centre capital-letter ink, measured from 'H' since cap height and ascent vary per font.
+		const ImFontGlyph* glyph = ImGui::GetFontBaked()->FindGlyph('H');
+		const float inkCenter = glyph ? (glyph->Y0 + glyph->Y1) * 0.5f : ImGui::GetFontSize() * 0.5f;
+		return rowHeight * 0.5f - inkCenter;
 	}
 
 	// Draws the custom floating header: the title (also the drag handle), an optional
@@ -1923,13 +1949,12 @@ namespace Util
 			IM_COL32(0, 0, 0, alpha));
 	}
 
-	void DrawBreathingText(const char* text, float speed, float minAlpha, float maxAlpha)
+	void DrawBreathingText(const char* text, std::optional<ImVec4> color, float speed, float minAlpha, float maxAlpha)
 	{
 		float alphaRange = maxAlpha - minAlpha;
 		float breathe = minAlpha + alphaRange * 0.5f * (1.0f + sinf((float)ImGui::GetTime() * speed));
-		auto& theme = globals::menu->GetTheme().Palette;
-		ImVec4 color = ImVec4(theme.Text.x, theme.Text.y, theme.Text.z, breathe);
-		ImGui::TextColored(color, "%s", text);
+		const ImVec4 base = color.value_or(globals::menu->GetTheme().Palette.Text);
+		ImGui::TextColored(ImVec4(base.x, base.y, base.z, breathe), "%s", text);
 	}
 
 	ImVec4 GetPulsingColor(const ImVec4& baseColor, float speed, float minBrightness, float maxBrightness)

@@ -259,6 +259,8 @@ bool Widget::BeginWidgetWindow(bool showApply, bool showSaveLoadRevert, bool sho
 	bool result = Util::BeginWithCustomHeader(title.c_str(), &open, [this, showApply, showSaveLoadRevert, showForceWeather, weather, searchId]() { m_customHeaderActionsDrawn = DrawTitleBarActions(showApply, showSaveLoadRevert, showForceWeather, weather, true, searchId); }, ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags, hasLeadingIcon ? [typeIcon](ImVec2 iconMin, float iconSize) { WeatherTypeIcons::Draw(typeIcon, ImGui::GetWindowDrawList(), iconMin, iconSize,
 																																																																																																		   ImGui::GetColorU32(ImGuiCol_Text)); } : std::function<void(ImVec2, float)>{});
 	UpdateWidgetTypeSize(GetWidgetTypeName());
+	if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+		EditorWindow::GetSingleton()->SetFocusedWidget(*this);
 	return result;
 }
 
@@ -578,7 +580,7 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 
 		switch (action.kind) {
 		case Kind::LockBadge:
-			Util::DrawLockStatusBadge(bb.Min, action.locked, drawList);
+			Util::DrawLockStatusBadge(bb.Min, action.locked, drawList, hovered, held);
 			break;
 		case Kind::Icon:
 			{
@@ -713,7 +715,9 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		// Transparent icon button style
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 		ImGui::PushStyleColor(ImGuiCol_Button, WidgetUI::kIconButtonTransparent);
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, WidgetUI::kIconButtonHover);
+		ImVec4 iconButtonHover = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+		iconButtonHover.w = WidgetUI::kIconButtonHoverAlpha;
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, iconButtonHover);
 
 		auto iconButton = [&](const char* suffix, void* texture, const char* tooltip, auto callback) {
 			if (!texture)
@@ -859,8 +863,7 @@ void Widget::DrawSearchDropdown()
 	ImGui::SetNextWindowPos(searchDropdownAnchor, ImGuiCond_Always);
 	ImGui::SetNextWindowSize(ImVec2(WidgetUI::kSearchDropdownWidth * scale, 0));
 	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f);
-	const ImVec4 dropdownBg(WidgetUI::kSearchDropdownBgGray, WidgetUI::kSearchDropdownBgGray, WidgetUI::kSearchDropdownBgGray, 1.0f);
-	ImGui::PushStyleColor(ImGuiCol_WindowBg, dropdownBg);
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::GetStyleColorVec4(ImGuiCol_PopupBg));
 	const std::string dropdownWindowId = std::format("##SearchDropdown_{}", static_cast<const void*>(this));
 	if (ImGui::Begin(dropdownWindowId.c_str(), nullptr,
 			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |

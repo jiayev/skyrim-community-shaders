@@ -1,5 +1,6 @@
 #include "LinearLighting.h"
 
+#include <DirectXTex.h>
 #include <cmath>
 
 #include "../I18n/I18n.h"
@@ -375,6 +376,19 @@ namespace
 				}
 			}
 			func(shader, pass, renderFlags);
+			if constexpr (Type == RE::BSShader::Type::Lighting) {
+				constexpr auto projectedTextureIsSRGB = static_cast<uint>(State::ExtraShaderDescriptors::ProjectedTextureIsSRGB);
+				auto& descriptor = globals::state->permutationData.ExtraShaderDescriptor;
+				descriptor &= ~projectedTextureIsSRGB;
+				if (globals::state->currentPixelDescriptor & static_cast<uint>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) {
+					if (auto* srv = globals::game::shadowState->GetRuntimeData().PSTexture[3]) {
+						D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+						srv->GetDesc(&desc);
+						if (DirectX::IsSRGB(desc.Format))
+							descriptor |= projectedTextureIsSRGB;
+					}
+				}
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -653,8 +667,9 @@ namespace ImageSpaceColorManagement
 void LinearLighting::Load()
 {
 	ApplyGameGamma();
-	// Needs Post Processing's display transform, as in Reset(); without it the game renders in gamma space.
-	configuredLinearLighting = loaded && settings.enableLinearLighting && globals::features::postProcessing.loaded;
+	// Matches Reset() so a saved Vanilla mode does not cost a shader reload on the first frame.
+	configuredLinearLighting = loaded && settings.enableLinearLighting && globals::features::postProcessing.loaded &&
+	                           !PostProcessingMode::IsVanillaPending();
 	configuredACEScg = configuredLinearLighting && settings.enableACEScg;
 
 	// Installed regardless of the toggle so Reset() can enable Linear Lighting without a restart.

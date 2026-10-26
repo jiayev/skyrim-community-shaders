@@ -97,10 +97,6 @@ void MotionBlur::ClearShaderCache()
 	neighborMaxTexture = nullptr;
 	blurOutputTexture = nullptr;
 
-	// Release constant buffer objects
-	blurConstantBufferObj = nullptr;
-	reductionPassConstantBufferObj = nullptr;
-
 	lastWidth = lastHeight = 0;
 
 	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/MotionBlur");

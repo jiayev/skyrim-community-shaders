@@ -454,12 +454,19 @@ namespace
 		return nullptr;
 	}
 
+	/** @brief The setting's value in one of the settings layers State holds for its feature. */
+	const json* FindStateLayerValue(const SettingMetadata& a_setting,
+		const json* (State::*a_layer)(const std::string&) const)
+	{
+		auto* feature = Feature::FindFeatureByShortName(std::string{ a_setting.featureShortName });
+		const auto* layer = feature ? (globals::state->*a_layer)(feature->GetName()) : nullptr;
+		return layer ? SceneSettingsInternal::GetCatalogSerializedValue(*layer, a_setting) : nullptr;
+	}
+
 	/** @brief The setting's value in the layers beneath the user's edits: defaults with Baseline packs applied. */
 	const json* FindLayeredBaseValue(const SettingMetadata& a_setting)
 	{
-		auto* feature = Feature::FindFeatureByShortName(std::string{ a_setting.featureShortName });
-		const auto* base = feature ? globals::state->GetFeatureBase(feature->GetName()) : nullptr;
-		return base ? SceneSettingsInternal::GetCatalogSerializedValue(*base, a_setting) : nullptr;
+		return FindStateLayerValue(a_setting, &State::GetFeatureBase);
 	}
 }
 
@@ -999,9 +1006,9 @@ void SceneWidgetBinding::Guard::StoreHoldingValue()
 	for (const auto& component : components) {
 		const auto index = DisplayEntry(component);
 		if (index && *index < entries.size())
-			WriteHoldingComponent(component, entries[*index].value);
+			WriteComponent(holding.bytes, component, entries[*index].value);
 		else if (const auto* fallback = ResolveFallbackValue(component))
-			WriteHoldingComponent(component, *fallback);
+			WriteComponent(holding.bytes, component, *fallback);
 	}
 }
 
@@ -1020,13 +1027,13 @@ const json* SceneWidgetBinding::Guard::ResolveFallbackValue(const Component& a_c
 	return manager->FindAppliedBaseline(setting);
 }
 
-void SceneWidgetBinding::Guard::WriteHoldingComponent(const Component& a_component, const json& a_stored)
+void SceneWidgetBinding::Guard::WriteComponent(void* a_storage, const Component& a_component, const json& a_stored) const
 {
 	if (value.kind == Kind::Bool) {
 		if (a_stored.is_boolean())
-			*reinterpret_cast<bool*>(holding.bytes) = a_stored.get<bool>();
+			*static_cast<bool*>(a_storage) = a_stored.get<bool>();
 		else if (a_stored.is_number_integer())
-			*reinterpret_cast<bool*>(holding.bytes) = a_stored.get<std::int64_t>() != 0;
+			*static_cast<bool*>(a_storage) = a_stored.get<std::int64_t>() != 0;
 		return;
 	}
 	if (!a_stored.is_number())
@@ -1035,14 +1042,14 @@ void SceneWidgetBinding::Guard::WriteHoldingComponent(const Component& a_compone
 	const auto number = a_stored.get<double>() * widgetScale;
 	switch (value.kind) {
 	case Kind::Int:
-		*reinterpret_cast<int*>(holding.bytes) = static_cast<int>(number);
+		*static_cast<int*>(a_storage) = static_cast<int>(number);
 		break;
 	case Kind::Float:
 	case Kind::FloatVector:
-		reinterpret_cast<float*>(holding.bytes)[a_component.widgetComponent] = static_cast<float>(number);
+		static_cast<float*>(a_storage)[a_component.widgetComponent] = static_cast<float>(number);
 		break;
 	case Kind::Scalar:
-		GetScalarTraits(value.scalarType).write(holding.bytes, number);
+		GetScalarTraits(value.scalarType).write(a_storage, number);
 		break;
 	default:
 		break;
@@ -1241,6 +1248,31 @@ bool SceneWidgetBinding::Guard::TryEnableOverrideFromGesture()
 		return false;
 
 	EnableOverride();
+	return true;
+}
+
+bool SceneWidgetBinding::Guard::TryResetFromGesture()
+{
+	assert(state == State::Baseline);
+	// An active item still owns its value (InputText keeps its own buffer), and MarkItemEdited expects none.
+	if (ImGui::IsAnyItemActive() || !ImGui::IsItemHovered() || !ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
+		return false;
+
+	bool reset = false;
+	for (const auto& component : components) {
+		const auto* defaultValue = FindStateLayerValue(*component.setting, &::State::GetFeatureDefaults);
+		if (!defaultValue || SceneSettingsManager::AppliedValuesEqual(*defaultValue, ReadEditedValue(component)))
+			continue;
+		WriteComponent(value.data, component, *defaultValue);
+		reset = true;
+	}
+	if (!reset)
+		return false;
+
+	// The click never activates the item, so neither the edit flag nor an interaction end would report it.
+	ImGui::MarkItemEdited(ImGui::GetItemID());
+	if (const auto* context = SceneWidgetInterceptor::GetArmedContext())
+		globals::state->InvalidateEditsUnderBaselines(context->feature);
 	return true;
 }
 
@@ -1549,13 +1581,16 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 		return a_changed;
 	}
 	if (state == State::Baseline) {
+		a_changed |= TryResetFromGesture();
 		if (a_changed) {
 			auto* manager = SceneSettingsManager::GetSingleton();
 			for (const auto& component : components)
 				manager->RecordBaselineEdit(ComponentIdentity(component), ReadEditedValue(component));
 		}
-		if (const auto tooltip = ResolveBaselineTooltip(); !tooltip.empty())
+		if (auto tooltip = ResolveBaselineTooltip(); !tooltip.empty()) {
+			tooltip.append("\n").append(T(TKEY("baseline_reset_hint"), "Middle-click to restore the default."));
 			Util::AddTooltip(tooltip.c_str(), Util::kTooltipWhenDisabled);
+		}
 		return a_changed;
 	}
 	// Both were greyed, so neither took input: no gutter to own and nothing to commit. Words are all a
