@@ -69,17 +69,20 @@ float RemapBaseContrast(float centeredBase)
 
 float ComputeLocalExposure(float3 sceneColor, float baseLogLuminance, float globalExposure, float middleGreyCompensation)
 {
-	float sceneLuminance = Color::RGBToLuminance(max(sceneColor, 0.0));
-	float sceneLogLuminance = clamp(log2(max(sceneLuminance, exp2(LogLuminanceMin))), LogLuminanceMin, LogLuminanceMax);
 	float logGlobalExposure = log2(max(globalExposure, 1e-5));
-	float exposedLogLuminance = sceneLogLuminance + logGlobalExposure;
 	float exposedBase = baseLogLuminance + logGlobalExposure;
-	float detail = exposedLogLuminance - exposedBase;
 	float middleGrey = log2(0.18 * middleGreyCompensation) + MiddleGreyBias;
-	float remappedBase = middleGrey + RemapBaseContrast(exposedBase - middleGrey);
-	float targetLogLuminance = remappedBase + detail * DetailStrength;
-	float logAdjustment = (targetLogLuminance - exposedLogLuminance) * Strength;
-	return exp2(clamp(logAdjustment, -8.0, 8.0));
+	float centeredBase = exposedBase - middleGrey;
+	float logAdjustment = RemapBaseContrast(centeredBase) - centeredBase;
+
+	[branch] if (DetailStrength != 1.0)
+	{
+		float sceneLuminance = Color::RGBToLuminance(max(sceneColor, 0.0));
+		float sceneLogLuminance = clamp(log2(max(sceneLuminance, exp2(LogLuminanceMin))), LogLuminanceMin, LogLuminanceMax);
+		logAdjustment += (sceneLogLuminance - baseLogLuminance) * (DetailStrength - 1.0);
+	}
+
+	return exp2(clamp(logAdjustment * Strength, -8.0, 8.0));
 }
 #endif
 
