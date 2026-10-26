@@ -1907,17 +1907,5 @@
     "ui.copy": "Копировать",
     "ui.dont_ask_again": "Больше не спрашивать",
     "ui.search": "Поиск...",
-    "ui.search_features": "Поиск функций...",
-    "feature.exp_height_fog.debug": "Отладка",
-    "feature.exp_height_fog.depth_distribution_scale": "Масштаб распределения по глубине",
-    "feature.exp_height_fog.directional_shadow_bias": "Смещение направленных теней",
-    "feature.exp_height_fog.grid_depth_slices": "Срезы сетки по глубине",
-    "feature.exp_height_fog.grid_pixel_size": "Размер пикселя сетки",
-    "feature.exp_height_fog.history_miss_samples": "Образцы промахов в истории",
-    "feature.exp_height_fog.sample_jitter_multiplier": "Множитель джиттера образцов",
-    "feature.exp_height_fog.sample_jitter_multiplier_tooltip": "Соответствует r.VolumetricFog.LightScatteringSampleJitterMultiplier в UE.\nДобавляет случайное смещение на вокселе поверх последовательности Халтона.\n0 = стандарт UE; ненулевые значения требуют более сильной временной фильтрации.",
-    "feature.exp_height_fog.temporal_history_weight": "Вес временной истории",
-    "feature.exp_height_fog.upsample_jitter_multiplier": "Множитель джиттера при апсемплинге",
-    "feature.exp_height_fog.upsample_jitter_multiplier_tooltip": "Соответствует r.VolumetricFog.UpsampleJitterMultiplier в UE.\nДобавляет джиттер финального поиска 3D-тумана в экранном пространстве, скрывая\nпикселизацию низкого разрешения фрокселей. 0 = стандарт UE.",
-    "feature.exp_height_fog.volumetric_view_distance": "Дальность видимости объёмного тумана"
+    "ui.search_features": "Поиск функций..."
 }

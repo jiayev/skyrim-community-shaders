@@ -433,6 +433,8 @@ bool NdfManager::UpdateNdf(const NdfSettings& settings, TextureManager& textures
 			context->CSSetConstantBuffers(1, 1, &cb);
 			context->CSSetShader(nullptr, nullptr, 0);
 			context->GenerateMips(noiseTextures[i]->srv.get());
+			if (i == 2u)
+				++noiseRevision;
 			generatedNoise[i] = data;
 			noiseValid[i] = true;
 			generatedValid = false;
@@ -533,6 +535,8 @@ bool NdfManager::UpdateNdf(const NdfSettings& settings, TextureManager& textures
 	textureRevision = textures.revision;
 	if (changed)
 		++generatedRevision;
+	if (noiseInputs[2] != sources[2])
+		++noiseRevision;
 	std::copy_n(sources.begin(), 4, noiseInputs.begin());
 	for (size_t i = 0; i < noiseInputs.size(); ++i)
 		noiseInputResources[i].copy_from(noiseInputs[i]);

@@ -1,8 +1,10 @@
+float2 CloudMaterialAmbient(NDFInfo ndf);
+
 #ifndef PHYSICAL_SKY_CLOUD_AMBIENT_HLSLI
 #define PHYSICAL_SKY_CLOUD_AMBIENT_HLSLI
 
 Texture2D<float4> TexCloudAmbientLighting : register(t40);
-Texture3D<float> TexCloudAmbientDensity : register(t41);
+Texture3D<float2> TexCloudAmbientDensity : register(t41);
 Texture3D<float4> TexCloudAmbientSource0 : register(t42);
 Texture3D<float4> TexCloudAmbientSource1 : register(t43);
 Texture3D<float4> TexCloudAmbientSource2 : register(t44);
@@ -20,7 +22,7 @@ RWTexture3D<float4> RWCloudAmbientView1 : register(u1);
 RWTexture3D<float4> RWCloudAmbientView2 : register(u2);
 RWTexture3D<float4> RWCloudAmbientView3 : register(u3);
 RWTexture2D<float4> RWCloudAmbientLighting : register(u0);
-RWTexture3D<float> RWCloudAmbientDensity : register(u0);
+RWTexture3D<float2> RWCloudAmbientDensity : register(u0);
 RWTexture3D<float4> RWCloudAmbientSweep : register(u0);
 RWTexture2D<float4> RWCloudAmbientBoundary : register(u0);
 RWTexture3D<float4> RWCloudAmbientSource : register(u1);
@@ -53,10 +55,26 @@ namespace CloudAmbientTransport
 			altitude.x = min(altitude.x, info.localNdfAltitude.x);
 			altitude.y = max(altitude.y, info.localNdfAltitude.x + info.localNdfAltitude.y);
 		}
+		// Independent instances are not part of the weather Height reduction.
+		// Their full height must participate in the transport grid as well.
+		[loop] for (uint index = 0u; index < CloudStormCount(); ++index)
+		{
+			const float2 bounds = CloudStorms[index].altitudeMotion.xy;
+			altitude.x = min(altitude.x, bounds.x);
+			altitude.y = max(altitude.y, bounds.x + bounds.y);
+		}
+		if (info.voxelCount > 0u) {
+			altitude.x = min(altitude.x, info.voxelAltitude.x);
+			altitude.y = max(altitude.y, info.voxelAltitude.y);
+		}
 		Grid grid;
 		grid.size = uint3(CloudAmbientWidth, CloudAmbientWidth, CloudAmbientWidth / 2u);
 		const float extent = 4000.0 * exp2(2.0 * float(cascade));
-		const float verticalExtent = max(altitude.y - altitude.x + 64.0, 96.0);
+		float verticalExtent = max(altitude.y - altitude.x + 64.0, 96.0);
+		// Leave complete boundary cells after snapping the grid origin. Otherwise
+		// the tall eruption can touch the grid's last slice and expose its edge.
+		if (CloudStormCount() > 0u || info.voxelCount > 0u)
+			verticalExtent = max(verticalExtent, (altitude.y - altitude.x) / (1.0 - 4.0 / grid.size.z));
 		grid.spacing = float3(extent / grid.size.xy, verticalExtent / grid.size.z);
 		const float3 center = float3(FrameBuffer::CameraPosAdjust.xy * GAME_UNIT_TO_M, 0.5 * (altitude.x + altitude.y));
 		grid.origin = floor(center / grid.spacing) * grid.spacing - 0.5 * float3(grid.size) * grid.spacing;
@@ -129,7 +147,7 @@ namespace CloudAmbientTransport
 			const Grid grid = StoredGrid(cascade, previous);
 			const float3 uvw = (Coordinate(pos, cascade, previous) - grid.origin) / (grid.spacing * float3(grid.size));
 			const float3 edge = min(uvw, 1.0 - uvw) * float3(grid.size);
-			const float blend = uvw.z >= 0.0 && uvw.z <= 1.0 ? smoothstep(0.5, 3.5, min(edge.x, edge.y)) : 0.0;
+			const float blend = smoothstep(0.5, 3.5, min(edge.x, edge.y)) * smoothstep(0.0, 1.0, edge.z);
 			if (blend <= 0.0)
 				continue;
 			float3 value = 0.0;
@@ -154,7 +172,7 @@ namespace CloudAmbientTransport
 			const Grid grid = StoredGrid(cascade, false);
 			const float3 uvw = (Coordinate(pos, cascade, false) - grid.origin) / (grid.spacing * float3(grid.size));
 			const float3 edge = min(uvw, 1.0 - uvw) * float3(grid.size);
-			const float blend = uvw.z >= 0.0 && uvw.z <= 1.0 ? smoothstep(0.5, 3.5, min(edge.x, edge.y)) : 0.0;
+			const float blend = smoothstep(0.5, 3.5, min(edge.x, edge.y)) * smoothstep(0.0, 1.0, edge.z);
 			if (blend <= 0.0)
 				continue;
 			float3 value;
@@ -299,28 +317,6 @@ namespace CloudAmbientTransport
 		return max(source, 0.0);
 	}
 
-	float3 Environment(float3 ray, float altitude)
-	{
-		static const float nodes[8] = { -0.9305681558, -0.6699905218, -0.3300094782, -0.0694318442, 0.0694318442, 0.3300094782, 0.6699905218, 0.9305681558 };
-		uint lo = 0u;
-		[unroll] for (uint ring = 1u; ring < 7u; ++ring) if (ray.z >= nodes[ring])
-			lo = ring;
-		const float blend = saturate((ray.z - nodes[lo]) / (nodes[lo + 1u] - nodes[lo]));
-		const float azimuth = frac(atan2(ray.y, ray.x) / (2.0 * Math::PI)) * 64.0 - 0.5;
-		const int az = int(floor(azimuth));
-		const float2 range = AltitudeRange();
-		const float row = 4.0 * sqrt(saturate((altitude - range.x) / max(range.y - range.x, 1.0)));
-		float3 values[2];
-		[unroll] for (uint j = 0u; j < 2u; ++j)
-		{
-			const uint ring = lo + j < 4u ? 3u - (lo + j) : lo + j;
-			const float2 uv0 = float2((ring * 64u + uint((az + 64) % 64) + 0.5) / 512.0, (1.5 + row) / 7.0);
-			const float2 uv1 = float2((ring * 64u + uint((az + 65) % 64) + 0.5) / 512.0, (1.5 + row) / 7.0);
-			values[j] = lerp(TexCloudAmbientLighting.SampleLevel(TransmittanceSampler, uv0, 0).rgb,
-				TexCloudAmbientLighting.SampleLevel(TransmittanceSampler, uv1, 0).rgb, frac(azimuth));
-		}
-		return lerp(values[0], values[1], blend);
-	}
 }
 
 [numthreads(4, 4, 4)] void resolveCloudAmbientView(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID) {
@@ -403,13 +399,14 @@ groupshared float4 gAmbientIntervals[CLOUD_AMBIENT_SWEEP_THREADS];
 	float halfTransmission = 1.0;
 	if (inside) {
 		const float3 uvw = (clamp(cell, 0.0, float3(grid.size) - 1.0) + 0.5) / float3(32, 32, 16);
-		const float sigma = TexCloudAmbientDensity.SampleLevel(TransmittanceSampler, uvw, 0);
+		const float2 medium = TexCloudAmbientDensity.SampleLevel(TransmittanceSampler, uvw, 0);
+		const float sigma = medium.x;
 		halfTransmission = exp(-0.5 * sigma * distance);
 		if (sigma > 0.0) {
 			const float3 coordinate = grid.origin + (cell + 0.5) * grid.spacing;
 			float3 pos = coordinate * GAME_UNITS_PER_METER;
 			pos.z -= CloudCurvatureOffset(pos.xy - FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
-			source = CloudAmbientPhase.y * (CloudAmbientReset != 0u ? CloudAmbientTransport::BoundarySource(d, pos.z) : CloudAmbientTransport::Source(pos, d, true));
+			source = (medium.y / max(sigma, 1e-8)) * (CloudAmbientReset != 0u ? CloudAmbientTransport::BoundarySource(d, pos.z) : CloudAmbientTransport::Source(pos, d, true));
 		}
 	}
 	const float transmission = halfTransmission * halfTransmission;
@@ -580,14 +577,25 @@ groupshared float gAmbientBinWeight[512];
 	static const float3 quadrature[4] = {
 		float3(-1, -1, -1), float3(-1, 1, 1), float3(1, -1, 1), float3(1, 1, -1)
 	};
-	float density = 0.0;
-	[unroll] for (uint sampleIndex = 0u; sampleIndex < 4u; ++sampleIndex)
+	float2 medium = 0.0;
+	[unroll(4)] for (uint sampleIndex = 0u; sampleIndex < 4u; ++sampleIndex)
 	{
 		const float3 offset = quadrature[sampleIndex] * 0.288675135;
 		const float2 xy = center.xy + offset.xy * grid.spacing.xy;
 		const float2 anchored = xy * GAME_UNITS_PER_METER;
 		const float2 field = CloudFieldPosition(xy - info.noiseWindOffset * GAME_UNIT_TO_M, info.cloudEvolution.xy);
-		const float2 heights = SampleCloudHeights(field * GAME_UNITS_PER_METER, anchored).xy * GAME_UNIT_TO_M;
+		float2 heights = SampleCloudHeights(field * GAME_UNITS_PER_METER, anchored).xy * GAME_UNIT_TO_M;
+		// A storm can lie below the weather layer; include its support before quadrature.
+		[loop] for (uint stormIndex = 0u; stormIndex < CloudStormCount(); ++stormIndex)
+		{
+			const CloudStormData storm = CloudStorms[stormIndex];
+			const float2 lo = IsVolcanic(storm) ? storm.plumeLower.xy : storm.centerRadiusStrength.xy + min(storm.driftDensity.xy, 0.0) - storm.animation.z;
+			const float2 hi = IsVolcanic(storm) ? storm.plumeUpper.xy : storm.centerRadiusStrength.xy + max(storm.driftDensity.xy, 0.0) + storm.animation.z;
+			if (all(xy >= lo) && all(xy <= hi)) {
+				heights.x = min(heights.x, storm.altitudeMotion.x);
+				heights.y = max(heights.y, storm.altitudeMotion.x + storm.altitudeMotion.y);
+			}
+		}
 		const float bottom = max(center.z - 0.5 * grid.spacing.z, heights.x);
 		const float top = min(center.z + 0.5 * grid.spacing.z, heights.y);
 		if (top > bottom) {
@@ -595,10 +603,12 @@ groupshared float gAmbientBinWeight[512];
 			const float3 pos = float3(anchored, profileAltitude - CloudCurvatureOffset(anchored - FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius));
 			CloudDensityContext context;
 			const float extinction = sampleCloudDensity(pos, GetCloudLayer(info), 0.0, 700.0, 0.0, context);
-			density += extinction * ((top - bottom) / grid.spacing.z);
+			const float2 phase = CloudMaterialAmbient(context.ndf);
+			const float sigma = extinction * ((top - bottom) / grid.spacing.z) * phase.x;
+			medium += sigma * float2(1.0, phase.y);
 		}
 	}
-	RWCloudAmbientDensity[index] = 0.25 * density * info.viewExtinction * CloudAmbientPhase.x;
+	RWCloudAmbientDensity[index] = 0.25 * medium * info.viewExtinction;
 }
 
 	[numthreads(512, 1, 1)] void buildCloudAmbientLighting(uint lane : SV_GroupIndex, uint3 group : SV_GroupID)
@@ -612,12 +622,15 @@ groupshared float gAmbientBinWeight[512];
 	                                    CloudAmbientGround(d, TexCloudAmbientSH[int2(5, 0)].rgb, altitude);
 	RWCloudAmbientLighting[uint2(lane, group.y + 1u)] = float4(radiance, 0.0);
 	gAmbientReduction[lane] = weight * radiance;
-	gAmbientColors[lane] = d.z > 0.0 ? radiance : 0.0;
+	const float luminance = d.z > 0.0 ? dot(radiance, float3(0.2126, 0.7152, 0.0722)) : 0.0;
+	gAmbientColors[lane].x = luminance / 64.0;
 	GroupMemoryBarrierWithGroupSync();
 	[unroll] for (uint stride = 256u; stride > 0u; stride >>= 1u)
 	{
 		if (lane < stride)
 			gAmbientReduction[lane] += gAmbientReduction[lane + stride];
+		if (group.y == 4u && stride < 64u && (lane % 64u) < stride)
+			gAmbientColors[lane].x += gAmbientColors[lane + stride].x;
 		GroupMemoryBarrierWithGroupSync();
 	}
 	if (lane == 0u)
@@ -625,10 +638,7 @@ groupshared float gAmbientBinWeight[512];
 	if (group.y < 4u)
 		return;
 	GroupMemoryBarrierWithGroupSync();
-	float ringMean = 0.0;
-	[loop] for (uint azimuth = 0u; azimuth < 64u; ++azimuth)
-		ringMean += dot(gAmbientColors[(lane / 64u) * 64u + azimuth], float3(0.2126, 0.7152, 0.0722)) / 64.0;
-	const float luminance = dot(gAmbientColors[lane], float3(0.2126, 0.7152, 0.0722));
+	const float ringMean = gAmbientColors[(lane / 64u) * 64u].x;
 	gAmbientReduction[lane] = d * (weight * max(luminance - ringMean, 0.0));
 	GroupMemoryBarrierWithGroupSync();
 	[unroll] for (uint axisStride = 256u; axisStride > 0u; axisStride >>= 1u)

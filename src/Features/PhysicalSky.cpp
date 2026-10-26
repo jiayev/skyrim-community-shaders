@@ -186,7 +186,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	marchStepScale,
 	cloudMap,
 	cloudLayer,
-	cloudNoise)
+	cloudNoise,
+	voxelClouds)
 
 namespace
 {
@@ -457,6 +458,8 @@ namespace
 
 void PhysicalSky::DataLoaded()
 {
+	cloudStormManager.LoadInstances();
+	voxelCloudManager.LoadInstances();
 	if (!globals::features::skySync.loaded) {
 		failedLoadedMessage = T("feature.physical_sky.sky_sync_required", "Sky Sync is required for Physical Sky to function.");
 		loaded = false;
@@ -1010,6 +1013,12 @@ void PhysicalSky::SettingsVolumetricClouds()
 	}
 
 	DrawCirrusSection();
+	DrawCloudStormSection();
+	if (ImGui::CollapsingHeader(T(TKEY("voxel_section"), "Voxel Clouds"), ImGuiTreeNodeFlags_SpanAvailWidth)) {
+		const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();
+		voxelCloudManager.DrawSettings(settings.voxelClouds, GetCurrentWorldspaceEditorID(),
+			{ camera.x * Util::Units::GAME_UNIT_TO_M, camera.y * Util::Units::GAME_UNIT_TO_M, (camera.z - cbData.zBottom) * Util::Units::GAME_UNIT_TO_M });
+	}
 	DrawCloudMotionSection();
 	DrawCloudLightingSection();
 	DrawCloudQualitySection();
@@ -1335,6 +1344,9 @@ void PhysicalSky::SettingsDebug()
 			BUFFER_VIEWER_NODE(texVolAux, debugScale);
 			BUFFER_VIEWER_NODE(texVolFilteredTr, debugScale);
 			BUFFER_VIEWER_NODE(texVolFilteredLum, debugScale);
+			BUFFER_VIEWER_NODE(texVoxelViewColor, debugScale);
+			BUFFER_VIEWER_NODE(texVoxelViewDepth, debugScale);
+			BUFFER_VIEWER_NODE(texVoxelCompositeLum, debugScale);
 			ImGui::TreePop();
 		}
 
@@ -1543,21 +1555,22 @@ bool PhysicalSky::ShadersOK()
 	const bool cirrusMapsReady = !settings.cloudLayer.cirrus.enabled || cirrusMapManager.ShadersReady(settings.cloudLayer.cirrus);
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
 	                           (vsCloudBoundary && psCloudBoundary && texCloudBoundary && cloudBoundaryCB && cloudBoundaryIndices && cloudBoundaryBlend && cloudBoundaryRasterizer && cloudBoundaryDepth &&
-								   csCloudHeightBounds && csCloudHeightBoundsReduce && texCloudHeightBounds && texCloudHeightBoundsTiles &&
+								   csCloudHeightBounds && csCloudHeightBoundsReduce && texCloudHeightBounds && texCloudHeightBoundsTiles && texCloudWeatherBounds &&
 								   csCloudAmbientLighting && texCloudAmbientLighting &&
 								   csCloudAmbientDensity && csCloudAmbientBoundary && csCloudAmbientSweep && csCloudAmbientSweepFar && csCloudAmbientProject && csCloudAmbientLayout && csCloudAmbientView && cloudAmbientVolumeCB &&
 								   texCloudAmbientView[0] && texCloudAmbientView[1] && texCloudAmbientView[2] && texCloudAmbientView[3] &&
 								   texCloudAmbientDensity && texCloudAmbientSweep && texCloudAmbientBoundary && texCloudAmbientLayout[0] && texCloudAmbientLayout[1] &&
 								   texCloudAmbientSource[0][0] && texCloudAmbientSource[0][1] && texCloudAmbientSource[1][0] && texCloudAmbientSource[1][1] &&
 								   texCloudAmbientSource[2][0] && texCloudAmbientSource[2][1] && texCloudAmbientSource[3][0] && texCloudAmbientSource[3][1] &&
-								   csVolMainView && csVolFilter && csVolReproject && csVolCubeReproject && csVolShadowVolume && csVolShadowResample && texShadowVolumeRaw && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
+								   csVolMainView && csVolMainWithoutStorm && csVolMainSingleVolcanic && csStormTiles && texStormTiles && csVolFilter && csVolReproject && csVolCubeReproject && csVolShadowVolume && csVolShadowResample && texShadowVolumeRaw && csVolCubemap && csVolAmbientSH && csCloudAmbientReduce && texVolCloudAmbientSH && texCloudAmbientPartial &&
 								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux &&
 								   texVolFilteredTr && texVolFilteredLum && texVolFilteredAux &&
 								   texVolHistoryTr && texVolHistoryLum && texVolHistoryAux && texVolCubeTr && texVolCubeLum &&
 								   texVolCubeAux && texVolCubeHistoryTr && texVolCubeHistoryLum && texVolCubeHistoryAux &&
 								   texVolCubeTraceTr && texVolCubeTraceLum && texVolCubeTraceAux &&
 								   texShadowVolume && baseShapeNoiseSrv && cloudProfileLutSrv && cloudAdjustmentLutSrv && ndfReady && cirrusMapsReady);
-	return baseShadersOk && volumetricShadersOk;
+	const bool voxelShadersOk = !voxelCloudManager.Count() || (csVoxelView && csVoxelComposite && csVoxelLighting && csVolCubemapVoxel && csVolShadowVoxel && csCloudAmbientDensityVoxel);
+	return baseShadersOk && volumetricShadersOk && voxelShadersOk;
 }
 
 bool PhysicalSky::SetLocalCloudState(const LocalNdfState& state)
@@ -1577,12 +1590,24 @@ void PhysicalSky::Reset()
 		cloudAmbientWorldspace = worldspaceID;
 	}
 	UpdateCloudWind();
+	UpdateCloudStorm(worldspaceID);
+	voxelCloudManager.Update(settings.voxelClouds, worldspaceID, settings.enabled && settings.enableVolumetricClouds);
 	if (settings.enabled && settings.enableVolumetricClouds)
 		localNdfManager.Update(settings.cloudMap, ndfTexManager, worldspaceID);
 	const float2 lowAltitudeRange = settings.cloudLayer.low.GetNdfAltitudeRangeKm();
 	const auto localAltitude = localNdfManager.GetAltitude();
-	const float lowCloudBaseKm = localAltitude.y > 0.f ? std::min(lowAltitudeRange.x, localAltitude.x * 0.001f) : lowAltitudeRange.x;
-	const float lowCloudTopKm = localAltitude.y > 0.f ? std::max(lowAltitudeRange.y, (localAltitude.x + localAltitude.y) * 0.001f) : lowAltitudeRange.y;
+	float lowCloudBaseKm = localAltitude.y > 0.f ? std::min(lowAltitudeRange.x, localAltitude.x * 0.001f) : lowAltitudeRange.x;
+	float lowCloudTopKm = localAltitude.y > 0.f ? std::max(lowAltitudeRange.y, (localAltitude.x + localAltitude.y) * 0.001f) : lowAltitudeRange.y;
+	if (cloudStormManager.Count()) {
+		const auto stormAltitude = cloudStormManager.Altitude();
+		lowCloudBaseKm = std::min(lowCloudBaseKm, stormAltitude.x * 0.001f);
+		lowCloudTopKm = std::max(lowCloudTopKm, stormAltitude.y * 0.001f);
+	}
+	if (voxelCloudManager.Count()) {
+		const auto voxelAltitude = voxelCloudManager.Altitude();
+		lowCloudBaseKm = std::min(lowCloudBaseKm, voxelAltitude.x * 0.001f);
+		lowCloudTopKm = std::max(lowCloudTopKm, voxelAltitude.y * 0.001f);
+	}
 	const float traceBottomKm = settings.cloudLayer.cirrus.enabled ? std::min(lowCloudBaseKm, settings.cloudLayer.cirrus.GetAltitudeKm()) : lowCloudBaseKm;
 	const float traceTopKm = settings.cloudLayer.cirrus.enabled ? std::max(lowCloudTopKm, settings.cloudLayer.cirrus.GetAltitudeKm()) : lowCloudTopKm;
 	const float shadowBottomKm = settings.cloudLayer.low.GetShadowBottomKm(lowCloudBaseKm, settings.shadowVolumeRange, kShadowVolW);
@@ -1797,6 +1822,7 @@ void PhysicalSky::Prepass()
 				{ "low", settings.cloudLayer.low },
 				{ "cirrus", settings.cloudLayer.cirrus },
 				{ "lighting", settings.cloudLayer.lighting },
+				{ "stormRevision", cloudStormManager.Revision() },
 				{ "range", settings.rayMarchRange },
 				{ "step", settings.marchStepScale },
 				{ "froxel", globals::features::viewAtmosphere.IsPrepared() },
@@ -1866,7 +1892,9 @@ void PhysicalSky::Prepass()
 		globals::d3d::context->PSSetShaderResources(66, 1, &skyTailSrv);
 
 		// Bind volumetric cloud results and shadow volume for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
-		if (texVolTr && texVolLum) {
+		// RenderVolumetricClouds already bound the reconstructed/composited result.
+		// Do not replace it with the NDF-only trace before the sky is drawn.
+		if (texVolTr && texVolLum && (!renderVolumetricClouds || globals::features::viewAtmosphere.CompositeEnabled())) {
 			std::array<ID3D11ShaderResourceView*, 3> volSrvs = { texVolTr->srv.get(), texVolLum->srv.get(), texShadowVolume ? texShadowVolume->srv.get() : nullptr };
 			globals::d3d::context->PSSetShaderResources(110, (uint)volSrvs.size(), volSrvs.data());
 		}
@@ -1909,7 +1937,8 @@ void PhysicalSky::GenerateLuts()
 		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
 		context->CSSetShader(csMsLutGen.get(), nullptr, 0);
 		globals::profiler->BeginPass("PhysicalSky::MultiscatterLut");
-		context->Dispatch((kMsLutW + 7) >> 3, (kMsLutH + 7) >> 3, 1);
+		// Each group integrates sixteen directions for four LUT texels.
+		context->Dispatch((kMsLutW + 1) >> 1, (kMsLutH + 1) >> 1, 1);
 		globals::profiler->EndPass();
 
 		// -> sky-view
@@ -1927,7 +1956,8 @@ void PhysicalSky::GenerateLuts()
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShader(csApLutGen.get(), nullptr, 0);
 		globals::profiler->BeginPass("PhysicalSky::AerialPerspectiveLut");
-		context->Dispatch((kApLutW + 7) >> 3, (kApLutH + 7) >> 3, 1);
+		// Two rays per group; all depth intervals are evaluated in parallel.
+		context->Dispatch((kApLutW + 1) >> 1, kApLutH, 1);
 		globals::profiler->EndPass();
 
 		/* ---- RESTORE ---- */

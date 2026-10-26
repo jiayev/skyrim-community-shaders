@@ -48,7 +48,7 @@ void rayMarch(
 	inout float3 tr,
 	inout float3 lum
 #elif LUTGEN == 3
-	uint2 tid, uint depth,
+	uint sliceIndex, uint depth,
 	inout float3 tr,
 	inout float3 lum
 #endif
@@ -121,7 +121,11 @@ void rayMarch(
 #endif
 
 	float3 curr_pos = pos;
+#if LUTGEN == 3
+	for (uint i = sliceIndex; i < min(sliceIndex + 1u, nsteps); ++i)
+#else
 	[loop] for (uint i = 0; i < nsteps; ++i)
+#endif
 	{
 #if LUTGEN == 3
 		const float tNear = ApSliceDistance(i, depth);
@@ -195,10 +199,6 @@ void rayMarch(
 		lum += scatterIntegeral * tr;
 #endif
 		tr *= trSample;
-
-#if LUTGEN == 3
-		RWTexOutput[uint3(tid.xy, i + 1)] = float4(lum, dot(tr, float3(0.2126, 0.7152, 0.0722)));
-#endif
 	}
 
 #if LUTGEN == 1  // multiscatter
@@ -212,7 +212,21 @@ void rayMarch(
 #endif
 }
 
+#if LUTGEN == 1
+// Four texels per group, with the original sixteen angular samples in parallel.
+groupshared float3 MsRadiance[64];
+groupshared float3 MsFeedback[64];
+[numthreads(16, 2, 2)] void main(uint3 thread : SV_GroupThreadID, uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
+	const uint3 tid = uint3(group.xy * 2u + thread.yz, 0u);
+#elif LUTGEN == 3
+// Two rays per group; evaluate the original 31 intervals concurrently.
+groupshared float3 ApRadiance[128];
+groupshared float3 ApTransmission[128];
+[numthreads(32, 2, 1)] void main(uint3 thread : SV_GroupThreadID, uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
+	const uint3 tid = uint3(group.x * 2u + thread.y, group.y, 0u);
+#else
 [numthreads(8, 8, 1)] void main(uint3 tid : SV_DispatchThreadID) {
+#endif
 	const SharedData::PhysSkyData data = SharedData::physSkyData;
 
 	uint3 outDims;
@@ -221,10 +235,19 @@ void rayMarch(
 #else
 	RWTexOutput.GetDimensions(outDims.x, outDims.y);
 #endif
+#if LUTGEN == 1
+	if (any(group.xy * 2u >= outDims.xy))
+		return;
+#elif LUTGEN == 3
+	if (group.x * 2u >= outDims.x || group.y >= outDims.y)
+		return;
+#else
 	if (any(tid.xy >= outDims.xy))
 		return;
+#endif
 #if LUTGEN == 3
-	RWTexOutput[uint3(tid.xy, 0)] = float4(0, 0, 0, 1);
+	if (thread.x == 0u && all(tid.xy < outDims.xy))
+		RWTexOutput[uint3(tid.xy, 0)] = float4(0, 0, 0, 1);
 #endif
 	float2 uv = (tid.xy + 0.5) / outDims.xy;
 
@@ -256,24 +279,28 @@ void rayMarch(
 	const uint sqrtSamples = 4;
 	const float rcpSqrtSamples = rcp(sqrtSamples);
 	const float rcpSamples = rcpSqrtSamples * rcpSqrtSamples;
-
-	float3 lumTotal = 0;
-	float3 fMs = 0;
-	for (uint i = 0; i < sqrtSamples; ++i)
-		for (uint j = 0; j < sqrtSamples; ++j) {
-			const float theta = (i + 0.5) * (2.0 * Math::PI) * rcpSqrtSamples;
-			const float phi = acos(1.0 - 2.0 * (j + 0.5) * rcpSqrtSamples);
-			const float3 rayDir = SphericalDir(theta, phi);
-
-			tr = 1;
-			float3 lum = 0;
-			float3 lumFactor = 0;
-			rayMarch(pos, rayDir, sunDir, tr, lum, lumFactor);
-
-			fMs += lumFactor;
-			lumTotal += lum;
+	const uint i = thread.x / sqrtSamples;
+	const uint j = thread.x % sqrtSamples;
+	const float theta = (i + 0.5) * (2.0 * Math::PI) * rcpSqrtSamples;
+	const float phi = acos(1.0 - 2.0 * (j + 0.5) * rcpSqrtSamples);
+	const float3 rayDir = SphericalDir(theta, phi);
+	float3 lum = 0.0;
+	float3 lumFactor = 0.0;
+	rayMarch(pos, rayDir, sunDir, tr, lum, lumFactor);
+	MsRadiance[lane] = lum;
+	MsFeedback[lane] = lumFactor;
+	GroupMemoryBarrierWithGroupSync();
+	if (thread.x == 0u && all(tid.xy < outDims.xy)) {
+		// Preserve the original angular accumulation order and FP32 arithmetic.
+		precise float3 lumTotal = 0.0;
+		precise float3 fMs = 0.0;
+		[unroll] for (uint sampleIndex = 0u; sampleIndex < 16u; ++sampleIndex)
+		{
+			fMs += MsFeedback[lane + sampleIndex];
+			lumTotal += MsRadiance[lane + sampleIndex];
 		}
-	RWTexOutput[tid.xy] = float4(lumTotal * rcpSamples / (1 - fMs * rcpSamples), 1.0);
+		RWTexOutput[tid.xy] = float4(lumTotal * rcpSamples / (1 - fMs * rcpSamples), 1.0);
+	}
 
 #elif LUTGEN == 2
 	float3 lum = 0;
@@ -281,7 +308,24 @@ void rayMarch(
 	RWTexOutput[tid.xy] = float4(lum, 1.0);
 
 #elif LUTGEN == 3
-	float3 lum = 0;
-	rayMarch(pos, rayDir, tid.xy, outDims.z, tr, lum);
+float3 lum = 0;
+rayMarch(pos, rayDir, thread.x, outDims.z, tr, lum);
+// Ordered front-to-back transport: (L0 + T0*L1, T0*T1).
+// Ping-pong storage needs one barrier per prefix stage.
+uint bank = 0u;
+[unroll] for (uint stride = 1u; stride < 32u; stride <<= 1u)
+{
+	ApRadiance[bank + lane] = lum;
+	ApTransmission[bank + lane] = tr;
+	GroupMemoryBarrierWithGroupSync();
+	if (thread.x >= stride) {
+		const float3 prefixTr = ApTransmission[bank + lane - stride];
+		lum = ApRadiance[bank + lane - stride] + prefixTr * lum;
+		tr = prefixTr * tr;
+	}
+	bank = 64u - bank;
+}
+if (thread.x + 1u < outDims.z && all(tid.xy < outDims.xy))
+	RWTexOutput[uint3(tid.xy, thread.x + 1u)] = float4(lum, dot(tr, float3(0.2126, 0.7152, 0.0722)));
 #endif
 }

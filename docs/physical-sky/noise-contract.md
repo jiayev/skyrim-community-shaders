@@ -12,9 +12,11 @@ signals using dimensional profile, top type, local height and view distance.
 reserved for a future orographic cloud path. That path uses its R channel for
 nearby erosion. It is not sampled by the regular NDF layer.
 
-`NubisVoxelNoise.dds` preserves the original 128³ RGBA8 voxel detail resource
-without modifying its bytes. It is not loaded or bound by this renderer. Its
-threshold/roundness reconstruction does not apply to regular profile clouds.
+The [voxel-cloud path](voxel-clouds.md) uses the original 128³ RGBA8 **Noise3dC**
+resource, stored globally as `Textures/PhysicalSky/NoiseVoxel.dds` and shared
+by every voxel instance. Its threshold and folded-detail reconstruction is separate from regular NDF profile clouds.
+The current procedural generator supplies NDF shape and displacement noise;
+it does not yet generate this voxel-specific four-channel resource.
 
 Two linear lookup textures accompany the shape volume. Optional packed inputs are:
 
@@ -90,7 +92,8 @@ lightDensity = viewExtinction * (1 + 3*height^4)
 
 Empty eroded samples return exactly zero before the power response. The internal
 height B channel supplies `shapingStart`, remapped from the composed top type.
-It is separate from the public RG height input. Storm modifications are not implemented.
+It is separate from the public RG height input. The optional [storm core](cloud-storms.md)
+uses its own NDF profile, rotating noise, base shaping and top fade within the shared density query.
 
 Each local sunlight probe retains the originating view sample's distance for
 the B/G transition. Ground-shadow queries use distance from the camera. View

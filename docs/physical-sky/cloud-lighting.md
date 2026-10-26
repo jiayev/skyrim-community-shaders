@@ -292,8 +292,11 @@ cascade overlaps use two. The observation-dependent cache is rebuilt each frame,
 so turning the camera does not reuse an old directional convolution.
 
 Ambient radiance integrates against its own delta-scaled transmittance `T'`, using
-`albedo' (1-exp(-K sigma_t ds)) S_r`. The difference `(T'-T) L_boundary` accounts
-for the collapsed forward peak while output opacity uses the original medium.
+`albedo' (1-exp(-K sigma_t ds)) S_r`. The collapsed forward peak belongs to the
+incident background: the output transmission is `T_view = T + g (T' - T)`, with
+`g = saturate(ambientStrength * cloudLightingScale)`. Final compositing supplies
+the actual sky or surface radiance. Substituting sky radiance here would inject
+a bright rim where a partially transparent cloud overlaps dark terrain.
 The original density function, step selection and solar-light sampling remain in
 use. A ray continues while either solar/view or ambient transmittance exceeds the
 termination threshold; dense clouds can consequently need more density steps.
@@ -302,16 +305,16 @@ to their combined cloud radiance.
 
 A sheet behind low clouds is part of the incident background. Its premultiplied
 radiance `C` contributes `T C + g (T' - T) C`, where
-`g = ambientStrength * cloudLightingScale` is the forward-boundary gain. The sheet
+`g = saturate(ambientStrength * cloudLightingScale)` is the forward-boundary gain. The sheet
 then multiplies both transmittances by its own transmission. The sheet remains
 eligible for integration while either active path exceeds the termination
 threshold. With unit gain, the result is `T' (C + T_sheet L_boundary)` plus
 the low-cloud scattering source, preserving the order of the two layers.
 
-The termination remap `T_out = saturate((T - 0.1) / 0.9)` keeps radiance
+The termination remap `T_out = saturate((T_view - 0.1) / 0.9)` keeps radiance
 premultiplied by the same output opacity. Before aerial perspective, cloud radiance
-is multiplied by `(1 - T_out) / (1 - T)`, evaluated as
-`1 / (1 - min(T, 0.1))` to retain a finite empty-ray limit. A constant source
+is multiplied by `(1 - T_out) / (1 - T_view)`, evaluated as
+`1 / (1 - min(T_view, 0.1))` to retain a finite empty-ray limit. A constant source
 matching the background therefore remains constant through the silhouette.
 
 ### Resources and cost
