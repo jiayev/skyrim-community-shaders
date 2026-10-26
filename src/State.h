@@ -306,6 +306,10 @@ public:
 	 */
 	[[nodiscard]] static uint32_t GetRuntimePixelBits(const RE::BSShader& a_shader);
 
+	/** @brief Whether perf events reach a consumer: an attached capture tool, Tracy, or an Nsight Perf pass. */
+	[[nodiscard]] bool PerfEventsConsumed() const;
+	/** @brief Whether Frame Annotations' per-draw events are worth building: the setting is on and consumed. */
+	[[nodiscard]] bool AnnotateDraws() const { return frameAnnotations && PerfEventsConsumed(); }
 	/** @brief Opens a named GPU performance event (D3D annotation + Tracy zone). */
 	void BeginPerfEvent(std::string_view title);
 	/** @brief Closes the most recent GPU performance event. */
@@ -336,9 +340,9 @@ public:
 	// Keep compiled shaders in Data/ShaderCache/ContentStore, keyed by their preprocessed source and
 	// compile inputs, so a cache wipe or plugin update restores unchanged shaders instead of recompiling.
 	// Atomic: written from the UI thread, read from compilation pool workers.
-	std::atomic_bool enableContentStore{ false };
+	std::atomic_bool enableContentStore{ true };
 	/// Size limit of the persistent shader store in MB; least recently used shaders beyond it are evicted.
-	std::atomic<uint32_t> contentStoreMaxMB{ 4096 };
+	std::atomic<uint32_t> contentStoreMaxMB{ 1024 };
 	static constexpr uint32_t kContentStoreMinMB = 512;
 	static constexpr uint32_t kContentStoreMaxMB = 32768;
 

@@ -1544,6 +1544,7 @@
     "feature.light_limit_fix.local_shadow_samples": "Shadow Filter Samples",
     "feature.light_limit_fix.local_shadow_samples_tooltip": "Filter taps per shadow lookup. More taps give softer edges at a higher cost per shadowed light.",
     "feature.light_limit_fix.local_shadow_slots": "Shadow Cache Slots",
+    "feature.light_limit_fix.local_shadow_slots_format": "%d ({} MB)",
     "feature.light_limit_fix.local_shadow_slots_tooltip": "Maximum number of lights that can hold a cached shadow map at the same time. Each slot costs video memory at the cache resolution.",
     "feature.light_limit_fix.local_shadows": "Local Light Shadows",
     "feature.light_limit_fix.local_shadows_restart_to_enable": "Requires restart to enable Local Light Shadows.",
@@ -4107,7 +4108,7 @@
     "menu.home.welcome": "Welcome to Community Shaders {version}",
     "menu.home.wiki": "Wiki",
     "menu.issues.all_ini_loading": "All feature INI files are loading successfully.",
-    "menu.issues.baseline_failures_desc": "These Baseline preset files failed to load or apply. Check the file format and content.",
+    "menu.issues.baseline_failures_desc": "These Baseline preset files failed to load or apply. Old-format feature overrides are not compatible anymore and must be updated to the new Baseline format. Check the file format and content.",
     "menu.issues.baseline_failures_header": "Baseline Preset Failures",
     "menu.issues.cancel": "Cancel",
     "menu.issues.cannot_be_undone": "This action cannot be undone!",
@@ -4531,6 +4532,7 @@
     "ui.post_processing_mode.post_processing": "Post Processing",
     "ui.post_processing_mode.tooltip": "Only one pipeline runs at a time. Vanilla uses the game's original post processing.",
     "ui.post_processing_mode.vanilla": "Vanilla",
+    "ui.recache_banner": "A full shader recache is pending and will run on the next game restart. Click to dismiss.",
     "ui.search": "Search...",
     "ui.search_features": "Search Features..."
 }

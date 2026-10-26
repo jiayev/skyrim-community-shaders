@@ -344,6 +344,8 @@ namespace Util
 	 */
 	void RequestClearShaderCacheConfirmation();
 	void DrawClearShaderCacheConfirmation();
+	/** @brief Draws the banner telling the user that shaders were cleared and will be fully recompiled; click dismisses it. */
+	void DrawRecacheBanner();
 
 	/**
 	 * Reusable confirmation popup. Call RequestConfirmation() to trigger, DrawConfirmationPopup() each frame.
