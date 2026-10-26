@@ -435,6 +435,9 @@ namespace SIE
 		 * @param a_keepContentStore Keep the persistent shader store, whose blobs stay valid because they are keyed by their own inputs.
 		 */
 		void DeleteDiskCache(bool a_keepContentStore = false);
+		/** @brief True after a user action cleared every shader, until the menu banner is dismissed. */
+		bool IsRecachePending() const { return recachePending; }
+		void SetRecachePending(bool value) { recachePending = value; }
 		/** @brief Validates disk cache integrity against current shader sources and feature set. */
 		void ValidateDiskCache();
 		/** @brief Writes cache metadata (version, feature list) to the disk cache directory. */
@@ -939,6 +942,7 @@ namespace SIE
 		bool hideError = false;
 		bool useFileWatcher = false;
 		bool preserveStandaloneCache = false;
+		bool recachePending = false;
 
 		std::stop_source ssource;
 		std::mutex vertexShadersMutex;
