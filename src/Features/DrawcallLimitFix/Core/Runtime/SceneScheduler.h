@@ -21,7 +21,9 @@ namespace DCLF
 	 * - The scene lane: one thread, serialized, for the scene pump's passes (SceneLaneScope); above normal priority as the coordinator.
 	 * - The preparation pool: hardware_concurrency - 2 threads (at least one), below normal priority, beside the engine's own
 	 *   job threads; CS_DCLF_WORKERS sets the count. A worker running a ParallelFor chunk for a higher-priority caller runs it at the
-	 *   caller's priority, restored afterwards (CS_DCLF_ASYNC_PRIORITY=noboost: never).
+	 *   caller's priority, restored afterwards (CS_DCLF_ASYNC_PRIORITY=noboost: never). Frame-critical jobs (DispatchFrameCritical:
+	 *   the CPU pipeline's culls, the frame values' producer) are taken before every other preparation job and run at the
+	 *   coordinator's priority, also by the frame-critical threads (FrameCriticalWorkers), which wait at it and take nothing else.
 	 *
 	 * Started on first use and never torn down: the process ends it.
 	 */
@@ -38,6 +40,8 @@ namespace DCLF
 		/** @brief The scope every feature job runs under: never cancelled (a job's own stop source cancels it). */
 		static const org::async::Scope& Scope();
 		static unsigned PreparationWorkers();
+		/** @brief The frame-critical threads beside the preparation pool (CS_DCLF_FRAME_WORKERS; default a quarter of it, at least 2). */
+		static unsigned FrameCriticalWorkers();
 		/** @brief DCLF's state graph on this executor (Runtime::SceneGraph). */
 		static Runtime::SceneGraph& Graph();
 		/**

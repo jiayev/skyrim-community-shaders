@@ -355,7 +355,7 @@ VS_OUTPUT main(VS_INPUT input)
 VS_OUTPUT DCLFShadowVertex(uint index, uint a_instance)
 {
 	const uint64_t sequence = DCLFDrawSequence(a_instance);
-	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the draw's key slot's vertex layout, the material row's address
+	const uint4 rows = DCLFSequenceShadowRows(sequence);  // the draw's key slot's vertex layout, the material row's address
 	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
 	// The draw's own (BuildDrawsCS: a shadow view's slot layouts), so a bucket draws casters of every layout; the call's pushed one
 	// for a slot the latch's table did not hold yet.
@@ -464,7 +464,7 @@ float DCLFRefractionFloat(uint64_t a_frame, uint a_float) { return asfloat(vk::R
 VS_OUTPUT DCLFRefractionVertex(uint index, uint a_instance)
 {
 	const uint64_t sequence = DCLFDrawSequence(a_instance);
-	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
+	const uint4 rows = DCLFSequenceRows(sequence);  // the pipeline row's address, the material row's
 	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
 	DCLFPipelineRowAddress = DCLFAddress(rows.xy);
 	DCLFMaterialRowAddress = DCLFAddress(rows.zw);

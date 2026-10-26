@@ -5,11 +5,14 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
+#include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatches.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
 #include "Globals.h"
+
+#include <Tracy/Tracy.hpp>
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "State.h"
 
@@ -74,6 +77,9 @@ namespace DCLF
 			{
 				{
 					logger::info("[DCLF] test command at frame {}: {}", a_frame, command);
+					// The command in a capture too: a timing run's phases are found in its Tracy capture by these zones.
+					ZoneScopedN("CS.DCLF.TestCommand");
+					ZoneText(command.data(), command.size());
 					// "dclf:<toggle name>=<0|1>": a live toggle (Toggles.h, ToggleInfo::name), as the menu sets it, so one run can
 					// compare a class drawn by DCLF and by the engine from the same camera.
 					// "dclf:pov=first" / "dclf:pov=third": the camera switched as the POV key does (PlayerCamera::ForceFirstPerson/ForceThirdPerson,
@@ -334,9 +340,19 @@ namespace DCLF
 					}
 					// The CPU-driven pipeline's toggles (CS_DCLF_PIPELINE's, CS_DCLF_CPU_RECORD's and CS_DCLF_CPU_CADENCE's live values):
 					// "dclf:pipeline=gpu|cpu" (from the next build point: it changes the graph's conditions), "dclf:cpu-record=serial|parallel",
-					// "dclf:cpu-cadence-<view>=frame|snapshot" ("dclf:cpu-cadence=frame|snapshot": every view but main).
+					// "dclf:cpu-cadence-<view>=frame|snapshot" ("dclf:cpu-cadence=frame|snapshot": every view but main), "dclf:cpu-batch=<lanes>"
+					// (CS_DCLF_CPU_BATCH's: from the next snapshot).
 					if (command.rfind("dclf:pipeline=", 0) == 0) {
 						DCLF::Toggles::Get().Requested().cpuPipeline = command.substr(14) == "cpu";
+						return;
+					}
+					if (command.rfind("dclf:cpu-batch=", 0) == 0) {
+						DCLF::Draws::SetBatchLanes(static_cast<std::uint32_t>(std::strtoul(command.c_str() + 15, nullptr, 10)));
+						return;
+					}
+					// "dclf:cpu-exp=<bits>": the CPU pipeline's performance A/B bits (Direct::Experiment), decimal or 0x hex.
+					if (command.rfind("dclf:cpu-exp=", 0) == 0) {
+						DCLF::Direct::ExperimentBits().store(static_cast<std::uint32_t>(std::strtoul(command.c_str() + 13, nullptr, 0)), std::memory_order_relaxed);
 						return;
 					}
 					if (command.rfind("dclf:cpu-record=", 0) == 0) {

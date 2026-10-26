@@ -2424,7 +2424,8 @@ namespace DCLF
 		// Batches submitted from here wait for the frame's values; the producer always signals.
 		host->SetFrameWaitValue(seq);
 		s.kicked = true;
-		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu,
+		// Frame-critical: the frame's GPU work waits for its signal, and the CPU pipeline's culls for its cull frame (the CPU fade stage).
+		if (!SceneScheduler::Executor().DispatchFrameCritical(SceneScheduler::Scope(),
 				"frame values", [&s, job = std::move(job)](const auto&) mutable {
 					s.Run(job);
 					// The items a lease refusal left unsampled, to the next producer (their engine references with them).

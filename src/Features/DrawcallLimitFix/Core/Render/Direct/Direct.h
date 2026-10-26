@@ -38,8 +38,12 @@ namespace DCLF::Direct
 {
 	struct StrictGates;  // Cull.h
 
-	/** @brief The lanes of a batch (CS_DCLF_CPU_BATCH overrides the default at startup; always a multiple of 8, for the SIMD tests). */
-	inline constexpr std::uint32_t kDefaultBatchLanes = 256;
+	/**
+	 * @brief The lanes of a batch by default (the live setting: Draws::BatchLanes; always a multiple of 8, for the SIMD tests). 4096: in
+	 * heavy scenes it halves Parallel mode's cost against 256 (fewer secondaries) at the same Serial cost; past it a list is too few
+	 * jobs, and DXVK's CS thread waits for them (2026-10-25, 1.6.1170 heavy exterior).
+	 */
+	inline constexpr std::uint32_t kDefaultBatchLanes = 4096;
 
 	/** @brief The view types with a list of their own. Main's list serves both main segments: with no HZB the colour pass draws exactly
 	 * the depth pass's set (EQUAL). */
@@ -67,6 +71,29 @@ namespace DCLF::Direct
 		PerFrame,
 		PerSnapshot
 	};
+
+	/**
+	 * @brief The CPU pipeline's performance changes under A/B (test command dclf:cpu-exp=<bits>): each on by default; a bit cleared restores
+	 * the behaviour before it, for a comparison within one launch.
+	 */
+	enum Experiment : std::uint32_t
+	{
+		kExpCullEarly = 1u << 0,  // CullBatch: a lane outside the frustum dropped before its other tests (gathering its inputs)
+		kExpPortalEarly = 1u << 1,  // Features/Portals' CPU plane set test stopped at the plane that decides it
+		kExpParabolicPass = 1u << 3,  // CullBatch: a paraboloid view's sphere test over the lanes, four at a time, before the lanes' own tests
+		kExpPrefillLive = 1u << 4,  // MakeViewBatches fills both live columns (the producer's first fill a set and parity skipped)
+		kExpPortalBatch = 1u << 2,
+		kExpIncremental = 1u << 5,  // the view batch sets from the incremental scene lists (Snapshot/SceneLists.cpp), not a full build each
+		// Not a change: every other incremental set checked against a full build of its snapshot (Snapshot/SceneLists.cpp, CompareSets).
+		kExpIncrementalCheck = 1u << 29,  // CullBatch: the main camera lists' portal tests made over the batch's lanes, four at a time (portalTestBatch)
+		// Not a change: kExpPortalBatch's verdicts checked against the per-lane test (mismatches on the [CPU] line). Off by default.
+		kExpPortalCheck = 1u << 30,
+		// Not a change: CullBatch's sections timed by view (TSC cycles), reported on the [CPU] line (Direct::TakeCullProfileLine). Off by default.
+		kExpCullProfile = 1u << 31,
+	};
+	inline std::atomic<std::uint32_t> experimentBits{ ~(kExpCullProfile | kExpPortalCheck | kExpIncrementalCheck) };  // constant-initialised: no guard on the hot paths that read it
+	inline std::atomic<std::uint32_t>& ExperimentBits() { return experimentBits; }
+	inline bool ExperimentOn(std::uint32_t a_bit) { return (experimentBits.load(std::memory_order_relaxed) & a_bit) != 0; }
 
 	/** @brief How per-frame views are recorded (dclf:cpu-record). */
 	enum class RecordMode : std::uint8_t
@@ -132,6 +159,9 @@ namespace DCLF::Direct
 			float *cx = nullptr, *cy = nullptr, *cz = nullptr, *r = nullptr;
 		};
 		std::array<Spheres, 2> liveSpheres{};
+		// The incremental lists' tombstones (Snapshot/SceneLists.cpp): a base batch shared by several sets has a bit per lane set where
+		// this set's lane is gone (removed or replaced since the base); the cull drops those. Null: every lane is live.
+		const std::uint64_t* dead = nullptr;
 	};
 
 	/** @brief Where a mover's lanes are, for FrameValues' producer (ViewBatchSet::moverLanes). */
@@ -172,6 +202,18 @@ namespace DCLF::Direct
 	};
 
 	/**
+	 * @brief The incremental lists' persistent sequences' arguments (Snapshot/SceneLists.cpp), shared by the sets of one base: fixed
+	 * chunks in a fixed directory, appended past every posted set's count and never moved, so a set reads its prefix while the builder
+	 * appends the next set's.
+	 */
+	struct ArgsChunks
+	{
+		static constexpr std::uint32_t kShift = 12, kChunk = 1u << kShift, kChunks = 4096;  // 16M sequences
+		std::unique_ptr<std::unique_ptr<DrawArgs[]>[]> chunks = std::make_unique<std::unique_ptr<DrawArgs[]>[]>(kChunks);
+		const DrawArgs& At(std::uint32_t a_sequence) const { return chunks[a_sequence >> kShift][a_sequence & (kChunk - 1)]; }
+	};
+
+	/**
 	 * @brief One snapshot's per-view lists (MakeViewBatches): immutable once posted, retired with its snapshot. Every batch's
 	 * columns live in `storage`, one allocation, laid out by the builder; nothing is copied after.
 	 */
@@ -186,8 +228,23 @@ namespace DCLF::Direct
 		// local shadow mask, cross-fade copy) are not in them: the recorder pushes the word per draw.
 		std::uint64_t sequencesAddress = 0;
 		std::uint32_t sequenceCount = 0;
-		// By resident sequence: its draw arguments (the recorder's DrawIndexed; the GPU copy's are the same, without the pool's first).
+		// The sequences' rows are offsets from these (kDirectFlagRelativeRows): the payload's row parts' versions the set was made for
+		// (held by `keep`), pushed once per list by the recorder (main lists: pipeline and material rows; shadow lists: the shadow rows).
+		std::uint64_t pipelineRowsBase = 0, materialRowsBase = 0, shadowRowsBase = 0;
+		// By resident sequence: its draw arguments (the recorder's DrawIndexed; the GPU copy's are the same, without the pool's first):
+		// the first persistentSequences in persistentArgs (the incremental lists'), then sequenceArgs (the set's own: every sequence of a
+		// full build). Read through Args.
+		std::shared_ptr<const ArgsChunks> persistentArgs;
+		std::uint32_t persistentSequences = 0;
 		std::vector<DrawArgs> sequenceArgs;
+		/** @brief A resident sequence's arguments (null: past the set's). */
+		const DrawArgs* Args(std::uint32_t a_sequence) const
+		{
+			if (a_sequence < persistentSequences)
+				return &persistentArgs->At(a_sequence);
+			a_sequence -= persistentSequences;
+			return a_sequence < sequenceArgs.size() ? &sequenceArgs[a_sequence] : nullptr;
+		}
 		// The decal list's second pass groups: group g (its main range slot, Extensions::MainRangeEntry::slot) is the decal list's lanes
 		// [decalGroupFirst[g], decalGroupFirst[g + 1]), counted across its batches (batch * lanes + lane). Empty: no decals.
 		std::vector<std::uint32_t> decalGroupFirst;
@@ -199,13 +256,18 @@ namespace DCLF::Direct
 		// object -> [moverLaneFirst[object], moverLaneFirst[object + 1]) in moverLanes; only movers have lanes there.
 		std::vector<std::uint32_t> moverLaneFirst;
 		std::vector<LaneRef> moverLanes;
-		std::unique_ptr<std::byte[]> storage;
+		std::shared_ptr<std::byte[]> storage;  // a recycled block (ViewBatches.cpp's storage pool): returned when the set goes
 		// The resident sequences' version (sequencesAddress is its backing's): bound to the retirement point of every frame that draws
 		// with the set (Draws::BindViewBatches, beside PayloadPools::BindInstalled), so its backing is not reused while one reads it.
 		std::shared_ptr<const org::services::PublishedBufferVersion> sequencesVersion;
 		// What the sequences' addresses are into: the snapshot's draws and payload (its row parts' versions), held for as long as the set.
 		std::shared_ptr<const void> keep;
-		// Mutable: the live columns' static lanes are filled once, by the first frame of each parity that uses the set.
+		// The incremental lists' shared parts the set's batches and sequences are in (their base's storage, the persistent arguments).
+		std::shared_ptr<const void> shared;
+		// The set's dead bitmaps (ViewBatch::dead), its own.
+		std::vector<std::uint64_t> deadBits;
+		// Mutable: the live columns' static lanes are filled once, by the first frame of each parity that uses the set (MakeViewBatches
+		// fills both and sets both).
 		mutable std::array<std::atomic<bool>, 2> liveFilled{};
 
 		const std::vector<ViewBatch>& List(ViewType a_view) const { return lists[static_cast<std::size_t>(a_view)]; }
@@ -322,5 +384,7 @@ namespace DCLF::Direct
 		std::uint32_t snapshotRecorded = 0, snapshotExecuted = 0;
 		// Geometry slots the set drew whose pool range is another buffer's this frame (TakePoolFirsts): their draws skipped.
 		std::uint32_t staleGeometry = 0;
+		// The recordings' calls (RecordContext's): pipeline binds, those binding the pipeline already bound, per-draw pushes.
+		std::uint32_t binds = 0, sameBinds = 0, pushes = 0;
 	};
 }

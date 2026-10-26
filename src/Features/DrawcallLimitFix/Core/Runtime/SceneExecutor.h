@@ -18,13 +18,18 @@ namespace DCLF
 	// configurable number of preparation threads. Dispatch never waits and never runs work inline: a job goes into its domain's unbounded MPMC queue
 	// (tbb::concurrent_queue, as BasicRenderer's scheduler) and a semaphore wakes a worker. Nothing is rejected for want of
 	// room; only an invalid scope, class or task is. Scope waits and Shutdown are teardown/test APIs, not normal-frame
-	// operations.
+	// operations. The preparation domain has a second queue for frame-critical jobs (DispatchFrameCritical, ORG's
+	// TaskPriority::FrameCritical): its workers take from it first, and so do a few frame-critical threads that take nothing else.
+	// Those wait at the frame-critical priority, so a frame-critical job starts when the engine's threads saturate the machine and
+	// the preparation workers (below normal) are not scheduled.
 	class SceneExecutor final : public org::async::GraphScheduler
 	{
 	public:
 		static constexpr org::async::TaskClass Coordinator{ 0, 0 };
 		static constexpr org::async::TaskClass Preparation{ 0, 1 };
 		static constexpr org::async::TaskClass Scene{ 0, 2 };
+		// A frame-critical thread's class in ThreadStart alone (not a dispatch class: DispatchFrameCritical reaches them).
+		static constexpr org::async::TaskClass FrameCriticalThread{ 0, 3 };
 		static constexpr org::async::GraphSchedulingLayout Layout{ 1, 3, Coordinator, Coordinator };
 		static constexpr std::size_t kDomains = 3;
 
@@ -60,9 +65,11 @@ namespace DCLF
 		{
 			std::function<int()> get;
 			std::function<void(int)> set;
+			// A frame-critical job (DispatchFrameCritical) runs at least at this one, restored after (with get and set).
+			int frameCritical = 0;
 		};
 
-		explicit SceneExecutor(unsigned preparationWorkers = 2, ThreadStart onThreadStart = {}, ThreadPriority priority = {});
+		explicit SceneExecutor(unsigned preparationWorkers = 2, ThreadStart onThreadStart = {}, ThreadPriority priority = {}, unsigned frameCriticalWorkers = 0);
 		~SceneExecutor() override;
 		SceneExecutor(const SceneExecutor&) = delete;
 		SceneExecutor& operator=(const SceneExecutor&) = delete;
@@ -71,6 +78,12 @@ namespace DCLF
 			std::string_view, Task, org::async::TaskTraceMetadata = {}) override;
 		bool DispatchAfter(const org::async::Scope&, std::chrono::steady_clock::duration,
 			org::async::TaskClass, std::string_view, Task) override;
+		/**
+		 * @brief A preparation job the frame waits on (the CPU pipeline's culls, whose batches DXVK's CS thread records): queued ahead of
+		 * every other preparation job, and run at least at ThreadPriority::frameCritical, so neither the queue nor the engine's job
+		 * threads hold it back. A ParallelFor it calls has frame-critical helpers. Never runs inline; false for an invalid scope or task.
+		 */
+		bool DispatchFrameCritical(const org::async::Scope& a_scope, std::string_view a_name, Task a_task);
 		/**
 		 * @brief Runs a_body(begin, end) over [0, a_count) in chunks of a_grain, on the calling thread and on the preparation
 		 * workers, and returns once every chunk ran (BasicRenderer's TaskSchedulerManager::ParallelFor). The caller takes chunks

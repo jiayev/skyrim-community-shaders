@@ -79,7 +79,18 @@ namespace DCLF
 	// The GPU path's plain draws push both 0, so their stages read the sequence's word as before.
 	inline constexpr std::uint32_t kDirectDrawPushObjectWord = 6, kDirectDrawPushFlags = 7;
 	inline constexpr std::uint32_t kDirectFlagObjectWord = 1;
+	// kDirectFlagRelativeRows: the draw's sequence holds its rows as offsets from the bases at kDirectDrawPushRowBases (pushed once per
+	// list: the pipeline rows' base, then the material rows' or the shadow rows'), so the CPU pipeline's resident sequences do not embed
+	// a payload's row versions (DCLFObjects.hlsli, DCLFSequenceRows).
+	inline constexpr std::uint32_t kDirectFlagRelativeRows = 2;
+	inline constexpr std::uint32_t kDirectDrawPushRowBases = 8;
 	static_assert(kDirectDrawPushObjectWord > kZDrawPushOffsetDepth && kDirectDrawPushObjectWord >= kShadowDrawPushVertexLayout + 2 && kDirectDrawPushFlags < kDrawPushWords);
+	static_assert(kDirectDrawPushRowBases > kDirectDrawPushFlags && kDirectDrawPushRowBases + 4 <= kDrawPushWords);
+	// The frame's copy of the animated material rows (Api::PassDef::animatedRows, the latch's animatedRows; 0: none), pushed once per
+	// list of a main-rows pass after the row bases: a relative row whose header names an animated row is drawn from its copy, as
+	// BuildDrawsCS's MaterialRowAddress resolves it (DCLFObjects.hlsli, DCLFSequenceRows).
+	inline constexpr std::uint32_t kDirectDrawPushAnimatedRows = kDirectDrawPushRowBases + 4;
+	static_assert(kDirectDrawPushAnimatedRows + 2 <= kDrawPushWords);
 	/** @brief Where a DrawSequence's draw arguments start, which the shadow views' plain indexed draws read. */
 	inline constexpr std::uint32_t kSequenceDrawOffset = 116;
 	static_assert(offsetof(DrawSequence, indexCount) == kSequenceDrawOffset);

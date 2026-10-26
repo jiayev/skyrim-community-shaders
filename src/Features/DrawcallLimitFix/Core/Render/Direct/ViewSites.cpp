@@ -30,6 +30,7 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <Tracy/Tracy.hpp>
 
 namespace DCLF::Direct::detail
 {
@@ -285,6 +286,9 @@ namespace DCLF::Direct::detail
 				b.offsetDepth = false;
 				if (face.face < shape.push.size())
 					b.framePush = shape.push[face.face];
+				// The animated rows' copy is the frame's: a view recorded once per snapshot draws the installed rows (its captured transforms).
+				if (FrameMode().cadence[static_cast<std::size_t>(a_view.type)] == Cadence::PerSnapshot)
+					b.animatedRows = 0;
 				// The reflection's lanes draw their colour pipelines (the faces' forward ones), first person's depth its Z-prepass ones.
 				auto& site = NewView(a_slot, a_depth, a_view.type, face.view, !reflection);
 				site.bindings = &b;
@@ -502,6 +506,7 @@ namespace DCLF::Direct
 
 	void HostedViewCommitted(const HostedViewCommit& a_commit)
 	{
+		ZoneScopedN("CS.DCLF.Cpu.HostedViewCommitted");
 		auto* slot = S().current;
 		if (!slot || !slot->set || !a_commit.shape || !a_commit.resources || a_commit.faces.empty())
 			return;

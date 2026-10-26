@@ -9,6 +9,7 @@
 #include <semaphore>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <tbb/concurrent_queue.h>
@@ -21,6 +22,8 @@ namespace DCLF
 		thread_local const void* currentExecutor = nullptr;
 		// A worker's current priority, read once after ThreadStart and kept by the boosts that change it (no query per chunk).
 		thread_local int threadPriority = 0;
+		// The worker is running a frame-critical job: its ParallelFor's helpers are frame-critical too.
+		thread_local bool inFrameCritical = false;
 
 		template <class T>
 		void RaiseTo(std::atomic<T>& a_max, T a_value)
@@ -36,6 +39,7 @@ namespace DCLF
 			std::chrono::steady_clock::time_point ready;
 			std::shared_ptr<ExecutorScope> scope;
 			Task task;
+			bool frameCritical = false;  // DispatchFrameCritical's
 		};
 
 		// Unbounded and lock-free for producers: any thread pushes, every worker of the domain pops.
@@ -61,6 +65,7 @@ namespace DCLF
 		struct Domain
 		{
 			Queue ring;
+			Queue frameCritical;  // DispatchFrameCritical's jobs (the preparation domain's): taken before the ring's
 			std::counting_semaphore<> available{ 0 };  // one release per pushed job, and per wake-up (Cancel, Shutdown)
 			unsigned workers = 0;
 			std::atomic<std::size_t> active{ 0 }, highWater{ 0 };
@@ -83,6 +88,9 @@ namespace DCLF
 		std::array<std::unique_ptr<Domain>, kDomains> domains;
 		std::atomic<std::uint64_t> accepted{ 0 }, completed{ 0 }, cancelled{ 0 }, rejected{ 0 }, failed{ 0 };
 		ThreadPriority priority;  // both set, or ParallelFor leaves priorities alone
+		// The frame-critical threads (RunFrameCritical): they take the preparation domain's frame-critical queue alone, one token per job.
+		unsigned frameCriticalWorkers = 0;
+		std::counting_semaphore<> frameCriticalAvailable{ 0 };
 		// Lock-free lookup and insertion; nodes never move.
 		tbb::concurrent_unordered_map<std::string, std::unique_ptr<ParallelForEntry>, NameHash, std::equal_to<>> parallelFor;
 
@@ -96,8 +104,8 @@ namespace DCLF
 		}
 		bool Boosts() const { return priority.get && priority.set; }
 
-		explicit State(unsigned preparationWorkers, ThreadPriority a_priority) :
-			priority(std::move(a_priority))
+		explicit State(unsigned preparationWorkers, unsigned a_frameCriticalWorkers, ThreadPriority a_priority) :
+			priority(std::move(a_priority)), frameCriticalWorkers(a_frameCriticalWorkers)
 		{
 			if (!preparationWorkers)
 				throw std::invalid_argument("scene executor needs a preparation worker");
@@ -112,8 +120,10 @@ namespace DCLF
 		{
 			for (auto& domain : domains)
 				domain->available.release(domain->workers);
+			frameCriticalAvailable.release(frameCriticalWorkers);
 		}
 		void Run(unsigned domain);
+		void RunFrameCritical();
 		void Execute(unsigned domain, Job& job);
 	};
 
@@ -160,8 +170,21 @@ namespace DCLF
 		std::exception_ptr error;
 		const bool wasCancelled = scope->StopRequested();
 		if (!wasCancelled) {
+			// A frame-critical job holds the worker at the frame's priority (workers sit below the engine's job threads), restored after.
+			const int previous = threadPriority;
+			const bool raise = job.frameCritical && Boosts() && priority.frameCritical > previous;
+			if (raise) {
+				priority.set(priority.frameCritical);
+				threadPriority = priority.frameCritical;
+			}
+			const bool wasFrameCritical = std::exchange(inFrameCritical, inFrameCritical || job.frameCritical);
 			try { job.task({ [scope] { return scope->StopRequested(); } }); }
 			catch (...) { error = std::current_exception(); }
+			inFrameCritical = wasFrameCritical;
+			if (raise) {
+				priority.set(previous);
+				threadPriority = previous;
+			}
 		}
 		// Release captured resources before signalling completion, including when the task never started. Cancel never
 		// destroys queued work.
@@ -203,7 +226,7 @@ namespace DCLF
 				timers = std::move(kept);
 				std::make_heap(timers.begin(), timers.end(), later);
 			}
-			if (stopping.load() && timers.empty() && d.ring.Size() == 0) {
+			if (stopping.load() && timers.empty() && d.ring.Size() == 0 && d.frameCritical.Size() == 0) {
 				currentExecutor = nullptr;
 				return;
 			}
@@ -215,7 +238,7 @@ namespace DCLF
 			else if (!d.available.try_acquire_until(timers.front().ready))
 				continue;  // the earliest timer is due
 			Job job;
-			if (!d.ring.Pop(job))
+			if (!d.frameCritical.Pop(job) && !d.ring.Pop(job))
 				continue;  // a wake-up, or a job another worker took with its token
 			if (job.ready > std::chrono::steady_clock::now() && !job.scope->StopRequested()) {
 				timers.push_back(std::move(job));
@@ -226,10 +249,31 @@ namespace DCLF
 		}
 	}
 
-	SceneExecutor::SceneExecutor(unsigned preparationWorkers, ThreadStart onThreadStart, ThreadPriority priority) :
-		state(std::make_shared<State>(preparationWorkers, std::move(priority))), threads(std::make_unique<Threads>())
+	void SceneExecutor::State::RunFrameCritical()
 	{
-		threads->workers.reserve(2 + preparationWorkers);
+		currentExecutor = this;
+		if (Boosts())
+			threadPriority = priority.get();  // after ThreadStart set it
+		auto& d = *domains[Preparation.domain];
+		for (;;) {
+			if (stopping.load() && d.frameCritical.Size() == 0) {
+				currentExecutor = nullptr;
+				return;
+			}
+			if (stopping.load())
+				(void)frameCriticalAvailable.try_acquire_for(std::chrono::milliseconds(1));
+			else
+				frameCriticalAvailable.acquire();
+			Job job;
+			if (d.frameCritical.Pop(job))  // else a preparation worker took it, or a wake-up
+				Execute(Preparation.domain, job);
+		}
+	}
+
+	SceneExecutor::SceneExecutor(unsigned preparationWorkers, ThreadStart onThreadStart, ThreadPriority priority, unsigned frameCriticalWorkers) :
+		state(std::make_shared<State>(preparationWorkers, frameCriticalWorkers, std::move(priority))), threads(std::make_unique<Threads>())
+	{
+		threads->workers.reserve(2 + preparationWorkers + frameCriticalWorkers);
 		try {
 			threads->workers.emplace_back([shared = state, onThreadStart] {
 				if (onThreadStart)
@@ -247,6 +291,12 @@ namespace DCLF
 					onThreadStart(Scene, 0);
 				shared->Run(2);
 			});
+			for (unsigned i = 0; i < frameCriticalWorkers; ++i)
+				threads->workers.emplace_back([shared = state, onThreadStart, i] {
+					if (onThreadStart)
+						onThreadStart(FrameCriticalThread, i);
+					shared->RunFrameCritical();
+				});
 		} catch (...) {
 			Shutdown();
 			throw;
@@ -283,6 +333,26 @@ namespace DCLF
 		domain.ring.Push({ now + (std::max)(delay, std::chrono::steady_clock::duration::zero()), own, std::move(task) });
 		state->accepted.fetch_add(1, std::memory_order_relaxed);
 		const std::size_t queued = domain.ring.Size();
+		for (std::size_t high = domain.highWater.load(std::memory_order_relaxed); queued > high &&
+			 !domain.highWater.compare_exchange_weak(high, queued, std::memory_order_relaxed);) {}
+		domain.available.release();
+		return true;
+	}
+
+	bool SceneExecutor::DispatchFrameCritical(const org::async::Scope& a_scope, std::string_view, Task a_task)
+	{
+		const auto own = std::dynamic_pointer_cast<ExecutorScope>(a_scope);
+		if (!own || own->owner != state || own->StopRequested() || !a_task) {
+			state->rejected.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+		auto& domain = *state->domains[Preparation.domain];
+		own->pending.fetch_add(1, std::memory_order_acq_rel);
+		domain.frameCritical.Push({ std::chrono::steady_clock::now(), own, std::move(a_task), true });
+		if (state->frameCriticalWorkers)
+			state->frameCriticalAvailable.release();
+		state->accepted.fetch_add(1, std::memory_order_relaxed);
+		const std::size_t queued = domain.ring.Size() + domain.frameCritical.Size();
 		for (std::size_t high = domain.highWater.load(std::memory_order_relaxed); queued > high &&
 			 !domain.highWater.compare_exchange_weak(high, queued, std::memory_order_relaxed);) {}
 		domain.available.release();
@@ -367,9 +437,13 @@ namespace DCLF
 			shared->callerPriority = currentExecutor == state.get() ? threadPriority : state->priority.get();
 		}
 		const std::size_t helpers = (std::min)(chunks - 1, std::size_t(state->domains[1]->workers));
-		for (std::size_t i = 0; i < helpers; ++i)
-			if (!Dispatch(parallelScope, Preparation, org::async::TaskDispatch::Cpu, a_name, [shared](const org::async::TaskContext&) { shared->Help(); }))
+		// A frame-critical caller's helpers are frame-critical: no queued preparation job stands between it and its chunks.
+		const bool critical = currentExecutor == state.get() && inFrameCritical;
+		for (std::size_t i = 0; i < helpers; ++i) {
+			auto help = [shared](const org::async::TaskContext&) { shared->Help(); };
+			if (!(critical ? DispatchFrameCritical(parallelScope, a_name, std::move(help)) : Dispatch(parallelScope, Preparation, org::async::TaskDispatch::Cpu, a_name, std::move(help))))
 				break;  // the caller takes what no helper does
+		}
 		shared->Work();
 		if (std::size_t done = shared->done.load(std::memory_order_acquire); done != chunks) {
 			// Only chunks a helper claimed and still runs: the wait the statistics report.
@@ -394,7 +468,7 @@ namespace DCLF
 		stats.rejected = state->rejected.load();
 		stats.failed = state->failed.load();
 		for (std::size_t d = 0; d < kDomains; ++d) {
-			stats.queued[d] = state->domains[d]->ring.Size();
+			stats.queued[d] = state->domains[d]->ring.Size() + state->domains[d]->frameCritical.Size();
 			stats.active[d] = state->domains[d]->active.load();
 			stats.highWater[d] = state->domains[d]->highWater.load();
 		}
@@ -431,7 +505,7 @@ namespace DCLF
 		// A dispatch that passed its check before stopping and pushed after its domain's workers left: run as cancelled here,
 		// so its scope's count still reaches zero.
 		for (unsigned domain = 0; domain < kDomains; ++domain)
-			for (State::Job job; state->domains[domain]->ring.Pop(job);)
+			for (State::Job job; state->domains[domain]->frameCritical.Pop(job) || state->domains[domain]->ring.Pop(job);)
 				state->Execute(domain, job);
 	}
 }

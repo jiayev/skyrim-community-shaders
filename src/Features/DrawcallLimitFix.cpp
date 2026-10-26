@@ -35,6 +35,7 @@
 #	include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
 #	include "DrawcallLimitFix/Core/Handoff/ShadowViews.h"
 #	include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#	include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatches.h"
 #	include "DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #	include "DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 #	include "DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
@@ -591,6 +592,47 @@ void DrawcallLimitFix::DrawSettings()
 		int cull = toggles.cullMode;
 		if (ImGui::Combo("GPU culling", &cull, "off\0frustum\0frustum + occlusion\0"))
 			toggles.cullMode = static_cast<std::uint8_t>(cull);
+		// The CPU-driven pipeline (an experiment; Core/Render/Direct/Direct.h): its pipeline, record mode and per-view cadences, the test
+		// harness's dclf:pipeline, dclf:cpu-record and dclf:cpu-cadence-<view>. Not saved: seeded at startup by their switches alone.
+		int pipeline = toggles.cpuPipeline ? 1 : 0;
+		if (ImGui::Combo("Pipeline", &pipeline, "GPU-driven\0CPU-driven (experiment)\0"))
+			toggles.cpuPipeline = pipeline == 1;
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(
+				"GPU-driven: the draws culled and recorded on the GPU. CPU-driven: culled on DCLF's worker threads and drawn with direct draws "
+				"recorded into DXVK's command buffer. Takes effect at the next graph build; not kept by Save Settings (CS_DCLF_PIPELINE seeds it).");
+		if (toggles.cpuPipeline) {
+			ImGui::Indent();
+			int record = toggles.cpuRecord;
+			if (ImGui::Combo("CPU recording", &record, "serial\0parallel\0"))
+				toggles.cpuRecord = static_cast<std::uint8_t>(record);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(
+					"Serial: the workers cull, and DXVK's CS thread records every batch's draws. Parallel: the workers also record each batch into "
+					"a secondary command list, which the CS thread only executes (decals, forward and refraction stay serial: one ordered stream). "
+					"CS_DCLF_CPU_RECORD seeds it.");
+			// Applied when entered (or stepped), from the next snapshot: each change makes the view batches again.
+			int lanes = static_cast<int>(DCLF::Draws::BatchLanes());
+			if (ImGui::InputInt("Batch lanes", &lanes, 256, 1024, ImGuiInputTextFlags_EnterReturnsTrue))
+				DCLF::Draws::SetBatchLanes(static_cast<std::uint32_t>(std::max(lanes, 8)));
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(
+					"The draws a culled batch holds (a multiple of 8, 8 to 65528; default 4096). More coalesce more draws into each batch and, in "
+					"parallel recording, into each secondary command list; fewer spread a view's culls over more jobs. Takes effect from the next "
+					"scene snapshot; CS_DCLF_CPU_BATCH seeds it.");
+			if (ImGui::TreeNodeEx("Views culled once per snapshot")) {
+				ImGui::TextWrapped("A view checked here is culled and recorded once per scene snapshot and replayed until the next; unchecked, every frame. "
+								   "The main view is always culled every frame. CS_DCLF_CPU_CADENCE seeds them.");
+				for (std::size_t v = 1; !DCLF::CpuViewName(v).empty(); ++v) {
+					const auto bit = static_cast<std::uint16_t>(1u << v);
+					bool snapshot = (toggles.cpuCadence & bit) != 0;
+					if (ImGui::Checkbox(std::string(DCLF::CpuViewName(v)).c_str(), &snapshot))
+						toggles.cpuCadence = snapshot ? static_cast<std::uint16_t>(toggles.cpuCadence | bit) : static_cast<std::uint16_t>(toggles.cpuCadence & ~bit);
+				}
+				ImGui::TreePop();
+			}
+			ImGui::Unindent();
+		}
 		for (const auto& toggle : DCLF::ToggleTable()) {
 			if (!toggle.section.empty())
 				ImGui::SeparatorText(toggle.section.data());
@@ -613,7 +655,7 @@ void DrawcallLimitFix::DrawSettings()
 		return;
 	drawTools();
 	if (ImGui::TreeNodeEx("This frame", ImGuiTreeNodeFlags_DefaultOpen)) {
-		std::string flags = fmt::format("Active: cull {}", active.cullMode);
+		std::string flags = fmt::format("Active: cull {}, pipeline {}", active.cullMode, active.cpuPipeline ? (active.cpuRecord ? "cpu parallel" : "cpu serial") : "gpu");
 		for (const auto& toggle : DCLF::ToggleTable())
 			flags += fmt::format(", {} {}", toggle.name, DCLF::ToggleValue(active, toggle) ? 1 : 0);
 		ImGui::TextWrapped("%s", flags.c_str());

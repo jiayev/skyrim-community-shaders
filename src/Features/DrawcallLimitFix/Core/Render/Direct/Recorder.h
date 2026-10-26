@@ -70,6 +70,9 @@ namespace DCLF::Direct
 		std::span<const std::uint32_t> shadowMapRow;
 		// The refraction draws' second address: the frame's LodFadeFrame (LodFadeFrameAddress), in the shadow layout's material rows' words.
 		std::uint64_t lodFadeFrame = 0;
+		// The frame's copy of the animated material rows (the latch's animatedRows, kDirectDrawPushAnimatedRows; 0: the installed rows).
+		// Per frame: a per-snapshot recording's bindings keep 0.
+		std::uint64_t animatedRows = 0;
 		// Terrain Blending's depth offset on every draw (kZDrawPushOffsetDepth: a terrain group 1 twin's recording).
 		bool offsetDepth = false;
 		// RecordForward: the frame's placement rows (FrameValues::RowsIfDone, by object) and the view's ViewProj (row major, clip = M * p),
@@ -101,6 +104,10 @@ namespace DCLF::Direct
 		rhi::PipelineHandle boundPipeline{};
 		std::uint64_t boundVertexLayout = 0;  // a shadow bucket's (ShadowIndirectState::vertexLayouts), pushed with each of its draws
 		std::uint32_t drawn = 0;
+		// The list's calls (FrameCounters' binds, sameBinds, pushes, flushed with drawn): pipeline binds, those that bound the pipeline
+		// already bound (another bucket of the same pipeline), and per-draw push constants.
+		std::uint32_t binds = 0, sameBinds = 0, pushes = 0;
+		std::uint32_t countedBinds = 0, countedSameBinds = 0, countedPushes = 0;
 	};
 
 	/** @brief The pass a view type's lanes draw in at a_depthPass (RecordContext::depthPass). */

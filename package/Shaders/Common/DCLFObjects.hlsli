@@ -84,7 +84,9 @@ cbuffer DCLFPushData : register(b190)
 	uint2 DCLFMaterialRowsAddress : packoffset(c0.z);
 	uint2 DCLFVertexLayout : packoffset(c1.x);
 	uint DCLFObjectWordOverride : packoffset(c1.z);
-	uint DCLFDirectFlags : packoffset(c1.w);  // bit 0: kDirectFlagObjectWord
+	uint DCLFDirectFlags : packoffset(c1.w);  // bit 0: kDirectFlagObjectWord; bit 1: kDirectFlagRelativeRows
+	uint4 DCLFRowBases : packoffset(c2);      // kDirectFlagRelativeRows: the rows' bases (xy: the pipeline rows', zw: the material rows')
+	uint2 DCLFAnimatedRows : packoffset(c3.x);  // kDirectFlagRelativeRows: the frame's copy of the animated material rows (0: none)
 };
 
 // The object word (below), set by the stage's main from the draw's sequence (the vertex stage) or its vertex stage's output
@@ -155,6 +157,36 @@ uint64_t DCLFDrawSequence(uint a_instance) { return DCLFAddress(DCLFSequencesAdd
 uint DCLFSequenceObjectWord(uint64_t a_sequence)
 {
 	return (DCLFDirectFlags & 1u) != 0 ? DCLFObjectWordOverride : vk::RawBufferLoad<uint>(a_sequence + 20);
+}
+
+uint2 DCLFAddressWords(uint64_t a_address) { return uint2(uint(a_address), uint(a_address >> 32)); }
+
+// A pulled draw's rows (DrawSequence bytes 4-19: the pipeline row's address, then the material row's). A direct draw with
+// kDirectFlagRelativeRows holds offsets from the rows' bases its list pushes (DCLFRowBases): the CPU pipeline's resident sequences
+// then outlive the payload's row versions (Snapshot/SceneLists). The GPU path's draws push 0 and hold addresses.
+uint4 DCLFSequenceRows(uint64_t a_sequence)
+{
+	uint4 rows = vk::RawBufferLoad<uint4>(a_sequence + 4);
+	if ((DCLFDirectFlags & 2u) != 0) {
+		rows.xy = DCLFAddressWords(DCLFAddress(rows.xy) + DCLFAddress(DCLFRowBases.xy));
+		rows.zw = DCLFAddressWords(DCLFAddress(rows.zw) + DCLFAddress(DCLFRowBases.zw));
+		// A row a frame patch writes (its header's animatedRow, MaterialRowHeader word 0 at byte 768) is drawn from its row of the
+		// frame's copy, as BuildDrawsCS's MaterialRowAddress points the GPU path's draws (kMaterialRowBytes 1024 a row).
+		if ((DCLFAnimatedRows.x | DCLFAnimatedRows.y) != 0) {
+			const uint animatedRow = vk::RawBufferLoad<uint>(DCLFAddress(rows.zw) + 768, 4);
+			if (animatedRow != 0xFFFFFFFFu)
+				rows.zw = DCLFAddressWords(DCLFAddress(DCLFAnimatedRows) + uint64_t(animatedRow) * 1024);
+		}
+	}
+	return rows;
+}
+// A shadow sequence's: its key slot's vertex layout (no address), then its material row's (relative as DCLFSequenceRows').
+uint4 DCLFSequenceShadowRows(uint64_t a_sequence)
+{
+	uint4 rows = vk::RawBufferLoad<uint4>(a_sequence + 4);
+	if ((DCLFDirectFlags & 2u) != 0)
+		rows.zw = DCLFAddressWords(DCLFAddress(rows.zw) + DCLFAddress(DCLFRowBases.zw));
+	return rows;
 }
 #		endif
 

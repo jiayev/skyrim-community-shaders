@@ -206,6 +206,11 @@ both ways (no overlap, no hole). **Check:** a turn-only run's first `grass draws
     writers next to the installed inputs SRV. It did not reproduce in run wr4 (2026-10-22, about 12,400 frames walking out of
     Riverwood). **Next:** on a hit, a writer whose inputs SRV is not the installed one means a dispatch read another backing; the
     same SRV with no input naming the slot means the backing changed after the dispatch.
+-   **Extras parity on terrain and object LOD after a load (`<- DIFFER`).** In run tog9 (2026-10-25, MO2 1.6.1170 heavy
+    exterior, `CS_DCLF_PERSISTENT_PARITY`), the first two windows only: 97 of 1111 and 39 of 1391 objects, largest difference
+    262144, first samples `Block (3, 0)` (component 2: completed -30720, reference -4710.4) and `objsnowHD-LargeRef`
+    (component 7: completed 0, reference -49152); every later window 0. The first window ended before the run's first pipeline
+    switch, so the CPU/GPU toggling there is not its cause. Not seen in v3-full on the same save. Not investigated.
 -   **Build parity's decal check reads only the classes' decal sub-ranges.** With the plain decal buckets on
     (`CS_DCLF_DECAL_PLAIN`) the decals go to the class plan's decal buckets, which `DrawnDecal` does not read, so the check reports
     every slot culled ("87 slots, 87 culled"). The colour and terrain draws' plain buckets were added to the comparison on 2026-10-22

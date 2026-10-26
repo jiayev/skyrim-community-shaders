@@ -22,6 +22,7 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace DCLF
@@ -99,6 +100,13 @@ namespace DCLF::Direct
 	/** @brief PortalPrograms.hlsli's PortalTest on the CPU (Features/Portals' evaluator): 1 in view, 0 culled, -1 no program. */
 	using PortalTestFn = int (*)(std::span<const std::uint32_t> a_programs, std::uint32_t a_program, const float a_centre[3], float a_radius, std::uint32_t a_nodeFlags);
 
+	/**
+	 * @brief PortalTestFn over many member bounds of one program (node flags 0): for k < a_count, lane a_lanes[k]'s bound (a_x, a_y, a_z,
+	 * a_r at that index) tested, a_rejected[a_lanes[k]] set to 1 where the verdict is not 1, else 0 (Features/Portals' batch evaluator).
+	 */
+	using PortalTestBatchFn = void (*)(std::span<const std::uint32_t> a_programs, std::uint32_t a_program, const float* a_x, const float* a_y, const float* a_z,
+		const float* a_r, const std::uint16_t* a_lanes, std::uint32_t a_count, std::uint8_t* a_rejected);
+
 	/** @brief CullFrame::rootWords: a root slot's verdicts as the frame's cull reads them, from the CPU fade stage. */
 	enum RootWord : std::uint32_t
 	{
@@ -134,6 +142,7 @@ namespace DCLF::Direct
 		// The main camera's programs (PortalPrograms.h's encoding; empty: none this frame, the frustum alone) and their evaluator.
 		std::span<const std::uint32_t> programs;
 		PortalTestFn portalTest = nullptr;
+		PortalTestBatchFn portalTestBatch = nullptr;  // the same verdicts over a batch's lanes (null: portalTest per lane)
 		// The main camera as the fade test measures from it (FadeState::FadeEye: position, LOD factor) and the tree height test (base,
 		// limit): the main camera's lists' stamps read these whichever view culls them (the depth latch's fadeEye and treeHeight).
 		std::array<float, 4> fadeEye{};
@@ -200,6 +209,9 @@ namespace DCLF::Direct
 	 * @brief The colour pass's words for the main list's depth-culled batch (same lanes and draw masks): each object word with the sun miss
 	 * (a_colour.sunTest, the cascades) and the local shadow mask (the volumes), which only exist at the colour commit.
 	 */
+	/** @brief Render thread (the reports): kExpCullProfile's sections by view since the last take, or empty. */
+	std::string TakeCullProfileLine();
+
 	const CulledBatch& ColourObjectWords(const CulledBatch& a_depth, const CullView& a_colour, const CullFrame& a_frame, CullArena& a_arena);
 
 	// ---- The views, from the latches the GPU path writes at the same trigger ----

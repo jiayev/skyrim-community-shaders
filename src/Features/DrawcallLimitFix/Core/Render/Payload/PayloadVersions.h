@@ -128,6 +128,8 @@ namespace DCLF::Draws
 		 * the builder).
 		 */
 		bool Settle();
+		/** @brief Any thread, read racily (for a stall's message): the parts with a version in flight, by name; "none". */
+		std::string PendingParts();
 		/**
 		 * @brief Snapshot builder, with Settle true: posts the next version of each part a_source has that changed for it (its journal
 		 * moved, its units, or a tailed part's new source); the others keep theirs. a_uploads: the frame's dedicated uploader. False when

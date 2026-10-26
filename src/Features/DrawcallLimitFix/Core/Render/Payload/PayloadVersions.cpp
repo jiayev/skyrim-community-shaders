@@ -429,6 +429,18 @@ namespace DCLF::Draws
 			return idle;
 		}
 
+		std::string PendingParts()
+		{
+			std::string out;
+			for (std::size_t k = 0; k < kPayloadParts; ++k)
+				if (const auto pending = Parts().chains[k].pending)
+					out += fmt::format("{}{} v{}{}", out.empty() ? "" : ", ", kPartNames[k], pending->held.version, pending->done.load(std::memory_order_acquire) ? " (done)" : "");
+			std::uint64_t suspensions = 0;
+			for (const auto& shared : Parts().shared)
+				suspensions += shared.suspensions.load(std::memory_order_relaxed);
+			return fmt::format("{}; {} suspensions since the report", out.empty() ? std::string("none") : out, suspensions);
+		}
+
 		bool Post(const std::shared_ptr<const PayloadSource>& a_source, const std::shared_ptr<org::runtime::IUploadService>& a_uploads)
 		{
 			auto& s = Parts();

@@ -27,6 +27,7 @@ namespace DCLF
 		ShadowMerge,
 		LazyRows,
 		Workers,
+		FrameWorkers,
 		SceneCopies,
 		Fanout,
 		Precompile,

@@ -512,7 +512,7 @@ VS_OUTPUT DCLFPulledVertex(uint index, uint a_instance)
 {
 	const uint64_t sequence = DCLFDrawSequence(a_instance);
 	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
-	DCLFRowStatics(vk::RawBufferLoad<uint4>(sequence + 4));  // the pipeline row's address, the material row's
+	DCLFRowStatics(DCLFSequenceRows(sequence));  // the pipeline row's address, the material row's
 	DCLFDrawVertexLayout = DCLFPipelineVertexLayout();
 	const uint4 vertexBuffer = vk::RawBufferLoad<uint4>(sequence + 24);  // address, size, stride
 	const uint4 streamBuffer = vk::RawBufferLoad<uint4>(sequence + 40);
@@ -3944,7 +3944,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	const uint64_t sequence = DCLFDrawSequence(input.DCLFDrawInstance);
 	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
-	DCLFRowStatics(vk::RawBufferLoad<uint4>(sequence + 4));
+	DCLFRowStatics(DCLFSequenceRows(sequence));
 	DCLFPixelObjectStatics();
 	return DCLFShadePS(input, frontFace);
 }
