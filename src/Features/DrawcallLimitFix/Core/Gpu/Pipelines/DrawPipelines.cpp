@@ -131,14 +131,20 @@ namespace DCLF
 
 		// No vertex buffer arguments: the vertex stages pull their attributes through the buffers' views in the draw's push data
 		// (kDrawPushWords).
+		// Every path needs indirect bindings (the layouts' record-addressed ranges). Device-generated commands with pipeline sets draw the GPU
+		// path's colour classes; without them (Polaris and older AMD, most Intel) every cell draws CPU-driven (CpuPipelineForced), whose
+		// pushed draws bind each key's pipeline themselves.
 		::IndirectCommandsFeatureInfo indirect{};
-		supported = device.QueryFeatureInfo(&indirect.header) == rhi::Result::Ok && indirect.pipelineSets && indirect.indexBufferArguments &&
-		            indirect.indirectBindings && indirect.maxPipelineSetCount >= kMaxPipelines;
+		supported = device.QueryFeatureInfo(&indirect.header) == rhi::Result::Ok && indirect.indirectBindings;
 		if (!supported) {
-			logger::warn("[DCLF] Indirect pipelines unavailable: pipeline sets {}, index buffers {}, indirect bindings {}, up to {} pipelines", indirect.pipelineSets,
-				indirect.indexBufferArguments, indirect.indirectBindings, indirect.maxPipelineSetCount);
+			logger::warn("[DCLF] Indirect pipelines unavailable: indirect bindings {}", indirect.indirectBindings);
 			return false;
 		}
+		deviceGenerated = indirect.pipelineSets && indirect.indexBufferArguments && indirect.maxPipelineSetCount >= kMaxPipelines;
+		if (!deviceGenerated)
+			logger::warn("[DCLF] Device-generated commands unavailable (pipeline sets {}, index buffers {}, up to {} pipelines): every cell draws "
+						 "CPU-driven",
+				indirect.pipelineSets, indirect.indexBufferArguments, indirect.maxPipelineSetCount);
 		// The layouts' push data, the draw's words then the pass's (the frame push; the shadow views', kShadowPushWords, fewer). On descriptor
 		// heaps all of it is pushed, and BasicRHI refuses a layout past the device's maxPushDataSize (the indirect pipelines are then
 		// unavailable, as above). On descriptor buffers BasicRHI pushes 128 B (the base-spec push constant size, on every GPU) and keeps
@@ -146,11 +152,11 @@ namespace DCLF
 		// which the shaders read the same way. Device-generated commands write only pushed bytes: the draw's Constant argument must fit
 		// IndirectCommandsFeatureInfo::constantArgumentBytes, counted from the first range (0: no limit).
 		constexpr std::uint32_t kPushBytes = 4 * (kDrawPushWords + kFramePushWords);
-		if (indirect.constantArgumentBytes && indirect.constantArgumentBytes < 4 * kDrawPushArgumentWords) {
-			logger::warn("[DCLF] Indirect pipelines unavailable: a draw's Constant argument is {} B, and device-generated commands may write {} B of push data",
+		if (deviceGenerated && indirect.constantArgumentBytes && indirect.constantArgumentBytes < 4 * kDrawPushArgumentWords) {
+			logger::warn("[DCLF] Device-generated commands unavailable: a draw's Constant argument is {} B, and they may write {} B of push data; "
+						 "every cell draws CPU-driven",
 				4 * kDrawPushArgumentWords, indirect.constantArgumentBytes);
-			supported = false;
-			return false;
+			deviceGenerated = false;
 		}
 
 		// A draw's push data (kDrawPushWords).
@@ -248,6 +254,16 @@ namespace DCLF
 	bool DrawPipelines::Enabled() const
 	{
 		return impl->Initialize() && impl->supported;
+	}
+
+	bool DrawPipelines::DeviceGenerated() const
+	{
+		return Enabled() && impl->deviceGenerated;
+	}
+
+	bool DrawPipelines::IndirectBindable() const
+	{
+		return impl->deviceGenerated;
 	}
 
 	void DrawPipelines::SetTargetFormats(const TargetFormats& a_formats)

@@ -474,6 +474,13 @@ namespace DCLF
 		static DrawPipelines& Get();
 
 		bool Enabled() const;
+		/**
+		 * @brief Whether the device draws the GPU path's colour classes: device-generated commands with pipeline sets (Enabled with them).
+		 * Without them every cell draws CPU-driven (Draws::CpuPipelineForced); the classes get no execution sets or signatures.
+		 */
+		bool DeviceGenerated() const;
+		/** @brief The lane's builds: whether the main set's pipelines are made indirect-bindable (an execution set holds them). */
+		bool IndirectBindable() const;
 
 		/** @brief Render thread: the native main pass's targets; the lane rebuilds pipelines when they change. */
 		void SetTargetFormats(const TargetFormats& a_formats);

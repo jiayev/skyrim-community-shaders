@@ -716,6 +716,8 @@ void DrawcallLimitFix::DrawSettings()
 			ImGui::Unindent();
 		}
 		ImGui::Text("Now: %s-driven (%s)", DCLF::Draws::CurrentGraphConditions().cpuPipeline ? "CPU" : "GPU", DCLF::Draws::CurrentGraphConditions().interior ? "interior" : "exterior");
+		if (DCLF::Draws::CpuPipelineForced())
+			ImGui::TextWrapped("This GPU or driver has no device-generated commands with pipeline sets: every cell draws CPU-driven.");
 		// The CPU-driven pipeline's options, while it draws some kind of cell.
 		if (toggles.pipelineMode == DCLF::PipelineMode::Auto || toggles.interiorCpu || toggles.exteriorCpu) {
 			ImGui::Indent();

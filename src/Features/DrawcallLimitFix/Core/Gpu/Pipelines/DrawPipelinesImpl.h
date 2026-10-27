@@ -587,6 +587,7 @@ namespace DCLF
 		// The shadow views' plain indirect draw: a DrawSequence's tail as an indexed draw from the index pool (StoreShadowSequence).
 		rhi::CommandSignaturePtr shadowDrawSignature;
 		bool supported = false;
+		bool deviceGenerated = false;  // DrawPipelines::DeviceGenerated: the classes' execution sets and signatures are made
 		bool attempted = false;
 		org::services::PipelineService service;
 		/**

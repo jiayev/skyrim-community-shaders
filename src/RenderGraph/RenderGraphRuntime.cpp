@@ -67,7 +67,9 @@ namespace
 {
 	// Everything BasicRHI's Vulkan backend needs beyond what DXVK enables for itself.
 	// DXVK already requires the rest (timeline semaphores, buffer device address,
-	// descriptor indexing, scalar block layout, dynamic rendering, maintenance5).
+	// descriptor indexing, scalar block layout, dynamic rendering). maintenance5 is optional
+	// (AMD's legacy Polaris driver lacks it): BasicRHI then puts pipeline flags in the legacy
+	// flags (VkChainPipelineCreateFlags).
 	// DXVK enables vulkanMemoryModel, which makes the Device-scope atomics DXC emits
 	// invalid unless vulkanMemoryModelDeviceScope is enabled as well.
 	// Drawcall Limit Fix draws through device-generated commands (optional: without it the graph
@@ -720,8 +722,6 @@ struct RenderGraphRuntime::Impl
 		const auto segmentIndex = static_cast<std::size_t>(frameSegments[a_frameNumber % kSegmentRing].load(std::memory_order_acquire));
 		a_out.segment = segmentIndex;
 		a_out.timestampFrame = frameTimestampFrames[a_frameNumber % kSegmentRing].exchange(0, std::memory_order_acq_rel);
-		if (segmentIndex >= kSegments)
-			return;
 		// Every timestamp pair the frame slot's completion read: the graph's per-frame passes (the shared pool, graphics queue)
 		// and the recordings kept across frames (their own queries, every queue, and their barrier batches).
 		const auto& timestamps = a_stats.GetCompletedTimestamps();
@@ -738,20 +738,23 @@ struct RenderGraphRuntime::Impl
 			logger::info("[ORG] completed frame {}: {} timestamp pairs read back ({} from kept recordings, {} on other queues, {} barrier batches), {:.6f} ms per tick",
 				a_frameNumber, timestamps.size(), replayed, otherQueue, barriers, toMs);
 		}
-		// RequestTimestampDump's: each graphics range of the epoch, in GPU order.
-		if (!timestamps.empty() && timestampDumps.load(std::memory_order_relaxed) > 0 && timestampDumps.fetch_sub(1, std::memory_order_relaxed) > 0) {
+		// RequestTimestampDump's: each graphics range of the epoch, in GPU order; every epoch's, DCLF's or not, and one with none says so.
+		if (timestampDumps.load(std::memory_order_relaxed) > 0 && timestampDumps.fetch_sub(1, std::memory_order_relaxed) > 0) {
 			std::vector<const org::runtime::CompletedTimestamp*> sorted;
 			for (const auto& timestamp : timestamps)
 				if (timestamp.queueKind == rhi::QueueKind::Graphics && timestamp.beginTick)
 					sorted.push_back(&timestamp);
 			std::ranges::sort(sorted, [](auto* a, auto* b) { return a->beginTick < b->beginTick || (a->beginTick == b->beginTick && a->endTick < b->endTick); });
 			const std::uint64_t origin = sorted.empty() ? 0 : sorted.front()->beginTick;
-			logger::info("[TSDUMP] frame {}: {} graphics ranges", a_frameNumber, sorted.size());
+			logger::info("[TSDUMP] frame {} ({}): {} graphics ranges of {} timestamp pairs", a_frameNumber,
+				segmentIndex < kSegments ? SegmentLabel(static_cast<Segment>(segmentIndex)) : "not DCLF's", sorted.size(), timestamps.size());
 			for (const auto* t : sorted)
 				logger::info("[TSDUMP] {:10.2f} {:10.2f} {:8.2f} k{} r{} o{} {}", double(t->beginTick - origin) * toMs * 1000.0,
 					double(t->endTick - origin) * toMs * 1000.0, double(t->endTick - t->beginTick) * toMs * 1000.0, static_cast<int>(t->kind),
 					t->replayed ? 1 : 0, t->occurrence, t->name);
 		}
+		if (segmentIndex >= kSegments)
+			return;
 		if (a_out.timestampFrame) {
 			a_out.ranges.reserve(timestamps.size());
 			for (const auto& timestamp : timestamps) {
@@ -1399,6 +1402,10 @@ bool RenderGraphRuntime::Initialize()
 	}
 
 	state->setTeardownCallback(&Impl::OnDxvkTeardown, nullptr);
+	// CS_ORG_RECORDING_TIMESTAMPS=1: the recordings kept across frames are timed too (the others always are), as a timestamp trace
+	// turns them on (NvPerf timestamps).
+	if (EnvEquals("CS_ORG_RECORDING_TIMESTAMPS", "1"))
+		state->host->SetRecordingTimestamps(true);
 	state->host->SetCompletedFrameCallback([self = state.get()](std::uint64_t a_frameNumber, const org::runtime::IStatisticsService& a_stats) {
 		self->OnCompletedFrame(a_frameNumber, a_stats);
 	});
