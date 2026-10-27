@@ -2444,6 +2444,14 @@ the layout grows (`ReserveMainLatch`). A frame where the sun did not accumulate 
     DCLF's receivers and the engine's receivers' bits pass its strict gates (`dclf-portal-query-batches.md`, "Strict point-light
     gates"; `CS_DCLF_STRICT_LIGHT_CULLS=0` keeps it native). The bookkeeping is done as `BSShadowParabolicLight::Accumulate` does it
     (the light index `+0x160`, the bit `+0x164`, the count).
+-   **Spot lights' empty culls** (`SpotAccumulate`, on `BSShadowFrustumLight::Accumulate`, vtable slot 9, AE `0x14151aa60`). The
+    engine's sets descriptor 0's light index and bit, then `FUN_1414f0920` culls the scene's whole object root through descriptor 0's
+    culling process (mode 3, or 4 portal-strict) and counts the view. With no exclusion to wait for (the spot views' casters are the
+    plain and clamped set's), a spot light is culled empty on any frame the set withholds those casters and that is not a parity
+    frame, its view covered. Its receivers' bits are given where the bound is inside its process's planes (`ShadowCameras::CullPlanes`:
+    the caster volume, else the frustum), as DCLF's receivers test them, and through its strict gates when portal-strict. Window Shadows
+    Ultimate's spots (radii above 100,000 units) culled every object of the cell this way: 1.4-1.6 ms per light a frame in
+    Dragonsreach (two lights), about 0.6 us culled empty; the whole selection then measured 0.17 ms a frame.
 -   **Light entries** (`LightEntryOf`, `Tracked::lightRoot`): an actor's geometry's light entry is its actor's root; any other
     geometry's is its sun entry, unless that is a category node, so entries never nest.
 -   **The lights' bits** (`LocalLightCull::NoteMainRegistration`): for the engine's main passes under a cut entry, DCLF writes a point

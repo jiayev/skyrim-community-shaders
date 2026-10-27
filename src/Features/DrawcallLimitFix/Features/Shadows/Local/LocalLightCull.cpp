@@ -17,6 +17,7 @@
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Features/LocalLights/LightSelection.h"
 #include "Features/DrawcallLimitFix/Features/Portals/StrictGates.h"
 
@@ -146,6 +147,10 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			// context of it (made after its Accumulate, before any main registration).
 			const RE::BSShadowLight* light = nullptr;
 			bool strict = false;
+			// A spot light (BSShadowFrustumLight): its cull tests its culling process's planes (Process2: the caster volume, else the
+			// frustum), not a sphere; the predicted volume, as its cull will test it.
+			bool spot = false;
+			ShadowCameras::Planes volume;
 		};
 		std::array<FrameLight, kMaxLights> frameLights;
 		std::atomic<std::uint32_t> frameLightNext{ 0 };      // the next light's ordinal (from the selection)
@@ -158,11 +163,15 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		constexpr std::size_t kLightPortalStrict = 0x47;    // BSLight::portalStrict: its cull tests the portals' compound frustum
 		bool strictCulls = true;                            // CS_DCLF_STRICT_LIGHT_CULLS: portal-strict lights take the empty culls too
 		std::atomic<bool> frameCullsEmpty{ false };         // the selection's: the exclusion live and not a parity frame
+		std::atomic<bool> frameSpotsEmpty{ false };         // the selection's: the spot views' casters withheld and not a parity frame
+		std::atomic<bool> frameParity{ false };             // the selection's: a parity frame (every light culled natively)
 		std::atomic<std::uint32_t> emptyLights{ 0 };        // the ordinals of the frame's lights culled empty
 		FrameAddressSet mainSeen;                           // the geometries whose first clearing main registration this frame was seen
 		struct EmptyStats
 		{
 			std::atomic<std::uint64_t> lights{ 0 }, notCovered{ 0 }, portalStrict{ 0 }, given{ 0 }, withBits{ 0 }, unstamped{ 0 };
+			// The spot lights' of these: culled empty, with a view not DCLF's, portal-strict kept native.
+			std::atomic<std::uint64_t> spots{ 0 }, spotsNotCovered{ 0 }, spotsStrict{ 0 };
 			std::atomic<std::uint64_t> spheresChecked{ 0 }, spheresDiffer{ 0 };
 			// Portal-strict lights culled empty; their sphere bits tested against their gates, and refused by them; tested without a portal
 			// graph (no rooms: nothing to gate, by design); tested without a context otherwise (not selected, or not walked: given, ungated).
@@ -188,7 +197,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			frameLightBits.store(0, std::memory_order_relaxed);
 			emptyLights.store(0, std::memory_order_relaxed);
 			for (auto& light : frameLights) {
-				light.captured = light.predicted = light.strict = false;
+				light.captured = light.predicted = light.strict = light.spot = false;
 				light.light = nullptr;
 			}
 			// No registration reads it now: the last frame's main registrations ended at its Main::Draw.
@@ -241,6 +250,19 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			const float dy = a_bound.center.y - a_light.centre[1];
 			const float dz = a_bound.center.z - a_light.centre[2];
 			return (std::sqrt(dx * dx + dy * dy + dz * dz) - a_bound.radius) - a_light.radius < 0.0f;
+		}
+
+		/** @brief A bound against a spot light's predicted volume (its process's planes: outside one when dot(n, c) - d < -r). */
+		bool InVolume(const FrameLight& a_light, const RE::NiBound& a_bound)
+		{
+			for (std::uint32_t p = 0; p < 6; ++p) {
+				if (!(a_light.volume.mask & (1u << p)))
+					continue;
+				const auto& plane = a_light.volume.plane[p];
+				if (plane[0] * a_bound.center.x + plane[1] * a_bound.center.y + plane[2] * a_bound.center.z - plane[3] < -a_bound.radius)
+					return false;
+			}
+			return true;
 		}
 
 		/**
@@ -523,6 +545,11 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 				const auto& light = frameLights[std::countr_zero(a_lights)];
 				if (!light.predicted)
 					continue;
+				if (light.spot) {
+					if (InVolume(light, bound) && StrictAdmits(light, a_geometry))
+						bits |= light.bit;
+					continue;
+				}
 				FrameLight sphere;
 				std::memcpy(sphere.centre, light.predictedCentre, sizeof(sphere.centre));
 				sphere.radius = light.predictedRadius;
@@ -554,6 +581,14 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			a_frameLight.predictedCentre[1] = camera->world.translate.y;
 			a_frameLight.predictedCentre[2] = camera->world.translate.z;
 			a_frameLight.predictedRadius = niLight->GetLightRuntimeData().radius.x;
+			// A spot light's cull (FUN_1414f0920): descriptor 0's culling process, set up by its UpdateCamera before this Accumulate.
+			a_frameLight.spot = a_light.GetIsFrustumLight();
+			if (a_frameLight.spot) {
+				const auto* process = static_cast<const RE::NiCullingProcess*>(descriptors[0].cullingProcess);
+				if (!process)
+					return;
+				ShadowCameras::CullPlanes(process, *camera, a_frameLight.volume);
+			}
 			a_frameLight.predicted = true;
 		}
 
@@ -567,17 +602,19 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			auto& descriptors = a_light.GetRuntimeData().shadowmapDescriptors;
 			// Every view of the light DCLF's this frame and its casters the set's (KeepLight covered them, before this Accumulate): nothing
 			// the engine's cull would register is drawn by them.
+			const bool spot = frameLights[a_ordinal].spot;
+			const auto kind = spot ? ShadowViews::Kind::Frustum : ShadowViews::Kind::Parabolic;
 			std::uint32_t views = 0;
 			bool covered = true;
 			for (const auto& view : ShadowViews::Get().All()) {
 				if (view.light != &a_light || view.focus)
 					continue;
 				++views;
-				covered = covered && view.kind == ShadowViews::Kind::Parabolic && view.covered && PassCapture::Get().CastersForBatch(view.batch);
+				covered = covered && view.kind == kind && view.covered && PassCapture::Get().CastersForBatch(view.batch);
 			}
 			auto* accumulator = descriptors.empty() ? nullptr : descriptors[0].shaderAccumulator.get();
 			if (!covered || views < descriptors.size() || !accumulator || !frameLights[a_ordinal].predicted) {
-				emptyStats.notCovered.fetch_add(1, std::memory_order_relaxed);
+				(spot ? emptyStats.spotsNotCovered : emptyStats.notCovered).fetch_add(1, std::memory_order_relaxed);
 				return false;
 			}
 			// Portal-strict: its cull's rooms, shared nodes and room frusta are DCLF's strict gates (Portals/StrictGates.h), on its views'
@@ -585,7 +622,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			// (StrictAdmits). With CS_DCLF_STRICT_LIGHT_CULLS=0 culled as before.
 			if (Engine::At<bool>(&a_light, kLightPortalStrict)) {
 				if (!strictCulls) {
-					emptyStats.portalStrict.fetch_add(1, std::memory_order_relaxed);
+					(spot ? emptyStats.spotsStrict : emptyStats.portalStrict).fetch_add(1, std::memory_order_relaxed);
 					return false;
 				}
 				emptyStats.strictLights.fetch_add(1, std::memory_order_relaxed);
@@ -593,10 +630,39 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			const std::uint32_t count = *a_count;
 			Engine::At<std::uint32_t>(accumulator, kAccumulatorLightIndex) = count + 1;
 			Engine::At<std::uint32_t>(accumulator, kAccumulatorLightBit) = count < 0x1F ? 1u << count : 0u;
-			*a_count = count + (a_light.shadowMapCount == 2 ? 2 : 1);
+			// A spot light's FUN_1414f0920 counts its one view; a point light's Accumulate one per hemisphere.
+			*a_count = count + (!spot && a_light.shadowMapCount == 2 ? 2 : 1);
 			emptyLights.fetch_or(1u << a_ordinal, std::memory_order_relaxed);
-			emptyStats.lights.fetch_add(1, std::memory_order_relaxed);
+			(spot ? emptyStats.spots : emptyStats.lights).fetch_add(1, std::memory_order_relaxed);
 			return true;
+		}
+
+		/** @brief A light's ordinal for its Accumulate (kNoLight: DCLF not running, or past the mask's 32). */
+		std::uint32_t TakeOrdinal()
+		{
+			if (!installed || !ShellState::Running())
+				return kNoLight;
+			const std::uint32_t ordinal = frameLightNext.fetch_add(1, std::memory_order_relaxed);
+			if (ordinal < kMaxLights)
+				return ordinal;
+			bitStats.overflow.fetch_add(1, std::memory_order_relaxed);
+			return kNoLight;
+		}
+
+		/** @brief After a light's Accumulate: the bit its registration ORs into every geometry it reaches (FUN_1414b2140: the accumulator's +0x164). */
+		void NoteLightBit(RE::BSShadowLight& a_light, std::uint32_t a_ordinal)
+		{
+			std::uint32_t bit = 0;
+			for (const auto& descriptor : a_light.GetRuntimeData().shadowmapDescriptors)
+				if (const auto* accumulator = descriptor.shaderAccumulator.get()) {
+					const auto index = Engine::At<std::uint32_t>(accumulator, kAccumulatorLightIndex);
+					if (index != 0 && index != 0xFFFF)
+						bit |= Engine::At<std::uint32_t>(accumulator, kAccumulatorLightBit);
+				}
+			frameLights[a_ordinal].bit = bit;
+			frameLightBits.fetch_or(bit, std::memory_order_relaxed);
+			bitStats.lights.fetch_add(1, std::memory_order_relaxed);
+			lightsReady.store(true, std::memory_order_release);
 		}
 
 		// BSShadowParabolicLight::Accumulate (vtable slot 9, 0x14151b960): the point lights' cull and registration, timed; the
@@ -611,14 +677,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 				QueryPerformanceCounter(&start);
 				// A light DCLF cannot give its bits to (past the mask's 32) culls everything, as does every light while DCLF is switched off
 				// (no selection ran: the frame's exclusion, filter and empty culls are a running frame's).
-				std::uint32_t ordinal = kNoLight;
-				if (installed && ShellState::Running()) {
-					ordinal = frameLightNext.fetch_add(1, std::memory_order_relaxed);
-					if (ordinal >= kMaxLights) {
-						bitStats.overflow.fetch_add(1, std::memory_order_relaxed);
-						ordinal = kNoLight;
-					}
-				}
+				const std::uint32_t ordinal = TakeOrdinal();
 				auto& light = *static_cast<RE::BSShadowLight*>(a_light);
 				if (ordinal != kNoLight) {
 					Predict(light, frameLights[ordinal]);
@@ -654,22 +713,43 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 						emptyStats.spheresChecked.fetch_add(1, std::memory_order_relaxed);
 						emptyStats.spheresDiffer.fetch_add(same ? 0 : 1, std::memory_order_relaxed);
 					}
-					// The bit its registration ORed into every geometry it reached (FUN_1414b2140: the accumulator's +0x164).
-					std::uint32_t bit = 0;
-					for (const auto& descriptor : static_cast<RE::BSShadowLight*>(a_light)->GetRuntimeData().shadowmapDescriptors)
-						if (const auto* accumulator = descriptor.shaderAccumulator.get()) {
-							const auto index = Engine::At<std::uint32_t>(accumulator, kAccumulatorLightIndex);
-							if (index != 0 && index != 0xFFFF)
-								bit |= Engine::At<std::uint32_t>(accumulator, kAccumulatorLightBit);
-						}
-					frameLights[ordinal].bit = bit;
-					frameLightBits.fetch_or(bit, std::memory_order_relaxed);
-					bitStats.lights.fetch_add(1, std::memory_order_relaxed);
-					lightsReady.store(true, std::memory_order_release);
+					NoteLightBit(light, ordinal);
 				}
 				QueryPerformanceCounter(&end);
 				accumulateTicks.fetch_add(end.QuadPart - start.QuadPart, std::memory_order_relaxed);
 				accumulateCalls.fetch_add(1, std::memory_order_relaxed);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		/**
+		 * BSShadowFrustumLight::Accumulate (vtable slot 9, AE 0x14151aa60): descriptor 0's accumulator takes the light's index and bit, then
+		 * FUN_1414f0920 culls the scene's object root through descriptor 0's culling process (mode 3; 4 portal-strict), registers what it
+		 * reaches and counts the view. Culled empty as a point light's is (CullEmpty), its receivers' bits from its process's planes.
+		 */
+		std::atomic<std::int64_t> spotTicks{ 0 };
+		std::atomic<std::uint64_t> spotCalls{ 0 };
+		struct SpotAccumulate
+		{
+			static void thunk(void* a_light, std::uint32_t* a_count, std::uint32_t* a_arg2, RE::NiAVObject* a_arg3)
+			{
+				LARGE_INTEGER start{}, end{};
+				QueryPerformanceCounter(&start);
+				const std::uint32_t ordinal = TakeOrdinal();
+				auto& light = *static_cast<RE::BSShadowLight*>(a_light);
+				if (ordinal != kNoLight) {
+					Predict(light, frameLights[ordinal]);
+					frameLights[ordinal].light = &light;
+					frameLights[ordinal].strict = Engine::At<bool>(&light, kLightPortalStrict);
+				}
+				const bool empty = ordinal != kNoLight && !a_arg3 && frameSpotsEmpty.load(std::memory_order_relaxed) && CullEmpty(light, ordinal, a_count);
+				if (!empty)
+					func(a_light, a_count, a_arg2, a_arg3);
+				if (ordinal != kNoLight)
+					NoteLightBit(light, ordinal);
+				QueryPerformanceCounter(&end);
+				spotTicks.fetch_add(end.QuadPart - start.QuadPart, std::memory_order_relaxed);
+				spotCalls.fetch_add(1, std::memory_order_relaxed);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -703,6 +783,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		if (!timed) {
 			// Timed whether or not the skip is on: the A/B's measure.
 			stl::write_vfunc<0x9, Accumulate>(RE::VTABLE_BSShadowParabolicLight[0]);
+			stl::write_vfunc<0x9, SpotAccumulate>(RE::VTABLE_BSShadowFrustumLight[0]);
 			timed = true;
 		}
 		if (installed)
@@ -778,6 +859,9 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		cullsWhole.store(whole, std::memory_order_relaxed);
 		// The empty culls with the exclusion live (the mode's casters withheld, its candidates current) and not on a parity frame.
 		frameCullsEmpty.store(next && !whole, std::memory_order_relaxed);
+		// The spot lights' need no exclusion (their casters are the plain and clamped set's): every frame those are withheld, but a parity one.
+		frameSpotsEmpty.store(Policy::FilterLightCulls(a_frame) && PassCapture::Get().CastersWithheld(kSetCaster), std::memory_order_relaxed);
+		frameParity.store(!Policy::FilterLightCulls(a_frame), std::memory_order_relaxed);
 		Diagnostics::Notify(Diagnostics::LightCullsSelected{ whole });
 		stats.live += next ? 1 : 0;
 		frameExclusion.store(next.get(), std::memory_order_release);
@@ -805,7 +889,8 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			return;
 		const auto* exclusion = frameExclusion.load(std::memory_order_acquire);
 		const std::uint32_t empty = emptyLights.load(std::memory_order_relaxed);
-		if (!exclusion && !empty)
+		const bool parity = frameParity.load(std::memory_order_relaxed);
+		if (!exclusion && !empty && !parity)
 			return;
 		const auto* property = a_geometry->GetGeometryRuntimeData().shaderProperty.get();
 		void* lightData = property ? Engine::At<void*>(property, Engine::kPropertyLightData) : nullptr;
@@ -814,10 +899,11 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		const bool whole = cullsWhole.load(std::memory_order_relaxed);
 		// The empty culls' lights reached nothing: at a geometry's first clearing main registration of the frame (the later ones read the
 		// cleared mask) it takes the bit of each whose sphere it is in, as their culls' registration would have ORed it. The parity frames
-		// (none culled empty) compute the same over every light, for the observer to compare with the engine's.
+		// (none culled empty) compute the same over every light, for the observer to compare with the engine's, with or without an exclusion
+		// (a frame of spot lights alone has none).
 		bool first = false;
 		std::uint32_t sphereBits = 0;
-		if (empty || whole) {
+		if (empty || whole || parity) {
 			const auto found = mainSeen.Test(a_geometry, true);
 			if (found == FrameAddressSet::Found::kFull)
 				emptyStats.unstamped.fetch_add(1, std::memory_order_relaxed);
@@ -830,8 +916,13 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 				emptyStats.withBits.fetch_add(sphereBits ? 1 : 0, std::memory_order_relaxed);
 			}
 		}
-		if (!exclusion)
+		if (!exclusion) {
+			static constexpr std::array<std::uint32_t, kReachKinds> kNoReach{};
+			if (parity && first)
+				Diagnostics::Notify(Diagnostics::PointLightBits{ a_geometry, ~0u, 0u, kNoReach,
+					Engine::At<std::uint32_t>(lightData, Engine::kLightDataActiveMask) & frameLightBits.load(std::memory_order_relaxed), true, sphereBits });
 			return;
+		}
 		const auto& candidates = *exclusion->candidates;
 		std::uint32_t entry = ~0u;
 		if (const auto it = candidates.geometries.find(a_geometry); it != candidates.geometries.end() && exclusion->excluded[candidates.geometryEntry[it->second]]) {
@@ -891,6 +982,8 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		auto& e = emptyStats;
 		c.emptyLights = e.lights.exchange(0), c.emptyNotCovered = e.notCovered.exchange(0), c.emptyPortalStrict = e.portalStrict.exchange(0);
 		c.emptyGiven = e.given.exchange(0), c.emptyWithBits = e.withBits.exchange(0), c.emptyUnstamped = e.unstamped.exchange(0);
+		c.emptySpots = e.spots.exchange(0), c.spotsNotCovered = e.spotsNotCovered.exchange(0), c.spotsStrict = e.spotsStrict.exchange(0);
+		c.spotCalls = spotCalls.exchange(0), c.spotTicks = spotTicks.exchange(0);
 		c.spheresChecked = e.spheresChecked.exchange(0), c.spheresDiffer = e.spheresDiffer.exchange(0);
 		c.strictLights = e.strictLights.exchange(0), c.strictTested = e.strictTested.exchange(0), c.strictRefused = e.strictRefused.exchange(0);
 		c.strictNoGraph = e.strictNoGraph.exchange(0), c.strictNoContext = e.strictNoContext.exchange(0);

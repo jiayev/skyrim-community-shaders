@@ -295,7 +295,7 @@ namespace DCLF
 				const std::uint32_t seedsIndex = CullBindingIndex(Api::CullBindingSlot::RootSeeds, scene, frameNumber, adopted);
 				const std::uint32_t statesIndex = CullBindingIndex(Api::CullBindingSlot::RootStates, scene, frameNumber, adopted);
 				const auto roots = Extensions::RootListOf(Scene::FrameView::Get().GetTables());
-				// A portal-strict point light's casters pass its strict gates (the frame's atlas and gates; 0: none, nothing gated).
+				// A portal-strict light's casters (point or spot) pass its strict gates (the frame's atlas and gates; 0: none, nothing gated).
 				const std::uint32_t contextsIndex = CullBindingIndex(Api::CullBindingSlot::LightContexts, scene, frameNumber, adopted);
 				const std::uint32_t gatesIndex = CullBindingIndex(Api::CullBindingSlot::StrictGates, scene, frameNumber, adopted);
 				// The sun views' contribution cull's threshold (live: a latch value, read once a commit).

@@ -214,7 +214,10 @@ namespace DCLF::Features::Shadows::Local::LightCulls
 			const auto& reach = a_event.reach;
 			if (a_event.first)
 				CompareSphere(a_event);
+			// A parity frame without an exclusion (no point lights' cut entries): the empty culls' comparison alone.
 			const auto* exclusion = View::FrameExclusion();
+			if (!exclusion)
+				return;
 			const auto& candidates = *exclusion->candidates;
 			if (entry == ~0u) {
 				bool cut = false;
