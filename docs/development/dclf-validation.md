@@ -145,7 +145,7 @@ Each compares a live path with a reference built from scratch and flags every mi
 
 | Switch | Format | Effect |
 | --- | --- | --- |
-| `CS_DCLF_TEST_COMMANDS` | `<frame>:<command>;...` | A console command at a frame. Also `dclf:<toggle name>=0\|1` (a live toggle), `dclf:cull=`, `dclf:pipeline=`, `dclf:cpu-record=` and `dclf:cpu-cadence[-<view>]=` (the toggles that are not flags), `dclf:pov=first\|third`, `dclf:draw=1\|0` (weapons or magic hands drawn or sheathed), `dclf:rebuild` (a graph rebuild), `dclf:compat=0\|1` and `dclf:compat-report` (the compatibility monitor and its report), `dclf:foreign-write=<n>` (an unhooked alpha threshold write on up to n references near the player) and `dclf:kill-scene-pump` (the scene pump stopped for good, for its watchdog). |
+| `CS_DCLF_TEST_COMMANDS` | `<frame>:<command>;...` | A console command at a frame. Also `dclf:<toggle name>=0\|1` (a live toggle), `dclf:cull=`, `dclf:pipeline=`, `dclf:cpu-record=` and `dclf:cpu-cadence[-<view>]=` (the toggles that are not flags), `dclf:pov=first\|third`, `dclf:draw=1\|0` (weapons or magic hands drawn or sheathed), `dclf:rebuild` (a graph rebuild), `dclf:compat=0\|1` and `dclf:compat-report` (the compatibility monitor and its report), `dclf:foreign-write=<n>` (an unhooked alpha threshold write on up to n references near the player) and `dclf:kill-scene-pump` (the scene pump stopped for good, for its watchdog). The run's sequencing (`dclf:wait=`, `dclf:define=`, `dclf:mark=`, `dclf:gpu-window=`, `dclf:nvperf=`, `dclf:feature=`, `dclf:signal=`): [Timing runs](#timing-runs). |
 | `CS_DCLF_TEST_MOVE` | `<start>:<end>:<units per frame>;...` | Carries the player forward. |
 | `CS_DCLF_TEST_TURN` | `<start>:<end>:<degrees per frame>;...` | Turns the player. |
 | `CS_DCLF_TEST_TOGGLE` | `<off frame>:<on frame>...` | Switches DCLF off and on. |
@@ -335,9 +335,8 @@ Under set parity or persistent parity. Each compares DCLF's view, made from the 
 | `<- LIGHT SELECTION` | `[DCLF] light selection (T3b, T3c: ...)`: DCLF's choice of shadow lights and focus hosts against `CalculateActiveShadowCasterLights`' |
 | `<- LIGHT ROOMS` | the light rooms line: `PortalViews::WalkLight`'s rooms against the engine's walk |
 | `<- LOCAL SHADOW VOLUME`, `<- PARABOLIC CULL` | `[DCLF] local shadow volumes (T3b: ...)`; then each point light's paraboloid cull (`kCullParabolic`: sphere, plane, back accumulator) against the static process `FUN_141519d20` set up, when its camera is the light's (AE) |
-| `<- SHADOW MASK RESOLVE` | `[DCLF] target dump: Present N: local shadow mask agreement ...` (`CS_DCLF_TARGET_DUMP` only): texels of a local shadow light's `kSHADOW_MASK` channel the engine lit at opaque-end that DCLF's resolve left dark, past 10% (see "The target dump") |
+| `<- SHADOW MASK RESOLVE` | `[DCLF] target dump: Present N: local shadow mask agreement ...` (`CS_DCLF_TARGET_DUMP` only): texels of a local shadow light's `kSHADOW_MASK` channel the engine lit at opaque-end that are dark after DCLF's colour segment, past 10% (see "The target dump"); DCLF's draws read the mask and leave it as it is |
 | `<- FOCUS VIEW`, `<- FOCUS MEMBERS` | `[DCLF] focus views (T3c: ...)`, `[DCLF] focus members (T3c: ...)` |
-| `<- MASK CHANNEL` | `[DCLF] local shadow masks: ...`: colour commits with a local shadow mask record whose channel (DCLF's selection's mask index) is not the one the engine holds the light in (BSShadowLight +0x520), which Light Limit Fix's light data reads; each record prints its `engine channel` |
 | `<- SHADOW TARGET` | `[DCLF] shadow targets (T3d: ...)`: the predicted depth target and slice against the renderer's at the draw |
 | `<- OCCLUSION VIEW` | `[DCLF] occlusion views (T4: ...)` |
 | `<- PORTAL VIEW` | the portal line: DCLF's occluder states and sets against the engine's |
@@ -665,11 +664,10 @@ written to ...`. Use it to compare a good frame with a corrupt one; Streamline a
     the engine's: that is how the paraboloid views' missing casters were found (the raw maps differed by 20% of their texels).
 -   A frame with both an `opaque-end` and an `after-DCLF-colour` copy of `kSHADOW_MASK` also gets the mask's agreement, in
     `stats.txt` and the log (`[DCLF] target dump: Present N: local shadow mask agreement ...`). The engine draws each light's channel for
-    its registered receivers before the colour segment, and DCLF's resolve then rewrites every texel of the channels it has a record
-    for. Per channel it counts the texels the engine lit (> 0.5) and how many of them DCLF's resolve left dark (< 0.5), and flags
-    `<- SHADOW MASK RESOLVE` past 10%. That caught the resolve reading slice 0 alone: every channel but the one whose light drew into
-    slice 0 came out 0, so those lights went dark wherever the camera's position put them past slice 0. On a DCLF-off frame it
-    compares the engine's mask with itself.
+    each shadow light whole before the colour segment (Main::RenderShadowmasks), and DCLF's colour draws read it and leave it as it is.
+    Per channel it counts the texels the engine lit (> 0.5) and how many of them are dark (< 0.5) after the segment, and flags
+    `<- SHADOW MASK RESOLVE` past 10%. When DCLF still resolved the mask with a compute pass, that caught it reading slice 0 alone.
+    On a DCLF-off frame it compares the engine's mask with itself.
 
 ### The schedule dump and `tools/dclf-schedule-diff.py`
 
@@ -797,6 +795,24 @@ withheld and drawn by nobody. Before reading parity or timing, check in each run
 -   **No parity switches** in a timing run, and the full featureset.
 -   Compare alternating runs, never single runs: two runs of one build differed by more than a step's gain. A live toggle in one
     run (`CS_DCLF_TEST_TOGGLE`) compares DCLF on and off under the same conditions.
+-   **Sequence the run in game, never from outside.** Every step goes in `CS_DCLF_TEST_COMMANDS`; a script that watches the log
+    to swap files or call DevBench races the frames (a reload asked 10 frames after a file swap ran before the swap landed). The
+    list's own steps for this:
+    -   `dclf:wait=<condition>` holds the list until the condition holds, then runs every later command as many frames later as it
+        held ("test wait '...' held frames A-B"), so the gaps after it are frames of the outcome: `reload` (the last
+        `dclf:reload-shaders` finished and its rebuilt pipelines swapped in; one takes ~20 s), `settled` (the frames draw under the
+        requested toggles on the pipeline they choose; at once with the feature off), `nvperf` (the last `dclf:nvperf` capture
+        done) and `signal:<name>` (a remote client's `dclf:signal=<name>`).
+    -   `dclf:define=<NAME>[=<value>],...` adds defines to every DCLF stage compiled from then on (empty: none). With
+        `dclf:reload-shaders=<file>` and `dclf:wait=reload` after it, a shader A/B is an `#if` in the source compared in one launch.
+    -   `dclf:mark=<label>` marks a phase's boundary in the log; `dclf:gpu-window=<label>` makes the GPU event timers
+        (`CS_GPU_EVENT_TIMERS`, with an interval too large to reach) log the frames from there to the next window as one block,
+        frames in flight included ("[GpuEvents] window '<label>'"; `-` is not logged).
+    -   `dclf:nvperf=<range>|<range>...[#<samples>]` starts an NvPerf capture at that frame.
+    -   `dclf:feature=0|1` switches the feature, in the list's frames (`CS_DCLF_TEST_TOGGLE` counts its own and does not shift).
+
+    DevBench's `communityshaders.dclf` replies with the list's progress (`harness`: frame, shift, next command and its frame, the
+    condition it holds on), with or without a command, so a client follows the run by it rather than by the log.
 
 ### The Vulkan validation layer
 

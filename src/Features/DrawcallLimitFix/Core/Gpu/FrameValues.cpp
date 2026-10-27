@@ -2289,7 +2289,7 @@ namespace DCLF
 		MakeRegistered();
 		const std::size_t count = registeredMade.load(std::memory_order_relaxed);
 		a_job.registered.resize(count);
-		const Api::FrameValuePoolKick kick{ a_job.seq, a_globals };
+		const Api::FrameValuePoolKick kick{ a_job.seq, a_globals, a_job.shadingSlots };
 		for (std::size_t i = 0; i < count; ++i) {
 			auto input = registered[i].entry->kick(kick);
 			a_job.registered[i].input = std::move(input.input);

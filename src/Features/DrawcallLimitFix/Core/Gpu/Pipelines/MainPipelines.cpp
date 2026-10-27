@@ -98,8 +98,8 @@ namespace DCLF
 
 	inline namespace DrawPipelinesDetail
 	{
-		// The main pass: pass-wide blocks by push address, b0/b1/b2/b4 by the draw's pushed addresses (its sequence's, DrawSequence),
-		// the rest from the frame record.
+		// The main pass: pass-wide blocks by their uniform buffer views (FrameBlockViews, the frame record's frameBlocks), b0/b1/b2/b4 by
+		// the draw's pushed addresses (its sequence's, DrawSequence), the rest from the frame record.
 		std::vector<rhi::LayoutBindingRange> MainLayoutRanges(bool a_pulled)
 		{
 			// A pulled draw (Z-prepass plain draws) reads its rows itself (DCLF_PULLED): no row ranges.
@@ -119,7 +119,7 @@ namespace DCLF
 				}
 			};
 			std::vector<rhi::LayoutBindingRange> mainRanges;
-			std::uint32_t word = kFramePushRegisters;
+			std::uint32_t block = 0;  // ForEachFrameBlock's ordinal
 			for (const bool pixel : { false, true }) {
 				const std::uint32_t mask = pixel ? kFramePushPS : kFramePushVS;
 				const auto stage = pixel ? rhi::ShaderStage::Pixel : rhi::ShaderStage::Vertex;
@@ -128,8 +128,10 @@ namespace DCLF
 					const std::uint32_t b = kBindingShiftB + r;
 					const auto address = rhi::LayoutRangeSource::IndirectAddress;
 					if ((mask >> r) & 1) {
-						mainRanges.push_back(PushedRange(b, stage, 1, word));
-						word += 2;
+						// A heap descriptor, not the pushed address (FramePushWords, which the push data still holds): the descriptor-buffer
+						// model lowers an address-sourced block to raw pointer loads (kFrameBlocks).
+						mainRanges.push_back(FromFrameRecord(LayoutRange(b, 1, stage, rhi::LayoutRangeSource::IndirectIndex,
+							offsetof(DrawBindings, frameBlocks) + 4 * std::size_t{ block++ })));
 					} else if (r <= 2 || r == 4) {
 						if (!a_pulled)
 							mainRanges.push_back(PushedRange(b, stage, 0, rowBlockWord(r, pixel)));
@@ -841,8 +843,14 @@ namespace DCLF
 		}
 		state.plainColour.reserve(version->pipelines.size());
 		state.plainDepth.reserve(version->pipelines.size());
+		state.colour.reserve(version->pipelines.size());
+		state.depth.reserve(version->pipelines.size());
 		for (const auto& payload : version->pipelines) {
 			const auto* built = static_cast<const DrawPipelines::Impl::Built*>(payload.get());
+			const auto& colour = built->pipelines[kColorVariant];
+			state.colour.push_back(colour ? colour->GetHandle() : decltype(colour->GetHandle()){});
+			const auto& depth = built->pipelines[kDepthVariant];
+			state.depth.push_back(depth ? depth->GetHandle() : decltype(depth->GetHandle()){});
 			const auto& pulledColour = built->pulledColour;
 			state.plainColour.push_back(pulledColour ? pulledColour->GetHandle() : decltype(pulledColour->GetHandle()){});
 			const auto& pulledDepth = built->pulledDecalDepth ? built->pulledDecalDepth : built->pulledDepth;

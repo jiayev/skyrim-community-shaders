@@ -45,6 +45,7 @@ namespace DCLF
 namespace DCLF::Draws
 {
 	struct ViewResources;  // Epochs/ViewEpoch.h
+	class FrameBlockViews;  // Resources/FrameSlots.h
 	struct ShadowResources;  // Shadow/ShadowFrame.h
 
 	/**
@@ -122,6 +123,8 @@ namespace DCLF::Draws
 		// Targets declared for the latched copies (LatchedCopiesPass); anything else is staged.
 		std::atomic<std::shared_ptr<const std::vector<const void*>>> latchedTargets;  // LatchedTarget::key
 		std::uint64_t frameConstantsAddress = 0;
+		// Its pass-wide blocks' uniform buffer views, which its frame record names (FrameRecordOf).
+		std::shared_ptr<const FrameBlockViews> frameBlocks;
 		// The zeroed StrictLightData every bindless draw's b3 reads: constant, staged once by the first commit.
 		bool sharedLightZeroed = false;
 		// The main pass's imported targets and depth.
@@ -133,11 +136,8 @@ namespace DCLF::Draws
 		// The engine's refraction normals (kREFRACTION_NORMALS), for RefractionDrawPass. Null without the target.
 		std::shared_ptr<org::ExternalTextureResource> refractionNormals;
 		DXGI_FORMAT refractionFormat = DXGI_FORMAT_UNKNOWN;
-		// The engine's screen-space shadow mask (kSHADOW_MASK, made UAV-capable by Community Shaders' creation hook), into which
-		// LocalShadowMaskCS resolves the local shadow lights' channels for DCLF's receivers, and that program. Null without either.
+		// The engine's screen-space shadow mask (kSHADOW_MASK), which the colour draws read; null without it.
 		std::shared_ptr<org::ExternalTextureResource> shadowMask;
-		std::uint32_t shadowMaskWidth = 0, shadowMaskHeight = 0;
-		std::shared_ptr<const ComputeProgram> localShadowMasks;
 		// The shadow engine's resources (their shadow map imports, which the masks sample), once both exist (Impl::ShadowResourcesMade).
 		std::shared_ptr<ShadowResources> shadow;
 		Versioned visibility;  // per-object verdict, published by the depth segment

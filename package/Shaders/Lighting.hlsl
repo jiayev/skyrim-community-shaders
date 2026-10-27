@@ -936,43 +936,18 @@ cbuffer DCLFFrameLighting : register(b13)
 #endif  // DCLF_BINDLESS
 
 #if defined(DCLF_BINDLESS)
-// The fade node's LOD metric under the frame's camera (FUN_14147b110's +0x144): the distance to its bound centre, scaled by
-// lodAdjust over its LOD type's divisor (the default scale when that is not positive), times the metric scale.
-float DCLFLodMetric(float3 a_node, uint a_type)
-{
-	if (DCLFLodFadeMetric.w != 0)
-		return DCLFLodFadeMetric.z;
-	const float divisor = DCLFLodFadeDivisors[a_type >> 2][a_type & 3];
-	const float scale = divisor > 0 ? DCLFLodFadeEye.w / divisor : DCLFLodFadeMetric.y;
-	return length(a_node - DCLFLodFadeEye.xyz) * scale * DCLFLodFadeMetric.x;
-}
-// GetRenderPasses' fade at a metric (FUN_14147c470): 1 up to the start, 0 past the end, where the engine drops the feature.
-float DCLFLodFadeAt(float a_metric, float a_start, float a_end)
-{
-	if (a_end < a_metric)
-		return 0;
-	if (a_metric <= a_start)
-		return 1;
-	return saturate((a_metric - a_end) / (a_start - a_end));
-}
-#	define DCLF_PS_LOD_FADES (DCLFLodFadeState.x != 0 ? DCLFLodFadeFlagsOf(DCLFObjectIndex) : 0)
-#	define DCLF_PS_LOD_METRIC (DCLFLodFades ? DCLFLodMetric(DCLFPlacements[DCLFObjectIndex].LodFadeNode.xyz, DCLFLodFades & 0xF) : 0)
-#	define DCLF_PS_SPECULAR_LOD_FADE DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.x, DCLFLodFadeThresholds.y)
-// FadeStateCS's rows and DCLFAlphaFade: Common/DCLFObjects.hlsli (the Effect shader's draws read them too).
+// The object's pixel-stage values are its row of the frame's DCLFPixelObjects (Common/DCLFObjects.hlsli, DCLFPixelObjectRow), written
+// once a frame (Features/Fades' PixelRowsCS) rather than computed per pixel from its records, LOD fade and fade root: they are the
+// draw's. A LOD cross-fade's copy (the object word's bit 30) takes the row's copy alpha.
 #	define DCLF_PS_CROSSFADE_COPY ((DCLFObjectWord & 0x40000000u) != 0)
-#	define DCLF_PS_MATERIAL_DATA float4(                                                                                                                 \
-		(DCLFLodFades & (1u << 5)) ? DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.z, DCLFLodFadeThresholds.w) : DCLFShading[DCLFObjectIndex].MaterialData.x, \
-		(DCLFLodFades & (1u << 4)) ? DCLFSpecularLodFade : DCLFShading[DCLFObjectIndex].MaterialData.y,                                                             \
-		DCLFShading[DCLFObjectIndex].MaterialData.z * DCLFAlphaFade(DCLFObjectIndex, DCLF_PS_CROSSFADE_COPY),                                                     \
-		DCLFShading[DCLFObjectIndex].MaterialData.w)
-// Only the w of SSRParams is per-object; x, y and z stay in the per-pipeline buffer above.
-#	define DCLF_PS_SSR_SPECULAR ((DCLFLodFades & (1u << 4)) ? ((DCLFLodFades & (1u << 6)) ? DCLFSpecularLodFade : 0) : DCLFShading[DCLFObjectIndex].EmitColor.w)
+#	define DCLF_PIXEL_ROW DCLFPixelObjects[DCLFObjectIndex]
+float4 DCLFPixelMaterialData(DCLFPixelObjectRow a_row)
+{
+	return float4(a_row.MaterialData.xy, DCLF_PS_CROSSFADE_COPY ? a_row.CopyAlpha : a_row.MaterialData.z, a_row.MaterialData.w);
+}
 // ProjectedUV's three pixel parameters are per object too (the property's, plus two globals).
 #	if defined(DCLF_PULLED)
 // A pulled draw's object word is its vertex stage's, which main reads first: these are assigned there (DCLFPixelObjectStatics).
-static uint DCLFLodFades;
-static float DCLFLodMetricValue;
-static float DCLFSpecularLodFade;
 static float4 MaterialData;
 static float3 EmitColor;
 static float DCLFSSRSpecular;
@@ -980,12 +955,10 @@ static float4 ProjectedUVParams;
 static float4 ProjectedUVParams2;
 static float4 ProjectedUVParams3;
 #	else
-static const uint DCLFLodFades = DCLF_PS_LOD_FADES;
-static const float DCLFLodMetricValue = DCLF_PS_LOD_METRIC;
-static const float DCLFSpecularLodFade = DCLF_PS_SPECULAR_LOD_FADE;
-static float4 MaterialData = DCLF_PS_MATERIAL_DATA;
-static float3 EmitColor = DCLFShading[DCLFObjectIndex].EmitColor.xyz;
-static float DCLFSSRSpecular = DCLF_PS_SSR_SPECULAR;
+static const DCLFPixelObjectRow DCLFPixelRow = DCLF_PIXEL_ROW;
+static float4 MaterialData = DCLFPixelMaterialData(DCLFPixelRow);
+static float3 EmitColor = DCLFPixelRow.EmitColorSSR.xyz;
+static float DCLFSSRSpecular = DCLFPixelRow.EmitColorSSR.w;
 static float4 ProjectedUVParams = DCLFExtras[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 4];
 static float4 ProjectedUVParams2 = DCLFExtras[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 5];
 static float4 ProjectedUVParams3 = DCLFExtrasProjectedGlobals;
@@ -1001,7 +974,7 @@ static float4 ProjectedUVParams3 = DCLFExtrasProjectedGlobals;
 #	if defined(DCLF_PULLED)
 static float AlphaTestRefRS;  // DCLFPixelObjectStatics
 #	else
-static const float AlphaTestRefRS = DCLFObjects[DCLFObjectIndex].AlphaTestRef;
+static const float AlphaTestRefRS = DCLFPixelRow.AlphaTestRef;
 #	endif
 #else
 cbuffer AlphaTestRefBuffer : register(b11)
@@ -3921,18 +3894,16 @@ void DCLFRowStatics(uint4 a_rows)
 void DCLFPixelObjectStatics()
 {
 #		if defined(DCLF_BINDLESS)
-	DCLFLodFades = DCLF_PS_LOD_FADES;
-	DCLFLodMetricValue = DCLF_PS_LOD_METRIC;
-	DCLFSpecularLodFade = DCLF_PS_SPECULAR_LOD_FADE;
-	MaterialData = DCLF_PS_MATERIAL_DATA;
-	EmitColor = DCLFShading[DCLFObjectIndex].EmitColor.xyz;
-	DCLFSSRSpecular = DCLF_PS_SSR_SPECULAR;
+	const DCLFPixelObjectRow row = DCLF_PIXEL_ROW;
+	MaterialData = DCLFPixelMaterialData(row);
+	EmitColor = row.EmitColorSSR.xyz;
+	DCLFSSRSpecular = row.EmitColorSSR.w;
 	ProjectedUVParams = DCLFExtras[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 4];
 	ProjectedUVParams2 = DCLFExtras[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 5];
 	ProjectedUVParams3 = DCLFExtrasProjectedGlobals;
-#		endif
-#		if defined(DCLF_BINDLESS_DRAW)
-	AlphaTestRefRS = DCLFObjects[DCLFObjectIndex].AlphaTestRef;
+#			if defined(DCLF_BINDLESS_DRAW)
+	AlphaTestRefRS = row.AlphaTestRef;
+#			endif
 #		endif
 }
 

@@ -195,13 +195,6 @@ namespace DCLF::Engine
 		inline constexpr Offset kMetricScale{ { 252903 }, { 302862 } };  // float: the fade metric scale
 		inline constexpr Offset kScreenDoorFades{ { 391102 }, { 513330 } };  // byte: screen-door fades are on
 		inline constexpr Offset kNoSunShadowDir{ { 390962 }, { 513222 } };  // byte: GetRenderPasses gives no pass ShadowDir
-		// A local shadow light's mask constants (BSUtilityShader: FUN_1414fbd30, SetupGeometry, SetupTechnique for the mask techniques).
-		inline constexpr Offset kShadowBiasFactor{ { 255329 }, { 305660 } };  // float: AlphaTestRef.y = shadowBiasScale * this * kShadowBiasScale
-		inline constexpr Offset kShadowBiasScale{ { 415265 }, { 528317 } };  // float
-		inline constexpr Offset kShadowFadeDistance{ { 208217 }, { 262344 } };  // float: ShadowLightParam.z (the mask's fade distance squared)
-		inline constexpr Offset kShadowFadeDistanceLod{ { 415264 }, { 528316 } };  // float: ShadowLightParam.z for a light with lodFade (+0x63)
-		inline constexpr Offset kShadowFilterRadius{ { 391759 }, { 513773 } };  // float: ShadowSampleParam.z = this / kShadowMapResolution
-		inline constexpr Offset kShadowMapResolution{ { 415268 }, { 528318 } };  // uint
 		inline constexpr Offset kTreeOnVisible{ { 105604 }, { 98953 } };  // BSTreeNode::OnVisible (the height test, BSLeafAnimNode's, the LOD fix-up)
 		inline constexpr Offset kFadeUpdate{ { 105486 }, { 98849 } };  // FUN_14147a160(node, fadeAmount, camera): BSFadeNode's fade state machine
 		inline constexpr Offset kLodLevelUpdate{ { 105487 }, { 98850 } };  // FUN_14147a430(node, level): the leaf and tree LOD transition (+0x152)

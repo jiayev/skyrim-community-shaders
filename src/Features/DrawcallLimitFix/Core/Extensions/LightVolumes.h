@@ -23,16 +23,13 @@ namespace DCLF::Api
 	class LightVolumeSink
 	{
 	public:
-		LightVolumeSink(std::vector<Draws::GpuShadowVolume>& a_out, std::vector<LightShadowMask>& a_masks) :
-			out(a_out), masks(a_masks) {}
+		explicit LightVolumeSink(std::vector<Draws::GpuShadowVolume>& a_out) :
+			out(a_out) {}
 
 		void Put(const LightVolume& a_volume);
-		/** @brief A light's mask (one per light; a second of the same channel is dropped by the latch). */
-		void PutMask(const LightShadowMask& a_mask) { masks.push_back(a_mask); }
 
 	private:
 		std::vector<Draws::GpuShadowVolume>& out;
-		std::vector<LightShadowMask>& masks;
 	};
 }
 

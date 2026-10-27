@@ -75,25 +75,50 @@ namespace DCLF::Draws
 		/**
 		 * @brief The latched copies a_source names, as LatchedCopiesPass records them: the epoch's own lists, then each hosted shape's
 		 * (none in a recording without that view's work), each copy from frame slot a_frameSlot's latch region (a fixed list's one) to
-		 * the buffer a_target resolves its target to (a null handle: a target not declared, skipped).
+		 * the buffer a_target resolves its target to (a null handle: a target not declared, skipped). a_withZeros false: the fixed lists
+		 * (the zeroed draw and bucket counts) are left out.
 		 */
 		template <class TargetOf>
-		void CopyLatchedLists(rhi::CommandList& a_commands, const LatchedSource& a_source, std::uint32_t a_frameSlot, const TargetOf& a_target)
+		void CopyLatchedLists(rhi::CommandList& a_commands, const LatchedSource& a_source, std::uint32_t a_frameSlot, const TargetOf& a_target,
+			bool a_withZeros = true)
 		{
+			// A copy continuing the one before it (the same latch and target, both ranges adjacent) joins it: the copies are one command.
+			struct Run
+			{
+				rhi::ResourceHandle target, latch;
+				std::uint64_t dst = 0, src = 0, bytes = 0;
+			} run;
+			constexpr rhi::HandleEqual<rhi::ResourceHandle> same{};
+			auto flush = [&] {
+				if (!run.bytes)
+					return;
+				a_commands.CopyBufferRegion(run.target, run.dst, run.latch, run.src, run.bytes);
+				run.bytes = 0;
+			};
 			auto copyLists = [&](std::span<const LatchedList> a_lists) {
 				for (const auto& list : a_lists) {
-					if (!list.latch)
+					if (!list.latch || (list.fixed && !a_withZeros))
 						continue;
 					const auto latch = list.latch->Resource()->GetAPIResource().GetHandle();
 					const std::uint64_t region = list.fixed ? 0 : list.latch->Offset(a_frameSlot);
-					for (const auto& copy : list.copies)
-						if (const auto target = a_target(copy.target); target.valid())
-							a_commands.CopyBufferRegion(target, copy.dstOffset, latch, region + copy.latchOffset, copy.bytes);
+					for (const auto& copy : list.copies) {
+						const auto target = a_target(copy.target);
+						if (!target.valid())
+							continue;
+						const std::uint64_t src = region + copy.latchOffset;
+						if (run.bytes && same(run.target, target) && same(run.latch, latch) && run.dst + run.bytes == copy.dstOffset && run.src + run.bytes == src) {
+							run.bytes += copy.bytes;
+							continue;
+						}
+						flush();
+						run = { target, latch, copy.dstOffset, src, copy.bytes };
+					}
 				}
 			};
 			copyLists(a_source.lists);
 			for (const auto& hosted : a_source.hosted)
 				copyLists(hosted.lists);
+			flush();
 		}
 
 		struct LatchedCopiesBindings
@@ -184,13 +209,16 @@ namespace DCLF::Draws
 		for (const auto& target : a_targets)
 			if (auto buffer = target.versioned ? a_pass.Version(target.versioned) : target.buffer)
 				targets.emplace_back(target.Key(), std::move(buffer));
+		// The zeroed counts are the GPU culls' (BuildDraws' draw and bucket counts, the indirect draws' arguments): the CPU pipeline's
+		// sites draw their own lists, and nothing in a CPU frame writes or reads them. Each copy is a copy engine command the queue waits
+		// on, so they are left out.
 		a_out.Add([source = std::move(a_source), targets = std::move(targets), slot = a_pass.frameSlot](rhi::CommandList& a_commands) {
 			if (LatchedRecordCut())
 				return;
 			CopyLatchedLists(a_commands, source, slot, [&](const void* a_key) {
 				const auto target = std::find_if(targets.begin(), targets.end(), [&](const auto& a_target) { return a_target.first == a_key; });
 				return target != targets.end() ? target->second->GetAPIResource().GetHandle() : rhi::ResourceHandle{};
-			});
+			}, false);
 		});
 	}
 

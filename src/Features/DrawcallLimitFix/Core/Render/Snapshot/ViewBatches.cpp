@@ -68,6 +68,7 @@ namespace DCLF::Draws
 		set->pipelineRowsBase = rows.pipelineRows;
 		set->materialRowsBase = rows.materialRows;
 		set->shadowRowsBase = rows.shadowRows;
+		FillAnimatedRows(*set, a_in);
 		auto& scratch = BuilderScratch();
 		for (auto& lanes : scratch.lanes)
 			lanes.clear();
@@ -273,6 +274,8 @@ namespace DCLF::Draws
 			if (!building) {
 				auto sequences = std::make_shared<std::vector<DrawSequence>>();
 				building = MakeViewBatches(a_in, spheres.get(), *sequences);
+				if (building)
+					building->ownSequences = sequences;
 				const auto* view = sequences.get();
 				upload = {};
 				upload.total = view->size();

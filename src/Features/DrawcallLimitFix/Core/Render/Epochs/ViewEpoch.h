@@ -45,6 +45,8 @@ namespace DCLF
 
 namespace DCLF::Draws
 {
+	class FrameBlockViews;  // Resources/FrameSlots.h
+
 	/*
 	 * The views (ViewEpoch.cpp and ViewEpochRecord.cpp, with their captures in Features/Reflection and Features/FirstPerson): epochs that
 	 * cull the frame's scene list through BuildDraws' bucket path, frustum only, for faces with a camera of their own, and draw the
@@ -201,6 +203,7 @@ namespace DCLF::Draws
 		// commit from this frame's sources. Null for a view drawing with the main resources' (first person's).
 		std::shared_ptr<org::Buffer> frameConstants;
 		std::uint64_t frameConstantsAddress = 0;
+		std::shared_ptr<const FrameBlockViews> frameBlocks;  // its pass-wide blocks' views (FrameBlockViews), which its record names
 		bool sharedLightZeroed = false;
 		// With them, its copies of the main pass's frame buffers (Resources::frameBuffers' shape: Deferred's sun cascades at t98), which its
 		// commit fills from each buffer's CPU mirror (this frame's contents) and names at their registers. Made by SetupView, made again by

@@ -1056,8 +1056,7 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// kSHADOW_MASK needs UAV bind: Drawcall Limit Fix resolves the local shadow lights' channels into it for the receivers it draws
-	// (LocalShadowMaskCS), whose masks the engine never draws (it draws a local light's mask per registered receiver).
+	// kSHADOW_MASK: Community Shaders' render target modifications (ModifyRenderTarget: UAV bind).
 	struct CreateRenderTarget_ShadowMask
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)

@@ -257,6 +257,11 @@ namespace DCLF
 
 		/** @brief Any thread: the sources generation (PipelineRegistry::SourcesGeneration) the next stage is compiled for. */
 		static std::uint64_t CurrentSourcesGeneration();
+		/**
+		 * @brief Any thread: extra defines for every DCLF stage compiled from now on ("NAME[=value],...", empty: none), for shader A/Bs in
+		 * one launch (CS_DCLF_TEST_COMMANDS' dclf:define, then dclf:reload-shaders). The compiler's cache key hashes the defines.
+		 */
+		static void SetTestDefines(std::string_view a_defines);
 		/** @brief The shader file a shader's programs are compiled from ("Data/Shaders/Lighting.hlsl"), for PipelineRegistry. */
 		static std::string SourcePathOf(const RE::BSShader& a_shader);
 

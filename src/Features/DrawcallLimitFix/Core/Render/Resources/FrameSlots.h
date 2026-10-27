@@ -124,30 +124,66 @@ namespace DCLF::Draws
 		return ~0u;
 	}
 
+	/** @brief A pass-wide block's offset in the frame constants: its frame slot, the shared light block at PS b3, the frame lighting at PS b13. */
+	constexpr std::uint64_t FrameBlockOffset(bool a_pixel, std::uint32_t a_register)
+	{
+		if (a_pixel && a_register == 3)
+			return std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes;
+		if (a_pixel && a_register == kFrameLightingRegister)
+			return std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes;
+		return FrameSlotOffset(a_pixel, a_register);
+	}
+
+	/** @brief Calls a_visit(pixel, register, block) for each pass-wide block, in the frame push words' order (block: its ordinal). */
+	template <class F>
+	void ForEachFrameBlock(F&& a_visit)
+	{
+		std::uint32_t block = 0;
+		for (const bool pixel : { false, true }) {
+			const std::uint32_t mask = pixel ? kFramePushPS : kFramePushVS;
+			for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r)
+				if ((mask >> r) & 1)
+					a_visit(pixel, r, block++);
+		}
+	}
+
 	inline std::array<std::uint32_t, kFramePushWords> FramePushWords(std::uint64_t a_frameConstants)
 	{
 		std::array<std::uint32_t, kFramePushWords> words{};
-		std::uint32_t word = kFramePushRegisters;
-		for (const bool pixel : { false, true }) {
-			const std::uint32_t mask = pixel ? kFramePushPS : kFramePushVS;
-			for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
-				if (!((mask >> r) & 1))
-					continue;
-				// The frame slot, the shared light block at PS b3 and the frame lighting at PS b13 (kFrameLightingRegister).
-				std::uint64_t address = a_frameConstants + FrameSlotOffset(pixel, r);
-				if (pixel && r == 3)
-					address = a_frameConstants + std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes;
-				else if (pixel && r == kFrameLightingRegister)
-					address = a_frameConstants + std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes;
-				words[word++] = static_cast<std::uint32_t>(address);
-				words[word++] = static_cast<std::uint32_t>(address >> 32);
-			}
-		}
+		ForEachFrameBlock([&](bool a_pixel, std::uint32_t a_register, std::uint32_t a_block) {
+			const std::uint64_t address = a_frameConstants + FrameBlockOffset(a_pixel, a_register);
+			words[kFramePushRegisters + 2 * a_block] = static_cast<std::uint32_t>(address);
+			words[kFramePushRegisters + 2 * a_block + 1] = static_cast<std::uint32_t>(address >> 32);
+		});
 		const std::uint64_t record = a_frameConstants + std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes;
 		words[kFramePushRecord] = static_cast<std::uint32_t>(record);
 		words[kFramePushRecord + 1] = static_cast<std::uint32_t>(record >> 32);
 		return words;
 	}
+
+	/**
+	 * @brief The pass-wide blocks' uniform buffer views of one frame constants buffer (kFrameBlocks, ForEachFrameBlock's order): slots of
+	 * ORG's shader-visible heap, made with the buffer and retired with it as their owner (released once the GPU is past every use). A
+	 * frame record names them (DrawBindings::frameBlocks, FrameRecordOf); the main layout reads each block through its view.
+	 */
+	class FrameBlockViews
+	{
+	public:
+		/** @brief Render thread, with the buffer: null (logged) when a slot or view cannot be made. */
+		static std::shared_ptr<const FrameBlockViews> Create(rhi::Device a_device, const std::shared_ptr<org::Buffer>& a_frameConstants);
+		FrameBlockViews() = default;
+		FrameBlockViews(const FrameBlockViews&) = delete;
+		FrameBlockViews& operator=(const FrameBlockViews&) = delete;
+		~FrameBlockViews();
+
+		std::array<std::uint32_t, kFrameBlocks> indices{};
+
+	private:
+		std::array<rhi::DescriptorSlot, kFrameBlocks> slots{};
+		std::uint32_t made = 0;
+		std::shared_ptr<org::runtime::IDescriptorService> service;
+		std::shared_ptr<org::Buffer> buffer;
+	};
 
 	// The blocks the render thread packs into the frame slots for one epoch.
 	struct FrameBlocks

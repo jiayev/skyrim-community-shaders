@@ -15,7 +15,7 @@
 //   fade portals' queries, batches and evaluations, the builds, fades.state, the HZB, phase 2, the forward sort, the visibility
 //   events, their readback and fades.events (the CPU's: Cull.cpp, the CPU fade stage), nor the tree LOD and grass counts' readbacks
 //   (report counters of the GPU cull's phases).
-// - main.colour (opaque.after): core.latched-copies, core.local-shadow-masks. Not the build, the sorts, the forward sort.
+// - main.colour (opaque.after): core.latched-copies. Not the build, the sorts, the forward sort.
 // - forward (blended.draw) and fp.colour (fp.colour-render): none (draws only; their shapes' latched copies are main.colour's and
 //   main.depth's).
 //

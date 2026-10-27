@@ -125,6 +125,9 @@ namespace DCLF
 			{ Profile, "CS_DCLF_PROFILE", D, N, false, "1: scene-phase timings in the report" },
 			{ ShaderDebug, "CS_DCLF_SHADER_DEBUG", D, N, false, "default on: SPIR-V with debug info, and the HLSL sources copied beside the log; 0: without" },
 			{ ShaderSourceDir, "CS_DCLF_SHADER_SOURCE_DIR", D, N, false, "where CS_DCLF_SHADER_DEBUG copies the HLSL sources" },
+			{ StageDump, "CS_DCLF_STAGE_DUMP", D, N, false,
+				"<dir>: every DCLF stage request's compile inputs, the Lighting programs' descriptor pairs and the pulled rewrite's options, as JSON "
+				"lines in <dir>/stages.jsonl, for tools/shader-compare" },
 			{ TraceTexturePaths, "CS_DCLF_TRACE_TEXTURE_PATHS", D, N, false, "set: texture identities are logged with their paths" },
 			// (Features/TreeLod's CS_DCLF_TREE_LOD_AUDIT is listed here, after CS_DCLF_TRACE_TEXTURE_PATHS.)
 			{ Census, "CS_DCLF_CENSUS", D, N, false,

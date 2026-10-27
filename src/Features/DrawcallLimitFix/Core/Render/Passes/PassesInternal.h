@@ -15,8 +15,6 @@ namespace DCLF::Draws
 	// VisibilityEvents.cpp: the visibility events.
 	std::shared_ptr<org::RenderPass> MakeVisibilityEventsPass(std::shared_ptr<Resources> a_resources);
 
-	// LocalShadowMasks.cpp: the local shadow masks' CPU-mode work (Api::PassDef::direct: core.local-shadow-masks).
-	void DirectLocalShadowMasks(const Api::DirectPass& a_pass, Api::DirectWork& a_out);
 
 	// MainExtension.cpp: the buffers a main commit may latch into (LatchedUploads); its latched copies declare them.
 	std::vector<LatchedTarget> MainLatchedTargets(const Resources& a_resources);

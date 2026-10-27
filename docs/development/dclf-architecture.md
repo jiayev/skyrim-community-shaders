@@ -1654,6 +1654,11 @@ pass, so it was not kept.
     corrected by its fused remainder), exact for all 256 values, as the native draws' input assembler converts them; `x / 255.0` is
     an ulp off on 126 inputs and striped foliage. The shadow views' pulled Utility stages use the same decode.
 -   `DCLF_DEPTH_ONLY` (the Z-prepass pixel stage) returns right after the alpha test, so it reads only what the discard needs.
+    Its alpha terms (`MaterialData.z`, the property's alpha times its fade, and the alpha test's reference) come from its vertex
+    stage, flat (`DCLFDepthAlpha`): they are the draw's, and computed per pixel (the object and fade rows, `DCLFAlphaFade`) they were
+    most of the stage's instructions (in Dragonsreach the Z-prepass's pixel stages ran 17.5M a frame, 7.2M with them flat, native's
+    3.0M). The
+    main layout's vertex run starts at t117 for it (`kMainVertexTextureBinding`: the fade seeds, roots and states).
 
 ### Shader programs and pipelines
 
@@ -2302,25 +2307,21 @@ the parities.
 
 #### Local shadow masks
 
-The engine draws a local shadow light's screen-space mask per **receiver**: render modes `0x10`/`0x11`
-(`GetRenderPasses_ShadowMapOrMask`, `0x1414af030`) give each property with ReceiveShadows a Utility mask pass (`0x400000` spot,
-`0x800000` paraboloid, `0x1000000` dual paraboloid) for each shadow light in its `activeLightMask`. DCLF's receivers are not
-registered, so the engine writes no mask for them. (The sun's mask is one full-screen pass from depth, so exteriors never showed this.)
-DCLF resolves those channels itself:
--   **Records.** The light volumes contribution (`Api::LightVolumesContribution`, Features/LocalLights) puts a mask per selected light
-    (`LightVolumeSink::PutMask`): its channel (`maskIndex`), kind (frustum, omni, parabolic, the engine's order), its first descriptor's
-    `lightTransform`, radius, cone falloff, `shadowBiasScale` and `lodFade`. `WriteShadowLatch` latches a `GpuLocalShadowMask` per
-    channel at `BuildDrawsLatch::localShadowMaskOffset`: the target and slice are the light's first view's as DCLF drew it
-    (`ShadowViews::View::drawTarget`, `drawSlice`), the frame's eye is folded into the transform, and the bias, fade distance and PCF
-    radius are the engine's mask constants (`Engine::Address::kShadowBias*`, `kShadowFadeDistance*`, `kShadowFilterRadius`).
--   **The pass.** `core.local-shadow-masks` (`Passes/LocalShadowMasks.cpp`, `LocalShadowMaskCS.hlsl`) runs first in the colour epoch,
-    after the latched copies: one dispatch over `kSHADOW_MASK` (imported with a UAV: Community Shaders' `CreateRenderTarget_ShadowMask`
-    hook gives the target UAV access). Each texel's position comes from the main depth through the frame block's inverse view-projection,
-    as the Utility shader's `RENDER_DEPTH` variants reconstruct it. The map lookup is Light Limit Fix's (`LocalShadowProjection.hlsli`,
-    shared with its local shadow cache), sampled with the engine's eight-tap PCF, times the mask's distance fade. The dispatch covers the rendered area alone (the engine's
-dynamic resolution ratio: under an upscaler the frame is the mask's top-left part). Sky texels are skipped, and so is a paraboloid
-light's filter past its radius, where the receiver depth saturates. In Dragonsreach that took the pass from 269 to 126 us. The maps are bound by their full-array views (`org::SRVViewType::Texture2DArrayFull`): an array's default view is one slice's, and a record's slice past it loads 0, which reads as shadowed everywhere. A channel without a
-    record keeps what the engine drew. The colour draws declare the mask, so the graph orders their reads after the resolve.
+DCLF's colour draws read `kSHADOW_MASK` as the engine's do: the engine draws every shadow light's channel whole. `Main::RenderShadowmasks`
+(AE `0x1414cd600`, its body `0x1414cd6a0`; Community Shaders' `Shadowmasks` range) walks the frame's shadow caster lights and draws one
+full-screen Utility pass per light into the mask (render target `0x12`) from the main depth: the directional light's technique
+`0x200002 + 0x2b`, a local light's `0x400000` (spot), `0x800000` (paraboloid) or `0x1000000` (dual paraboloid) `| 0x2002 + 0x2b`. It
+reads the shadow maps DCLF's shadow views drew and the depth DCLF's Z-prepass wrote, so it covers DCLF's pixels, with no receiver
+registration. The full-screen path is taken while the byte at `0x142032fd0` is set (default; no code writes it); the per-receiver mask
+passes (render modes `0x10`/`0x11`, `GetRenderPasses_ShadowMapOrMask`) are not what fills the mask then.
+-   **Checked** (2026-10-26, `CS_DCLF_TARGET_DUMP`): in Dragonsreach (a paraboloid light) the engine's mask at opaque-end on a DCLF frame
+    and a native frame of the same frozen view agree (channel 0's mean 0.427788 and 0.427787; 471 of 8.3M texels apart by more than
+    64/255), and the presented image with DCLF's own evaluation and with the engine's mask differ no more than two frames of the
+    engine's mask do. The exterior (Tamriel: the directional light and a local one) was checked by eye.
+-   **What DCLF dropped.** Earlier, on the premise that the engine draws a local light's mask per registered receiver only, DCLF
+    resolved those channels itself: a compute pass over the mask (`core.local-shadow-masks`, 0.084 ms in Dragonsreach), then each
+    pixel stage's own eight-tap PCF from per-light records in the frame constants. The engine's pass ran in both cases, so the work was
+    done twice: the pixel stages' evaluation cost the colour range 0.065 ms and the frame about 0.07 ms.
 -   **Receivers' bits.** A draw applies a shadow light only where its object word carries the light's bit (`BuildDrawsCS`'s
     `LocalShadowMask`, Light Limit Fix's `ShadowBitMask`). In a plain draw (`DCLF_PULLED`) the object word is loaded by the stage's main,
     so anything derived from it is read where used, never initialised as a static (`LightLimitFix.hlsli`: `ShadowBitMaskOf`,
@@ -2695,6 +2696,20 @@ stand-ins and the engine boundary are the GPU path's: the same objects are DCLF'
     cascades and a point light's faces pass nearly disjoint lanes, so a lane's work is rarely shared).
     `dclf:cpu-exp` bit 31 profiles the cull by view, the loop as one span a batch; bit 27 adds per-lane sections, whose TSC reads
     are a large part of what they time.
+-   **Pushed colour and depth draws** (`dclf:cpu-exp` bits 10 and 11, on by default). The colour lists (main colour, the decals'
+    second pass, forward) and the main depth list draw with each key's own pipeline, its colour or depth variant, under the main
+    layout. The recorder pushes each draw's 24 words, as a device-generated draw's Constant argument: the sequence's CPU copy
+    (`ViewBatchSet::Sequence`), its rows placed at the set's bases, an animated material row pointed at its row of the frame's copy
+    (`ViewBatchSet::animatedRowOf`), the blocks' addresses derived from the rows, and the draw's object word. The layout maps the
+    blocks from those pushed addresses. Why: the pulled colour pipelines' pixel stages load the same blocks through the rows'
+    addresses. On NVIDIA (RTX 5080, `DXVK_PIPELINE_STATS`) that cost 25-30 registers: 96 became 123-127, and 128 became 148-151.
+    That is one occupancy step: 21 warps an SM became 16, and 16 became 13. The pass launched the same warps but kept fewer
+    resident. Its launches were stalled on register allocation 96% of the time, against native's 84%. In Dragonsreach the colour
+    draws went from 0.347 to 0.324 ms (native's whole colour pass is 0.29-0.31 ms), and frame time fell by about 0.035 ms. Pulled
+    vertices were not the cost: the vertex stages are about 1% of the pass. The depth list's gain is small (42 to 39 us), but both
+    passes then compute their positions in the same vertex build, as the GPU path's device-generated classes do. A recording with
+    Terrain Blending's depth offset keeps the pulled depth pipelines, which read the offset from their push data. So does a key
+    without its own pipeline, which binds its pulled one under the Z-prepass's layout.
 -   **Relative rows.** A direct draw's sequence holds its rows as offsets (`kDirectFlagRelativeRows`). The list pushes the set's
     row bases once (`kDirectDrawPushRowBases`: the pipeline and material rows', or the shadow rows'), so resident sequences
     outlive the payload's row versions. The list also pushes the frame's copy of the animated material rows

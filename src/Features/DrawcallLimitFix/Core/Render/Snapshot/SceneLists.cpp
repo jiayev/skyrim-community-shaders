@@ -547,6 +547,7 @@ namespace DCLF::Draws::detail
 		set->pipelineRowsBase = rows.pipelineRows;
 		set->materialRowsBase = rows.materialRows;
 		set->shadowRowsBase = rows.shadowRows;
+		FillAnimatedRows(*set, a_in);
 		// The volatile lanes (their sequences after the store's), then each view's fresh lanes: the delta's live and the volatile.
 		for (auto& list : volatileScratch)
 			list.clear();
@@ -689,6 +690,7 @@ namespace DCLF::Draws::detail
 		const std::uint32_t total = set->sequenceCount;
 		const std::uint32_t first = s.posted ? std::min(s.postedPersistent, s.persistent) : 0u;
 		auto volatileCopy = std::make_shared<const std::vector<DrawSequence>>(s.volatileSequences);
+		set->ownSequences = volatileCopy;
 		a_upload.previous = s.posted;
 		a_upload.first = first;
 		a_upload.total = total;
@@ -891,4 +893,15 @@ namespace DCLF::Draws::detail
 		}
 		return differ;
 	}
+}
+
+// The set's CPU copies of its sequences: the incremental lists' store (its shared parts), then its own.
+const DCLF::DrawSequence* DCLF::Direct::ViewBatchSet::Sequence(std::uint32_t a_sequence) const
+{
+	if (a_sequence < persistentSequences) {
+		const auto* parts = static_cast<const DCLF::Draws::detail::SharedParts*>(shared.get());
+		return parts && parts->sequences ? &parts->sequences->At(a_sequence) : nullptr;
+	}
+	a_sequence -= persistentSequences;
+	return ownSequences && a_sequence < ownSequences->size() ? &(*ownSequences)[a_sequence] : nullptr;
 }

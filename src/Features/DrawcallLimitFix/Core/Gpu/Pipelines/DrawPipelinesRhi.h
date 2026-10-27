@@ -38,6 +38,11 @@ namespace DCLF
 		// By set index: a forward key's plain colour draws' pipeline (DrawPipelinesImpl.h, Built::pulledColour), under zLayout with
 		// zDrawSignature (ForwardDrawPass); null for any other key and for one whose pulled stages would not build.
 		std::vector<rhi::PipelineHandle> plainColour;
+		// By set index: the key's colour pipeline (its kColorVariant, under `layout`: the rows' blocks mapped from pushed addresses), for
+		// the CPU pipeline's pushed colour draws (Direct::kExpPushedColour); null for a key without one.
+		std::vector<rhi::PipelineHandle> colour;
+		// Likewise its depth pipeline (kDepthVariant), for the pushed depth draws (Direct::kExpPushedDepth).
+		std::vector<rhi::PipelineHandle> depth;
 		// By set index: its key's own plain depth draws' pipeline (a Lighting key's Built::pulledDepth, an effect decal key's
 		// pulledDecalDepth), for the decal depth pass's decal buckets; null for a key without one.
 		std::vector<rhi::PipelineHandle> plainDepth;

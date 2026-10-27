@@ -4,6 +4,43 @@
 
 namespace DCLF::Draws
 {
+	std::shared_ptr<const FrameBlockViews> FrameBlockViews::Create(rhi::Device a_device, const std::shared_ptr<org::Buffer>& a_frameConstants)
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		auto service = host && host->Graph() ? host->Graph()->RetainDescriptorService() : nullptr;
+		if (!service || !a_frameConstants) {
+			logger::error("[DCLF] frame block views: no descriptor service");
+			return nullptr;
+		}
+		auto views = std::make_shared<FrameBlockViews>();
+		views->service = std::move(service);
+		views->buffer = a_frameConstants;
+		const auto resource = a_frameConstants->GetAPIResource().GetHandle();
+		bool ok = true;
+		ForEachFrameBlock([&](bool a_pixel, std::uint32_t a_register, std::uint32_t a_block) {
+			if (!ok)
+				return;
+			const rhi::DescriptorSlot slot = views->service->AllocateDescriptorSlot(rhi::DescriptorHeapType::CbvSrvUav, true);
+			views->slots[a_block] = slot;
+			views->made = a_block + 1;
+			const rhi::CbvDesc desc{ .byteOffset = FrameBlockOffset(a_pixel, a_register), .byteSize = static_cast<std::uint32_t>(kFrameSlotBytes) };
+			if (!slot.heap.valid() || a_device.CreateConstantBufferView(slot, resource, desc) != rhi::Result::Ok) {
+				logger::error("[DCLF] frame block views: the view of {} b{} could not be made", a_pixel ? "PS" : "VS", a_register);
+				ok = false;
+				return;
+			}
+			views->indices[a_block] = slot.index;
+		});
+		return ok ? std::shared_ptr<const FrameBlockViews>(std::move(views)) : nullptr;
+	}
+
+	FrameBlockViews::~FrameBlockViews()
+	{
+		for (std::uint32_t b = 0; b < made; ++b)
+			if (slots[b].heap.valid())
+				service->RetireDescriptorSlotWithOwner(slots[b], buffer);
+	}
+
 	std::string FrameConstantsPart(std::uint64_t a_offset)
 	{
 		const auto slot = static_cast<std::uint32_t>(a_offset / kFrameSlotBytes);

@@ -254,12 +254,13 @@ static const uint kDCLFNodelessTree = 0xFFFFFFFEu;
 
 // The draw's LOD fade word (LightingDescriptors.h): its fade node's LOD type (bits 0-3) and the fades its pass applies, while
 // the node has them apply (LodFadesApply); 0 when nothing fades and MaterialData's fades are the property's.
-uint DCLFLodFadeFlagsOf(uint a_object)
+uint DCLFLodFadeFlagsFrom(StructuredBuffer<DCLFObjectRecord> a_objects, StructuredBuffer<DCLFPlacement> a_placements, uint a_object)
 {
-	const uint fades = DCLFObjects[a_object].DCLFLodFades;
-	const float node = DCLFPlacements[a_object].LodFadeNode.w;
+	const uint fades = a_objects[a_object].DCLFLodFades;
+	const float node = a_placements[a_object].LodFadeNode.w;
 	return fades != 0 && node >= 0.0f && node < 16.0f ? fades | (uint(node) & 0xFu) : 0u;
 }
+uint DCLFLodFadeFlagsOf(uint a_object) { return DCLFLodFadeFlagsFrom(DCLFObjects, DCLFPlacements, a_object); }
 
 bool DCLFTreeWindEntry(uint a_object, out uint a_entry)
 {
@@ -404,8 +405,6 @@ float DCLFWorldBoundRadius(uint a_object)
 	return (DCLFObjects[a_object].DCLFRecordFlags & kDCLFRecordEffectBillboard) ? placement.PreviousWorld[0].w : placement.Bound.w;
 }
 
-#	if defined(PSHADER)
-// The pixel stages' (Lighting.hlsl's MaterialData.z, Effect.hlsl's PropertyColor.w): the vertex stages bind no t119 or t120.
 // FadeStateCS's rows (Records.h, FadeNodeState and FadeRootStatic), the frame record's t120 and t119 (DrawPipelines.h,
 // kFadeStatesRegister, kFadeRootsRegister): the states the frame's builds read, and the roots' static rows.
 struct DCLFFadeNodeState
@@ -435,35 +434,109 @@ struct DCLFFadeRootStatic
 	float LodScale;
 	uint Generation;
 };
-StructuredBuffer<DCLFFadeNodeState> DCLFFadeStates : register(t120);
-StructuredBuffer<DCLFFadeRootStatic> DCLFFadeRoots : register(t119);
-// The fade roots' seeds (Features/Fades' "fade-seeds" pool, two rows a root slot: FadeSeedRow): a root's state, the node as the frame's
-// start had it, until FadeStateCS's first update of its generation reaches t120 (BuildDrawsCS's SeedState). Unbound: none.
-StructuredBuffer<DCLFFadeRootStatic> DCLFFadeSeeds : register(t117);
 // What GetRenderPasses and SetupGeometry put on a pass's alpha (MaterialData.z): the property's alpha times its fade node's
 // currentFade, and for a LOD cross-fade's copy (the draw's object word bit 30: BuildDrawsCS, kObjectCrossfadeCopy) the
 // cross-fade factor (+0x14C) instead. T1c: from the object's fade root (DCLFRecordFlags bits 9-31, its slot + 1) in
 // FadeStateCS's state, else (a generation it has not updated yet) its seed, else its row's; 1 without a root, or with a row the frame
 // does not hold (generation 0: none bound, or freed).
-float DCLFAlphaFade(uint a_object, bool a_copy)
+float DCLFAlphaFadeFrom(StructuredBuffer<DCLFObjectRecord> a_objects, StructuredBuffer<DCLFFadeRootStatic> a_roots, StructuredBuffer<DCLFFadeNodeState> a_states,
+	StructuredBuffer<DCLFFadeRootStatic> a_seeds, uint a_object, bool a_copy)
 {
-	const uint root = DCLFObjects[a_object].DCLFRecordFlags >> 9;
+	const uint root = a_objects[a_object].DCLFRecordFlags >> 9;
 	if (root == 0)
 		return 1;
-	const DCLFFadeRootStatic row = DCLFFadeRoots[root - 1];
+	const DCLFFadeRootStatic row = a_roots[root - 1];
 	if (row.Generation == 0)
 		return 1;
-	DCLFFadeNodeState state = DCLFFadeStates[root - 1];
+	DCLFFadeNodeState state = a_states[root - 1];
 	if (state.Generation != row.Generation) {
 		state = row.Initial;
 		uint seeds, stride;
-		DCLFFadeSeeds.GetDimensions(seeds, stride);
+		a_seeds.GetDimensions(seeds, stride);
 		const uint at = 2u * (root - 1) + ((row.Bits & (1u << 23)) != 0u ? 1u : 0u);  // FadeSeedRow (kFadeRootSeedOdd)
-		if (at < seeds && DCLFFadeSeeds[at].Generation == row.Generation)
-			state = DCLFFadeSeeds[at].Initial;
+		if (at < seeds && a_seeds[at].Generation == row.Generation)
+			state = a_seeds[at].Initial;
 	}
 	return a_copy ? state.Blend : state.CurrentFade;
 }
+
+// The frame's LOD fade inputs (LightingDescriptors.h, LodFadeFrame; Lighting.hlsl's DCLFFrameLighting c6-c13): what BSFadeNode::OnVisible's
+// fade value and GetRenderPasses' fade read. One a frame (FrameGlobals), the main camera's in every view.
+struct DCLFLodFadeFrameData
+{
+	float4 Eye;          // the main camera's world position, its lodAdjust in w
+	float4 Thresholds;   // specular start and end, envmap start and end
+	float4 Metric;       // metric scale, default scale, the override metric, 1 when overridden
+	float4 Divisors[4];  // per LOD type
+	float4 State;        // x: 1 when the engine updates the metric at all (else the property's fades stand)
+};
+// The fade node's LOD metric under the frame's camera (FUN_14147b110's +0x144): the distance to its bound centre, scaled by
+// lodAdjust over its LOD type's divisor (the default scale when that is not positive), times the metric scale.
+float DCLFLodMetric(DCLFLodFadeFrameData a_frame, float3 a_node, uint a_type)
+{
+	if (a_frame.Metric.w != 0)
+		return a_frame.Metric.z;
+	const float divisor = a_frame.Divisors[a_type >> 2][a_type & 3];
+	const float scale = divisor > 0 ? a_frame.Eye.w / divisor : a_frame.Metric.y;
+	return length(a_node - a_frame.Eye.xyz) * scale * a_frame.Metric.x;
+}
+// GetRenderPasses' fade at a metric (FUN_14147c470): 1 up to the start, 0 past the end, where the engine drops the feature.
+float DCLFLodFadeAt(float a_metric, float a_start, float a_end)
+{
+	if (a_end < a_metric)
+		return 0;
+	if (a_metric <= a_start)
+		return 1;
+	return saturate((a_metric - a_end) / (a_start - a_end));
+}
+
+// An object's pixel-stage values for the frame (Features/Fades' PixelRowsCS, once a frame first in the depth segment; the pixel stages'
+// DCLFPixelObjects, t116): what Lighting.hlsl's pixel stages computed per pixel from the object's rows, its LOD fade and its fade root,
+// which are the draw's. MaterialData with the LOD fades and the alpha fade applied (z: the alpha with currentFade), EmitColor with
+// SSRParams.w (only its w is per object), a LOD cross-fade copy's alpha (z with the cross-fade factor) and the alpha test's reference.
+struct DCLFPixelObjectRow
+{
+	float4 MaterialData;
+	float4 EmitColorSSR;
+	float CopyAlpha;
+	float AlphaTestRef;
+	float2 Padding;
+};
+DCLFPixelObjectRow DCLFPixelObjectRowOf(StructuredBuffer<DCLFObjectRecord> a_objects, StructuredBuffer<DCLFShadingRow> a_shading,
+	StructuredBuffer<DCLFPlacement> a_placements, StructuredBuffer<DCLFFadeRootStatic> a_roots, StructuredBuffer<DCLFFadeNodeState> a_states,
+	StructuredBuffer<DCLFFadeRootStatic> a_seeds, DCLFLodFadeFrameData a_frame, uint a_object)
+{
+	const DCLFShadingRow shading = a_shading[a_object];
+	const uint fades = a_frame.State.x != 0 ? DCLFLodFadeFlagsFrom(a_objects, a_placements, a_object) : 0u;
+	const float metric = fades ? DCLFLodMetric(a_frame, a_placements[a_object].LodFadeNode.xyz, fades & 0xF) : 0;
+	const float specular = DCLFLodFadeAt(metric, a_frame.Thresholds.x, a_frame.Thresholds.y);
+	DCLFPixelObjectRow row;
+	row.MaterialData.x = (fades & (1u << 5)) ? DCLFLodFadeAt(metric, a_frame.Thresholds.z, a_frame.Thresholds.w) : shading.MaterialData.x;
+	row.MaterialData.y = (fades & (1u << 4)) ? specular : shading.MaterialData.y;
+	row.MaterialData.z = shading.MaterialData.z * DCLFAlphaFadeFrom(a_objects, a_roots, a_states, a_seeds, a_object, false);
+	row.MaterialData.w = shading.MaterialData.w;
+	row.EmitColorSSR = float4(shading.EmitColor.xyz, (fades & (1u << 4)) ? ((fades & (1u << 6)) ? specular : 0) : shading.EmitColor.w);
+	row.CopyAlpha = shading.MaterialData.z * DCLFAlphaFadeFrom(a_objects, a_roots, a_states, a_seeds, a_object, true);
+	row.AlphaTestRef = a_objects[a_object].AlphaTestRef;
+	row.Padding = 0;
+	return row;
+}
+
+#	if defined(PSHADER)
+// The pixel stages' (Effect.hlsl's PropertyColor.w; Lighting.hlsl's through DCLFPixelObjects): the vertex stages bind no t116-t120.
+// The frame record's t120 and t119 (DrawPipelines.h, kFadeStatesRegister, kFadeRootsRegister): the states the frame's builds read,
+// and the roots' static rows.
+StructuredBuffer<DCLFFadeNodeState> DCLFFadeStates : register(t120);
+StructuredBuffer<DCLFFadeRootStatic> DCLFFadeRoots : register(t119);
+// The fade roots' seeds (Features/Fades' "fade-seeds" pool, two rows a root slot: FadeSeedRow): a root's state, the node as the frame's
+// start had it, until FadeStateCS's first update of its generation reaches t120 (BuildDrawsCS's SeedState). Unbound: none.
+StructuredBuffer<DCLFFadeRootStatic> DCLFFadeSeeds : register(t117);
+float DCLFAlphaFade(uint a_object, bool a_copy)
+{
+	return DCLFAlphaFadeFrom(DCLFObjects, DCLFFadeRoots, DCLFFadeStates, DCLFFadeSeeds, a_object, a_copy);
+}
+// The frame's object rows (DCLFPixelObjectRow; DrawPipelines.h, kPixelObjectsRegister): a frame binding of Features/Fades' pool.
+StructuredBuffer<DCLFPixelObjectRow> DCLFPixelObjects : register(t116);
 #	endif  // PSHADER
 
 #endif  // DCLF_BINDLESS

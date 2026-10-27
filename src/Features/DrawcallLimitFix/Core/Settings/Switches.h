@@ -66,6 +66,7 @@ namespace DCLF
 		Profile,
 		ShaderDebug,
 		ShaderSourceDir,
+		StageDump,
 		TraceTexturePaths,
 		Census,
 		MirrorWatch,
