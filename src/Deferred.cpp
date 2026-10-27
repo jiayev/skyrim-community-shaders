@@ -669,6 +669,7 @@ void Deferred::Hooks::Main_RenderShadowMaps::thunk()
 	// The occlusion maps DCLF draws this frame, set up and cleared before the engine's shadow maps (whose state
 	// setup follows): DCLF's shadow epoch below draws them with the shadow views.
 	globals::features::skylighting.RenderOcclusionAtShadowMaps();
+	globals::features::drawcallLimitFix.RenderPrecipitationAtShadowMaps();
 	func();
 	globals::features::drawcallLimitFix.AfterShadowMaps();
 	globals::deferred->EarlyPrepasses();

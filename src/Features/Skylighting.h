@@ -115,11 +115,6 @@ public:
 	 * the sky direction (r2 sequence over the zenith disc).
 	 */
 	void BeginOcclusionFrame();
-	/**
-	 * @brief The precipitation mask's render (a_dclf: Drawcall Limit Fix draws it, so its camera is set up without the engine's cull and
-	 * RenderMask clears it, the engine's reference first when its parity asks; else the engine's whole: SetupMask, RenderMask).
-	 */
-	void RenderPrecipitationMask(RE::Precipitation* a_precip, RE::BSGeometry* a_precipObject, bool a_dclf);
 	/** @brief The sky occlusion map's render, into texOcclusion swapped in for the precipitation target (a_dclf: as the mask's). */
 	void RenderSkyOcclusionMap(RE::Precipitation* a_precip, bool a_dclf);
 

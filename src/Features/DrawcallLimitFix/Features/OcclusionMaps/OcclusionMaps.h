@@ -2,10 +2,10 @@
 
 // OcclusionMaps (CS_DCLF_SKYLIGHT, CS_DCLF_PRECIPITATION): the precipitation accumulator's two views (render
 // mode 0x1C), Skylighting's sky occlusion map and the precipitation occlusion mask, drawn in the shadow epoch (Features/Shadows/Engine's,
-// DEPENDS: listed after it) in the engine's place
-// while Skylighting is loaded (it drives both: the engine's mask, then its own map, set up before the engine's shadow maps when DCLF
-// draws them, RenderOcclusionAtShadowMaps, else rendered whole at the engine's occlusion point, RenderOcclusion) and the map's toggle is
-// on. The feature registers its switches and live toggles (which need the shadows) and each map's contribution
+// DEPENDS: listed after it) in the engine's place while the map's toggle is on: the sky map while Skylighting is loaded (it drives both:
+// the engine's mask, then its own map, set up before the engine's shadow maps when DCLF draws them, RenderOcclusionAtShadowMaps, else
+// rendered whole at the engine's occlusion point, RenderOcclusion), the mask always (without Skylighting the shell drives it:
+// DrawcallLimitFix::RenderPrecipitationAtShadowMaps, and its hook of the engine's occlusion point). The feature registers its switches and live toggles (which need the shadows) and each map's contribution
 // (Api::OcclusionMapContribution, Api/ShadowViews.h): its set phase and view bit (kSetOccluderSky / kViewSkyOccluder,
 // kSetOccluderPrecipitation / kViewPrecipOccluder), its occluder rule (OccluderRules.cpp: Skylighting's, the precipitation mask's) and
 // cull size test (both maps') and floor (the sky map's: Skylighting's probe grid), its target (the sky map imports Skylighting's own
@@ -40,10 +40,12 @@ namespace DCLF::Features::OcclusionMaps
 
 	// OccluderRules.cpp: the maps' occluder rules (their technique; the scene work, per walked entry, pure): Skylighting::
 	// OcclusionTechnique's (skinned only with tree animation, no object under a fade node whose BSX flags reject it, depth-writing,
-	// none of refraction, LOD landscape, eye reflection, decals), the precipitation mask's (never skinned, depth-writing, none of
-	// refraction, landscape blends, LOD landscape, eye reflection, decals).
+	// none of refraction, LOD landscape, eye reflection, decals), the precipitation mask's with Skylighting (never skinned, depth-writing,
+	// none of refraction, landscape blends, LOD landscape, eye reflection, decals) and without it, the engine's (the same, and none of tree
+	// animation or anisotropic lighting; no size test).
 	std::uint32_t SkylightingTechnique(const Api::OccluderLeaf& a_leaf);
 	std::uint32_t PrecipitationTechnique(const Api::OccluderLeaf& a_leaf);
+	std::uint32_t EnginePrecipitationTechnique(const Api::OccluderLeaf& a_leaf);
 	// Render thread: both maps' camera and accumulator, the precipitation accumulator's (Precipitation::occlusionData); it draws
 	// Skylighting's map while Skylighting draws it (inOcclusion), else the precipitation mask.
 	void PrecipitationCamera(Api::OcclusionCamera& a_camera);
