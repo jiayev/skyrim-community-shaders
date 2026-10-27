@@ -26,4 +26,11 @@ namespace GpuEventTimers
 
 	/** @brief Once per frame at Present on the render thread: closes the frame, collects finished frames, logs. */
 	void OnPresent();
+
+	/**
+	 * @brief Render thread: the frames from the next one on are a new window, labelled a_label, logged as one block once its last frame
+	 * is read back ("[GpuEvents] window '<label>': ..."); "-" is not logged. Once a window is started, the interval no longer logs, so
+	 * a test's phases are timed exactly, frames in flight included (CS_DCLF_TEST_COMMANDS' dclf:gpu-window).
+	 */
+	void StartWindow(std::string_view a_label);
 }

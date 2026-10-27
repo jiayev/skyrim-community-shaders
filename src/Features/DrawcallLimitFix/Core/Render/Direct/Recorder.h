@@ -2,8 +2,10 @@
 
 // The CPU-driven pipeline's recorder (Direct.h; dclf-architecture.md, "The CPU-driven pipeline"): a CulledBatch's draws as direct draws
 // onto an rhi::CommandList, DXVK's adopted buffer (Serial mode, inside a site's callback) or a secondary (Parallel mode, a per-snapshot
-// view). One plain indexed draw a resident sequence: the lane's pulled pipeline bound when its bucket changes, the sequence's address
-// and the draw's object word pushed (DrawPipelines.h, kDirectDrawPush*), its arguments from the set's CPU copy (ViewBatchSet::sequenceArgs).
+// view). One plain indexed draw a resident sequence, its lane's bucket's pipeline bound when the bucket changes, its arguments from the
+// set's CPU copy (ViewBatchSet::sequenceArgs): in the colour and depth lists the key's own pipeline under the main layout, the draw pushing
+// its sequence's 24 words as a device-generated draw's Constant argument (kExpPushedColour, kExpPushedDepth); elsewhere the pulled
+// pipeline, the draw pushing the sequence's address and its object word (DrawPipelines.h, kDirectDrawPush*).
 // Recording reads only immutable inputs (the set, the culled batch, the frame's bindings), so any thread may record its own list.
 
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Direct.h"
@@ -103,6 +105,10 @@ namespace DCLF::Direct
 		std::uint32_t boundBucket = ~0u;
 		rhi::PipelineHandle boundPipeline{};
 		std::uint64_t boundVertexLayout = 0;  // a shadow bucket's (ShadowIndirectState::vertexLayouts), pushed with each of its draws
+		// A colour or depth list's draws through the keys' own pipelines under the main layout (kExpPushedColour, kExpPushedDepth), and
+		// whether that layout is bound (a bucket without one draws its pulled pipeline under the Z-prepass's).
+		bool pushedColour = false;
+		bool mainLayoutBound = false;
 		std::uint32_t drawn = 0;
 		// The list's calls (FrameCounters' binds, sameBinds, pushes, flushed with drawn): pipeline binds, those that bound the pipeline
 		// already bound (another bucket of the same pipeline), and per-draw push constants.

@@ -234,10 +234,11 @@ namespace DCLF::TargetDump
 		}
 
 		/**
-		 * @brief The local shadow mask's agreement on a DCLF frame: the engine draws each light's channel for its registered receivers
-		 * before the colour segment (opaque-end), and DCLF's resolve (LocalShadowMaskCS) rewrites every texel of the channels it has a
-		 * record for at the segment's start (after-DCLF-colour). Where the engine lit a receiver (> 0.5), DCLF's should not be dark (< 0.5):
-		 * those texels per channel, and how many DCLF left dark. Empty without both copies; a DCLF-off frame compares the engine's with itself.
+		 * @brief The local shadow mask's agreement on a DCLF frame: the engine draws each light's channel whole before the colour segment
+		 * (opaque-end: Main::RenderShadowmasks, a full-screen pass per shadow light), and DCLF's colour segment reads it and leaves it as it
+		 * is, so the copy after it (after-DCLF-colour) should agree. Where the engine lit a receiver
+		 * (> 0.5), the later copy should not be dark (< 0.5): those texels per channel, and how many are dark. Empty without both copies; a
+		 * DCLF-off frame compares the engine's with itself.
 		 */
 		std::string MaskAgreement(const Frame& a_frame, const std::vector<D3D11_MAPPED_SUBRESOURCE>& a_mapped, std::size_t a_done)
 		{

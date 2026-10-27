@@ -900,11 +900,16 @@ namespace
 	json BuildDclfResult(const json& a_args)
 	{
 #	if defined(CS_HAS_RENDER_GRAPH)
+		// Every reply carries the command list's progress, so a client drives a run by it (a waited-for signal, the list's frame) rather
+		// than by the log. No command: the progress alone.
+		const auto progress = DCLF::TestHarnessStatus();
+		json harness{ { "frame", progress.frame }, { "shift", progress.shift }, { "next", progress.next }, { "commands", progress.commands },
+			{ "nextFrame", progress.nextFrame }, { "nextCommand", progress.nextCommand }, { "waiting", progress.waiting } };
 		const std::string command = a_args.value("command", std::string{});
 		if (command.empty())
-			return json{ { "error", "no command" } };
+			return json{ { "harness", std::move(harness) } };
 		DCLF::QueueTestCommand(command);
-		return json{ { "queued", command }, { "enqueued_at_frame", EnqueuedFrame() } };
+		return json{ { "queued", command }, { "enqueued_at_frame", EnqueuedFrame() }, { "harness", std::move(harness) } };
 #	else
 		(void)a_args;
 		return json{ { "error", "built without the render graph" } };
@@ -1073,7 +1078,7 @@ namespace DevBenchBridge
 		dvb->RegisterTool("communityshaders.schedule", scheduleDesc, &ScheduleToolHandler, nullptr);
 
 		static constexpr const char* dclfDesc =
-			R"({"description":"Drawcall Limit Fix's test harness commands (CS_DCLF_TEST_COMMANDS' forms), run at the next Present: dclf:<toggle>=0|1 (a live toggle), dclf:async-compute=0|1|default (the async compute passes' queue, from a graph rebuild), dclf:rebuild, dclf:reload-shaders[=all|=<file>], dclf:pov=first|third, dclf:draw=0|1; any other is a console command. -> {queued}","inputSchema":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}})";
+			R"({"description":"Drawcall Limit Fix's test harness commands (CS_DCLF_TEST_COMMANDS' forms), run at the next Present: dclf:<toggle>=0|1 (a live toggle), dclf:async-compute=0|1|default (the async compute passes' queue, from a graph rebuild), dclf:rebuild, dclf:reload-shaders[=all|=<file>], dclf:define=<NAME[=v],...>, dclf:signal=<name> (releases a list's dclf:wait=signal:<name>), dclf:nvperf=<range|range...>[#samples], dclf:gpu-window=<label>, dclf:mark[=label], dclf:feature=0|1, dclf:pov=first|third, dclf:draw=0|1; any other is a console command. Omit command for the progress alone. -> {queued, harness:{frame,shift,next,commands,nextFrame,nextCommand,waiting}}","inputSchema":{"type":"object","properties":{"command":{"type":"string"}},"required":[]}})";
 		dvb->RegisterTool("communityshaders.dclf", dclfDesc, &DclfToolHandler, nullptr);
 	}
 

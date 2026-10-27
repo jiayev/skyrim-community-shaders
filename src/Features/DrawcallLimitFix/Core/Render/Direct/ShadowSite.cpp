@@ -72,7 +72,6 @@ namespace DCLF::Direct::detail
 		struct ShadowSiteState
 		{
 			std::shared_ptr<const ShadowTargets> targets;
-			std::uint64_t ranFrame = 0;  // State::frames when the site last ran
 			bool loggedTargets = false;
 		};
 
@@ -204,7 +203,6 @@ namespace DCLF::Direct
 		if (resources.scene)
 			state->strict = FrameStrictGates(*resources.scene, slot->sceneFrame);
 		run.shadowState = state;
-		Own().ranFrame = s.frames;
 		// What every view's recordings bind: the shape's heaps and shadow set (its indirect state, the GPU path's ShadowViewPass binds), the
 		// index pool's adopted version, the slot's first indices.
 		RecordBindings common{};
@@ -281,12 +279,6 @@ namespace DCLF::Direct
 				DispatchCulls(*slot, *run, *view, a_frame);
 		});
 		SetPending(run);
-	}
-
-	bool ShadowSiteRan()
-	{
-		const auto& s = S();
-		return s.current && s.frames != 0 && Own().ranFrame == s.frames;
 	}
 
 	bool ShadowSiteLive()

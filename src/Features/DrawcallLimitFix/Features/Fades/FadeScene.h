@@ -192,6 +192,8 @@ namespace DCLF::Features::Fades
 	// RegisterRender's parts (FadeRender.cpp, in its order), each in the source of its code:
 	/** @brief The seeds: the "fade-seeds" frame-value pool (the fade roots component's seeds). FadeSeeds.cpp. */
 	void RegisterSeeds(Api::InstallContext& a_context);
+	/** @brief The frame's object rows (FadePixelRows.cpp): their pool, their frame binding (t116) and their passes. */
+	void RegisterPixelRows(Api::InstallContext& a_context);
 	/** @brief The scene resources "fade roots" (setup, graph, requirements, fit, sealed). FadeResources.cpp. */
 	void RegisterResources(Api::InstallContext& a_context);
 	/** @brief The depth commit hook: the root rows and FadeStateCS's frame inputs, the write-back armed, the roots' programs. FadeCommit.cpp. */

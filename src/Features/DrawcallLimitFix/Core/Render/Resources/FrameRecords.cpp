@@ -23,7 +23,7 @@ namespace DCLF::Draws
 		Extensions::WriteFrameBindings(bindings, a_record.textures);
 	}
 
-	DrawBindings FrameRecordOf(std::uint64_t a_frameConstants, std::uint32_t a_vsMask, std::uint32_t a_psMask, std::span<const std::uint32_t, kTextureRegisters> a_frameTextures,
+	DrawBindings FrameRecordOf(std::uint64_t a_frameConstants, const FrameBlockViews& a_blocks, std::uint32_t a_vsMask, std::uint32_t a_psMask, std::span<const std::uint32_t, kTextureRegisters> a_frameTextures,
 		std::uint32_t a_nullIndex, const PayloadVersions& a_parts, const FrameValueIndices& a_values, const NamedVersions& a_adopted, const SceneBuffers& a_scene,
 		std::uint32_t a_frame)
 	{
@@ -34,6 +34,7 @@ namespace DCLF::Draws
 		}
 		record.pixelConstants[3] = a_frameConstants + std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes;
 		record.pixelConstants[kFrameLightingRegister] = a_frameConstants + std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes;
+		std::ranges::copy(a_blocks.indices, record.frameBlocks);
 		for (std::uint32_t t = 0; t < kTextureRegisters; ++t)
 			record.textures[t] = a_frameTextures[t] == kInvalidIndex ? a_nullIndex : a_frameTextures[t];
 		WriteRecordBuffers(record, a_parts, a_values, a_adopted, a_scene, a_frame);

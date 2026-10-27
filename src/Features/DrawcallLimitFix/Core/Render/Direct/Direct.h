@@ -27,6 +27,11 @@ namespace org::services
 	struct PublishedBufferVersion;
 }
 
+namespace DCLF
+{
+	struct DrawSequence;  // Core/Scene/Model/Records.h
+}
+
 namespace DCLF::Draws
 {
 	struct GpuCascade;
@@ -93,6 +98,14 @@ namespace DCLF::Direct
 		// Features/Portals' batch test walks the program once a call, each operator over every 16-bound chunk routed to it (a group of any
 		// size visits nearly every operator); off, a walk per group of 16 bounds.
 		kExpPortalOpMajor = 1u << 9,
+		// The colour lists (main colour, the decals' second pass, forward) drawn with each key's colour pipeline (its device-generated
+		// one: the rows' blocks mapped from pushed addresses) under the main layout, each draw pushing its sequence's 24 words as a
+		// device-generated draw's Constant argument; off, the pulled colour pipelines (Built::pulledColour), whose pixel stages load
+		// the blocks through the rows' addresses: on NVIDIA 25-30 registers more (96 to 123-127, 128 to 151), one occupancy step.
+		kExpPushedColour = 1u << 10,
+		// Likewise the depth lists (main depth, the hosted views' depth) with each key's depth pipeline (kDepthVariant) in place of its Z
+		// group's pulled one (Built::pulledDepth), but for a recording with Terrain Blending's depth offset (kZDrawPushOffsetDepth).
+		kExpPushedDepth = 1u << 11,
 		// Not a change: kExpCullProfile's per-lane sections (gather, keep, LOD, word), a TSC read each; without it the loop is one span a
 		// batch ("lanes"), the reads' own cost otherwise a large part of what they time. Off by default.
 		kExpCullProfileLanes = 1u << 27,
@@ -252,6 +265,14 @@ namespace DCLF::Direct
 		std::shared_ptr<const ArgsChunks> persistentArgs;
 		std::uint32_t persistentSequences = 0;
 		std::vector<DrawArgs> sequenceArgs;
+		// The resident sequences' CPU copies, for the pushed colour draws (kExpPushedColour), which push a sequence's words: the first
+		// persistentSequences in the incremental lists' store (`shared`), then these (a full build's every sequence). Read through Sequence.
+		std::shared_ptr<const std::vector<DrawSequence>> ownSequences;
+		// By material row (its index in the set's material rows): the row's animated row (MaterialRowHeader::animatedRow; ~0u: none),
+		// which a pushed draw is pointed at in the frame's copy, as DCLFSequenceRows points a relative pulled draw.
+		std::vector<std::uint32_t> animatedRowOf;
+		/** @brief A resident sequence's CPU copy (null: past the set's). Snapshot/SceneLists.cpp. */
+		const DrawSequence* Sequence(std::uint32_t a_sequence) const;
 		/** @brief A resident sequence's arguments (null: past the set's). */
 		const DrawArgs* Args(std::uint32_t a_sequence) const
 		{

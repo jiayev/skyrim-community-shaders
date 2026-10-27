@@ -47,9 +47,10 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief A frame record: the frame slots of a_frameConstants for the registers a_vsMask and a_psMask supply, PS b3 the shared light
-	 * block and PS b13 the lighting slot, a_frameTextures at their registers (kInvalidIndex: a_nullIndex), then WriteRecordBuffers.
+	 * block and PS b13 the lighting slot, the pass-wide blocks' views (a_blocks: a_frameConstants'), a_frameTextures at their registers
+	 * (kInvalidIndex: a_nullIndex), then WriteRecordBuffers.
 	 */
-	DrawBindings FrameRecordOf(std::uint64_t a_frameConstants, std::uint32_t a_vsMask, std::uint32_t a_psMask, std::span<const std::uint32_t, kTextureRegisters> a_frameTextures,
+	DrawBindings FrameRecordOf(std::uint64_t a_frameConstants, const FrameBlockViews& a_blocks, std::uint32_t a_vsMask, std::uint32_t a_psMask, std::span<const std::uint32_t, kTextureRegisters> a_frameTextures,
 		std::uint32_t a_nullIndex, const PayloadVersions& a_parts, const FrameValueIndices& a_values, const NamedVersions& a_adopted, const SceneBuffers& a_scene,
 		std::uint32_t a_frame);
 

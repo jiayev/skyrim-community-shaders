@@ -52,9 +52,4 @@ namespace DCLF::Direct
 	 */
 	void ShadowCommitted(const ShadowCommitInputs& a_inputs);
 
-	/**
-	 * @brief Render thread: whether this CPU frame's shadow site ran (its commit latched the views and its pre-work copies their blocks), so
-	 * the frame's local shadow records name views DCLF drew (LocalShadowMasks.cpp's CPU-mode resolve).
-	 */
-	bool ShadowSiteRan();
 }

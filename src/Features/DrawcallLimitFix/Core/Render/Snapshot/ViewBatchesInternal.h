@@ -253,6 +253,19 @@ namespace DCLF::Draws::detail
 		}
 	};
 
+	/** @brief A set's animated material rows (ViewBatchSet::animatedRowOf), from its main payload's rows' headers. */
+	inline void FillAnimatedRows(Direct::ViewBatchSet& a_set, const ViewBatchInputs& a_in)
+	{
+		a_set.animatedRowOf.clear();
+		if (!a_in.main || !a_in.main->body)
+			return;
+		const auto& rows = a_in.main->body->materialRows;
+		a_set.animatedRowOf.assign(rows.Count(), ~0u);
+		for (std::size_t m = 0; m < rows.Count(); ++m)
+			if (const auto* row = rows.At(m); row && row->bytes.size() >= kMaterialRowHeader + sizeof(MaterialRowHeader))
+				a_set.animatedRowOf[m] = reinterpret_cast<const MaterialRowHeader*>(row->bytes.data() + kMaterialRowHeader)->animatedRow;
+	}
+
 	/** @brief The lane flags an input's object flags carry. */
 	inline std::uint32_t LaneFlagsOf(const DrawInput& a_input)
 	{

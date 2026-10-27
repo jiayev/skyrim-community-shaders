@@ -468,6 +468,7 @@ namespace DCLF
 					WriteRecordBuffers(record, parts, { in.addresses.placementsIndex, in.addresses.palettesIndex, in.addresses.shadingIndex }, a_commit.adopted,
 						*resources.scene, a_commit.frameNumber);
 					constexpr std::size_t recordEnd = kShadowFrameRecordOffset + sizeof(DrawBindings);
+					static_assert(recordEnd <= kShadowArenaBlocksOffset, "the frame record overlaps the arena's blocks");
 					if (bytes.size() < recordEnd)
 						stl::report_and_fail("Drawcall Limit Fix: a shadow arena without its frame record");
 					// The arena around the record is the build's: nothing is staged while the buffer holds this build's (a kept publication

@@ -38,6 +38,13 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     `WRCastleRugBEndL:1`): Light Limit Fix's first room map is posted after those objects joined. With room -1 a portal-strict light
     is not gated for them, so it can light them through walls for those frames. **Next:** check whether the first map's post
     (`FrameView::PostAncestorMap`) can precede the first joins, or whether `RefreshAncestorValues` misses objects joined before it.
+-   **Subsurface Scattering's pass does not run while DCLF draws the faces (suspected; seen in timings only).** In Dragonsreach
+    (2026-10-27, GpuEvents windows of one launch) `SubsurfaceScattering::Burley` took 0.03 ms a frame natively and did not appear
+    at all with DCLF on. The pass runs only when `validMaterials` is set. Its `BSLightingShader_SetupSkin` hook sets it from the
+    engine's setup of a face pass (kFace, kFaceGenRGBTint). The engine never sets up a face DCLF draws, and
+    `Integrations/SubsurfaceScattering` gives such faces only their IsBeastRace flag. So skin may lose its scattering, and DCLF's
+    timings leave out the pass's cost. **Check:** compare an NPC's face with DCLF on and off. **Next:** set `validMaterials` from the
+    integration while a DCLF-drawn face is in the frame's lists.
 
 ## Open crashes
 

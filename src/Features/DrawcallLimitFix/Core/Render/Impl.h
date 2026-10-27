@@ -306,8 +306,6 @@ namespace DCLF
 		// reference), and how many of them the latch takes (clamped to the revision's layout: CommitShadowInputs).
 		std::vector<GpuShadowVolume> shadowVolumes;
 		std::uint32_t shadowVolumesLatched = 0;
-		// The same sample's lights' masks (LightVolumeSink::PutMask), which WriteShadowLatch latches for LocalShadowMaskCS.
-		std::vector<Api::LightShadowMask> shadowMaskLights;
 		// The depth commit's scratch: its buckets (PlanZBuckets) and the zeros their count words take.
 		ZBucketPlan zBucketPlan;
 		std::vector<std::uint32_t> zBucketZeros;

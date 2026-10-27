@@ -138,7 +138,9 @@ What SetupTechnique writes (ported in `ConstantEvaluator.cpp` `EvaluateTechnique
     `(1 / width, 1 / height, 0, 0)` of the globals at AE `0x14328be9c` (the shadow mask size).
     **The VPOSOffset write happens after the buffer is unmapped.** On DXVK the dynamic buffer stays mapped,
     so the draw still sees it.
--   **Who writes a local shadow light's mask channel: its receivers.** Render modes `0x10`/`0x11`
+-   **Who writes a local shadow light's mask channel: `Main::RenderShadowmasks`, whole** (`0x1414cd6a0`: a full-screen Utility pass per
+    shadow light from the main depth, while the byte at `0x142032fd0` is set, the default; see dclf-architecture.md, "Local shadow
+    masks"). The per-receiver passes below exist, but are not what fills the mask then. Render modes `0x10`/`0x11`
     (`BSLightingShaderProperty::GetRenderPasses_ShadowMapOrMask`, `0x1414af030`) give a property with ReceiveShadows (flag bit 8)
     one Utility pass per shadow light in its `activeLightMask` (`0x11` also takes `firstPersonShadowMask`), kept in
     `shadowMapOrMaskPasses`: `0x400000` for a frustum light (vfunc 5), `0x1000000` for an omni light (vfunc 8), `0x800000` for a

@@ -440,7 +440,7 @@ namespace DCLF
 			const std::uint32_t psMask = (1u << kPerFrameVertexRegister) | (shared.empty() ? 0u : 1u << kSharedDataRegister) | (feature.empty() ? 0u : 1u << kFeatureDataRegister);
 			auto& textures = GpuTextures::Get();
 			const std::uint32_t nullIndex = textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u;
-			const DrawBindings record = FrameRecordOf(own->frameConstantsAddress, vsMask, psMask, state.frameTextures, nullIndex, *InstalledPayload(),
+			const DrawBindings record = FrameRecordOf(own->frameConstantsAddress, *own->frameBlocks, vsMask, psMask, state.frameTextures, nullIndex, *InstalledPayload(),
 				{ FrameValues::Get().PlacementsIndex(), FrameValues::Get().PalettesIndex(), FrameValues::Get().ShadingIndex() }, adopted, *scene, frameNumber);
 			frame(own->frameConstants, &record, sizeof(record), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
 			frame(own->frameConstants, shared.data(), shared.size(), FrameSlotOffset(true, kSharedDataRegister));

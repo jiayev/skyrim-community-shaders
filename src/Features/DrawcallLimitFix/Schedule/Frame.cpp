@@ -69,6 +69,7 @@ namespace DCLF::Schedule
 		constexpr std::string_view kMainDepth[] = {
 			"core.z.latched-copies",
 			"texture-transforms.apply",
+			"fades.pixel-rows",
 			"core.z.portal-queries",
 			"portals.member-batch",
 			"portals.member-evaluate",
@@ -104,10 +105,10 @@ namespace DCLF::Schedule
 			"fades.events",
 			"diag.after-depth",
 		};
-		// The colour epoch: the local shadow masks, the build, the sort by pipeline, the forward range's sort, the colour draws.
+		// The colour epoch: the build, the sort by pipeline, the forward range's sort, the colour draws.
 		constexpr std::string_view kMainColour[] = {
 			"core.latched-copies",
-			"core.local-shadow-masks",
+			"fades.pixel-rows-colour",
 			"core.build-draws",
 			"core.sort-scan",
 			"core.sort-scatter",

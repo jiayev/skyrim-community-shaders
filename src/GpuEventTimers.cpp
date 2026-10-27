@@ -43,6 +43,7 @@ namespace GpuEventTimers
 			std::uint32_t frameBegin = kNone, frameEnd = kNone;
 			std::vector<Event> events;
 			bool open = false, pending = false, overflow = false;
+			std::uint32_t window = 0;  // the window it was recorded in (StartWindow)
 		};
 
 		struct Accumulated
@@ -67,6 +68,10 @@ namespace GpuEventTimers
 			std::vector<Accumulated> accumulated;
 			double frameMs = 0.0;
 			std::uint32_t collected = 0, dropped = 0, disjoint = 0, overflowed = 0;
+			// Windows (StartWindow): the one frames open in, the one the totals are of, and each one's label ("-": not logged). Window 0
+			// is the interval's; once a window is started, the windows alone are logged.
+			std::uint32_t window = 0, collecting = 0;
+			std::vector<std::string> labels{ std::string{} };
 		};
 
 		State& Get()
@@ -123,6 +128,16 @@ namespace GpuEventTimers
 			return at->second;
 		}
 
+		void Log(State& a_state);
+
+		void ResetTotals(State& a_state)
+		{
+			for (auto& total : a_state.accumulated)
+				total = {};
+			a_state.frameMs = 0.0;
+			a_state.collected = a_state.dropped = a_state.disjoint = a_state.overflowed = 0;
+		}
+
 		/** @brief Reads a finished frame's queries into the totals; false while the GPU has not reached its end. */
 		bool Collect(State& a_state, Frame& a_frame, bool a_flush)
 		{
@@ -136,6 +151,14 @@ namespace GpuEventTimers
 				if (context->GetData(a_frame.queries[i].get(), &ticks[i], sizeof(std::uint64_t), flags) != S_OK)
 					return false;
 			a_frame.pending = false;
+			// The first frame of a later window: the window before is complete (frames are read back in order), so it is logged.
+			if (a_frame.window != a_state.collecting) {
+				if (a_state.labels[a_state.collecting] != "-")
+					Log(a_state);
+				else
+					ResetTotals(a_state);
+				a_state.collecting = a_frame.window;
+			}
 			if (disjoint.Disjoint || !disjoint.Frequency || a_frame.frameBegin == kNone || a_frame.frameEnd == kNone) {
 				++a_state.disjoint;
 				return true;
@@ -169,13 +192,14 @@ namespace GpuEventTimers
 
 		void Log(State& a_state)
 		{
-			const double frames = a_state.collected;
+			const double frames = std::max(1u, a_state.collected);
 			double annotated = 0.0;
 			for (std::size_t p = 0; p < a_state.paths.size(); ++p)
 				if (a_state.depth[p] == 0)
 					annotated += a_state.accumulated[p].inclusive;
-			std::string text = fmt::format("[GpuEvents] {} frames ({} dropped unread, {} disjoint, {} out of queries): GPU frame {:.2f} ms, {:.2f} ms outside any event; per frame, inclusive / self ms, calls:",
-				a_state.collected, a_state.dropped, a_state.disjoint, a_state.overflowed, a_state.frameMs / frames, (a_state.frameMs - annotated) / frames);
+			const auto& label = a_state.labels[a_state.collecting];
+			std::string text = fmt::format("[GpuEvents] {}{} frames ({} dropped unread, {} disjoint, {} out of queries): GPU frame {:.2f} ms, {:.2f} ms outside any event; per frame, inclusive / self ms, calls:",
+				label.empty() ? std::string{} : fmt::format("window '{}': ", label), a_state.collected, a_state.dropped, a_state.disjoint, a_state.overflowed, a_state.frameMs / frames, (a_state.frameMs - annotated) / frames);
 			for (std::size_t p = 0; p < a_state.paths.size(); ++p) {
 				const auto& total = a_state.accumulated[p];
 				if (total.inclusive / frames < kMinLoggedMs)
@@ -186,10 +210,7 @@ namespace GpuEventTimers
 					std::string(std::size_t(a_state.depth[p]) * 2, ' '), leaf == std::string::npos ? path : path.substr(leaf + 3));
 			}
 			logger::info("{}", text);
-			for (auto& total : a_state.accumulated)
-				total = {};
-			a_state.frameMs = 0.0;
-			a_state.collected = a_state.dropped = a_state.disjoint = a_state.overflowed = 0;
+			ResetTotals(a_state);
 		}
 	}
 
@@ -276,7 +297,7 @@ namespace GpuEventTimers
 			if (frame.pending && !Collect(state, frame, i == 1))
 				break;
 		}
-		if (state.collected >= state.interval)
+		if (state.window == 0 && state.collected >= state.interval)
 			Log(state);
 
 		// Open the next frame in the ring; one the GPU has still not finished is given up.
@@ -290,8 +311,18 @@ namespace GpuEventTimers
 		next.events.clear();
 		next.overflow = false;
 		next.frameEnd = kNone;
+		next.window = state.window;
 		context->Begin(next.disjoint.get());
 		next.open = true;
 		next.frameBegin = Timestamp(next);
+	}
+
+	void StartWindow(std::string_view a_label)
+	{
+		if (!Requested())
+			return;
+		auto& state = Get();
+		state.labels.emplace_back(a_label);
+		state.window = static_cast<std::uint32_t>(state.labels.size() - 1);
 	}
 }

@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -34,6 +35,58 @@ namespace DCLF::Direct
 			a_words[1] = static_cast<std::uint32_t>(a_value >> 32);
 		}
 
+		/**
+		 * @brief Binds the list's layout and the push data its draws keep: the frame (or view) words, then for every layout but the main
+		 * one the draw range zeroed, the set's row bases and the frame's animated rows (each draw pushes its first kDirectDrawWords). a_main:
+		 * the main layout, a pushed colour draw's (kExpPushedColour), whose draws push their whole range.
+		 */
+		void BindListLayout(RecordContext& a_context, bool a_main)
+		{
+			const auto& bindings = a_context.bindings;
+			auto& list = a_context.list;
+			const bool shadowLayout = a_context.pass == RecordPass::Shadow || a_context.pass == RecordPass::Refraction;
+			list.BindLayout(a_main                                     ? bindings.main->layout :
+			                a_context.pass == RecordPass::Shadow       ? bindings.shadow->layout :
+			                a_context.pass == RecordPass::Refraction   ? bindings.main->refractionLayout :
+			                                                             bindings.main->zLayout);
+			if (shadowLayout)
+				list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kShadowPushWords, bindings.shadowPush.data());
+			else
+				list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, bindings.framePush.data());
+			a_context.mainLayoutBound = a_main;
+			if (a_main)
+				return;
+			// The draw range whole, once: each draw then pushes its first kDirectDrawWords.
+			const std::uint32_t zeros[kDrawPushWords]{};
+			list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, zeros);
+			// The set's row bases (its sequences' rows are relative), kept by every draw's push of its first words.
+			std::uint32_t bases[4]{};
+			const auto& set = a_context.set;
+			if (a_context.pass == RecordPass::Shadow) {
+				Split(bases + 2, set.shadowRowsBase);
+			} else {
+				Split(bases, set.pipelineRowsBase);
+				Split(bases + 2, set.materialRowsBase);
+			}
+			list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, kDirectDrawPushRowBases, 4, bases);
+			// The main rows' animated rows read from the frame's copy (the texture transforms' TexcoordOffset).
+			if (a_context.pass != RecordPass::Shadow && bindings.animatedRows) {
+				std::uint32_t animated[2]{};
+				Split(animated, bindings.animatedRows);
+				list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, kDirectDrawPushAnimatedRows, 2, animated);
+			}
+		}
+
+		/** @brief The key's pipeline under the main layout a pushed list draws set index a_index with (null: its pulled one). */
+		rhi::PipelineHandle PushedPipeline(const RecordContext& a_context, std::uint32_t a_index)
+		{
+			if (!a_context.pushedColour)
+				return {};
+			const auto& main = *a_context.bindings.main;
+			const auto& pipelines = a_context.pass == RecordPass::Depth ? main.depth : main.colour;
+			return a_index < pipelines.size() ? pipelines[a_index] : rhi::PipelineHandle{};
+		}
+
 		/** @brief The pipeline bucket a_bucket binds in the context's pass (ViewBuckets), and a shadow view's its vertex layout; null: none. */
 		rhi::PipelineHandle BucketPipeline(const RecordContext& a_context, std::uint32_t a_bucket, std::uint64_t& a_vertexLayout)
 		{
@@ -49,11 +102,15 @@ namespace DCLF::Direct
 			case RecordPass::Depth:
 				{
 					const auto& main = *bindings.main;
+					if (const auto pushed = PushedPipeline(a_context, index); pushed.valid())
+						return pushed;
 					return index < main.zGroups.size() && main.zGroups[index] < main.zPipelines.size() ? main.zPipelines[main.zGroups[index]] : rhi::PipelineHandle{};
 				}
 			case RecordPass::Colour:
 				{
 					const auto& main = *bindings.main;
+					if (const auto pushed = PushedPipeline(a_context, index); pushed.valid())
+						return pushed;
 					return index < main.plainColour.size() ? main.plainColour[index] : rhi::PipelineHandle{};
 				}
 			case RecordPass::DecalDepth:
@@ -87,6 +144,12 @@ namespace DCLF::Direct
 			const rhi::PipelineHandle previous = a_context.boundPipeline;
 			a_context.boundPipeline = BucketPipeline(a_context, a_bucket, a_context.boundVertexLayout);
 			if (a_context.boundPipeline.valid()) {
+				if (a_context.pushedColour) {
+					const auto& buckets = a_context.set.buckets[static_cast<std::size_t>(a_context.view)].pipeline;
+					const bool main = a_bucket < buckets.size() && PushedPipeline(a_context, buckets[a_bucket]).valid();
+					if (main != a_context.mainLayoutBound)
+						BindListLayout(a_context, main);
+				}
 				a_context.list.BindPipeline(a_context.boundPipeline);
 				++a_context.binds;
 				if (previous.index == a_context.boundPipeline.index && previous.generation == a_context.boundPipeline.generation)
@@ -113,6 +176,27 @@ namespace DCLF::Direct
 			const std::uint32_t poolFirst = bindings.poolFirsts[args.geometrySlot];
 			if (poolFirst == Draws::IndexPool::kNoRange)
 				return false;
+			auto& list = a_context.list;
+			if (a_context.mainLayoutBound) {
+				// A device-generated draw's Constant argument (its sequence's bytes 4-99, BuildDrawsCS's StoreSequence): the rows placed at
+				// the set's bases (an animated material row at its row of the frame's copy), their blocks from them, the draw's object word.
+				const DrawSequence* source = set.Sequence(a_sequence);
+				if (!source)
+					return false;
+				DrawSequence s = *source;
+				s.pipelineRowAddress += set.pipelineRowsBase;
+				const std::uint64_t row = s.materialRowAddress / kMaterialRowBytes;
+				const std::uint32_t animated = bindings.animatedRows && row < set.animatedRowOf.size() ? set.animatedRowOf[row] : ~0u;
+				s.materialRowAddress = animated != ~0u ? bindings.animatedRows + std::uint64_t(animated) * kMaterialRowBytes : s.materialRowAddress + set.materialRowsBase;
+				s.objectIndex = a_objectWord;
+				SetSequenceBlocks(s);
+				std::uint32_t pushed[kDrawPushArgumentWords];
+				std::memcpy(pushed, reinterpret_cast<const std::byte*>(&s) + 4, sizeof(pushed));
+				list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushArgumentWords, pushed);
+				++a_context.pushes;
+				list.DrawIndexed(args.indexCount, 1, poolFirst + args.firstIndex, 0, 0);
+				return true;
+			}
 			std::uint32_t words[kDirectDrawWords]{};
 			Split(words + kZDrawPushSequences, set.sequencesAddress + std::uint64_t(a_sequence) * sizeof(DrawSequence));
 			switch (a_context.pass) {
@@ -129,7 +213,6 @@ namespace DCLF::Direct
 			}
 			words[kDirectDrawPushObjectWord] = a_objectWord;
 			words[kDirectDrawPushFlags] = kDirectFlagObjectWord | kDirectFlagRelativeRows;
-			auto& list = a_context.list;
 			list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDirectDrawWords, words);
 			++a_context.pushes;
 			list.DrawIndexed(args.indexCount, 1, poolFirst + args.firstIndex, 0, 0);
@@ -254,7 +337,6 @@ namespace DCLF::Direct
 		a_context.boundPipeline = {};
 		a_context.boundVertexLayout = 0;
 		const auto& bindings = a_context.bindings;
-		const bool shadowLayout = a_context.pass == RecordPass::Shadow || a_context.pass == RecordPass::Refraction;
 		if (a_context.pass == RecordPass::Shadow ? !bindings.shadow || !bindings.shadow->valid : !bindings.main || !bindings.main->valid)
 			return false;
 		const rhi::PipelineLayoutHandle layout = a_context.pass == RecordPass::Shadow ? bindings.shadow->layout :
@@ -265,30 +347,11 @@ namespace DCLF::Direct
 		auto& list = a_context.list;
 		list.SetDescriptorHeaps(bindings.resourceHeap, bindings.samplerHeap);
 		list.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
-		list.BindLayout(layout);
-		if (shadowLayout)
-			list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kShadowPushWords, bindings.shadowPush.data());
-		else
-			list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, bindings.framePush.data());
-		// The draw range whole, once: each draw then pushes its first kDirectDrawWords.
-		const std::uint32_t zeros[kDrawPushWords]{};
-		list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, zeros);
-		// The set's row bases (its sequences' rows are relative), kept by every draw's push of its first words.
-		std::uint32_t bases[4]{};
-		const auto& set = a_context.set;
-		if (a_context.pass == RecordPass::Shadow) {
-			Split(bases + 2, set.shadowRowsBase);
-		} else {
-			Split(bases, set.pipelineRowsBase);
-			Split(bases + 2, set.materialRowsBase);
-		}
-		list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, kDirectDrawPushRowBases, 4, bases);
-		// The main rows' animated rows read from the frame's copy (the texture transforms' TexcoordOffset).
-		if (a_context.pass != RecordPass::Shadow && bindings.animatedRows) {
-			std::uint32_t animated[2]{};
-			Split(animated, bindings.animatedRows);
-			list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, kDirectDrawPushAnimatedRows, 2, animated);
-		}
+		// A colour list binds the main layout at its first bucket with a colour pipeline (BindBucket).
+		a_context.pushedColour = bindings.main && bindings.main->layout.valid() &&
+		                         ((a_context.pass == RecordPass::Colour && ExperimentOn(kExpPushedColour) && !bindings.main->colour.empty()) ||
+		                          (a_context.pass == RecordPass::Depth && ExperimentOn(kExpPushedDepth) && !bindings.offsetDepth && !bindings.main->depth.empty()));
+		BindListLayout(a_context, false);
 		list.SetIndexBuffer(rhi::IndexBufferView{ bindings.indexPool, 0, 0, rhi::Format::R16_UInt });  // the whole buffer
 		if (a_context.pass == RecordPass::Refraction) {
 			a_context.boundBucket = 0;
@@ -440,9 +503,11 @@ namespace DCLF::Direct
 		// Each family's draw (its indirect executions) counted as one of the main view's: a site that drew only families drew something.
 		a_context.drawn += drawn;
 		CountDrawn(a_context, drawn);
-		// The families bound their own pipelines and draw words: the next lane binds its bucket again (and pushes its own words).
+		// The families bound their own pipelines and draw words: the next lane binds its bucket again (and pushes its own words), and
+		// a pushed colour lane the main layout.
 		a_context.boundBucket = ~0u;
 		a_context.boundPipeline = {};
+		a_context.mainLayoutBound = false;
 	}
 
 	bool RecordSecondary(RecordContext& a_context, const rhi::SecondaryInheritance& a_inheritance, const CulledBatch& a_batch, rhi::CommandList& a_secondary)

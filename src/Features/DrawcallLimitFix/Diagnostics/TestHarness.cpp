@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "TestHarness.h"
 
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatches.h"
@@ -10,16 +11,22 @@
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
+#include "Features/RemoteControl/NvPerf.h"
+#include "GpuEventTimers.h"
 #include "Globals.h"
 
 #include <Tracy/Tracy.hpp>
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "State.h"
 
+#include <ORGModuleServices/PipelineRegistry.h>
 #include <OpenRenderGraph/PersistentGraphHost.h>
 #include <Render/RenderGraph/ExperimentalRhiExecution.h>
 
 #include <mutex>
+#include <optional>
+#include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -27,6 +34,73 @@ namespace DCLF
 {
 	namespace
 	{
+		/**
+		 * @brief What the commands' waits test (render thread, the Present the harness runs at): the last reload asked for, the last NvPerf
+		 * capture started, the signals a remote client sent (dclf:signal), the feature's short name; and, for any thread, the harness's
+		 * progress (TestHarnessStatus).
+		 */
+		struct HarnessState
+		{
+			bool reloadAsked = false;
+			std::uint64_t reloadSerial = 0, reloadGeneration = 0;  // the registry's before the reload was asked
+			std::uint64_t nvperfCapture = 0;                         // 0: none started
+			std::set<std::string> signals;
+			std::string feature;
+
+			std::mutex statusMutex;
+			TestHarnessProgress status;
+		};
+		HarnessState& Harness()
+		{
+			static HarnessState state;
+			return state;
+		}
+
+		/**
+		 * @brief A command list's wait (dclf:wait=<condition>): the list holds until its condition holds, then the commands after it run as
+		 * many frames later as it held, so a list's gaps are frames of the condition's outcome, not of its latency.
+		 * - "reload": the last dclf:reload-shaders finished, and its rebuilt pipelines (if any) are swapped in.
+		 * - "settled": the frames draw under the requested toggles (the installed publication's set is the requested one) on the pipeline
+		 *   they choose (the graph built for it); at once with the feature off.
+		 * - "nvperf": the last dclf:nvperf capture done or failed.
+		 * - "signal:<name>": dclf:signal=<name> was run (a remote client's, through DevBench's communityshaders.dclf); consumed.
+		 */
+		struct Wait
+		{
+			std::string condition;
+			std::uint32_t since = 0;  // the frame it started at
+		};
+
+		bool WaitHolds(const Wait& a_wait)
+		{
+			auto& harness = Harness();
+			const auto& condition = a_wait.condition;
+			if (condition == "reload") {
+				const auto* registry = RenderGraphRuntime::PipelineRegistry();
+				if (!registry || !harness.reloadAsked)
+					return true;
+				const auto reload = registry->LastReload();
+				return reload.serial > harness.reloadSerial && (reload.rebuilt == 0 || registry->Generation() > harness.reloadGeneration);
+			}
+			if (condition == "settled") {
+				if (globals::state->IsFeatureDisabled(harness.feature))
+					return true;
+				const auto& requested = DCLF::Toggles::Get().Requested();
+				return DCLF::Toggles::Get().Frame() == requested &&
+				       DCLF::Draws::GraphBuiltForCpu() == DCLF::CpuPipelineFor(requested, DCLF::Draws::CurrentGraphConditions().interior);
+			}
+			if (condition == "nvperf") {
+				if (!harness.nvperfCapture)
+					return true;
+				const auto latest = NvPerf::LatestResult();
+				return latest && latest->id >= harness.nvperfCapture;
+			}
+			if (condition.rfind("signal:", 0) == 0)
+				return harness.signals.erase(condition.substr(7)) != 0;
+			logger::warn("[DCLF] test wait: no condition '{}' (reload, settled, nvperf, signal:<name>); not waiting", condition);
+			return true;
+		}
+
 		/**
 		 * @brief Test switch CS_DCLF_TEST_COMMANDS="<frame>:<console command>;...": runs each console command
 		 * once the main pass has run that many frames (loading screens do not count), on the main thread.
@@ -68,8 +142,45 @@ namespace DCLF
 				if (DCLF::Scene::FrameView::IsLoadingScreenUp())
 					return;
 				const std::uint32_t a_frame = ++frame;
-				while (next < commands.size() && a_frame >= commands[next].frame)
-					Run(commands[next++].command, a_frame);
+				if (wait) {
+					if (!WaitHolds(*wait)) {
+						Publish(a_frame);
+						return;
+					}
+					shift += a_frame - wait->since;
+					logger::info("[DCLF] test wait '{}' held frames {}-{} ({} frames); the commands after it run {} frames later", wait->condition, wait->since, a_frame,
+						a_frame - wait->since, shift);
+					wait.reset();
+				}
+				while (!wait && next < commands.size() && a_frame >= commands[next].frame + shift) {
+					const std::string& command = commands[next++].command;
+					if (command.rfind("dclf:wait=", 0) != 0) {
+						Run(command, a_frame);
+						continue;
+					}
+					logger::info("[DCLF] test command at frame {}: {}", a_frame, command);
+					wait = Wait{ command.substr(10), a_frame };
+					if (WaitHolds(*wait)) {
+						logger::info("[DCLF] test wait '{}' held at once", wait->condition);
+						wait.reset();
+					}
+				}
+				Publish(a_frame);
+			}
+
+			/** @brief The progress a remote client reads (TestHarnessStatus). */
+			void Publish(std::uint32_t a_frame) const
+			{
+				auto& harness = Harness();
+				std::lock_guard lock(harness.statusMutex);
+				auto& status = harness.status;
+				status.frame = a_frame;
+				status.shift = shift;
+				status.next = static_cast<std::uint32_t>(next);
+				status.commands = static_cast<std::uint32_t>(commands.size());
+				status.nextFrame = next < commands.size() ? commands[next].frame + shift : 0;
+				status.nextCommand = next < commands.size() ? commands[next].command : std::string{};
+				status.waiting = wait ? wait->condition : std::string{};
 			}
 
 			/** @brief Runs one command: a "dclf:" command here, any other the console's, on the main thread. */
@@ -168,10 +279,89 @@ namespace DCLF
 					// shader watcher asks for an edit (an include: every one).
 					if (command == "dclf:reload-shaders" || command.rfind("dclf:reload-shaders=", 0) == 0) {
 						const std::string value = command.size() > 20 ? command.substr(20) : std::string{};
+						// dclf:wait=reload's baseline: the registry's before this reload.
+						if (const auto* registry = RenderGraphRuntime::PipelineRegistry()) {
+							auto& harness = Harness();
+							harness.reloadAsked = true;
+							harness.reloadSerial = registry->LastReload().serial;
+							harness.reloadGeneration = registry->Generation();
+						}
 						if (value == "all")
 							RenderGraphRuntime::RequestShaderReload({}, true);
 						else
 							RenderGraphRuntime::RequestShaderReload(value);
+						return;
+					}
+					if (command.rfind("dclf:wait=", 0) == 0) {
+						logger::warn("[DCLF] test command {}: a wait holds CS_DCLF_TEST_COMMANDS' list; sent alone it does nothing", command);
+						return;
+					}
+					// "dclf:mark[=<label>]": nothing but this line in the log, a phase's boundary for the run's analysis.
+					if (command == "dclf:mark" || command.rfind("dclf:mark=", 0) == 0)
+						return;
+					// "dclf:feature=0|1": the feature's menu toggle (as CS_DCLF_TEST_TOGGLE flips it), for in-session on/off A/Bs.
+					if (command.rfind("dclf:feature=", 0) == 0) {
+						globals::state->SetFeatureDisabled(Harness().feature, command.substr(13) == "0");
+						return;
+					}
+					// "dclf:signal=<name>": releases a list's dclf:wait=signal:<name> (a remote client's; kept until a wait takes it).
+					if (command.rfind("dclf:signal=", 0) == 0) {
+						Harness().signals.insert(command.substr(12));
+						return;
+					}
+					// "dclf:define=<NAME>[=<value>],...": extra defines for every DCLF stage compiled from now on (empty: none), taken up by the
+					// next dclf:reload-shaders, so a shader A/B is an #if in the source, compared in one launch.
+					if (command.rfind("dclf:define=", 0) == 0) {
+						DCLF::ShaderPrograms::SetTestDefines(command.substr(12));
+						return;
+					}
+					// "dclf:gpu-window=<label>": the GPU event timers' frames from the next on are one window, logged as one block once read
+					// back ("[GpuEvents] window '<label>'"); "-" is not logged. Needs CS_GPU_EVENT_TIMERS.
+					if (command.rfind("dclf:gpu-window=", 0) == 0) {
+						if (!GpuEventTimers::Requested())
+							logger::warn("[DCLF] test command {}: the GPU event timers are off (CS_GPU_EVENT_TIMERS)", command);
+						GpuEventTimers::StartWindow(command.substr(16));
+						return;
+					}
+					// "dclf:nvperf=<range>|<range>...[#<samples>]": an NvPerf capture of those ranges (a trailing '*' a prefix) from the next
+					// frame, 3 samples by default; its rows are logged and appended to the CSV, and dclf:wait=nvperf waits for it.
+					if (command.rfind("dclf:nvperf=", 0) == 0) {
+						std::string value = command.substr(12);
+						NvPerf::CaptureConfiguration configuration;
+						configuration.samples = 3;
+						// "@<metric>[:<kind>],...": those metrics instead of the defaults (NvPerf::ParseMetric's form).
+						if (const auto at = value.rfind('@'); at != std::string::npos) {
+							std::stringstream list(value.substr(at + 1));
+							for (std::string metric; std::getline(list, metric, ',');) {
+								NvPerf::MetricRequest request;
+								std::string error;
+								if (NvPerf::ParseMetric(metric, request, error))
+									configuration.metrics.push_back(std::move(request));
+								else
+									logger::warn("[DCLF] test command: NvPerf metric '{}': {}", metric, error);
+							}
+							value.resize(at);
+						}
+						if (const auto hash = value.rfind('#'); hash != std::string::npos) {
+							configuration.samples = std::max(1u, static_cast<std::uint32_t>(std::strtoul(value.c_str() + hash + 1, nullptr, 10)));
+							value.resize(hash);
+						}
+						for (std::size_t start = 0; start <= value.size();) {
+							const auto bar = value.find('|', start);
+							auto range = value.substr(start, bar == std::string::npos ? std::string::npos : bar - start);
+							if (!range.empty())
+								configuration.ranges.push_back(std::move(range));
+							if (bar == std::string::npos)
+								break;
+							start = bar + 1;
+						}
+						std::uint64_t id = 0;
+						std::string error;
+						if (NvPerf::RequestCapture(configuration, id, error)) {
+							Harness().nvperfCapture = id;
+							logger::info("[DCLF] test command: NvPerf capture {} of {} ranges, {} samples", id, configuration.ranges.size(), configuration.samples);
+						} else
+							logger::warn("[DCLF] test command {}: no capture: {}", command, error);
 						return;
 					}
 					// "dclf:ts-dump=<epochs>": the next <epochs> completed epochs log their graphics timestamp ranges in GPU order ("[TSDUMP]").
@@ -411,6 +601,8 @@ namespace DCLF
 			std::vector<Command> commands;
 			std::size_t next = 0;
 			std::uint32_t frame = 0;
+			std::uint32_t shift = 0;  // frames the list's waits held: every later command runs that much later
+			std::optional<Wait> wait;
 		};
 
 		/**
@@ -543,22 +735,16 @@ namespace DCLF
 
 	void RunTestHarness(std::string_view a_feature)
 	{
+		if (Harness().feature.empty())
+			Harness().feature = a_feature;
 		{
 			std::vector<std::string> queued;
 			{
 				std::lock_guard lock(queuedMutex);
 				queued.swap(queuedCommands);
 			}
-			for (auto& command : queued) {
-				// "dclf:feature=0|1": the feature's menu toggle (as CS_DCLF_TEST_TOGGLE flips it), for in-session on/off A/Bs.
-				if (command.rfind("dclf:feature=", 0) == 0) {
-					const bool off = command.substr(13) == "0";
-					logger::info("[DCLF] test command: feature {}", off ? "off" : "on");
-					globals::state->SetFeatureDisabled(std::string(a_feature), off);
-					continue;
-				}
+			for (auto& command : queued)
 				TestCommands::Run(std::move(command), 0);
-			}
 		}
 		// CS_DCLF_TEST_EXIT=<frame>: a startup loop's run ends here, loading screens not counted. The log is flushed, then the
 		// process ends without the engine's shutdown, which is slow and not what such a run tests.
@@ -575,5 +761,12 @@ namespace DCLF
 		testToggle.OnFrame(std::string(a_feature));
 		static TestTurn testTurn;
 		testTurn.OnFrame();
+	}
+
+	TestHarnessProgress TestHarnessStatus()
+	{
+		auto& harness = Harness();
+		std::lock_guard lock(harness.statusMutex);
+		return harness.status;
 	}
 }

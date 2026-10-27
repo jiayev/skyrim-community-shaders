@@ -93,6 +93,7 @@ namespace DCLF::Features::Fades
 		// The depth commit's rows, inputs, write-back and root programs, after every feature's hook (Portals' programs among them).
 		RegisterCommit(a_context);
 		RegisterPasses(a_context);
+		RegisterPixelRows(a_context);
 		// Named as the named-address parity names them.
 		a_context.RegisterFrameBinding({ .name = "fade states SRV", .textureRegister = kFadeStatesRegister, .select = &SelectStatesBinding });
 		a_context.RegisterFrameBinding({ .name = "fade roots SRV", .textureRegister = kFadeRootsRegister, .select = &SelectRootsBinding });

@@ -43,6 +43,11 @@ namespace DCLF
 	inline constexpr std::uint32_t kFramePushRecord = 0;
 	inline constexpr std::uint32_t kFramePushRegisters = 2;
 	inline constexpr std::uint32_t kFramePushWords = kFramePushRegisters + 2 * (std::popcount(kFramePushVS) + std::popcount(kFramePushPS));
+	// The pass-wide blocks, in the frame push words' order (VS registers ascending, then PS). The main layout reads each as a uniform
+	// buffer descriptor whose heap index is in the frame record (DrawBindings::frameBlocks, FrameBlockViews), not as a pushed address:
+	// Vulkan's descriptor-buffer model lowers an address-sourced block to raw pointer loads, which cost the colour pass's pixel stage
+	// about 40 registers on NVIDIA against a descriptor's (tools/shader-compare).
+	inline constexpr std::uint32_t kFrameBlocks = std::popcount(kFramePushVS) + std::popcount(kFramePushPS);
 	// A draw's push data (DrawSequence's Constant argument: its bytes 4-99): pipeline row address (VS b0), material row address (VS
 	// b1), object word, the geometry's two vertex buffer views (address, size, stride each), which the vertex stage pulls its attributes
 	// through (DCLF_PULLED_VERTICES; DCLFObjects.hlsli, DCLFPushData, whose packoffsets are these words), a pad (word 13), then the
@@ -214,6 +219,12 @@ namespace DCLF
 	 * binding answered with the pool's descriptor; unbound reads none, the row's own.
 	 */
 	inline constexpr std::uint32_t kFadeSeedsRegister = kTextureRegisters - 11;
+	/**
+	 * @brief t116: the frame's object rows (DCLFPixelObjectRow: MaterialData with its LOD fades and alpha fade, EmitColor and SSRParams.w,
+	 * the cross-fade copy's alpha, the alpha test's reference), pixel stage, by object slot: Features/Fades' "pixel-rows" pool, which
+	 * PixelRowsCS writes first in the depth segment. A frame binding.
+	 */
+	inline constexpr std::uint32_t kPixelObjectsRegister = kTextureRegisters - 12;
 
 	/**
 	 * @brief A binding record in GPU memory, one entry per Lighting register, mapped by the layout (VK_EXT_descriptor_heap indirect
@@ -225,8 +236,10 @@ namespace DCLF
 		std::uint64_t pixelConstants[kConstantBufferRegisters];
 		std::uint32_t textures[kTextureRegisters];  // resource descriptor heap indices
 		std::uint32_t samplers[kSamplerRegisters];  // sampler descriptor heap indices
+		std::uint32_t frameBlocks[kFrameBlocks];    // the pass-wide blocks' uniform buffer descriptors' heap indices (FrameBlockViews)
+		std::uint32_t pad = 0;
 	};
-	static_assert(sizeof(DrawBindings) == 800);
+	static_assert(sizeof(DrawBindings) == 864);
 
 	/** @brief The registers a pipeline's shaders declare, which a draw's DrawBindings must supply. */
 	struct RegisterUsage

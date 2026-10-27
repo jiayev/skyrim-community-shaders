@@ -37,6 +37,7 @@ namespace DCLF::Api
 	public:
 		std::uint64_t seq = 0;                     // the frame's producer
 		const FrameGlobals* globals = nullptr;     // the frame's engine globals (null: none captured)
+		std::uint64_t objectSlots = 0;             // the object slots the frame's shading rows hold (DCLFShading's rows)
 	};
 
 	/**

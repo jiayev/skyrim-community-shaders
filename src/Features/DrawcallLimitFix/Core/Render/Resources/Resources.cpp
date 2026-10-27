@@ -261,9 +261,9 @@ namespace DCLF::Draws
 		}
 
 		/**
-		 * @brief The engine's screen-space shadow mask (kSHADOW_MASK), as LocalShadowMaskCS writes the local shadow lights' channels into
-		 * it: an RGBA8 image with a UAV (Community Shaders' CreateRenderTarget_ShadowMask). Without either, DCLF's receivers keep what the
-		 * engine drew there (nothing for them: their local shadow lights are dark).
+		 * @brief The engine's screen-space shadow mask (kSHADOW_MASK), which the colour draws read (their rows' t14) and MainOpaquePass
+		 * declares. The engine draws it whole (Main::RenderShadowmasks: a full-screen pass per shadow light from the depth), DCLF's
+		 * pixels included.
 		 */
 		void ImportShadowMask(Resources& a_state, rhi::Device a_device)
 		{
@@ -275,32 +275,19 @@ namespace DCLF::Draws
 			D3D11_TEXTURE2D_DESC textureDesc{};
 			if (mask.texture)
 				mask.texture->GetDesc(&textureDesc);
-			if (!mask.texture || !(textureDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) || textureDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM ||
-				!RenderGraphRuntime::Get().DescribeResource(mask.texture, info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE) {
-				logger::warn("[DCLF] the shadow mask (kSHADOW_MASK) is not an RGBA8 image with UAV access (format {}, bind flags {:#x}); DCLF's receivers get no "
-							 "local shadow light",
-					static_cast<int>(textureDesc.Format), textureDesc.BindFlags);
+			if (!mask.texture || textureDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM || !RenderGraphRuntime::Get().DescribeResource(mask.texture, info) ||
+				info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE) {
+				logger::warn("[DCLF] the shadow mask (kSHADOW_MASK) is not an RGBA8 image (format {}); the colour pass does not declare it", static_cast<int>(textureDesc.Format));
 				return;
 			}
 			org::TextureDescription maskDesc{};
 			maskDesc.imageDimensions.push_back({ textureDesc.Width, textureDesc.Height, 0, 0 });
 			maskDesc.format = rhi::Format::R8G8B8A8_UNorm;
 			maskDesc.channels = 4;
-			maskDesc.hasUAV = true;
-			maskDesc.uavFormat = maskDesc.format;
-			// The colour draws read it through the engine's view (their rows' t14); declared for the barrier after the resolve.
+			// The colour draws read it through the engine's view (their rows' t14); declared for the barrier after the engine's mask draws.
 			maskDesc.hasSRV = true;
 			maskDesc.srvFormat = maskDesc.format;
 			a_state.shadowMask = ImportImage(a_device, info.image, maskDesc, "DCLF shadow mask");
-			if (!a_state.shadowMask)
-				return;
-			a_state.shadowMaskWidth = textureDesc.Width;
-			a_state.shadowMaskHeight = textureDesc.Height;
-			a_state.localShadowMasks = ComputeProgram::Load(a_device, { .source = kLocalShadowMaskShader, .constantWords = kLocalShadowMaskConstantWords });
-			if (!a_state.localShadowMasks) {
-				logger::warn("[DCLF] the local shadow mask program could not be created; DCLF's receivers get no local shadow light");
-				a_state.shadowMask.reset();
-			}
 		}
 
 		/**
@@ -467,6 +454,9 @@ namespace DCLF
 			logger::error("[DCLF] Draw data buffers have no device address");
 			return false;
 		}
+		a_state.frameBlocks = FrameBlockViews::Create(a_device, a_state.frameConstants);
+		if (!a_state.frameBlocks)
+			return false;
 		return true;
 	}
 
@@ -834,6 +824,9 @@ namespace DCLF
 			state->frameConstantsAddress = AddressOf(device, *state->frameConstants);
 			if (!state->frameConstantsAddress)
 				return fail("frame constants have no device address");
+			state->frameBlocks = FrameBlockViews::Create(device, state->frameConstants);
+			if (!state->frameBlocks)
+				return fail("the frame blocks' views could not be made");
 			MatchViewFrameBuffers(*state, resources->frameBuffers);
 		}
 		// The forward part draws through the main set's state classes' colour signatures with an explicit preprocess, as ForwardDrawPass.
@@ -967,7 +960,7 @@ namespace DCLF
 		desc.channels = 1;
 		desc.hasDSV = true;
 		desc.dsvFormat = desc.format;
-		// Readable too: the main resources' local shadow masks sample the shadow maps (LocalShadowMaskCS).
+		// Readable too, as the engine's views of the maps are (an occlusion map's readers sample it).
 		desc.hasSRV = true;
 		desc.srvFormat = DepthReadFormat(desc.format);
 		// The shadow maps', then each occlusion map's (its entry's target label).

@@ -53,7 +53,7 @@ namespace DCLF::Extensions
 	 * @brief The most frame bindings there may be: a build embeds their values (Draws::ResourceAddresses::frameBindings). A binding past
 	 * them fails the install: grow this first.
 	 */
-	inline constexpr std::size_t kFrameBindingSlots = 4;
+	inline constexpr std::size_t kFrameBindingSlots = 5;
 	/** @brief A binding's value when its select gave no buffer: the register keeps what the record gave it. */
 	inline constexpr std::uint32_t kNoFrameBinding = ~0u;
 	/** @brief The bindings' values for one frame, by registration (Extensions::RegisteredFrameBindings). */

@@ -96,8 +96,6 @@ namespace DCLF::Draws
 		std::vector<Range> ranges;
 	};
 	/** @brief The sort of a forward range of a_sequences (the main one, a view's), its classes' counts read from a_counts. */
-	/** @brief The local shadow lights' masks (Passes/LocalShadowMasks.cpp); null without the mask, its program or both shadow maps. */
-	std::shared_ptr<org::RenderPass> MakeLocalShadowMaskPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment);
 	std::shared_ptr<org::RenderPass> MakeForwardSortPass(Versioned a_sequences, LatchedTarget a_counts, std::function<ForwardSortSource(const org::PassPrepareContext&)> a_source);
 
 	/** @brief The rows' strides into BuildDraws' constants (BuildDrawsCS: RowsOf; the addresses are the latch's: PayloadLatch). */
@@ -120,6 +118,11 @@ namespace DCLF::Draws
 		const std::uint64_t animatedRows = PassAnimatedRows();
 		a_latch.animatedRowsLo = static_cast<std::uint32_t>(animatedRows);
 		a_latch.animatedRowsHi = static_cast<std::uint32_t>(animatedRows >> 32);
+		// The frame's per-object rows (Api::PassDef::frameRows), which their pass writes from this latch.
+		const auto frameRows = PassFrameRows();
+		a_latch.frameRowsLo = static_cast<std::uint32_t>(frameRows.address);
+		a_latch.frameRowsHi = static_cast<std::uint32_t>(frameRows.address >> 32);
+		a_latch.frameRowsCount = frameRows.address ? frameRows.count : 0u;
 	}
 	/** @brief The installed payload's shadow parts into a shadow or occlusion view's latch: the scene list, the geometry table, the shadow rows. */
 	inline void ShadowPayloadLatch(const PayloadVersions& a_payload, BuildDrawsLatch& a_latch)
