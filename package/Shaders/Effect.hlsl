@@ -1065,6 +1065,14 @@ PS_OUTPUT main(PS_INPUT input)
 	if (Permutation::RenderToUI && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection))
 		psout.Diffuse.xyz = ColorManagement::WorkingToUI(psout.Diffuse.xyz);
 #	endif
+#	if !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
+	psout.Diffuse.rgb = PreExposure::EncodeScene(psout.Diffuse.rgb);
+#		if defined(DEFERRED)
+	psout.Specular.rgb = PreExposure::EncodeScene(psout.Specular.rgb);
+#		elif !defined(MOTIONVECTORS_NORMALS)
+	psout.Color2.rgb = PreExposure::EncodeScene(psout.Color2.rgb);
+#		endif
+#	endif
 	return psout;
 }
 #endif

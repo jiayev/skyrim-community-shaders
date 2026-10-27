@@ -468,6 +468,15 @@ bool SceneWidgetInterceptor::InterceptInt(const char* a_label, int& a_value, con
 	return InterceptScalar([&a_draw](const char*, int* a_bound) { return a_draw(*a_bound); }, a_label, &a_value);
 }
 
+bool SceneWidgetInterceptor::InterceptFloat3(const char* a_label, float* a_value, const std::function<bool(float*)>& a_draw)
+{
+	if (!ShouldIntercept())
+		return a_draw(a_value);
+	InterceptedCall interceptedCall;
+	SceneWidgetBinding::Guard guard(a_label, SceneWidgetBinding::Value::FloatVector(a_value, 3));
+	return guard.Finish(a_draw(guard.Float()));
+}
+
 const SceneWidgetInterceptor::Context* SceneWidgetInterceptor::GetArmedContext()
 {
 	return armed ? &armedContext : nullptr;

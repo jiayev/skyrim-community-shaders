@@ -105,8 +105,8 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	float3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];
 	float3 normalVS = GBuffer::DecodeNormal(normalGlossiness.xy);
 
-	float3 diffuseColor = MainRW[dispatchID.xy].xyz;
-	float3 specularColor = SpecularTexture[dispatchID.xy];
+	float3 diffuseColor = PreExposure::Decode(MainRW[dispatchID.xy].xyz);
+	float3 specularColor = PreExposure::Decode(SpecularTexture[dispatchID.xy]);
 	float3 albedo = AlbedoTexture[dispatchID.xy];
 
 	float depth = DepthTexture[dispatchID.xy];
@@ -327,6 +327,6 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 #endif
 
-	MainRW[dispatchID.xy] = float4(color, 1.0);
+	MainRW[dispatchID.xy] = float4(PreExposure::Encode(color), 1.0);
 	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = float4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);
 }

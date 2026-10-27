@@ -302,6 +302,9 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif  // DEFERRED
 #	endif      // RENDER_DEPTH
 
+#	if !defined(RENDER_DEPTH)
+	psout.Diffuse.rgb = PreExposure::EncodeScene(psout.Diffuse.rgb);
+#	endif
 	return psout;
 }
 #endif  // PSHADER

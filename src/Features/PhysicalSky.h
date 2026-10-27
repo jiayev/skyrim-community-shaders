@@ -107,6 +107,7 @@ struct PhysicalSky final : public Feature
 
 		float2 cloudShadowRemapRange = float2{ 0, 1.f };
 
+		// Linear RGB illuminance before extinction; working-gamut Y is in lux.
 		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 10.f;
 		float3 masserColor = float3{ 1.0f, 0.6f, 0.6f } * 0.1f;
 		float3 secundaColor = float3{ 0.8f, 1.0f, 1.0f } * 0.05f;

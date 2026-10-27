@@ -697,7 +697,30 @@ void PhysicalSky::SettingsCelestials()
 		ImGui::PushID("Sun");
 		ImGui::ColorEdit3(T(TKEY("light_color"), "Light Color"), &settings.sunlightColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("light_color_hint"), "This sets the light color BEFORE it goes through the atmosphere i.e. extraterrestrial radiance."));
+			ImGui::Text("%s", T(TKEY("sun_light_color_hint"), "Linear RGB illuminance before atmospheric extinction. The lux control scales all channels together, preserving the color."));
+		const char* illuminanceLabel = T(TKEY("sun_illuminance"), "Solar Illuminance");
+		SceneWidgetInterceptor::InterceptFloat3(illuminanceLabel, &settings.sunlightColor.x, [&](float* rgb) {
+			float3 color{ rgb[0], rgb[1], rgb[2] };
+			float illuminance;
+			// Match Color::RGBToLuminance in the active working gamut.
+			if (globals::features::linearLighting.IsACEScgActive()) {
+				static const auto matrix = getWhiteAdaptedRGBMatrix("sRGB", "ACEScg");
+				const auto working = TransformColor(color, matrix);
+				illuminance = working.x * 0.2722287168f + working.y * 0.6740817658f + working.z * 0.0536895174f;
+			} else {
+				illuminance = color.x * 0.2125f + color.y * 0.7154f + color.z * 0.0721f;
+			}
+			const float previous = illuminance;
+			if (!ImGui::DragFloat(illuminanceLabel, &illuminance, 0.1f, 0.f, FLT_MAX, "%.3f lux", ImGuiSliderFlags_AlwaysClamp) || !std::isfinite(illuminance))
+				return false;
+			color = previous > 0.f ? color * (illuminance / previous) : float3(illuminance);
+			rgb[0] = color.x;
+			rgb[1] = color.y;
+			rgb[2] = color.z;
+			return true;
+		});
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T(TKEY("sun_illuminance_hint"), "Illuminance on a surface perpendicular to the sun, before atmospheric extinction: 10 lux supplies 10 linear lighting units. Calibrated for LL + PBR with Override Directional Light enabled. Directional Light Multiplier, horizon fading and shadows apply afterward."));
 		ImGui::Checkbox(T(TKEY("procedural_sun"), "Procedural Sun"), &settings.proceduralSun);
 		ImGui::SliderAngle(T(TKEY("sun_disk_angular_radius"), "Sun Disk Angular Radius"), &settings.sunDiskRad, 0.f, 10.f, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())

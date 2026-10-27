@@ -448,6 +448,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		psout.Color.xyz = ColorManagement::LinearToScene(lerp(refractColor, reflectColor, fresnel) + directLighting);
 		psout.Color.w = alpha;
 		psout.Normal = float4(0, 1, 0, alpha);
+		psout.Color.rgb = PreExposure::EncodeScene(psout.Color.rgb);
 		return psout;
 	}
 #	endif
@@ -507,6 +508,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (Permutation::RenderToUI && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection))
 		psout.Color.rgb = ColorManagement::WorkingToUI(psout.Color.rgb);
 #	endif
+	psout.Color.rgb = PreExposure::EncodeScene(psout.Color.rgb);
 	return psout;
 }
 #endif
