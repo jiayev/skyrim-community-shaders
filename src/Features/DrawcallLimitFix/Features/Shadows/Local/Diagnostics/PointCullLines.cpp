@@ -59,6 +59,8 @@ namespace DCLF::Features::Shadows::Local
 				c.emptyUnstamped ? " <- STAMPS" : "", c.spheresChecked, c.spheresDiffer, c.spheresChecked ? (c.spheresDiffer ? " <- SPHERES" : " <- OK") : "",
 				p.sphereCompared, p.sphereAgree, p.sphereEngineOnly, p.sphereCompared ? (p.sphereEngineOnly ? " <- EMPTY CULL BITS" : " <- OK") : "", p.sphereDclfOnly,
 				p.sphereFirstEngineOnly.empty() ? "" : "; first engine-only: " + p.sphereFirstEngineOnly);
+			list += fmt::format("\n[DCLF] spot lights' shadow culls: {} Accumulate calls, {:.3f} ms in all; {} culled empty (DCLF draws the view; bits from the process's planes), {} with a view not DCLF's, {} portal-strict kept native",
+				c.spotCalls, c.spotTicks * Reports::MsPerTick(), c.emptySpots, c.spotsNotCovered, c.spotsStrict);
 			return timing + "\n" + withFirst + list;
 		}
 	}

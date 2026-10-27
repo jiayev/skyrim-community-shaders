@@ -51,7 +51,7 @@ namespace DCLF::Features::Shadows::Local
 			light.sphere = { niLight->world.translate.x, niLight->world.translate.y, niLight->world.translate.z,
 				const_cast<RE::NiLight*>(niLight)->GetLightRuntimeData().radius.x };
 		light.views.resize(data.shadowmapDescriptors.size());
-		// A portal-strict point light's casters pass its strict gates: its entry in the selection's atlas (encoded: the commits publish it).
+		// A portal-strict light's casters (point or spot) pass its strict gates: its entry in the selection's atlas (encoded: the commits publish it).
 		std::uint32_t portalContext = 0;
 		if (const auto* selection = LightSelection::Get().Current(frame); selection && !selection->portalContexts.empty())
 			if (const auto* entry = selection->LightOf(a_light); entry && entry->portalContext && entry->portalContextIndex != ~0u)

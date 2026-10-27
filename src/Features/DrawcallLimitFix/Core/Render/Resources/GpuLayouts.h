@@ -467,7 +467,7 @@ namespace DCLF::Draws
 		// The depth segment: the frame's main-camera portal programs (the cull binding Programs: a pooled backing's SRV, published
 		// whole by the depth commit). 0: none this frame (every reader takes the frustum alone). 0 elsewhere.
 		std::uint32_t portalProgramsIndex;
-		// A portal-strict point light's views and the colour segment: the frame's light context atlas and strict gates (the cull bindings
+		// A portal-strict light's views (point or spot) and the colour segment: the frame's light context atlas and strict gates (the cull bindings
 		// LightContexts and StrictGates: pooled backings' SRVs; 0 none, nothing is gated), and a view's light's atlas entry + 1 (0: its
 		// casters are not gated). PortalPrograms.hlsli's StrictGateRejects.
 		std::uint32_t lightContextsIndex;
