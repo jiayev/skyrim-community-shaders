@@ -2737,9 +2737,9 @@ stand-ins and the engine boundary are the GPU path's: the same objects are DCLF'
     Every site records into secondaries of the CS thread's (`SiteFrame.h`, `SiteOut`).
 -   **One descriptor model.** BasicRHI and DXVK must bind the same model in DXVK's command buffer: with DXVK on descriptor
     buffers and BasicRHI on heaps, NVIDIA fetched garbage descriptors in the callbacks' draws (render-graph.md, "External
-    commands in DXVK's command buffer"). DXVK and the graph negotiate it at device creation: descriptor heaps, or descriptor
-    buffers with BasicRHI's shaders lowered to them (BasicRHI README, "Two Vulkan binding models"). The CPU pipeline runs on
-    either; verified 2026-10-25 on both (CPU and parallel record, under the validation layer).
+    commands in DXVK's command buffer"). The graph runs on descriptor buffers alone, with BasicRHI's shaders lowered to them
+    (BasicRHI README, "Two Vulkan binding models"), and DXVK switches to them at device creation (render-graph.md, "Descriptor
+    buffers, negotiated").
 -   **The draw families** (tree LOD, grass) are drawn in their own rendering after main depth and after main colour, from
     their single-phase GPU cull in the depth site's pre-work; a family takes part through its contribution's `main.direct`
     (its draw row and arguments outside ORG), else it is the engine's in CPU mode.

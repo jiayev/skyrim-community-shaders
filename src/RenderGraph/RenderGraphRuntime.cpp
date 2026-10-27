@@ -72,11 +72,11 @@ namespace
 	// invalid unless vulkanMemoryModelDeviceScope is enabled as well.
 	// Drawcall Limit Fix draws through device-generated commands (optional: without it the graph
 	// runs, and DCLF stays off).
-	// BasicRHI binds descriptors in DXVK's own command buffers, so it runs on DXVK's model: DXVK grants
-	// descriptorHeap only while it runs on heaps, and descriptorBuffer + mutableDescriptorType only while it
-	// runs on descriptor buffers. Both are asked for; the binding model negotiation picks which applies.
+	// BasicRHI binds descriptors in DXVK's own command buffers, so it runs on DXVK's model, and the graph runs on descriptor
+	// buffers alone (descriptorBuffer + mutableDescriptorType, heaps emulated by BasicRHI's lowering): VK_EXT_descriptor_heap is
+	// not asked for (on NVIDIA it rendered DLSS black, and recording beside DXVK on it needed workarounds). The negotiation
+	// accepts only buffers, so DXVK runs on them wherever the device has them with mutable descriptors.
 	constexpr DxvkOrgInteropFeature kRequestedFeatures[] = {
-		{ VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME, "descriptorHeap" },
 		{ VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME, "descriptorBuffer" },
 		{ VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME, "mutableDescriptorType" },
 		// The descriptor-buffer model's heap sets are variable-count bindings (a bound heap need only cover its own capacity).
@@ -164,7 +164,8 @@ namespace
 				logger::info("[ORG]   {}", check);
 			logger::info("[ORG] Shader-visible heap capacities: descriptor heap {} / {}, descriptor buffer {} / {} (CBV/SRV/UAV / sampler; 0: unsupported)",
 				report.heapModelResources, report.heapModelSamplers, report.bufferModelResources, report.bufferModelSamplers);
-			return report.supportedModels;
+			// Descriptor buffers alone (kRequestedFeatures).
+			return report.supportedModels & rhi::vulkan::BindingModel_DescriptorBuffer;
 		} catch (...) {
 			return 0;
 		}
@@ -1244,25 +1245,21 @@ bool RenderGraphRuntime::Initialize()
 			properties.vendorID, properties.deviceID, driverText, VK_API_VERSION_MAJOR(properties.apiVersion), VK_API_VERSION_MINOR(properties.apiVersion),
 			VK_API_VERSION_PATCH(properties.apiVersion), info.enabledExtensionCount);
 	}
-	// BasicRHI runs on the model DXVK granted, which is DXVK's own (negotiated in NegotiateBindingModel): descriptor heaps, or
-	// descriptor buffers with mutable descriptors. On legacy descriptor sets DXVK grants neither.
-	const auto* heapFeatures = FindFeatures<VkPhysicalDeviceDescriptorHeapFeaturesEXT>(info.enabledFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT);
+	// BasicRHI runs on the model DXVK granted, which is DXVK's own (negotiated in NegotiateBindingModel): descriptor buffers with
+	// mutable descriptors. DXVK grants nothing on legacy descriptor sets, and is never asked for heaps.
 	const auto* bufferFeatures = FindFeatures<VkPhysicalDeviceDescriptorBufferFeaturesEXT>(info.enabledFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT);
 	const auto* mutableFeatures = FindFeatures<VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT>(info.enabledFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MUTABLE_DESCRIPTOR_TYPE_FEATURES_EXT);
-	const bool onHeaps = HasExtension(info, VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME) && heapFeatures && heapFeatures->descriptorHeap;
 	const bool onBuffers = HasExtension(info, VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME) && HasExtension(info, VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME) &&
 	                       bufferFeatures && bufferFeatures->descriptorBuffer && mutableFeatures && mutableFeatures->mutableDescriptorType;
-	if (!onHeaps && !onBuffers) {
+	if (!onBuffers) {
 		// The one cause seen in practice, named so the menu does not leave it to be guessed.
 		if (::GetModuleHandleW(L"renderdoc.dll"))
-			return disable("DXVK runs on legacy descriptor sets: RenderDoc is loaded, and its DXVK capture config turns off both descriptor heaps and "
-						   "descriptor buffers, which the render graph needs one of. Turn off RenderDoc capture to use the render graph.");
-		return disable("DXVK granted neither descriptor heaps nor descriptor buffers with mutable descriptors: it runs on legacy descriptor sets, or on a "
-					   "model BasicRHI cannot use on this device (see the binding model negotiation above and DXVK's 'Binding model' and "
-					   "'Interop feature denied' log lines)");
+			return disable("DXVK runs on legacy descriptor sets: RenderDoc is loaded, and its DXVK capture config turns off descriptor buffers, which the "
+						   "render graph needs. Turn off RenderDoc capture to use the render graph.");
+		return disable("DXVK did not grant descriptor buffers with mutable descriptors: it runs on legacy descriptor sets, or on a model BasicRHI cannot "
+					   "use on this device (see the binding model negotiation above and DXVK's 'Binding model' and 'Interop feature denied' log lines)");
 	}
-	logger::info("[ORG] Binding model: {}", onHeaps ? "descriptor heap (VK_EXT_descriptor_heap)" :
-	                                                  "descriptor buffer (VK_EXT_descriptor_buffer + VK_EXT_mutable_descriptor_type)");
+	logger::info("[ORG] Binding model: descriptor buffer (VK_EXT_descriptor_buffer + VK_EXT_mutable_descriptor_type)");
 
 	rhi::vulkan::AdoptedVulkanDeviceInfo adopt{};
 	adopt.getInstanceProcAddr = info.getInstanceProcAddr;
@@ -1687,6 +1684,25 @@ void RenderGraphRuntime::ConfigureFrame(FrameConfig a_config)
 	auto& runtime = Get();
 	runtime.frameConfig = std::move(a_config);
 	runtime.frameConfigured = true;
+}
+
+std::shared_ptr<org::ExternalEpochExecution> RenderGraphRuntime::ExecuteExternalEpoch(Segment a_segment,
+	const std::function<void(org::RenderGraph&)>& a_beforePrepare, std::shared_ptr<const void> a_resourceOwner)
+{
+	ZoneScopedN("CS.ORG.ExecuteExternalEpoch");
+	if (!IsActive() || !impl->asyncEpochs)
+		return nullptr;
+	impl->TakeCompletedEpochs();
+	std::function<void(org::RenderGraph&)> beforePrepare;
+	if (a_beforePrepare) {
+		beforePrepare = [&](org::RenderGraph& a_graph) {
+			ScopedPerfEvent inputsEvent(Impl::InputsLabel(a_segment));
+			a_beforePrepare(a_graph);
+		};
+	}
+	impl->host->SubmitEpoch(EpochOf(a_segment), beforePrepare, std::move(a_resourceOwner));
+	impl->MarkEpoch(impl->host->LastHostFrame(), a_segment);
+	return impl->host->TakeExternalExecution();
 }
 
 bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<void(org::RenderGraph&)>& a_beforePrepare,

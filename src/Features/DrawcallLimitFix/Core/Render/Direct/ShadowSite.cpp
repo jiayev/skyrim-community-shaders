@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/ShadowSite.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
@@ -188,13 +189,6 @@ namespace DCLF::Direct
 		// site of the frame draws with (TakePoolFirsts' rule; the shadow resources' pool is the scene's, the main sites').
 		TakePoolFirsts(*slot, resources.pool.get());
 		auto& run = NewBareRun(*slot, Site::Shadow);
-		// The pre-work: the shape's latched copies (the views' blocks, the commit's constants) and the index pool's copies, which the
-		// depth site's draws read too (its own commit gives out no range after this one's: depthWithoutIndexPool). Queued whatever the
-		// views draw.
-		Draws::RevisionShapes shapes;
-		shapes.shadow = a_inputs.shape;
-		const PreWorkInputs prework{ a_inputs.adopted, nullptr, a_inputs.resources, &shapes, a_inputs.latchSlot };
-		run.prework = PrepareShadowPreWork(prework);
 		auto state = std::make_shared<ShadowState>();
 		state->shape = a_inputs.shape;
 		state->resources = a_inputs.resources;

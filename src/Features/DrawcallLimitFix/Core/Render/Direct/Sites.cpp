@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/DrawHelpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/IndexPool.h"
@@ -18,6 +19,7 @@
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
+#include <Render/RenderGraph/ExternalEpochExecution.h>
 #include <Render/Runtime/ScopedActiveGraphServices.h>
 #include <Resources/Buffers/Buffer.h>
 #include <rhi.h>
@@ -875,17 +877,18 @@ namespace DCLF::Direct::detail
 			auto full = rhi::FullMemoryBarrier();
 			rhi::BarrierBatch barrier{};
 			barrier.globals = { &full, 1u };
-			// The commits' staged uploads, then a barrier against everything after (their destinations are the draws' and pre-work's).
+			// The epoch's ORG execution: the commits' uploads and its CPU pipeline passes, with ORG's barriers, its entry and exit full (the
+			// external queue boundary). Without (a site of an epoch with none), the commits' staged uploads, then a barrier against
+			// everything after (their destinations are the draws').
+			if (run.execution)
+				run.execution->Execute(list);
 			if (run.uploads) {
 				rhi::CommandList* uploads = run.uploads;
 				list.ExecuteCommands({ &uploads, 1u });
 				list.Barriers(barrier);
 			}
-			// The site's pre-work (its own barriers around it, PreWork.h), then its passes: all of it in secondaries but the parallel lists'
-			// executions (SiteOut).
+			// Its passes: all of them in secondaries but the parallel lists' executions (SiteOut).
 			SiteOut out{ list, slot.cs.lists, run.device, run.bindings.resourceHeap, run.bindings.samplerHeap };
-			if (run.prework)
-				RecordPreWork(*run.prework, out.Inline());
 			switch (run.site) {
 			case Site::Shadow:
 				RecordShadowSite(out, run);
@@ -937,7 +940,8 @@ namespace DCLF::Direct::detail
 		auto& s = S();
 		auto& slot = *a_run.slot;
 		auto* host = RenderGraphRuntime::Get().Host();
-		if (auto* graph = host ? host->Graph() : nullptr)
+		// An execution carries the uploads (its leading lists: the host recorded them with its ticket).
+		if (auto* graph = host && !a_run.execution ? host->Graph() : nullptr)
 			if (auto* uploads = slot.render.lists.Next(s.device)) {
 				ZoneScopedN("CS.DCLF.Cpu.EmitUploads");
 				rhi::SecondaryInheritance outside{};
@@ -963,11 +967,43 @@ namespace DCLF::Direct::detail
 				}
 			}
 		const auto wait = FrameValues::Get().FrameWaitPoint();
-		const RenderGraphRuntime::ExternalCommandsWait waits[1]{ { wait.semaphore, wait.value, 0 } };
-		const std::span<const RenderGraphRuntime::ExternalCommandsWait> waitSpan(waits, wait.semaphore ? 1u : 0u);
+		auto& waits = s.emitWaits;
+		auto& signals = s.emitSignals;
+		waits.clear();
+		signals.clear();
+		if (wait.semaphore)
+			waits.push_back({ wait.semaphore, wait.value, 0 });
+		// The execution's: what its ticket's batches would have waited for (the frame values among them) and its value on the graph's
+		// graphics timeline (with its passes' own signals), on the submission of DXVK's command list it lands in.
+		if (const auto& execution = a_run.execution) {
+			const auto native = [](const rhi::TimelinePoint& a_point) -> RenderGraphRuntime::ExternalCommandsWait {
+				const auto timeline = RenderGraphRuntime::Get().FrameWaitTimeline();
+				rhi::Timeline object(a_point.t);
+				if (timeline && *timeline) {
+					object.impl = timeline->Get().impl;
+					object.vt = timeline->Get().vt;
+				}
+				rhi::VulkanTimelineInfo info{};
+				if (!object || !rhi::QueryNativeTimeline(object, rhi::RHI_IID_VK_TIMELINE, &info, sizeof(info)))
+					return {};
+				return { static_cast<VkSemaphore_T*>(info.timeline), a_point.value, 0 };
+			};
+			for (const auto& point : execution->waits)
+				if (const auto converted = native(point); converted.semaphore)
+					waits.push_back(converted);
+			for (const auto& point : execution->signals) {
+				const auto converted = native(point);
+				if (!converted.semaphore)
+					stl::report_and_fail("Drawcall Limit Fix: an ORG execution's signal has no Vulkan semaphore");
+				signals.push_back(converted);
+			}
+		}
 		static constexpr const char* kLabels[kSites] = { "DCLF direct shadow", "DCLF direct depth", "DCLF direct colour", "DCLF direct forward",
 			"DCLF direct first person" };
-		const bool queued = RenderGraphRuntime::Get().EmitExternalCommands(&SiteCallback, &a_run, waitSpan, {}, true, kLabels[static_cast<std::size_t>(a_run.site)], true);
+		const bool queued = RenderGraphRuntime::Get().EmitExternalCommands(&SiteCallback, &a_run, waits, signals, true, kLabels[static_cast<std::size_t>(a_run.site)], true);
+		// Not queued: what the execution's signals would have completed, completed without its work (the graph waits for them).
+		if (!queued && a_run.execution && host)
+			host->SignalExternalExecutionUnexecuted(*a_run.execution);
 		if (!queued) {
 			++s.window.notQueued;
 			if (!std::exchange(s.loggedNoCallback, true))
@@ -1296,24 +1332,43 @@ namespace DCLF::Direct
 		if (!CpuFrame() || !s.current)
 			return RenderGraphRuntime::Get().ExecuteEpoch(a_segment, [&](org::RenderGraph&) { a_body(); }, std::move(a_owner));
 		s.pending = nullptr;
-		{
+		auto* host = RenderGraphRuntime::Get().Host();
+		auto* graph = host ? host->Graph() : nullptr;
+		if (!graph)
+			return false;
+		// The colour commit writes the main latch at the slot's second region, the depth commit's kept for the depth site's readers.
+		if (a_segment == RenderGraphRuntime::Segment::MainOpaque)
+			host->BeginExternalFrameSlot(s.current->colourSlot);
+		std::shared_ptr<org::ExternalEpochExecution> execution;
+		bool executed = true;
+		if (Draws::CpuPipelineSegmentRecords(a_segment)) {
+			// An external epoch (GraphConditions::cpuPipeline): its ticket submitted with the body as its commit (the ticket's frame slot,
+			// the graph's services active), which chooses its revision's recording (SubmitRevisionRecording); the host hands the execution
+			// back, which the site's callback runs in DXVK's buffer ahead of its draws.
+			try {
+				execution = RenderGraphRuntime::Get().ExecuteExternalEpoch(a_segment, [&](org::RenderGraph&) { a_body(); }, a_owner);
+			} catch (const std::exception& e) {
+				executed = false;
+				if (!std::exchange(s.loggedExternal, true))
+					logger::error("[DCLF] CPU pipeline: the {} site's ORG epoch was not submitted ({}): its draws are left out", static_cast<std::uint32_t>(a_segment), e.what());
+			}
+		} else {
 			// The body runs with the graph's upload and descriptor services active, as ORG's epochs run theirs: the commits stage their
 			// uploads through them (CommitUploads), and Emit records the ones pending.
-			auto* host = RenderGraphRuntime::Get().Host();
-			auto* graph = host ? host->Graph() : nullptr;
-			if (!graph)
-				return false;
-			// The colour commit writes the main latch at the slot's second region, the depth commit's kept for the depth site's readers.
-			if (a_segment == RenderGraphRuntime::Segment::MainOpaque)
-				host->BeginExternalFrameSlot(s.current->colourSlot);
 			org::runtime::ScopedActiveGraphServices services(graph->GetUploadService(), graph->GetDescriptorService());
 			a_body();
 		}
 		// What the execution reads, held as ORG would hold it until it retires.
 		s.current->holds.push_back(std::move(a_owner));
-		if (auto* run = std::exchange(s.pending, nullptr))
+		if (auto* run = std::exchange(s.pending, nullptr)) {
+			run->execution = std::move(execution);
+			// Without its epoch's passes (it failed), its draws read nothing current: its queues are drained, nothing drawn.
+			run->valid = run->valid && executed;
 			return Emit(*run);
-		return true;
+		}
+		if (execution)
+			host->SignalExternalExecutionUnexecuted(*execution);
+		return executed;
 	}
 
 	void DepthCommitted(const MainCommitInputs& a_inputs)
@@ -1328,10 +1383,8 @@ namespace DCLF::Direct
 		Draws::RevisionShapes shapes;
 		shapes.main[Draws::kDepthShape] = a_inputs.shape;
 		shapes.depthWithoutIndexPool = a_inputs.poolCopies == 0;
-		// The hosted views committed in this epoch (ViewSites.cpp): their shapes for the pre-work, their views culled with main's.
+		// The hosted views committed in this epoch (ViewSites.cpp): their views culled with main's.
 		AttachHostedViews(*slot, run, shapes);
-		const PreWorkInputs prework{ a_inputs.adopted, a_inputs.resources, nullptr, &shapes, a_inputs.latchSlot };
-		run.prework = PrepareDepthPreWork(prework);
 		auto& main = NewView(*slot, run, ViewType::Main, MainCullView(*a_inputs.latch), true);
 		if (run.valid)
 			SetMainSecondary(run, main);
@@ -1360,10 +1413,6 @@ namespace DCLF::Direct
 			return;
 		TakePoolFirsts(*slot, a_inputs.resources->pool.get());
 		auto& run = NewRun(*slot, Site::Colour, a_inputs);
-		Draws::RevisionShapes shapes;
-		shapes.main[Draws::kColourShape] = a_inputs.shape;
-		const PreWorkInputs prework{ a_inputs.adopted, a_inputs.resources, nullptr, &shapes, a_inputs.latchSlot };
-		run.prework = PrepareColourPreWork(prework);
 		const auto& latch = *a_inputs.latch;
 		// The colour views read the cascades and volumes the commit latched: copied, held by the slot for the culls' duration.
 		auto cascades = std::make_shared<const std::vector<Draws::GpuCascade>>(a_inputs.cascades.begin(), a_inputs.cascades.end());

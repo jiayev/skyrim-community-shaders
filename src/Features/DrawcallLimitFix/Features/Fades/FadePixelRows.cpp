@@ -3,8 +3,7 @@
 // stages computed per pixel from the object's rows, its fade node's LOD metric and its fade root's state, though they are the draw's. A
 // frame value pool the GPU alone writes ("pixel-rows", a row an object slot as the frame's shading rows hold), PixelRowsCS once a frame
 // first in the depth segment (fades.pixel-rows, after the latched copies, which put the frame record and constants it reads in place), the
-// pixel stages' t116 (a frame binding, kPixelObjectsRegister). A CPU frame without a depth site has its colour site write them instead
-// (fades.pixel-rows-colour).
+// pixel stages' t116 (a frame binding, kPixelObjectsRegister).
 
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
@@ -13,6 +12,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameValuePools.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/DrawHelpers.h"
@@ -58,6 +58,9 @@ namespace DCLF::Draws
 		std::shared_ptr<const ComputeProgram> program;
 		std::shared_ptr<const org::LatchBlock> latch;
 		std::uint64_t frameConstants = 0;  // Resources::frameConstantsAddress
+		// The full barriers before and after: an external epoch's execution (GraphConditions::cpuPipeline) has its own at its entry
+		// and exit, and no pass of it reads the rows.
+		bool outerBarriers = true;
 	};
 
 	/**
@@ -71,7 +74,8 @@ namespace DCLF::Draws
 	{
 	public:
 		PixelRowsPass(std::shared_ptr<Resources> a_resources, std::shared_ptr<const ComputeProgram> a_program, RenderGraphRuntime::Segment a_segment) :
-			resources(std::move(a_resources)), program(std::move(a_program)), segment(a_segment) {}
+			resources(std::move(a_resources)), program(std::move(a_program)), segment(a_segment),
+			outerBarriers(!CurrentGraphConditions().cpuPipeline) {}
 
 		PixelRowsBindings Declare(org::PassBuilder& a_builder)
 		{
@@ -96,7 +100,7 @@ namespace DCLF::Draws
 			const auto frame = CurrentFrame(a_preparation, segment);
 			if (!program || !frame || !frame->latch || !BuildsDraws(a_preparation, *resources, segment))
 				return {};
-			return { program, frame->latch, resources->frameConstantsAddress };
+			return { program, frame->latch, resources->frameConstantsAddress, outerBarriers };
 		}
 
 		static void Record(const PixelRowsBindings&, const PixelRowsPrepared& a_frame, org::PassRecordContext& a_recording)
@@ -104,7 +108,7 @@ namespace DCLF::Draws
 			RecordRows(a_recording.Commands(), a_frame, a_recording.FrameSlot());
 		}
 
-		// The barriers and the dispatch, from the latch's region of a_frameSlot (Record's and the CPU mode's).
+		// The barriers and the dispatch, from the latch's region of a_frameSlot.
 		static void RecordRows(rhi::CommandList& a_commands, const PixelRowsPrepared& a_frame, std::uint32_t a_frameSlot)
 		{
 			if (!a_frame.program || !a_frame.latch || !a_frame.frameConstants)
@@ -120,6 +124,10 @@ namespace DCLF::Draws
 			constants.lodFadeFrameHi = static_cast<std::uint32_t>(lodFadeFrame >> 32);
 			const rhi::GlobalBarrier global = rhi::FullMemoryBarrier();
 			const rhi::BarrierBatch batch{ {}, {}, { &global, 1 } };
+			if (!a_frame.outerBarriers) {
+				RecordDispatch(a_commands, *a_frame.program, constants, kPixelRowsGroups);
+				return;
+			}
 			a_commands.Barriers(batch);
 			RecordDispatch(a_commands, *a_frame.program, constants, kPixelRowsGroups);
 			a_commands.Barriers(batch);
@@ -129,6 +137,7 @@ namespace DCLF::Draws
 		std::shared_ptr<Resources> resources;
 		std::shared_ptr<const ComputeProgram> program;
 		RenderGraphRuntime::Segment segment;
+		bool outerBarriers = true;  // the graph's conditions at its build
 	};
 }
 
@@ -137,18 +146,12 @@ namespace DCLF::Features::Fades
 	namespace
 	{
 		Api::FrameValuePoolId pixelRowsPool;  // install
-		// Render thread: the frame the pool's last kick was for, its rows, and the last frame whose rows a site's pass was given (a CPU
-		// frame's depth site, else its colour site, writes them).
-		std::uint64_t kickedSeq = 0, writtenSeq = 0;
-		std::uint32_t kickedRows = 0;
-		// Render thread: the program (the depth pass's setup's), which the colour site's fallback records too.
-		std::shared_ptr<const ComputeProgram> pixelRowsProgram;
+		std::uint32_t kickedRows = 0;  // render thread: the pool's last kick's rows
 
 		// A row an object slot the frame's shading rows hold. Nothing is sampled or sent: PixelRowsCS writes every row before the frame's
 		// draws read any.
 		Api::FrameValueInput PixelRowsKick(const Api::FrameValuePoolKick& a_kick)
 		{
-			kickedSeq = a_kick.seq;
 			kickedRows = static_cast<std::uint32_t>(a_kick.objectSlots);
 			return { nullptr, a_kick.objectSlots };
 		}
@@ -174,7 +177,6 @@ namespace DCLF::Features::Fades
 			auto program = ComputeProgram::Load(a_setup.device, { .source = Draws::kPixelRowsShader, .constantWords = Draws::kPixelRowsConstantWords });
 			if (!program)
 				logger::error("[DCLF] The object rows program could not be created; DCLF's pixel stages read no object rows");
-			pixelRowsProgram = program;
 			return program;
 		}
 
@@ -182,28 +184,6 @@ namespace DCLF::Features::Fades
 		{
 			return std::make_shared<Draws::PixelRowsPass>(a_context.Main(), a_context.State<ComputeProgram>(), a_context.segment);
 		}
-
-		// The CPU mode's: a_pass's segment's latch (its commit wrote it), the same commands.
-		void DirectPixelRowsAt(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
-		{
-			auto program = pixelRowsProgram;
-			const auto frame = Draws::CurrentFrame(a_pass.shapes, a_pass.segment);
-			if (!program || !frame || !frame->latch || !Draws::BuildsDraws(a_pass.shapes, *a_pass.Main(), a_pass.segment))
-				return;
-			writtenSeq = kickedSeq;
-			a_out.Add([prepared = Draws::PixelRowsPrepared{ std::move(program), frame->latch, a_pass.Main()->frameConstantsAddress }, slot = a_pass.frameSlot](
-						  rhi::CommandList& a_commands) { Draws::PixelRowsPass::RecordRows(a_commands, prepared, slot); });
-		}
-
-		// The colour site's: only on a CPU frame whose depth site did not write them (none ran this frame).
-		void DirectPixelRowsColour(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
-		{
-			if (writtenSeq != kickedSeq)
-				DirectPixelRowsAt(a_pass, a_out);
-		}
-
-		// The colour epoch's in the GPU pipeline: nothing (the depth epoch always writes them first).
-		void EmitNone(const Api::PassContext&, Api::PassOut&) {}
 	}
 
 	void RegisterPixelRows(Api::InstallContext& a_context)
@@ -212,7 +192,6 @@ namespace DCLF::Features::Fades
 			.sample = &PixelRowsSample, .send = &PixelRowsSend });
 		a_context.RegisterFrameBinding({ .name = "object rows SRV", .textureRegister = kPixelObjectsRegister, .select = &SelectPixelRowsBinding });
 		a_context.RegisterPass({ .key = "fades.pixel-rows", .passName = "cs.dclf.z.pixel-rows", .make = &MakePixelRows, .setup = &PixelRowsSetup,
-			.frameRows = &PixelFrameRows, .direct = &DirectPixelRowsAt });
-		a_context.RegisterPass({ .key = "fades.pixel-rows-colour", .emit = &EmitNone, .setup = nullptr, .direct = &DirectPixelRowsColour });
+			.frameRows = &PixelFrameRows, .cpuPipeline = true });
 	}
 }

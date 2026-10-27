@@ -52,6 +52,8 @@ namespace DCLF::Draws
 		std::shared_ptr<const void> shape;
 		std::span<const LatchedList> lists;
 		std::vector<Hosted> hosted;
+		// The zeroed counts' lists too: the GPU culls'; a CPU pipeline's graph's pass leaves them out (nothing in a CPU frame reads them).
+		bool zeros = true;
 	};
 	/**
 	 * @brief An epoch's first pass: its shape's latched copies (LatchedList) from their blocks to where its passes read them,
@@ -61,25 +63,12 @@ namespace DCLF::Draws
 	 */
 	std::shared_ptr<org::RenderPass> MakeLatchedCopiesPass(std::function<std::vector<LatchedTarget>()> a_targets,
 		std::function<LatchedSource(const org::PassPrepareContext&)> a_source, std::atomic<std::shared_ptr<const std::vector<const void*>>>* a_declared = nullptr);
-	/**
-	 * @brief The CPU pipeline's graph build (GraphConditions::cpuPipeline, ScheduleExecutor's GatherScheduled): a latched copies pass, made
-	 * and not added, publishes what its Declare would (its a_declared). False: a_pass is no latched copies pass.
-	 */
-	bool PublishLatchedTargets(const org::RenderPass& a_pass);
-
-	/**
-	 * @brief A latched copies pass's CPU-mode work (Api::PassDef::direct): the copies a_source names, into a_targets as the frame's
-	 * adopted set names them, from a_pass's frame slot, the commands MakeLatchedCopiesPass's Record makes. Nothing without a shape.
-	 */
-	void DirectLatchedCopies(const Api::DirectPass& a_pass, std::span<const LatchedTarget> a_targets, LatchedSource a_source, Api::DirectWork& a_out);
 
 	/**
 	 * @brief The shadow epoch's index pool copies (Passes/Shadow.cpp: IndexPoolPass, Core's, as the depth epoch's), dispatched from the
 	 * revision's shadow shape's latch.
 	 */
 	std::shared_ptr<org::RenderPass> MakeShadowIndexPoolPass(const std::shared_ptr<ShadowResources>& a_resources);
-	/** @brief Its CPU-mode work (Api::PassDef::direct): the dispatch from the committed shadow shape's latch, as its Record makes it. */
-	void DirectShadowIndexPool(const Api::DirectPass& a_pass, Api::DirectWork& a_out);
 
 	/** @brief A pass's frame buffers (t16 and up) and Light Limit Fix's lights (t35-t37) declared as read, through no view. */
 	void DeclareFrameBuffers(org::PassBuilder& a_builder, const Resources& a_resources, bool a_lights = true);

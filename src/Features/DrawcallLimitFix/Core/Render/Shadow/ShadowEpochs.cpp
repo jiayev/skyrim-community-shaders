@@ -717,9 +717,13 @@ namespace DCLF
 			engine.lastActiveViews = active;
 			// The CPU pipeline's graph: no recording; the shadow site culls and draws the latched views from this commit (its pre-work the
 			// shape's latched copies and index pool copies).
-			if (revision.direct)
+			if (revision.direct) {
+				// Its recording of the shape's latched copies and index pool copies too (the site executes it first).
+				if (revision.recordings && !revision.recordings->recordings.empty())
+					impl->SubmitRevisionRecording(epoch, *revision.recordings,
+						Draws::ShadowVariantToSubmit(commit, latchSlot, revision.shape->Value<ShadowVariants>()->shapes, active));
 				Direct::ShadowCommitted({ revisionShape, resources, &adopted, directViews, payload.inputs.sunEntryProcesses, latchSlot });
-			else
+			} else
 				impl->SubmitRevisionRecording(epoch, *revision.recordings, Draws::ShadowVariantToSubmit(commit, latchSlot, revision.shape->Value<ShadowVariants>()->shapes, active));
 			owners.Seal(impl->scene.get());
 			blocksMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - blocksStart).count();

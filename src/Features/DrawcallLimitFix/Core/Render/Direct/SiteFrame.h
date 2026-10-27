@@ -9,12 +9,16 @@
 // Included by those files only (volk first: include Main/Resources.h before it).
 
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
-#include "Features/DrawcallLimitFix/Core/Render/Direct/PreWork.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Recorder.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 
 #include <rhi.h>
+
+namespace org
+{
+	class ExternalEpochExecution;
+}
 
 #include <array>
 #include <atomic>
@@ -132,7 +136,9 @@ namespace DCLF::Direct::detail
 		std::shared_ptr<const Draws::PassFrame> shape;
 		std::shared_ptr<Draws::Resources> resources;
 		std::shared_ptr<const TargetViews> targets;  // the main sites' (null: the site attaches its own)
-		std::shared_ptr<const PreWork> prework;
+		// Its epoch's ORG execution (an external epoch's: the commits' uploads, then its CPU pipeline passes with ORG's barriers),
+		// executed by its callback ahead of its draws in place of uploads; its waits and signals join DXVK's submission.
+		std::shared_ptr<org::ExternalEpochExecution> execution;
 		std::shared_ptr<const CullFrame> cullFrame;  // its views' culls' (written by their dispatch alone)
 		rhi::CommandList* uploads = nullptr;          // the commits' staged uploads, recorded on the render thread
 		RecordBindings bindings, refractionBindings;
@@ -213,7 +219,9 @@ namespace DCLF::Direct::detail
 		std::shared_ptr<const TargetViews> targets;
 		std::atomic<std::uint32_t> nextWorker{ 0 };
 		WindowCounters window;
-		bool loggedNoCallback = false, loggedRecordedLists = false, loggedNotAdopted = false;
+		bool loggedNoCallback = false, loggedRecordedLists = false, loggedNotAdopted = false, loggedExternal = false;
+		// Emit's scratch (render thread): a site's waits and signals for DXVK's submission.
+		std::vector<RenderGraphRuntime::ExternalCommandsWait> emitWaits, emitSignals;
 	};
 
 	State& S();

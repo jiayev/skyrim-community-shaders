@@ -52,12 +52,6 @@ namespace DCLF::Draws
 		}));
 	}
 
-	void DirectShadowIndexPool(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
-	{
-		if (const auto& frame = a_pass.shapes.shadow)
-			IndexPoolPass::Direct(a_pass, a_pass.Shadow()->pool, { frame->generation, frame->latch, frame->latchLayout.PoolOffset() }, a_out);
-	}
-
 	std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeShadowExtension(std::shared_ptr<ShadowResources> a_resources)
 	{
 		return std::make_unique<ShadowExtension>(std::move(a_resources));

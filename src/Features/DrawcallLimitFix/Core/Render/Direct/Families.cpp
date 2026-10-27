@@ -4,7 +4,7 @@
 // draw after the main colour draws, before the second pass), with its main.declare's arguments and draw row. Here the depth run resolves
 // them once a frame (the family's main.direct, from the depth commit's adopted set) with the slot's pipelines, and the
 // colour run draws what the depth run resolved: its colour tests EQUAL against that depth draw, and its arguments are what the depth
-// site's pre-work wrote (the families' single-phase culls and grass's arguments, PreWork.h).
+// site's epoch's passes wrote (the families' single-phase culls and grass's arguments, before its draws: GraphConditions::cpuPipeline).
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"

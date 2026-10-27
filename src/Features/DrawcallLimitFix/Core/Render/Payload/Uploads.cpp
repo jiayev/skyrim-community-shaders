@@ -647,6 +647,13 @@ namespace DCLF
 		// those that committed and none of the others' (their passes record nothing: RevisionRecordings::hosted, IndexOf).
 		// The CPU pipeline's graph (EpochRevision::direct): no recording; the site draws the frame from this commit (Direct/Sites.h).
 		if (a_revision.direct) {
+			// The epoch's recording of its CPU pipeline passes too (GraphConditions::cpuPipeline), chosen as the GPU path's below: its site
+			// executes it in DXVK's buffer ahead of its draws (Direct::ExecuteEpoch).
+			if (a_revision.recordings && !a_revision.recordings->recordings.empty()) {
+				const auto& recordings = *a_revision.recordings;
+				const std::size_t variant = depthOnly && !poolCopies && recordings.Variants() > 1 ? 1 : 0;
+				SubmitRevisionRecording(revisionEpoch, recordings, recordings.IndexOf(variant, hostedDrawn));
+			}
 			const Direct::MainCommitInputs site{ revisionShape, a_resources, &adopted, &latch, sunCascades, std::span(shadowVolumes.data(), shadowVolumesLatched), latchSlot,
 				poolCopies };
 			if (depthOnly)

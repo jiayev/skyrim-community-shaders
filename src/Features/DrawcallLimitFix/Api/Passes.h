@@ -18,8 +18,6 @@ namespace DCLF::Api
 	class PassContext;  // what a pass is made from: the epoch and its extension's resources
 	class PassOut;      // where an anchor adds its passes
 	class PassSetup;    // what a pass's setup is handed: the device and the scene's tables
-	class DirectPass;   // what a pass's CPU-mode work is prepared from: the frame's committed shapes and adopted set
-	class DirectWork;   // where it adds that work, recorded later into DXVK's command buffer
 
 	/** @brief The kind of a pass (the graph's ExternalPassDesc). */
 	enum class PassKind : std::uint8_t
@@ -59,11 +57,10 @@ namespace DCLF::Api
 	 * - frameRows: render thread, at each latch of the main rows: the device address and row count of the frame's per-object rows the
 	 *   pass writes (BuildDrawsLatch::frameRows; Features/Fades' object rows, which the pixel stages read by a frame binding), so that a
 	 *   recording the graph keeps across frames finds the frame's backing. One pass may have one, scheduled as latchWord's is.
-	 * - direct: the pass's work in the CPU-driven pipeline (dclf:pipeline=cpu; Core/Render/Direct/PreWork.h), where no ORG epoch runs at
-	 *   the draw points: render thread, at its epoch's site after the commits, prepared from the frame's committed shapes and adopted set
-	 *   (DirectPass) into closures (DirectWork) that DXVK's CS thread records into DXVK's command buffer before the site's draws, outside
-	 *   any render pass, the same commands the pass's Record makes. Null: the pass has none there (the CPU does its work, or it draws:
-	 *   the direct sites record the draws).
+	 * - cpuPipeline: the pass is in its epoch in the CPU-driven pipeline too (dclf:pipeline=cpu), whose graph has its epochs external
+	 *   (Core/Render/Epochs/GraphConditions.h): the revisions record it, and its site executes the recording in DXVK's command buffer
+	 *   before its draws, on the graphics queue (a preferred queue is not taken there). False: the pass is left out there (the CPU does
+	 *   its work, or it draws: the direct sites record the draws).
 	 */
 	/** @brief A pass's frame rows (PassDef::frameRows): its frame's backing's device address and rows (0: none this frame). */
 	struct FrameRows
@@ -84,6 +81,6 @@ namespace DCLF::Api
 		std::uint32_t (*latchWord)() = nullptr;
 		std::uint64_t (*animatedRows)() = nullptr;
 		FrameRows (*frameRows)() = nullptr;
-		void (*direct)(const DirectPass& a_pass, DirectWork& a_out) = nullptr;
+		bool cpuPipeline = false;
 	};
 }

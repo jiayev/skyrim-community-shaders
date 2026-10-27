@@ -131,17 +131,7 @@ namespace DCLF::Draws
 		public:
 			LatchedCopiesPass(std::function<std::vector<LatchedTarget>()> a_targets, std::function<LatchedSource(const org::PassPrepareContext&)> a_source,
 				std::atomic<std::shared_ptr<const std::vector<const void*>>>* a_declared) :
-				targets(std::move(a_targets)), source(std::move(a_source)), declared(a_declared) {}
-
-			/** @brief What Declare publishes, without a graph (the CPU pipeline's build: the pass is not added, its copies are the pre-work's). */
-			void PublishTargets() const
-			{
-				auto keys = std::make_shared<std::vector<const void*>>();
-				for (const auto& target : targets())
-					keys->push_back(target.Key());
-				if (declared)
-					declared->store(std::move(keys), std::memory_order_release);
-			}
+				targets(std::move(a_targets)), source(std::move(a_source)), declared(a_declared), zeros(!CurrentGraphConditions().cpuPipeline) {}
 
 			LatchedCopiesBindings Declare(org::PassBuilder& a_builder)
 			{
@@ -165,7 +155,12 @@ namespace DCLF::Draws
 					a_out.push_back(hosted.generation);
 			}
 
-			LatchedSource Prepare(const LatchedCopiesBindings&, const org::PassPrepareContext& a_preparation) const { return source(a_preparation); }
+			LatchedSource Prepare(const LatchedCopiesBindings&, const org::PassPrepareContext& a_preparation) const
+			{
+				auto prepared = source(a_preparation);
+				prepared.zeros = zeros;
+				return prepared;
+			}
 
 			static void Record(const LatchedCopiesBindings& a_bindings, const LatchedSource& a_prepared, org::PassRecordContext& a_recording)
 			{
@@ -174,52 +169,21 @@ namespace DCLF::Draws
 				CopyLatchedLists(a_recording.Commands(), a_prepared, a_recording.FrameSlot(), [&](const void* a_key) {
 					const auto target = std::find_if(a_bindings.targets.begin(), a_bindings.targets.end(), [&](const auto& a_target) { return a_target.first == a_key; });
 					return target != a_bindings.targets.end() ? a_recording.Resolve(target->second).GetHandle() : rhi::ResourceHandle{};
-				});
+				}, a_prepared.zeros);
 			}
 
 		private:
 			std::function<std::vector<LatchedTarget>()> targets;
 			std::function<LatchedSource(const org::PassPrepareContext&)> source;
 			std::atomic<std::shared_ptr<const std::vector<const void*>>>* declared = nullptr;
+			bool zeros = true;  // the graph's conditions at its build: a CPU pipeline's graph's pass copies no zeroed lists
 		};
-	}
-
-	bool PublishLatchedTargets(const org::RenderPass& a_pass)
-	{
-		const auto* latched = dynamic_cast<const LatchedCopiesPass*>(&a_pass);
-		if (latched)
-			latched->PublishTargets();
-		return latched != nullptr;
 	}
 
 	std::shared_ptr<org::RenderPass> MakeLatchedCopiesPass(std::function<std::vector<LatchedTarget>()> a_targets,
 		std::function<LatchedSource(const org::PassPrepareContext&)> a_source, std::atomic<std::shared_ptr<const std::vector<const void*>>>* a_declared)
 	{
 		return std::make_shared<LatchedCopiesPass>(std::move(a_targets), std::move(a_source), a_declared);
-	}
-
-	void DirectLatchedCopies(const Api::DirectPass& a_pass, std::span<const LatchedTarget> a_targets, LatchedSource a_source, Api::DirectWork& a_out)
-	{
-		if (!a_source.shape)
-			return;
-		// Each target's buffer as a preparation resolves it: a versioned one's version the adopted set names (none: skipped, as an
-		// undeclared target is), held with the work.
-		std::vector<std::pair<const void*, std::shared_ptr<org::Buffer>>> targets;
-		targets.reserve(a_targets.size());
-		for (const auto& target : a_targets)
-			if (auto buffer = target.versioned ? a_pass.Version(target.versioned) : target.buffer)
-				targets.emplace_back(target.Key(), std::move(buffer));
-		// The zeroed counts are the GPU culls' (BuildDraws' draw and bucket counts, the indirect draws' arguments): the CPU pipeline's
-		// sites draw their own lists, and nothing in a CPU frame writes or reads them. Each copy is a copy engine command the queue waits
-		// on, so they are left out.
-		a_out.Add([source = std::move(a_source), targets = std::move(targets), slot = a_pass.frameSlot](rhi::CommandList& a_commands) {
-			if (LatchedRecordCut())
-				return;
-			CopyLatchedLists(a_commands, source, slot, [&](const void* a_key) {
-				const auto target = std::find_if(targets.begin(), targets.end(), [&](const auto& a_target) { return a_target.first == a_key; });
-				return target != targets.end() ? target->second->GetAPIResource().GetHandle() : rhi::ResourceHandle{};
-			}, false);
-		});
 	}
 
 	void DeclareFrameBuffers(org::PassBuilder& a_builder, const Resources& a_resources, bool a_lights)
