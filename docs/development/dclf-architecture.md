@@ -2464,9 +2464,19 @@ the layout grows (`ReserveMainLatch`). A frame where the sun did not accumulate 
 
 ### The occlusion maps, drawn by DCLF
 
-The precipitation accumulator's two views (render mode 0x1C) are both drawn by DCLF's shadow epoch while Skylighting is loaded
-(`Features/OcclusionMaps/OcclusionMaps.h`): Skylighting's sky occlusion map (`CS_DCLF_SKYLIGHT`) and the engine's precipitation
-occlusion mask (`CS_DCLF_PRECIPITATION`). Without Skylighting the engine draws both.
+The precipitation accumulator's two views (render mode 0x1C) are drawn by DCLF's shadow epoch
+(`Features/OcclusionMaps/OcclusionMaps.h`): Skylighting's sky occlusion map (`CS_DCLF_SKYLIGHT`) while Skylighting is loaded, and the
+engine's precipitation occlusion mask (`CS_DCLF_PRECIPITATION`) with or without it.
+-   **The mask without Skylighting.** Skylighting drives both maps when loaded (its hook of Main::Draw's precipitation occlusion call,
+    and its own pass rule). Without it the shell does the mask's part: `DrawcallLimitFix::RenderPrecipitationAtShadowMaps` (Deferred's
+    `Main_RenderShadowMaps` hook, after Skylighting's) sets it up and clears it, and `Hooks::Main_Precipitation_RenderOcclusion` (the
+    same call, Main::Draw +0x3A1 SE, +0x3BF AE) skips the engine's render on a frame DCLF drew it. Both act only on a frame the engine
+    would render the mask (`EngineMaskObject`, `Main::Precipitation::RenderOcclusion`'s condition, AE `FUN_1404076c0`: the occlusion map
+    flag of `TogglePrecipitationOcclusionMap` on, either weather's precipitation rain or snow, and a precipitation object). The mask's
+    occluders are then the engine's rule (`EnginePrecipitationTechnique`: `BSShaderProperty`'s `GetPrecipitationOcclusionMapRenderPasses`,
+    vfunc `0x2D`, AE `0x1414afd50`), with no size test, and no tree-animated or anisotropic-lit occluder. The mask's render
+    (`DrawcallLimitFix::RenderPrecipitationMask`) is the shell's, Skylighting's points calling it too. The scene lists' filter needs
+    only the maps that can render to be DCLF's (`ListFilterReady`), so it is no longer off without Skylighting.
 -   Each map has its set phase and view bit (`kSetOccluderSky` / `kViewSkyOccluder`, `kSetOccluderPrecipitation` /
     `kViewPrecipOccluder`), its occluder rule (`OccluderRules.cpp`), and its target: Skylighting's texture for the sky map, depth
     target 10 for the mask.

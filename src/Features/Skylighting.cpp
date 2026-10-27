@@ -568,38 +568,6 @@ void Skylighting::BeginOcclusionFrame()
 	occlusionDirection.Normalize();
 }
 
-void Skylighting::RenderPrecipitationMask(RE::Precipitation* a_precip, RE::BSGeometry* a_precipObject, bool a_dclf)
-{
-	// With Drawcall Limit Fix drawing it (a_dclf), its native variant of the mask, as of the sky map below: DCLF draws every occluder from
-	// its own tables, GPU-culled, in its shadow epoch, so the engine's cull and registration (SetupMask) are skipped and RenderMask only
-	// sets the camera and clears the mask. Otherwise, or on a frame DCLF did not draw it, the engine does.
-	auto& dclf = globals::features::drawcallLimitFix;
-	const bool reference = a_dclf && dclf.OcclusionReferenceFrame(DrawcallLimitFix::kPrecipitationOcclusion);
-	if (!a_dclf || reference) {
-		a_precip->SetupMask();
-	} else {
-		// What SetupMask sets: the projection, and the accumulator's camera.
-		static REL::Relocation<void(RE::Precipitation*, RE::NiPointer<RE::NiCamera>)> computeProjection{ REL::RelocationID(25643, 26185) };
-		computeProjection(a_precip, a_precip->occlusionData.camera);
-		if (auto* accumulator = a_precip->occlusionData.accumulator.get())
-			accumulator->camera = a_precip->occlusionData.camera.get();
-	}
-	dclf.OcclusionView(DrawcallLimitFix::kPrecipitationOcclusion);
-	auto& effect = a_precipObject->GetGeometryRuntimeData().shaderProperty;
-	auto shaderProp = effect.get();
-	auto particleShaderProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(shaderProp);
-	auto rain = (RE::BSParticleShaderRainEmitter*)(particleShaderProperty->particleEmitter);
-
-	globals::profiler->BeginPass("Skylighting::PrecipMask");
-	a_precip->RenderMask(rain);
-	if (reference) {
-		// The engine's mask, announced; then the same view again, cleared, for DCLF's.
-		dclf.OcclusionReferenceRendered(DrawcallLimitFix::kPrecipitationOcclusion);
-		a_precip->RenderMask(rain);
-	}
-	globals::profiler->EndPass();
-}
-
 void Skylighting::RenderSkyOcclusionMap(RE::Precipitation* a_precip, bool a_dclf)
 {
 	[[maybe_unused]] auto state = globals::state;  // Tracy only
@@ -711,7 +679,7 @@ void Skylighting::RenderOcclusionAtShadowMaps()
 	const auto dynamicResolutionLock = graphicsState.dynamicResolutionLock;
 	graphicsState.dynamicResolutionLock = 1;
 	if (precipitationMask)
-		RenderPrecipitationMask(precip, precipObject.get(), true);
+		dclf.RenderPrecipitationMask(precip, precipObject.get(), true);
 	if (skyMap)
 		RenderSkyOcclusionMap(precip, true);
 	graphicsState.dynamicResolutionLock = dynamicResolutionLock;
@@ -754,7 +722,7 @@ void Skylighting::RenderOcclusion()
 					precipObject = precip->lastPrecip;
 				}
 				if (precipObject && dclf.OcclusionNeedsEngine(DrawcallLimitFix::kPrecipitationOcclusion))
-					RenderPrecipitationMask(precip, precipObject.get(), false);
+					dclf.RenderPrecipitationMask(precip, precipObject.get(), false);
 
 				state->EndPerfEvent();
 			}

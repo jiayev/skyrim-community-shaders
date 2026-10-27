@@ -30,6 +30,7 @@
 #	include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #	include "DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #	include "Features/Skylighting.h"
+#	include "ShaderCache.h"
 
 #	include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #	include "Features/DrawcallLimitFix/Core/Render/FrameDriver.h"
@@ -374,6 +375,99 @@ bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap a_map)
 	return DCLF::FrameDriver::Get().OcclusionNeedsEngine(a_map, Running());
 }
 
+namespace
+{
+	/**
+	 * @brief The precipitation object Main::Precipitation::RenderOcclusion (AE FUN_1404076c0, SE FUN_1403ae920) renders the mask for: with
+	 * the occlusion map on (TogglePrecipitationOcclusionMap's flag) and either weather's precipitation rain or snow, the current one, else
+	 * the last. Null: the engine renders none (it clears the mask once when switched off, and keeps its projection).
+	 */
+	RE::BSGeometry* EngineMaskObject()
+	{
+		static REL::Relocation<const bool*> maskOn{ REL::RelocationID(502538, 370126) };
+		auto* sky = globals::game::sky;
+		auto* precip = sky ? sky->precip : nullptr;
+		if (!precip || !*maskOn)
+			return nullptr;
+		const auto falls = [](RE::TESWeather* a_weather) {
+			using Data = RE::BGSShaderParticleGeometryData;
+			auto* data = a_weather ? a_weather->precipitationData : nullptr;
+			if (!data)
+				return false;
+			const auto type = data->GetSettingValue(Data::DataID::kParticleType).i;
+			return type == static_cast<std::uint32_t>(Data::ParticleType::kRain) || type == static_cast<std::uint32_t>(Data::ParticleType::kSnow);
+		};
+		if (!falls(sky->currentWeather) && !falls(sky->lastWeather))
+			return nullptr;
+		return precip->currentPrecip ? precip->currentPrecip.get() : precip->lastPrecip.get();
+	}
+}
+
+void DrawcallLimitFix::RenderPrecipitationMask(RE::Precipitation* a_precip, RE::BSGeometry* a_precipObject, bool a_dclf)
+{
+	// With DCLF drawing it (a_dclf), its native variant of the mask: DCLF draws every occluder from its own tables, GPU-culled, in its
+	// shadow epoch, so the engine's cull and registration (SetupMask) are skipped and RenderMask only sets the camera and clears the mask.
+	// Otherwise, or on a frame DCLF did not draw it, the engine does.
+	const bool reference = a_dclf && OcclusionReferenceFrame(kPrecipitationOcclusion);
+	if (!a_dclf || reference) {
+		a_precip->SetupMask();
+	} else {
+		// What SetupMask sets: the projection, and the accumulator's camera.
+		static REL::Relocation<void(RE::Precipitation*, RE::NiPointer<RE::NiCamera>)> computeProjection{ REL::RelocationID(25643, 26185) };
+		computeProjection(a_precip, a_precip->occlusionData.camera);
+		if (auto* accumulator = a_precip->occlusionData.accumulator.get())
+			accumulator->camera = a_precip->occlusionData.camera.get();
+	}
+	OcclusionView(kPrecipitationOcclusion);
+	auto* particleShaderProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(a_precipObject->GetGeometryRuntimeData().shaderProperty.get());
+	auto* rain = (RE::BSParticleShaderRainEmitter*)(particleShaderProperty->particleEmitter);
+
+	globals::profiler->BeginPass("Skylighting::PrecipMask");
+	a_precip->RenderMask(rain);
+	if (reference) {
+		// The engine's mask, announced; then the same view again, cleared, for DCLF's.
+		OcclusionReferenceRendered(kPrecipitationOcclusion);
+		a_precip->RenderMask(rain);
+	}
+	globals::profiler->EndPass();
+}
+
+void DrawcallLimitFix::RenderPrecipitationAtShadowMaps()
+{
+	// Skylighting's RenderOcclusionAtShadowMaps draws the maps when it is loaded; the engine renders the mask whole with the shader cache off.
+	if (globals::features::skylighting.loaded || !globals::shaderCache->IsEnabled())
+		return;
+	auto* object = EngineMaskObject();
+	if (!object || !OcclusionReady(kPrecipitationOcclusion))
+		return;
+	auto state = globals::state;
+	TracyD3D11Zone(state->tracyCtx, "Precipitation Mask (Drawcall Limit Fix)");
+	state->BeginPerfEvent("Precipitation Mask (Drawcall Limit Fix)");
+	// As Skylighting's: before the engine's shadow maps, which set the renderer's state again; the camera they begin with is put back
+	// (EarlyPrepasses reads its eye after them), and the mask's viewport is not scaled by dynamic resolution.
+	auto& shadowState = globals::game::shadowState->GetRuntimeData();
+	const auto posAdjust = shadowState.posAdjust;
+	const auto previousPosAdjust = shadowState.previousPosAdjust;
+	const auto cameraData = shadowState.cameraData;
+	auto& graphicsState = globals::game::graphicsState->GetRuntimeData();
+	const auto dynamicResolutionLock = graphicsState.dynamicResolutionLock;
+	graphicsState.dynamicResolutionLock = 1;
+	RenderPrecipitationMask(globals::game::sky->precip, object, true);
+	graphicsState.dynamicResolutionLock = dynamicResolutionLock;
+	shadowState.posAdjust = posAdjust;
+	shadowState.previousPosAdjust = previousPosAdjust;
+	shadowState.cameraData = cameraData;
+	state->EndPerfEvent();
+}
+
+void DrawcallLimitFix::Hooks::Main_Precipitation_RenderOcclusion::thunk()
+{
+	// The mask DCLF drew in this frame's shadow epoch (RenderPrecipitationAtShadowMaps) is done; else the engine renders it whole.
+	auto& dclf = globals::features::drawcallLimitFix;
+	if (!globals::shaderCache->IsEnabled() || !EngineMaskObject() || dclf.OcclusionNeedsEngine(kPrecipitationOcclusion))
+		func();
+}
+
 bool DrawcallLimitFix::OcclusionReferenceFrame(OcclusionMap a_map)
 {
 	// The map's own parity's (its entry's referenceDue: CS_DCLF_SKYLIGHT_PARITY's for Features/OcclusionMaps' maps).
@@ -509,6 +603,14 @@ void DrawcallLimitFix::Hooks::Install()
 		stl::write_thunk_call<Main_Update_Entry>(REL::Offset(DCLF::Engine::Address::kUpdateEntryCall).address());
 	else
 		logger::warn("[DCLF] Main::Update's first call is not where expected; the stood-in roots' kAccumulated is not written (T7b2)");
+	// The engine's precipitation mask, without Skylighting (which hooks the same call, and drives the mask itself).
+	if (!globals::features::skylighting.loaded) {
+		if (const auto site = REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x3A1, 0x3A1, 0x3BF); isCall(site)) {
+			stl::write_thunk_call<Main_Precipitation_RenderOcclusion>(site);
+			logger::info("[DCLF] precipitation mask hook installed on Main::Draw (without Skylighting)");
+		} else
+			logger::warn("[DCLF] Main::Draw's precipitation mask call is not where expected; the engine renders the mask");
+	}
 	// The engine's writers inside the engine-read window, kept out of DCLF's reads there.
 	DCLF::WindowWriters::Install();
 	// (The main pass's blended draw and Main::Draw's refraction point are Features/Forward's, the first-person view's two points
@@ -896,6 +998,15 @@ bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap) { return true; }
 void DrawcallLimitFix::OcclusionView(OcclusionMap) {}
 bool DrawcallLimitFix::OcclusionReferenceFrame(OcclusionMap) { return false; }
 void DrawcallLimitFix::OcclusionReferenceRendered(OcclusionMap) {}
+void DrawcallLimitFix::RenderPrecipitationMask(RE::Precipitation* a_precip, RE::BSGeometry* a_precipObject, bool)
+{
+	a_precip->SetupMask();
+	auto* particleShaderProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(a_precipObject->GetGeometryRuntimeData().shaderProperty.get());
+	globals::profiler->BeginPass("Skylighting::PrecipMask");
+	a_precip->RenderMask((RE::BSParticleShaderRainEmitter*)(particleShaderProperty->particleEmitter));
+	globals::profiler->EndPass();
+}
+void DrawcallLimitFix::RenderPrecipitationAtShadowMaps() {}
 void DrawcallLimitFix::NoteMaterialWritten(const RE::BSShaderMaterial*) {}
 void DrawcallLimitFix::WriteHidden(RE::NiAVObject* a_object, bool a_hidden)
 {

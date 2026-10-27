@@ -117,6 +117,18 @@ struct DrawcallLimitFix : Feature
 	 */
 	bool OcclusionReferenceFrame(OcclusionMap a_map);
 	void OcclusionReferenceRendered(OcclusionMap a_map);
+	/**
+	 * @brief The precipitation occlusion mask's render (Precipitation::SetupMask, then RenderMask), Skylighting's at its two points and
+	 * DCLF's own without Skylighting. a_dclf: DCLF draws its occluders in this frame's shadow epoch, so the engine's cull and registration
+	 * (SetupMask) are skipped, but on a reference frame, and RenderMask sets the camera and clears the mask. Render thread.
+	 */
+	void RenderPrecipitationMask(RE::Precipitation* a_precip, RE::BSGeometry* a_precipObject, bool a_dclf);
+	/**
+	 * @brief Deferred's Main_RenderShadowMaps, after Skylighting's maps: without Skylighting (whose RenderOcclusionAtShadowMaps does it
+	 * otherwise), the precipitation mask DCLF draws this frame, set up and cleared here on a frame the engine would render it
+	 * (Hooks::Main_Precipitation_RenderOcclusion skips the engine's then).
+	 */
+	void RenderPrecipitationAtShadowMaps();
 
 	// ---- Calls from the rest of CS (each inert in a build without DCLF) ----
 
@@ -194,6 +206,16 @@ private:
 		struct Main_Update_Entry
 		{
 			static void thunk(void* a_stages);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		/**
+		 * @brief Without Skylighting (which hooks the same call): Main::Draw's call of Main::Precipitation::RenderOcclusion (AE FUN_1404076c0,
+		 * SE FUN_1403ae920), the engine's precipitation mask, skipped on a frame DCLF's shadow epoch drew it.
+		 */
+		struct Main_Precipitation_RenderOcclusion
+		{
+			static void thunk();
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
