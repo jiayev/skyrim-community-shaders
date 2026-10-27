@@ -6,6 +6,7 @@
 #include "Utils/VersionedRelocation.h"
 
 #include "EngineFix.h"
+#include "EnvironmentProbe.h"
 #include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -171,6 +172,10 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 {
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
+	if (EnvironmentProbe::IsRendering() && shader->shaderType.get() != RE::BSShader::Type::Lighting)
+		return false;
+	if (EnvironmentProbe::IsRendering())
+		skipPixelShader = false;
 
 	// Landscape Seams: draw the vanilla terrain permutation while the seams one is compiling or failed.
 	constexpr auto landscapeSeamsFlag = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
@@ -199,6 +204,12 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 
 	NormalizeLegacyUtilityDescriptors(*shader, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor);
 	state->ModifyShaderLookup(*shader, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor);
+	if (EnvironmentProbe::IsRendering() &&
+		(!shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor) ||
+			!shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor))) {
+		EnvironmentProbe::ShaderFailed();
+		return false;
+	}
 
 	// Only check against non-shader bits
 	state->permutationData.PixelShaderDescriptor = Util::ShaderDescriptor::UploadedPixelDescriptor(state->permutationData.PixelShaderDescriptor, state->modifiedPixelDescriptor, State::GetRuntimePixelBits(*shader));
@@ -208,7 +219,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
 
 	const auto type = shader->shaderType.get();
-	if (!shaderFound && shaderCache->IsEnabled() && type > 0 && type < RE::BSShader::Type::Total &&
+	if ((!shaderFound || (EnvironmentProbe::IsRendering() && (!state->customVertexShader || !state->customPixelShader))) &&
+		shaderCache->IsEnabled() && type > 0 && type < RE::BSShader::Type::Total &&
 		state->enabledClasses[type - 1] && type != RE::BSShader::Type::Effect) {
 		RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
 		RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor);
@@ -570,10 +582,14 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
+	if (!isCompute)
+		EnvironmentProbe::BeforeDraw();
 	func(isCompute);
 	globals::state->Draw();
-	if (!isCompute)
+	if (!isCompute) {
 		VanillaBinding::BindDrawResources();
+		EnvironmentProbe::AfterDraw();
+	}
 }
 
 struct ID3D11Device_CreateVertexShader
@@ -1153,6 +1169,7 @@ namespace Hooks
 		stl::write_thunk_call<BSShader__BeginTechnique_SetPixelShader>(REL::RelocationID(101341, 108328).address() + REL::Relocate(0xD7, 0xEB));
 
 		logger::info("Hooking BSGraphics::SetDirtyStates");
+		EnvironmentProbe::InstallHooks();
 		stl::detour_thunk<BSGraphics_SetDirtyStates>(REL::RelocationID(75580, 77386));
 
 		logger::info("Hooking BSGraphics::Renderer::InitD3D");

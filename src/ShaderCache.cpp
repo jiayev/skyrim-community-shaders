@@ -187,6 +187,9 @@ namespace SIE
 			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred)) {
 				defines[lastIndex++] = { "DEFERRED", nullptr };
 			}
+			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::EnvironmentProbe)) {
+				defines[lastIndex++] = { "ENVIRONMENT_PROBE", nullptr };
+			}
 			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbr)) != 0) {
 				defines[lastIndex++] = { "TRUE_PBR", nullptr };
 				if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::AnisoLighting)) != 0) {
@@ -2266,7 +2269,8 @@ namespace SIE
 			}
 		}
 
-		if (IsAsync()) {
+		if (IsAsync() && !(shader.shaderType.get() == RE::BSShader::Type::Lighting &&
+							 (descriptor & static_cast<uint32_t>(LightingShaderFlags::EnvironmentProbe)))) {
 			compilationSet.Add({ ShaderClass::Vertex, shader, descriptor });
 		} else {
 			return MakeAndAddVertexShader(shader, descriptor);
@@ -2311,7 +2315,8 @@ namespace SIE
 			}
 		}
 
-		if (IsAsync()) {
+		if (IsAsync() && !(shader.shaderType.get() == RE::BSShader::Type::Lighting &&
+							 (descriptor & static_cast<uint32_t>(LightingShaderFlags::EnvironmentProbe)))) {
 			compilationSet.Add({ ShaderClass::Pixel, shader, descriptor });
 		} else {
 			return MakeAndAddPixelShader(shader, descriptor);
@@ -2897,8 +2902,8 @@ namespace SIE
 				const std::wstring globalDefinesSuffix(globalDefinesSuffixNarrow.begin(), globalDefinesSuffixNarrow.end());
 				const std::wstring defineSlugW(defineSlug.begin(), defineSlug.end());
 				const std::wstring diskPath = defineSlug.empty() ?
-				                                  std::format(L"{}/{}{}{}", GetStandaloneComputeCacheDir(srcPath), cacheName, globalDefinesSuffix, cacheExt) :
-				                                  std::format(L"{}/{}_{}{}{}", GetStandaloneComputeCacheDir(srcPath), cacheName, defineSlugW, globalDefinesSuffix, cacheExt);
+			                                      std::format(L"{}/{}{}{}", GetStandaloneComputeCacheDir(srcPath), cacheName, globalDefinesSuffix, cacheExt) :
+			                                      std::format(L"{}/{}_{}{}{}", GetStandaloneComputeCacheDir(srcPath), cacheName, defineSlugW, globalDefinesSuffix, cacheExt);
 
 				ID3D11DeviceChild* shader = nullptr;
 				bool diskCacheOutdated = true;

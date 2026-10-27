@@ -1,4 +1,5 @@
 #include "State.h"
+#include "EnvironmentProbe.h"
 
 #include <algorithm>
 #include <cmath>
@@ -118,7 +119,7 @@ void State::UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass)
 void State::Draw()
 {
 	ZoneScoped;
-	if (globals::features::sceneManager.loaded)
+	if (globals::features::sceneManager.loaded && !EnvironmentProbe::IsRendering())
 		globals::features::sceneManager.Update();
 
 	auto shaderCache = globals::shaderCache;
@@ -132,7 +133,7 @@ void State::Draw()
 	auto& skylighting = globals::features::skylighting;
 
 	if (shaderCache->IsEnabled()) {
-		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
+		if (terrainBlending.loaded && terrainBlending.settings.Enabled && !EnvironmentProbe::IsRendering()) {
 			ZoneScopedN("TerrainBlending::TerrainShaderHacks");
 			terrainBlending.TerrainShaderHacks();
 		}
@@ -1316,7 +1317,11 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
 
-				if (deferred->deferredPass || a_forceDeferred)
+				if (EnvironmentProbe::IsRendering()) {
+					a_vertexDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::EnvironmentProbe;
+					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::EnvironmentProbe;
+					a_pixelDescriptor &= ~(uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred;
+				} else if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred;
 
 				{
@@ -1606,6 +1611,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.MasserColor = lighting.masser.GetColor();
 		data.SecundaColor = lighting.secunda.GetColor();
 		data.TonemapOwner = static_cast<uint>(GetTonemapOwner());
+		if (a_inWorld)
+			sharedDataSnapshot = data;
 		sharedDataCB->Update(data);
 	}
 

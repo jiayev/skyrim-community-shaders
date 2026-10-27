@@ -3,6 +3,14 @@
 
 #define LIGHTING
 
+#if defined(ENVIRONMENT_PROBE)
+#	include "Common/EnvironmentProbe.hlsli"
+#	undef TERRAIN_BLENDING
+#	undef SCREEN_SPACE_SHADOWS
+#	undef WATER_BLENDING
+#	undef LLFDEBUG
+#endif
+
 #include "Common/BRDF.hlsli"
 #include "Common/ColorManagement.hlsli"
 #include "Common/FrameBuffer.hlsli"
@@ -63,6 +71,9 @@ struct VS_INPUT
 struct VS_OUTPUT
 {
 	float4 Position: SV_POSITION0;
+#if defined(ENVIRONMENT_PROBE)
+	float3 OctantClip: SV_ClipDistance0;
+#endif
 #if (defined(PROJECTED_UV) && !defined(SKINNED)) || defined(LANDSCAPE)
 	float4
 #else
@@ -282,6 +293,11 @@ VS_OUTPUT main(VS_INPUT input)
 
 	vsout.ModelPosition = input.Position.xyz;
 
+#	if defined(ENVIRONMENT_PROBE)
+	vsout.Position = EnvironmentProbe::Project(worldPosition.xyz);
+	vsout.OctantClip = EnvironmentProbe::ClipDistances(worldPosition.xyz);
+#	endif
+
 	return vsout;
 }
 #endif  // VSHADER
@@ -296,7 +312,14 @@ typedef VS_OUTPUT PS_INPUT;
 #	undef TERRAIN_BLENDING
 #endif
 
-#if defined(DEFERRED)
+#if defined(ENVIRONMENT_PROBE)
+struct PS_OUTPUT
+{
+	float4 Diffuse: SV_Target0;
+	float Distance: SV_Target1;
+	float RadialDepth: SV_Depth;
+};
+#elif defined(DEFERRED)
 struct PS_OUTPUT
 {
 	float4 Diffuse: SV_Target0;
@@ -1002,6 +1025,13 @@ bool UseSkylightingShadowVisibility()
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
+#	if defined(ENVIRONMENT_PROBE)
+	if (EnvironmentProbe::PixelFace(input.Position.xy) != EnvironmentProbe::GetFace(EnvironmentProbe::FaceSign))
+		discard;
+	float probeDistance = length(input.WorldPosition.xyz);
+	clip(probeDistance - EnvironmentProbe::NearDistance);
+	clip(EnvironmentProbe::FarDistance - probeDistance);
+#	endif
 
 	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;
 	float3 viewDirection = -normalize(input.WorldPosition.xyz);
@@ -1905,12 +1935,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float2 baseShadowUV = 1.0.xx;
 	float4 shadowColor = 1.0;
+#	if !defined(ENVIRONMENT_PROBE)
 	if ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) && ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir) || inWorld) || numShadowLights > 0) {
 		baseShadowUV = input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy;
 		float2 adjustedShadowUV = baseShadowUV * VPOSOffset.xy + VPOSOffset.zw;
 		float2 shadowUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(adjustedShadowUV);
 		shadowColor = TexShadowMaskSampler.Sample(SampShadowMaskSampler, shadowUV);
 	}
+#	endif
 
 	float projectedMaterialWeight = 0;
 
@@ -2365,6 +2397,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(SKYLIGHTING)
 	float3 positionMSSkylight = input.WorldPosition.xyz;
+#		if defined(ENVIRONMENT_PROBE)
+	positionMSSkylight += EnvironmentProbe::WorldOriginDelta;
+#		endif
 #		if defined(SKYLIGHTING_SHADOW_VIS)
 	float skylightingShadowVisibility = 1.0;
 #		endif
@@ -2516,7 +2551,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	    && !UseSkylightingShadowVisibility()
 #		endif
 	) {
-		const float lightingShadow = ShadowSampling::GetLightingShadow(input.WorldPosition.xyz, dirVSMDetailedShadow);
+		const float lightingShadow = ShadowSampling::GetLightingShadow(input.WorldPosition.xyz
+#		if defined(ENVIRONMENT_PROBE)
+																		   + EnvironmentProbe::WorldOriginDelta
+#		endif
+			,
+			dirVSMDetailedShadow);
 		if (!UseSkylightingShadowVisibility())
 			dirSoftShadow = lightingShadow;
 	}
@@ -2720,11 +2760,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	uint totalLightCount = LightLimitFix::NumStrictLights;
 	uint clusterIndex = 0;
 	uint lightOffset = 0;
+#			if defined(ENVIRONMENT_PROBE)
+	numClusteredLights = EnvironmentProbe::LightCount;
+	totalLightCount = numClusteredLights;
+#			else
 	if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		numClusteredLights = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		totalLightCount += numClusteredLights;
 		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
 	}
+#			endif
 
 #			if defined(SKINNED)
 	const bool localShadowSkinned = true;
@@ -2735,6 +2780,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
 	{
 		LightLimitFix::Light light;
+#			if defined(ENVIRONMENT_PROBE)
+		light = LightLimitFix::lights[lightIndex];
+		light.positionWS.xyz -= EnvironmentProbe::LightOriginDelta;
+		// The screen shadow mask is unavailable. Cached local shadow maps remain valid.
+		light.lightFlags &= ~LightLimitFix::LightFlags::Shadow;
+		if (LightLimitFix::IsLightIgnored(light))
+			continue;
+#			else
 		if (lightIndex < LightLimitFix::NumStrictLights) {
 			light = LightLimitFix::StrictLights[lightIndex];
 		} else {
@@ -2744,6 +2797,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			if (LightLimitFix::IsLightIgnored(light))
 				continue;
 		}
+#			endif
 
 		float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
 		float lightDist = length(lightDirection);
@@ -3229,6 +3283,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #		endif
 
+#		if !defined(ENVIRONMENT_PROBE)
 	color.xyz = ColorManagement::LinearToScene(color.xyz);
 #		if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled && (inWorld || inReflection)) {
@@ -3288,7 +3343,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 		}
 	}
-#	endif
+#		endif  // !ENVIRONMENT_PROBE: surface radiance without fog or scene encoding
+#	endif      // !DEFERRED
 
 #	if defined(TESTCUBEMAP) && defined(ENVMAP) && defined(DYNAMIC_CUBEMAPS)
 	baseColor.xyz = 0.0;
@@ -3499,12 +3555,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness.w = stochasticBlend;
 #	endif
 
-#	if defined(ENABLE_LL)
+#	if defined(ENABLE_LL) && !defined(ENVIRONMENT_PROBE)
 	if (Permutation::RenderToUI && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection))
 		psout.Diffuse.xyz = ColorManagement::WorkingToUI(psout.Diffuse.xyz);
 #	endif
 
-#	if !defined(DEFERRED)
+#	if !defined(DEFERRED) && !defined(ENVIRONMENT_PROBE)
 	float3 ssrNormal = screenSpaceNormal;
 	ssrNormal.z = max(0.001, sqrt(8.0 - 8.0 * ssrNormal.z));
 	ssrNormal.xy /= ssrNormal.zz;
@@ -3525,12 +3581,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		undef LANDSCAPE_PARALLAX_ENABLED
 #	endif
 
+#	if defined(ENVIRONMENT_PROBE)
+	psout.Distance = probeDistance;
+	psout.RadialDepth = probeDistance / EnvironmentProbe::FarDistance;
+#	else
 	psout.Diffuse.rgb = PreExposure::EncodeScene(psout.Diffuse.rgb);
 #	if defined(DEFERRED)
 	psout.Specular.rgb = PreExposure::EncodeScene(psout.Specular.rgb);
 #	else
 	if (outputColorToAuxiliaryTarget)
 		psout.NormalGlossiness.rgb = PreExposure::EncodeScene(psout.NormalGlossiness.rgb);
+#	endif
 #	endif
 	return psout;
 }

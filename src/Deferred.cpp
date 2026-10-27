@@ -1,4 +1,5 @@
 #include "Deferred.h"
+#include "EnvironmentProbe.h"
 #include "Features/ViewAtmosphere.h"
 
 #include <DDSTextureLoader.h>
@@ -859,6 +860,10 @@ void Deferred::Hooks::Main_RenderWorld_Start::thunk(RE::BSBatchRenderer* This, u
 
 void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumulator* This, uint32_t RenderFlags)
 {
+	if (EnvironmentProbe::IsRendering()) {
+		func(This, RenderFlags);
+		return;
+	}
 	auto deferred = globals::deferred;
 
 	if (globals::shaderCache->IsEnabled() && globals::state->inWorld) {

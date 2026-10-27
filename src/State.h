@@ -509,6 +509,7 @@ public:
 	using SharedDataCB = ::SharedDataCB;
 
 	std::unique_ptr<ConstantBuffer> sharedDataCB;
+	inline static SharedDataCB sharedDataSnapshot{};  ///< Last world lighting upload, reused by offscreen material captures.
 	std::unique_ptr<ConstantBuffer> featureDataCB;
 
 	PermutationCB permutationData{};

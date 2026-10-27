@@ -59,7 +59,12 @@ namespace ShadowSampling
 #endif
 
 #if defined(CLOUD_SHADOWS)
-		worldShadow *= CloudShadows::GetCloudShadowMult(positionWS, LinearSampler);
+		worldShadow *= CloudShadows::GetCloudShadowMult(positionWS
+#	if defined(ENVIRONMENT_PROBE)
+															+ EnvironmentProbe::WorldOriginDelta
+#	endif
+			,
+			LinearSampler);
 #endif
 
 		return worldShadow;
