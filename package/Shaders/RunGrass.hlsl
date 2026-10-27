@@ -380,7 +380,7 @@ struct PS_OUTPUT
 SamplerState SampBaseSampler : register(s0);
 SamplerState SampShadowMaskSampler : register(s1);
 #	if defined(PHYSICAL_SKY)
-SamplerState SampPhysicalSkyWrapSampler : register(s5);
+SamplerState SampPhysicalSkyWrapSampler : register(s7);
 #	endif
 #	if defined(GRASS_LIGHTING) && defined(TRUE_PBR)
 SamplerState SampNormalSampler : register(s2);
