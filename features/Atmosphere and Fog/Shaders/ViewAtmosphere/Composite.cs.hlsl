@@ -26,6 +26,6 @@ RWTexture2D<float4> MainRW : register(u0);
 	float4 position = mul(FrameBuffer::CameraViewProjInverse, float4(uv * float2(2, -2) + float2(-1, 1), depth, 1));
 	position.xyz /= position.w;
 	float4 color = MainRW[pixel];
-	color.rgb = ViewMedium::CompositeViewMedium(color.rgb, position.xyz, uv, SampColorSampler, fullCloudRay);
+	color.rgb = PreExposure::Encode(ViewMedium::CompositeViewMedium(PreExposure::Decode(color.rgb), position.xyz, uv, SampColorSampler, fullCloudRay));
 	MainRW[pixel] = color;
 }

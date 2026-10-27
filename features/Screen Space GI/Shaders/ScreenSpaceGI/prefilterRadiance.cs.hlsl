@@ -99,10 +99,11 @@ groupshared float3 g_scratchRadiance[8][8];
 	float4 rad1 = srcRadiance.GatherGreen(samplerPointClamp, uv * frameScale);
 	float4 rad2 = srcRadiance.GatherBlue(samplerPointClamp, uv * frameScale);
 
-	float3 radiance0 = ColorManagement::SceneToLinear(float3(rad0.w, rad1.w, rad2.w));
-	float3 radiance1 = ColorManagement::SceneToLinear(float3(rad0.z, rad1.z, rad2.z));
-	float3 radiance2 = ColorManagement::SceneToLinear(float3(rad0.x, rad1.x, rad2.x));
-	float3 radiance3 = ColorManagement::SceneToLinear(float3(rad0.y, rad1.y, rad2.y));
+	// NRD and the multi-bounce history keep unexposed radiance across frames.
+	float3 radiance0 = ColorManagement::SceneToLinear(PreExposure::Decode(float3(rad0.w, rad1.w, rad2.w)));
+	float3 radiance1 = ColorManagement::SceneToLinear(PreExposure::Decode(float3(rad0.z, rad1.z, rad2.z)));
+	float3 radiance2 = ColorManagement::SceneToLinear(PreExposure::Decode(float3(rad0.x, rad1.x, rad2.x)));
+	float3 radiance3 = ColorManagement::SceneToLinear(PreExposure::Decode(float3(rad0.y, rad1.y, rad2.y)));
 
 #ifdef GI
 	[branch] if (MultiBounceMode >= 2)

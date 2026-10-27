@@ -919,7 +919,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 	float4 ssrReflectionColorBlurred = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUvDR);
 	float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
 	float4 ssrReflectionColor = lerp(ssrReflectionColorBlurred, ssrReflectionColorRaw, ssrAmount * 0.7);
-	float3 finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
+	float3 finalSsrReflectionColor = max(0, PreExposure::Decode(ssrReflectionColor.xyz));
 	float ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
 	reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
 #			endif
@@ -1015,7 +1015,7 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 #				endif
 
 	float2 refractionUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(refractionUvRaw);
-	float3 refractionColor = RefractionTex.Sample(RefractionSampler, refractionUV).xyz;
+	float3 refractionColor = PreExposure::Decode(RefractionTex.Sample(RefractionSampler, refractionUV).xyz);
 
 #				if defined(UNDERWATER)
 	float refractionMul = 0;
@@ -1495,7 +1495,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #				endif
 #			endif
-	psout.Lighting = float4(finalColor, isSpecular);
+	psout.Lighting = float4(PreExposure::EncodeScene(finalColor), isSpecular);
 #		endif
 
 #		if defined(STENCIL)

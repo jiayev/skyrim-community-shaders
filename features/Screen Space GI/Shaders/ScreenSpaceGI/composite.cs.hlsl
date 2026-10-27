@@ -46,6 +46,6 @@ float3 SampleSSGIIL(uint2 pixCoord)
 	float3 ssgiIl = SampleSSGIIL(dispatchID.xy);
 
 	float4 mainColor = MainRW[dispatchID.xy];
-	mainColor.xyz = ColorManagement::SceneColor::ScaleAndAddLinear(mainColor.xyz, 1.0, ssgiIl * linAlbedo);
+	mainColor.xyz = PreExposure::Encode(ColorManagement::SceneColor::ScaleAndAddLinear(PreExposure::Decode(mainColor.xyz), 1.0, ssgiIl * linAlbedo));
 	MainRW[dispatchID.xy] = mainColor;
 }

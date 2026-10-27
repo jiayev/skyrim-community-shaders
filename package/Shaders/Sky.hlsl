@@ -511,7 +511,10 @@ PS_OUTPUT main(PS_INPUT input)
 			const float softEdge = saturate(8.0f * (cosTheta - SharedData::physSkyData.sunDiskCos) / (1.0f - SharedData::physSkyData.sunDiskCos));
 			const float sunSolidAngle = Math::TAU * (1.0f - SharedData::physSkyData.sunDiskCos);
 			const float3 transmittance = PhysSky::SampleViewCelestialTr(normalize(input.WorldPosition.xyz), SampBlendSampler);
-			const float3 sunDiskRadiance = min((SharedData::physSkyData.sunlightColor / max(sunSolidAngle, 1e-6f)) * transmittance, 62250.0f);
+			float3 sunDiskRadiance = (SharedData::physSkyData.sunlightColor / max(sunSolidAngle, 1e-6f)) * transmittance;
+#			if !defined(ENABLE_LL)
+			sunDiskRadiance = min(sunDiskRadiance, 62250.0f);
+#			endif
 
 			float3 sunDiskColor = sunDiskRadiance * limbFactor * softEdge;
 			psout.Color.xyz = sunDiskColor;
@@ -591,6 +594,9 @@ PS_OUTPUT main(PS_INPUT input)
 		psout.Color.rgb = ColorManagement::WorkingToUI(psout.Color.rgb);
 #	endif
 	psout.Color.w *= alphaTransmittance;
+#	if !defined(OCCLUSION)
+	psout.Color.rgb = PreExposure::EncodeScene(psout.Color.rgb);
+#	endif
 	return psout;
 }
 #endif

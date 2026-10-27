@@ -39,6 +39,10 @@ namespace SharedData
 		float4 AmbientSHG;
 		float4 AmbientSHB;
 		float4 HDRData;
+		float PreExposure;
+		float RcpPreExposure;
+		float PreviousPreExposure;
+		float PreExposureHistoryRatio;
 	};
 
 	struct GrassLightingSettings

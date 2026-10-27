@@ -24,6 +24,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PostProcessing.h"
+#include "Features/PostProcessing/HistogramAutoExposure.h"
 #include "Features/RainRefraction.h"
 #include "Features/RemoteControl/NvPerf.h"
 #include "Features/Skin.h"
@@ -1376,8 +1377,27 @@ void State::SetAdapterDescription(const std::wstring& description)
 
 void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] bool a_prepass)
 {
+	if (preExposureFrame != frameCount) {
+		preExposureFrame = frameCount;
+		previousPreExposure = preExposure;
+		preExposure = 1.0f;
+		if (globals::shaderCache->IsEnabled() && globals::features::linearLighting.IsLinearLightingActive() && !IsMainOrLoadingMenuOpen()) {
+			auto& post = globals::features::postProcessing;
+			if (auto* exposure = post.GetPipelineFeature<HistogramAutoExposure>(PostProcessing::FeaturePipelineIndex::AutoExposure); exposure && post.IsPipelineRunning())
+				preExposure = exposure->GetPreExposure();
+			if (!std::isfinite(preExposure) || preExposure <= 0.0f)
+				preExposure = 1.0f;
+			// Follow the exposed scene range. An unattenuated/off-screen sun must
+			// not force dark scene color into FP16 subnormals before exposure.
+			preExposure = std::clamp(preExposure, 1e-20f, 65504.0f);
+		}
+	}
 	{
 		SharedDataCB data{};
+		data.PreExposure = preExposure;
+		data.RcpPreExposure = 1.0f / preExposure;
+		data.PreviousPreExposure = previousPreExposure;
+		data.PreExposureHistoryRatio = preExposure / previousPreExposure;
 		SharedLighting lighting{};
 
 		const auto shaderManager = globals::game::smState;
