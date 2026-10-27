@@ -55,6 +55,10 @@ uint RecordTexture(uint a_register) { return vk::RawBufferLoad<uint>(Address(Rec
 		DCLFPixelObjectRow row = (DCLFPixelObjectRow)0;
 		if (object < known)
 			row = DCLFPixelObjectRowOf(objects, shading, placements, roots, states, seeds, frame, object);
-		vk::RawBufferStore<DCLFPixelObjectRow>(base + uint64_t(object) * kPixelObjectRowBytes, row, 16);
+		// Three float4s, not the struct: AMD's legacy Windows driver (Polaris, 2.0.279) crashes compiling a struct store to an address.
+		const uint64_t at = base + uint64_t(object) * kPixelObjectRowBytes;
+		vk::RawBufferStore<float4>(at, row.MaterialData, 16);
+		vk::RawBufferStore<float4>(at + 16, row.EmitColorSSR, 16);
+		vk::RawBufferStore<float4>(at + 32, float4(row.CopyAlpha, row.AlphaTestRef, row.Padding), 16);
 	}
 }

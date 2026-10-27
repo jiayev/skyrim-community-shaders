@@ -11,6 +11,11 @@ namespace org
 	class PersistentGraphHost;
 }
 
+namespace DCLF
+{
+	struct ToggleSet;
+}
+
 namespace DCLF::Draws
 {
 	struct Resources;
@@ -32,6 +37,12 @@ namespace DCLF::Draws
 
 		bool operator==(const GraphConditions&) const = default;
 	};
+
+	/** @brief Whether the device makes every cell CPU-driven: no device-generated commands for the GPU path's colour (DrawPipelines::DeviceGenerated). */
+	bool CpuPipelineForced();
+
+	/** @brief Whether a_set draws a cell of a_interior CPU-driven (CpuPipelineFor: Toggles.h), or the device forces it (CpuPipelineForced). */
+	bool CpuPipelineForCell(const ToggleSet& a_set, bool a_interior);
 
 	/**
 	 * @brief Render thread, at the frame's build point before it builds (IndirectDraws::BuildPoint): this frame's conditions. A change

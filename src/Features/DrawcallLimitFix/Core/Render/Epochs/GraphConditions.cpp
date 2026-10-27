@@ -1,6 +1,7 @@
 // The graph's conditions (see the header).
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
@@ -47,6 +48,17 @@ namespace DCLF::Draws
 		return false;
 	}
 
+	bool CpuPipelineForced()
+	{
+		const auto& pipelines = DrawPipelines::Get();
+		return pipelines.Enabled() && !pipelines.DeviceGenerated();
+	}
+
+	bool CpuPipelineForCell(const ToggleSet& a_set, bool a_interior)
+	{
+		return CpuPipelineFor(a_set, a_interior) || CpuPipelineForced();
+	}
+
 	void RefreshGraphConditions(org::PersistentGraphHost& a_host)
 	{
 		GraphConditions next;
@@ -56,8 +68,9 @@ namespace DCLF::Draws
 		// The pipeline from the newest applied toggles, as the cull mode: the rebuild here makes every recording of the old graph stale, so
 		// the frame waits at its start for a snapshot made for the graph as built (AdoptCurrentSnapshot), whose revision records the
 		// epochs (the CPU pipeline's: its external epochs, RevisionInputs::cpuPipeline).
-		// Which one draws this kind of cell (Auto: interiors CPU-driven): entering or leaving an interior rebuilds the graph anyway.
-		next.cpuPipeline = CpuPipelineFor(Toggles::Get().Active(), next.interior);
+		// Which one draws this kind of cell (Auto: interiors CPU-driven): entering or leaving an interior rebuilds the graph anyway. Every
+		// cell without device-generated commands.
+		next.cpuPipeline = CpuPipelineForCell(Toggles::Get().Active(), next.interior);
 		{
 			std::lock_guard lock(cutsMutex);
 			next.cuts = requestedCuts;

@@ -424,7 +424,8 @@ namespace DCLF
 		});
 		if (published == Versions<SetVersion>::PublishResult::Published && Diagnostics::Observe().claims)
 			if (const auto version = l.versions.published.load())
-				CheckClasses(*version);
+				if (deviceGenerated)
+					CheckClasses(*version);
 	}
 
 	void DrawPipelines::Impl::IndexMainBuilt(std::uint32_t a_index, const Built& a_built)
@@ -481,12 +482,13 @@ namespace DCLF
 		// Per state class, its own sets and signatures (its members only: a set's pipelines may differ in their shaders alone). A version
 		// brought up from an older generation catches up on every class; the classes it has not seen are made (initial pipeline: their
 		// first member). The classes' members are admitted in order, so those of [0, a_admitted) are a prefix of each.
+		// Without device-generated commands the classes keep their members' count alone (no sets or signatures: nothing executes them).
 		a_version.classes.resize(l.classMembers.size());
 		for (std::size_t c = 0; c < l.classMembers.size(); ++c) {
 			const auto& members = l.classMembers[c];
 			auto& sets = a_version.classes[c];
 			const auto count = static_cast<std::uint32_t>(std::ranges::lower_bound(members, a_admitted) - members.begin());
-			for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
+			for (std::uint32_t variant = 0; deviceGenerated && variant < kVariantCount; ++variant) {
 				const auto handleOf = [&](std::uint32_t a_member) {
 					return static_cast<const Built*>(l.setPipelines[members[a_member]].get())->pipelines[variant]->GetHandle();
 				};
@@ -646,7 +648,7 @@ namespace DCLF
 		for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
 			const bool depthOnly = variant == kDepthVariant;
 			PipelineDesc desc(a_layout, a_program->vertex, a_program->pixel, a_targets.depth);
-			desc.flags.flags = rhi::PipelineFlags_IndirectBindable;
+			desc.flags.flags = DrawPipelines::Get().IndirectBindable() ? rhi::PipelineFlags_IndirectBindable : rhi::PipelineFlags_None;
 			desc.raster.rs.cull = (a_key.rasterFlags & kRasterTwoSided) ? rhi::CullMode::None : rhi::CullMode::Back;
 			desc.raster.rs.frontCCW = a_frontCCW;
 			auto& depth = desc.depth.ds;
@@ -723,7 +725,7 @@ namespace DCLF
 		for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
 			const bool depthOnly = variant == kDepthVariant;
 			PipelineDesc desc(a_layout, a_program->vertex, depthOnly ? a_program->depthPixel : a_program->pixel, a_targets.depth);
-			desc.flags.flags = rhi::PipelineFlags_IndirectBindable;
+			desc.flags.flags = DrawPipelines::Get().IndirectBindable() ? rhi::PipelineFlags_IndirectBindable : rhi::PipelineFlags_None;
 			auto& raster = desc.raster.rs;
 			raster.cull = (a_key.rasterFlags & kRasterTwoSided) ? rhi::CullMode::None : rhi::CullMode::Back;
 			// No rasterizer bias for a decal: its variants are switched by device-generated commands, whose execution sets may change
@@ -828,8 +830,10 @@ namespace DCLF
 		for (std::size_t c = 0; c < version->classes.size(); ++c) {
 			const auto& sets = version->classes[c];
 			for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
-				state.classes[c].sets[variant] = sets.sets[variant]->GetHandle();
-				state.classes[c].signatures[variant] = sets.signatures[variant]->GetHandle();
+				if (sets.sets[variant])
+					state.classes[c].sets[variant] = sets.sets[variant]->GetHandle();
+				if (sets.signatures[variant])
+					state.classes[c].signatures[variant] = sets.signatures[variant]->GetHandle();
 			}
 			state.classes[c].pipelines = sets.applied;
 		}

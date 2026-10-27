@@ -339,6 +339,9 @@ namespace DCLF
 
 		auto device = host->GetDesc().device;
 		auto state = std::make_shared<Resources>();
+		// The targets first: a setup retried every frame until they can be imported does not make its buffers and programs each time.
+		if (!ImportMainTargets(*state, a_capture, device, target, targets))
+			return false;
 		if (!EnsureSceneBuffers(device)) {
 			logger::error("[DCLF] The face positions buffer has no device address");
 			return false;
@@ -352,8 +355,6 @@ namespace DCLF
 		if (Policy::RecordFoliagePixels())
 			CreateFoliageRecord(*state, *host, device, target);
 
-		if (!ImportMainTargets(*state, a_capture, device, target, targets))
-			return false;
 		ImportRefractionNormals(*state, device);
 		ImportShadowMask(*state, device);
 		state->shadow = shadowEngine->shadow;

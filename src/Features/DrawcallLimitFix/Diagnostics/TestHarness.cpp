@@ -87,7 +87,7 @@ namespace DCLF
 					return true;
 				const auto& requested = DCLF::Toggles::Get().Requested();
 				return DCLF::Toggles::Get().Frame() == requested &&
-				       DCLF::Draws::GraphBuiltForCpu() == DCLF::CpuPipelineFor(requested, DCLF::Draws::CurrentGraphConditions().interior);
+				       DCLF::Draws::GraphBuiltForCpu() == DCLF::Draws::CpuPipelineForCell(requested, DCLF::Draws::CurrentGraphConditions().interior);
 			}
 			if (condition == "nvperf") {
 				if (!harness.nvperfCapture)
