@@ -114,43 +114,12 @@ namespace DCLF::Draws
 			return prepared;
 		}
 
-		/**
-		 * @brief The CPU mode's (Api::PassDef::direct): phase 1 alone, single phase, with no HZB (the mode has none: no instance is
-		 * occluded, none goes on the retest list), Prepare's values from the committed depth shape and the frame's adopted set.
-		 */
-		static void Direct(const Features::Grass::GrassTables& a_tables, const Api::DirectPass& a_pass, Api::DirectWork& a_out)
-		{
-			const auto frame = CurrentFrame(a_pass.shapes, a_pass.segment);
-			const std::uint64_t slots = std::min({ a_pass.Units(a_tables.instances), a_pass.Units(a_tables.owners), a_pass.Units(a_tables.frame), a_pass.Units(a_tables.visible) });
-			if (!a_tables.cull || !slots || !frame || !frame->latch || !a_tables.draw || !a_tables.draws)
-				return;
-			GrassCullPrepared prepared{};
-			prepared.program = a_tables.cull;
-			prepared.latch = frame->latch;
-			auto& constants = prepared.constants;
-			constants.drawIndex = Api::DirectPass::Srv(a_tables.draw);
-			constants.instancesIndex = a_pass.Srv(a_tables.instances);
-			constants.ownersIndex = a_pass.Srv(a_tables.owners);
-			constants.shapesIndex = a_pass.Srv(a_tables.shapes);
-			constants.bucketsIndex = a_pass.Srv(a_tables.buckets);
-			constants.frameIndex = a_pass.Uav(a_tables.frame);
-			constants.visibleIndex = a_pass.Uav(a_tables.visible);
-			constants.drawsIndex = Api::DirectPass::Uav(a_tables.draws);
-			constants.latchIndex = frame->latch->SrvIndex();
-			constants.phase = 1;
-			constants.retestOffset = static_cast<std::uint32_t>(a_pass.Units(a_tables.visible) * GrassInstances::kRetestOffsetPerUnit);
-			prepared.groups = static_cast<std::uint32_t>((slots + Features::Grass::kGrassCullGroup - 1) / Features::Grass::kGrassCullGroup);
-			std::array<std::shared_ptr<org::Buffer>, 8> held{ a_pass.Version(a_tables.instances), a_pass.Version(a_tables.owners), a_pass.Version(a_tables.shapes),
-				a_pass.Version(a_tables.buckets), a_pass.Version(a_tables.frame), a_pass.Version(a_tables.visible), a_tables.draw, a_tables.draws };
-			a_out.Add([prepared = std::move(prepared), held = std::move(held), slot = a_pass.frameSlot](rhi::CommandList& a_commands) { RecordCull(a_commands, prepared, slot); });
-		}
-
 		static void Record(const GrassCullBindings&, const GrassCullPrepared& a_frame, org::PassRecordContext& a_recording)
 		{
 			RecordCull(a_recording.Commands(), a_frame, a_recording.FrameSlot());
 		}
 
-		// The dispatch, from the latch's region of a_frameSlot (Record's and the CPU mode's).
+		// The dispatch, from the latch's region of a_frameSlot.
 		static void RecordCull(rhi::CommandList& a_commands, const GrassCullPrepared& a_frame, std::uint32_t a_frameSlot)
 		{
 			if (!a_frame.program || !a_frame.groups || !a_frame.latch)
@@ -232,32 +201,12 @@ namespace DCLF::Draws
 			return prepared;
 		}
 
-		/** @brief The CPU mode's (Api::PassDef::direct): Prepare's values for a_mode from the frame's adopted set. */
-		static void Direct(const Features::Grass::GrassTables& a_tables, std::uint32_t a_mode, const Api::DirectPass& a_pass, Api::DirectWork& a_out)
-		{
-			const auto buckets = std::min<std::uint64_t>(a_pass.Units(a_tables.buckets), GrassInstances::kMaxBuckets);
-			if (!a_tables.args || !buckets || !a_tables.draw || !a_tables.draws)
-				return;
-			GrassArgsPrepared prepared{};
-			prepared.program = a_tables.args;
-			auto& constants = prepared.constants;
-			constants.drawIndex = Api::DirectPass::Srv(a_tables.draw);
-			constants.bucketsIndex = a_pass.Srv(a_tables.buckets);
-			constants.meshesIndex = a_pass.Srv(a_tables.meshes);
-			constants.drawsIndex = Api::DirectPass::Uav(a_tables.draws);
-			constants.mode = a_mode;
-			constants.drawSlots = static_cast<std::uint32_t>(buckets * GrassInstances::kTiers);
-			prepared.groups = (constants.drawSlots + Features::Grass::kGrassArgsGroup - 1) / Features::Grass::kGrassArgsGroup;
-			std::array<std::shared_ptr<org::Buffer>, 4> held{ a_pass.Version(a_tables.buckets), a_pass.Version(a_tables.meshes), a_tables.draw, a_tables.draws };
-			a_out.Add([prepared = std::move(prepared), held = std::move(held)](rhi::CommandList& a_commands) { RecordArgs(a_commands, prepared); });
-		}
-
 		static void Record(const GrassArgsBindings&, const GrassArgsPrepared& a_frame, org::PassRecordContext& a_recording)
 		{
 			RecordArgs(a_recording.Commands(), a_frame);
 		}
 
-		// The dispatch (Record's and the CPU mode's).
+		// The dispatch.
 		static void RecordArgs(rhi::CommandList& a_commands, const GrassArgsPrepared& a_frame)
 		{
 			if (!a_frame.program || !a_frame.groups)
@@ -413,24 +362,6 @@ namespace DCLF::Features::Grass
 			return std::make_shared<Draws::GrassArgsPass>(a_context.State<GrassTables>(), kArgsColour);
 		}
 
-		// The CPU mode's (Api::PassDef::direct), as their makes' conditions: no phase 2 (no HZB), the colour arguments always.
-		void DirectCull(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
-		{
-			if (Draws::CurrentGraphConditions().interior)
-				return;
-			if (const auto tables = a_pass.State<GrassTables>())
-				Draws::GrassCullPass::Direct(*tables, a_pass, a_out);
-		}
-
-		template <std::uint32_t Mode>
-		void DirectArgs(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
-		{
-			if (Draws::CurrentGraphConditions().interior)
-				return;
-			if (const auto tables = a_pass.State<GrassTables>())
-				Draws::GrassArgsPass::Direct(*tables, Mode, a_pass, a_out);
-		}
-
 		std::shared_ptr<org::RenderPass> MakeCounts(const Api::PassContext& a_context)
 		{
 			if (a_context.Interior())
@@ -443,11 +374,11 @@ namespace DCLF::Features::Grass
 	{
 		// Phase 1's lists and arguments before the depth draw; phase 2's retest against the HZB rebuilt this frame and its arguments; the
 		// colour draws' arguments once both phases are done; the header's counts read back.
-		a_context.RegisterPass({ .key = "grass.cull", .passName = "cs.dclf.z.grass-cull", .make = &MakeCullPhaseOne, .setup = &TablesSetup, .direct = &DirectCull });
-		a_context.RegisterPass({ .key = "grass.args", .passName = "cs.dclf.z.grass-args", .make = &MakeArgsPhaseOne, .setup = &TablesSetup, .direct = &DirectArgs<kArgsPhaseOne> });
+		a_context.RegisterPass({ .key = "grass.cull", .passName = "cs.dclf.z.grass-cull", .make = &MakeCullPhaseOne, .setup = &TablesSetup, .cpuPipeline = true });
+		a_context.RegisterPass({ .key = "grass.args", .passName = "cs.dclf.z.grass-args", .make = &MakeArgsPhaseOne, .setup = &TablesSetup, .cpuPipeline = true });
 		a_context.RegisterPass({ .key = "grass.cull-phase2", .passName = "cs.dclf.grass-cull-phase2", .make = &MakeCullPhaseTwo, .setup = &TablesSetup });
 		a_context.RegisterPass({ .key = "grass.args-phase2", .passName = "cs.dclf.grass-args-phase2", .make = &MakeArgsPhaseTwo, .setup = &TablesSetup });
-		a_context.RegisterPass({ .key = "grass.args-colour", .passName = "cs.dclf.z.grass-args-colour", .make = &MakeArgsColour, .setup = &TablesSetup, .direct = &DirectArgs<kArgsColour> });
+		a_context.RegisterPass({ .key = "grass.args-colour", .passName = "cs.dclf.z.grass-args-colour", .make = &MakeArgsColour, .setup = &TablesSetup, .cpuPipeline = true });
 		a_context.RegisterPass({ .key = "grass.counts", .passName = "cs.dclf.z.grass-counts", .kind = Api::PassKind::Copy, .make = &MakeCounts, .setup = &CountsSetup });
 	}
 }

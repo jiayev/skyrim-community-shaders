@@ -73,8 +73,9 @@ namespace DCLF::Draws
 		// for them), and its uploader (a growth's fills: SceneBufferSet::SetUploads; weak, so no post outlives a graph).
 		bool asyncEpochs = false;
 		std::weak_ptr<org::runtime::IUploadService> uploads;
-		// The graph is built for the CPU pipeline (GraphConditions::cpuPipeline, posted with its build): no epoch has a pass, so the
-		// revision records none (AssembleRevision) and a snapshot is complete without recordings (DecideEpochCoverage).
+		// The graph is built for the CPU pipeline (GraphConditions::cpuPipeline, posted with its build): only the epochs with CPU pipeline
+		// passes (Draws::CpuPipelineRecords) have passes, so the revision records only those (AssembleRevision), covered by their
+		// recordings too (DecideEpochCoverage).
 		bool cpuPipeline = false;
 	};
 

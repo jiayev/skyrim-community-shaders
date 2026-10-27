@@ -377,13 +377,6 @@ namespace DCLF::Features::Shadows::Engine
 			});
 		}
 
-		// The CPU mode's (Api::PassDef::direct): the same copies from the committed shadow shape.
-		void LatchedCopiesDirect(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
-		{
-			if (const auto& frame = a_pass.shapes.shadow)
-				Draws::DirectLatchedCopies(a_pass, LatchedTargets(*a_pass.Shadow()), Draws::LatchedSource{ frame->generation, frame, frame->latched }, a_out);
-		}
-
 		// Core's IndexPoolPass (the depth epoch's too), from the shadow shape's latch.
 		std::shared_ptr<org::RenderPass> IndexPoolCopies(const Api::PassContext& a_context)
 		{
@@ -413,8 +406,8 @@ namespace DCLF::Features::Shadows::Engine
 
 		// The shadow epoch's: the shadow views' and the occlusion maps' (Skylighting's sky map, the precipitation mask), in one epoch.
 		constexpr Api::PassDef kShadowPasses[] = {
-			{ .key = "shadows.latched-copies", .passName = "cs.dclf.shadow.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies, .direct = &LatchedCopiesDirect },
-			{ .key = "shadows.index-pool", .passName = "cs.dclf.shadow.index-pool", .make = &IndexPoolCopies, .direct = &Draws::DirectShadowIndexPool },
+			{ .key = "shadows.latched-copies", .passName = "cs.dclf.shadow.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies, .cpuPipeline = true },
+			{ .key = "shadows.index-pool", .passName = "cs.dclf.shadow.index-pool", .make = &IndexPoolCopies, .cpuPipeline = true },
 			{ .key = "shadows.build-draws", .passName = "cs.dclf.shadow.build-draws", .make = &BuildDraws },
 			{ .key = "shadows.view", .passName = "cs.dclf.shadow.view", .kind = PassKind::Render, .make = &ViewDraws },
 			{ .key = "shadows.cull-counters", .passName = "cs.dclf.shadow.cull-counters", .kind = PassKind::Copy, .make = &CullCounters },

@@ -4,7 +4,7 @@
 // the graph is built for the CPU pipeline (GraphConditions::cpuPipeline), the epoch's commits run on the render thread as in the GPU
 // path (they latch the frame's values), its submission is the site's instead: the site's views culled on DCLF's pool, and one callback
 // queued into DXVK's command stream (RenderGraphRuntime::EmitExternalCommands) that records, on DXVK's CS thread into DXVK's own command
-// buffer, the commits' staged uploads, the site's pre-work (PreWork.h), the views' direct draws (Recorder.h) inside one rendering per
+// buffer, its epoch's ORG execution (the commits' uploads, its CPU pipeline passes), the views' direct draws (Recorder.h) inside one rendering per
 // target, and the exit barrier. Nothing waits on the render thread but a frame slot's reuse (FrameStart).
 //
 // The sites: shadow (the shadow views and occlusion maps, ShadowSite.cpp), depth (main depth, the families' depth and the hosted views:

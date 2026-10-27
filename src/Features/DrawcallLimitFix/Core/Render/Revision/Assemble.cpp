@@ -326,9 +326,9 @@ namespace DCLF
 						return false;
 				return true;
 			};
-			// The CPU pipeline's graph has no pass in any DCLF epoch (GraphConditions::cpuPipeline): nothing to record, and the snapshot is
-			// complete without (DecideEpochCoverage); the direct sites draw from its payload and view batches.
-			if (!recordable || !shapeFragment || traits.hostedBy != kNoEpoch || producer.inputs.cpuPipeline) {
+			// The CPU pipeline's graph has no pass in a DCLF epoch without CPU pipeline passes (GraphConditions): nothing to record, and the
+			// snapshot is complete without (DecideEpochCoverage); the direct sites draw from its payload and view batches.
+			if (!recordable || !shapeFragment || traits.hostedBy != kNoEpoch || (producer.inputs.cpuPipeline && !CpuPipelineRecords(e))) {
 				draft.Set(slot, nullptr);
 				continue;
 			}

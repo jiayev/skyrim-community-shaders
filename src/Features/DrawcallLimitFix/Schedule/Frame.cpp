@@ -108,7 +108,6 @@ namespace DCLF::Schedule
 		// The colour epoch: the build, the sort by pipeline, the forward range's sort, the colour draws.
 		constexpr std::string_view kMainColour[] = {
 			"core.latched-copies",
-			"fades.pixel-rows-colour",
 			"core.build-draws",
 			"core.sort-scan",
 			"core.sort-scatter",

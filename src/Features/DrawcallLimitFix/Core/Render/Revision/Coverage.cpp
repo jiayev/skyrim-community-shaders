@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
@@ -220,9 +221,10 @@ namespace DCLF
 			growthToDraws.push_back(frameNow >= growthAdoptedFrame ? frameNow - growthAdoptedFrame : 0u);
 			growthAdoptedFrame = ~0u;
 		}
-		// The CPU pipeline's graph (GraphConditions::cpuPipeline): its revisions record nothing (AssembleRevision), so an epoch is covered by
-		// its shape in the revision (a shared one's while its gate class is on) and the snapshot's view batches (Direct::FrameBatches,
-		// adopted with it), which the direct sites draw from at the epochs' triggers. Never waits for a recording. An epoch whose site is
+		// The CPU pipeline's graph (GraphConditions::cpuPipeline): an epoch is covered by its shape in the revision (a shared one's while
+		// its gate class is on) and the snapshot's view batches (Direct::FrameBatches, adopted with it), which the direct sites draw from at
+		// the epochs' triggers, and one with CPU pipeline passes (its own, or its host's for a hosted one) by its current recording too,
+		// which its site executes (a hosted one's carried by its host's). An epoch whose site is
 		// not live (Direct::ShadowSiteLive, ViewSiteLive) is not covered, so the engine draws it meanwhile; a hosted one only with its host.
 		if (current && snapshot && Draws::CurrentGraphConditions().cpuPipeline) {
 			const bool batches = Direct::FrameBatches() != nullptr;
@@ -231,7 +233,13 @@ namespace DCLF
 				const bool live = traits.shape == ShapeKind::Main     ? true :
 				                  traits.shape == ShapeKind::Shadow ? Direct::ShadowSiteLive() :
 				                                                      Direct::ViewSiteLive(traits.index);
-				rv.covered[e] = batches && live && active->Fragment(R::kShapeSlot + e) != nullptr && (traits.hostedBy == kNoEpoch || rv.covered[traits.hostedBy]);
+				bool recorded = true;
+				if (const auto owner = traits.hostedBy != kNoEpoch ? traits.hostedBy : e; Draws::CpuPipelineRecords(owner)) {
+					const auto recordings = active->Get<RevisionRecordings>(R::kRecordingSlot + owner);
+					recorded = recordings && !recordings->recordings.empty() && recordings->recordings.front() && host &&
+					           host->EpochRecordingCurrent(*recordings->recordings.front()) && (traits.hostedBy == kNoEpoch || recordings->Carries(e));
+				}
+				rv.covered[e] = batches && live && recorded && active->Fragment(R::kShapeSlot + e) != nullptr && (traits.hostedBy == kNoEpoch || rv.covered[traits.hostedBy]);
 			}
 		} else if (current && snapshot)
 			for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e) {

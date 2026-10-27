@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransforms.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
 
 #include "RenderGraph/ComputeProgram.h"
@@ -47,6 +48,9 @@ namespace DCLF::Draws
 	{
 		std::shared_ptr<const ComputeProgram> program;
 		std::shared_ptr<const org::LatchBlock> latch;
+		// The full barriers before and after: an external epoch's execution (GraphConditions::cpuPipeline) has its own at its entry
+		// and exit, and no pass of it reads the copy.
+		bool outerBarriers = true;
 	};
 
 	/**
@@ -63,7 +67,8 @@ namespace DCLF::Draws
 	public:
 		// a_segment: its epoch's (the depth epoch's: the PassContext it was made with).
 		TextureTransformsPass(std::shared_ptr<Resources> a_resources, std::shared_ptr<const ComputeProgram> a_program, RenderGraphRuntime::Segment a_segment) :
-			resources(std::move(a_resources)), program(std::move(a_program)), segment(a_segment) {}
+			resources(std::move(a_resources)), program(std::move(a_program)), segment(a_segment),
+			outerBarriers(!CurrentGraphConditions().cpuPipeline) {}
 
 		TextureTransformsBindings Declare(org::PassBuilder& a_builder)
 		{
@@ -90,6 +95,7 @@ namespace DCLF::Draws
 				return prepared;
 			prepared.program = program;
 			prepared.latch = frame->latch;
+			prepared.outerBarriers = outerBarriers;
 			return prepared;
 		}
 
@@ -98,7 +104,7 @@ namespace DCLF::Draws
 			RecordApply(a_recording.Commands(), a_frame, a_recording.FrameSlot());
 		}
 
-		// The barriers and both dispatches, from the latch's region of a_frameSlot (Record's and the CPU mode's).
+		// The barriers and both dispatches, from the latch's region of a_frameSlot.
 		static void RecordApply(rhi::CommandList& a_commands, const TextureTransformsPrepared& a_frame, std::uint32_t a_frameSlot)
 		{
 			if (!a_frame.program || !a_frame.latch)
@@ -110,20 +116,23 @@ namespace DCLF::Draws
 			auto& commands = a_commands;
 			const rhi::GlobalBarrier global = rhi::FullMemoryBarrier();
 			const rhi::BarrierBatch batch{ {}, {}, { &global, 1 } };
-			commands.Barriers(batch);
+			if (a_frame.outerBarriers)
+				commands.Barriers(batch);
 			// Every animated row copied before any entry is stored (an entry's row may be another group's).
 			constants.phase = 0;
 			RecordDispatch(commands, *a_frame.program, constants, kGroups);
 			commands.Barriers(batch);
 			constants.phase = 1;
 			RecordDispatch(commands, *a_frame.program, constants, kGroups);
-			commands.Barriers(batch);
+			if (a_frame.outerBarriers)
+				commands.Barriers(batch);
 		}
 
 	private:
 		std::shared_ptr<Resources> resources;
 		std::shared_ptr<const ComputeProgram> program;
 		RenderGraphRuntime::Segment segment;
+		bool outerBarriers = true;  // the graph's conditions at its build
 	};
 }
 
@@ -146,18 +155,6 @@ namespace DCLF::Features::TextureTransforms
 		{
 			return std::make_shared<Draws::TextureTransformsPass>(a_context.Main(), a_context.State<ComputeProgram>(), a_context.segment);
 		}
-
-		// The CPU mode's (Api::PassDef::direct): Prepare's conditions on the committed depth shape, then the same commands.
-		void DirectApply(const Api::DirectPass& a_pass, Api::DirectWork& a_out)
-		{
-			auto program = a_pass.State<ComputeProgram>();
-			const auto frame = Draws::CurrentFrame(a_pass.shapes, a_pass.segment);
-			if (!program || !frame || !frame->latch || !Draws::BuildsDraws(a_pass.shapes, *a_pass.Main(), a_pass.segment))
-				return;
-			a_out.Add([prepared = Draws::TextureTransformsPrepared{ std::move(program), frame->latch }, slot = a_pass.frameSlot](rhi::CommandList& a_commands) {
-				Draws::TextureTransformsPass::RecordApply(a_commands, prepared, slot);
-			});
-		}
 	}
 
 	void RegisterPass(Api::InstallContext& a_context)
@@ -166,6 +163,6 @@ namespace DCLF::Features::TextureTransforms
 		// from them; the depth latch's stage word names the pool's rows (0: no producer this frame, the shader writes nothing), every main-rows
 		// latch the copy (animatedRows: 0 then too).
 		a_context.RegisterPass({ .key = "texture-transforms.apply", .passName = "cs.dclf.z.texture-transforms", .make = &MakePass, .setup = &Setup,
-			.latchWord = &RowsIndex, .animatedRows = &AnimatedRowsAddress, .direct = &DirectApply });
+			.latchWord = &RowsIndex, .animatedRows = &AnimatedRowsAddress, .cpuPipeline = true });
 	}
 }

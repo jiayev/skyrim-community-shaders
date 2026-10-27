@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Api/Epochs.h"
 #include "Features/DrawcallLimitFix/Api/Passes.h"
 #include "Features/DrawcallLimitFix/Api/Views.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 
 #include <Render/RenderGraph/RenderGraph.h>
 #include <rhi.h>
@@ -82,11 +83,13 @@ namespace DCLF::Draws
 	 */
 	void GatherScheduled(Api::EpochShape a_shape, Api::EngineView a_view, const Api::PassContext& a_base, std::vector<org::RenderGraph::ExternalPassDesc>& a_out);
 	/**
-	 * @brief Render thread, at a site of the CPU-driven pipeline (Core/Render/Direct/PreWork.cpp), after its commits: epoch a_epoch's
-	 * passes with CPU-mode work (Api::PassDef::direct), in the schedule's order, each prepared from a_base with the epoch's fields set,
-	 * its setup's state and, for a hosted epoch's pass, its view's resources (only a view whose shape a_base.shapes has: committed this
-	 * frame, as the recording with its work is selected), into a_out (DirectWork::passEnds: where each pass's work ends). A cut pass
-	 * (diagnostics) adds none.
+	 * @brief Any thread, after InstallFeatures: whether epoch row a_epoch (not hosted) has CPU pipeline work (a pass with Api::PassDef::cpuPipeline and
+	 * a make, its own or a hosted epoch's): in the CPU pipeline those passes are its graph's, the revisions record it, and its site
+	 * executes the recording (Direct::ExecuteEpoch).
 	 */
-	void PrepareDirectPasses(std::uint32_t a_epoch, const Api::DirectPass& a_base, Api::DirectWork& a_out);
+	bool CpuPipelineRecords(std::uint32_t a_epoch);
+	/** @brief Any thread, after InstallFeatures: whether an epoch of a_segment does (CpuPipelineRecords). */
+	bool CpuPipelineSegmentRecords(RenderGraphRuntime::Segment a_segment);
+	/** @brief Any thread, after InstallFeatures: the ORG epochs (RenderGraphRuntime::EpochOf) of the epochs that do: external in the CPU pipeline. */
+	std::vector<std::uint32_t> CpuPipelineEpochs();
 }

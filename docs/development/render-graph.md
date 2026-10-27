@@ -14,19 +14,25 @@ light culling is the first feature that does this. Its D3D11 path stays in place
     `vulkanMemoryModelDeviceScope` (DXC's atomics use Device scope, and DXVK enables
     `vulkanMemoryModel`), `deviceGeneratedCommands` (DCLF), and the descriptor models' features below.
     These are enabled on the `VkDevice` only; DXVK's own code keeps the feature set it would have chosen.
--   **One negotiated binding model.** BasicRHI records into DXVK's own command buffers, so the two must
-    bind descriptors the same way (see "One descriptor model" below). `DxvkLoader` also registers
-    `dxvkSetBindingModelCallback`: during device creation DXVK calls `NegotiateBindingModel`
-    (`RenderGraphRuntime.cpp`) with the physical device and its own choice, and the callback answers
-    with `rhi::vulkan::EvaluateBindingModels` (BasicRHI's limit checks, with DXVK's 2048-sampler pool and
-    descriptor buffers counted in; every check is logged under `[ORG]`). DXVK keeps its choice if
-    BasicRHI accepts it, else switches between heaps and descriptor buffers if the device supports the other,
-    else keeps it; legacy descriptor sets (RDNA2, Pascal, most Intel) are never switched away from.
-    `dxvk.enableDescriptorHeap` / `dxvk.enableDescriptorBuffer` keep precedence. DXVK then grants
-    exactly its own model: `descriptorHeap` on heaps, `descriptorBuffer` + `mutableDescriptorType` on
-    descriptor buffers (BasicRHI's descriptor-buffer backend, shaders lowered), nothing on legacy
-    descriptor sets. `Initialize` logs the model, or disables the graph with the reason (RenderDoc's
-    capture config forces legacy sets).
+-   **Descriptor buffers, negotiated.** BasicRHI records into DXVK's own command buffers, so the two must
+    bind descriptors the same way (see "One descriptor model" below). The graph runs on descriptor
+    buffers alone, with heaps emulated by BasicRHI's lowering. It never asks for `VK_EXT_descriptor_heap`,
+    which on NVIDIA rendered DLSS black and needed workarounds beside DXVK.
+    -   **The callback.** `DxvkLoader` registers `dxvkSetBindingModelCallback`. During device creation DXVK
+        calls `NegotiateBindingModel` (`RenderGraphRuntime.cpp`) with the physical device and its own
+        choice. The callback answers with the descriptor-buffer bit of `rhi::vulkan::EvaluateBindingModels`
+        (BasicRHI's limit checks, with DXVK's 2048-sampler pool and descriptor buffers counted in; every
+        check is logged under `[ORG]`).
+    -   **DXVK's answer.** DXVK switches to descriptor buffers wherever the device has them with mutable
+        descriptors, a model the user forced on included (with a warning).
+    -   **fmask.** On amdvlk with fmask (RDNA2 and older), where DXVK's policy keeps legacy sets for fmask
+        alone, DXVK takes descriptor buffers for the graph too, warning that fmask is off. Neither Skyrim
+        runtime has an MSAA setting (1.5.97 and 1.6.1170 have only `bUseTAA:Display`), so the game creates
+        no MSAA targets and loses nothing.
+    -   **Legacy sets kept.** Pascal and most Intel keep legacy sets, and the graph is off there.
+        `dxvk.enableDescriptorBuffer = False` turns it off too.
+    -   **The grant.** DXVK then grants `descriptorBuffer` + `mutableDescriptorType`, and `Initialize` logs
+        the model or disables the graph with the reason (RenderDoc's capture config forces legacy sets).
 -   **Persistent graph.** A `org::PersistentGraphHost` drives the graph in persistent mode: it is compiled
     once and each frame runs `PrepareFrame` + record + submit. Resizes and pass-set changes rebuild it.
 -   **Epoch.** `RenderGraphRuntime::ExecuteEpoch` runs the graph once, on the thread that drives the
@@ -167,19 +173,17 @@ stream order, on its own command buffer, outside any render pass. DCLF's CPU-dri
     after its last frame's signal.
 -   Once the path has been used, DXVK no longer reorders transfers or layout transitions on interop images, or on buffers with a
     stable address, ahead of the command buffer.
--   **One descriptor model.** BasicRHI and DXVK always run on the same model, descriptor heaps or descriptor buffers, negotiated
-    at device creation (Runtime shape, "One negotiated binding model"; `[ORG] Binding model:` in CS's log, `Binding model:` in
-    DXVK's). With BasicRHI on heaps and DXVK on descriptor buffers, the two models in one command buffer made NVIDIA (RTX 5080,
-    driver 621.01) fetch garbage descriptors in the callback's draws: MMU faults with no owning resource, depending only on where
-    in DXVK's stream the callback landed, even with every command in secondaries. DXVK now grants the graph only its own model, so
-    that pairing cannot occur. NVIDIA runs on descriptor buffers, as upstream (`dxvk_device_info.cpp`; heaps there: NGX's D24S8 descriptor, black DLSS
-    output, level-to-3% slower frames); `dxvk.enableDescriptorHeap = True` opts into heaps, and BasicRHI follows.
--   **Heaps bound in DXVK's buffer too.** A secondary that binds its own heaps is not enough: on the same GPU, on heaps, a
+-   **One descriptor model.** BasicRHI and DXVK always run on descriptor buffers together (Runtime shape, "Descriptor buffers,
+    negotiated"; `[ORG] Binding model:` in CS's log, `Binding model:` in DXVK's). The two models in one command buffer, BasicRHI
+    on heaps and DXVK on descriptor buffers, made NVIDIA (RTX 5080, driver 621.01) fetch garbage descriptors in the callback's
+    draws. Those were MMU faults with no owning resource, depending only on where in DXVK's stream the callback landed, even with
+    every command in secondaries.
+-   **Heaps bound in DXVK's buffer too.** A secondary that binds its own heaps is not enough. On the same GPU, when the graph ran on heaps, a
     secondary's heap binding did not hold while the buffer executing it had DXVK's heap bound, and the draws fetched DXVK's
     descriptors at the graph's indices (MMU faults with no owning resource; a callback at the start of a command list, before DXVK
     bound a heap, ran clean, and a separate command buffer within the list did not help). The sites bind the graph's heaps
-    (`SetDescriptorHeaps`: heaps, or descriptor buffers and their offsets) in DXVK's buffer before each execution of their
-    secondaries (`Direct::SiteOut::BindHeaps`), on either model; DXVK binds its own heaps or descriptor buffers again after the
+    (`SetDescriptorHeaps`: the descriptor buffers and their offsets) in DXVK's buffer before each execution of their
+    secondaries (`Direct::SiteOut::BindHeaps`), kept as the safe assumption on descriptor buffers. DXVK binds its own descriptor buffers again after the
     callback, and re-sets its descriptor buffer offsets at its next pipeline bind.
 
 ## Resources crossing the boundary

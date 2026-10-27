@@ -1,6 +1,7 @@
 // The graph's conditions (see the header).
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
 #include <atomic>
@@ -54,7 +55,7 @@ namespace DCLF::Draws
 		next.twoPassOcclusion = Toggles::Get().Active().cullMode >= 2;
 		// The pipeline from the newest applied toggles, as the cull mode: the rebuild here makes every recording of the old graph stale, so
 		// the frame waits at its start for a snapshot made for the graph as built (AdoptCurrentSnapshot), whose revision records the
-		// epochs (GPU) or none (CPU: RevisionInputs::cpuPipeline).
+		// epochs (the CPU pipeline's: its external epochs, RevisionInputs::cpuPipeline).
 		// Which one draws this kind of cell (Auto: interiors CPU-driven): entering or leaving an interior rebuilds the graph anyway.
 		next.cpuPipeline = CpuPipelineFor(Toggles::Get().Active(), next.interior);
 		{
@@ -66,6 +67,9 @@ namespace DCLF::Draws
 		logger::info("[DCLF] graph conditions: {} cell, {}, {} pipeline{}{}; the graph is rebuilt", next.interior ? "interior" : "exterior",
 				next.twoPassOcclusion ? "two-pass occlusion" : "no occlusion pass (portal and frustum culling)", next.cpuPipeline ? "CPU" : "GPU",
 				next.cuts.empty() ? "" : ", passes cut: ", next.cuts);
+		// The epochs the CPU pipeline's sites execute themselves (their passes before the draws), before the build the change requests.
+		if (next.cpuPipeline != current.cpuPipeline)
+			a_host.SetExternalEpochs(next.cpuPipeline ? CpuPipelineEpochs() : std::vector<std::uint32_t>{});
 		current = next;
 		builtForCpu.store(current.cpuPipeline, std::memory_order_release);
 		latchedRecordCut.store(("," + current.cuts + ",").find(",~latched-record,") != std::string::npos, std::memory_order_relaxed);

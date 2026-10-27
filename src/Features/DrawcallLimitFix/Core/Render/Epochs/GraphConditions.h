@@ -20,10 +20,13 @@ namespace DCLF::Draws
 	{
 		bool interior = false;         // the current cell is an interior: no grass and no tree LOD (their passes are left out)
 		bool twoPassOcclusion = true;  // the cull mode tests occlusion (cullMode 2): the HZB and the depth epoch's phase 2 block
-		// The CPU-driven pipeline (CpuPipelineFor the cell: Toggles.h; Core/Render/Direct): every DCLF epoch's passes are left out - the draws (main
-		// depth and colour, shadow and occlusion maps, forward, the reflection's faces, first person's depth and colour), the HZB and
-		// phase 2, the visibility and fade-event readbacks, fade state, and tree wind's compute pass. The direct sites draw at the
-		// epochs' triggers in DXVK's command buffer and record what they still need there (Direct/PreWork); no revision records them.
+		// The CPU-driven pipeline (CpuPipelineFor the cell: Toggles.h; Core/Render/Direct): a DCLF epoch keeps only its passes in the CPU
+		// pipeline (Api::PassDef::cpuPipeline: the latched and index pool copies, texture transforms, the object rows, tree LOD's and
+		// grass's single-phase culls and arguments, tree wind), as external epochs (org::PersistentGraphHost::SetExternalEpochs:
+		// CpuPipelineEpochs), which the revisions record and the sites execute in DXVK's command buffer before their draws
+		// (Direct::ExecuteEpoch). The draws (main depth and colour, shadow and occlusion maps, forward, the reflection's faces, first
+		// person's depth and colour) are the direct sites'; the builds, the HZB and phase 2, the visibility and fade-event readbacks and
+		// fade state are left out (the CPU's).
 		bool cpuPipeline = false;
 		std::string cuts;              // diagnostics (dclf:cut=): comma-separated pass key prefixes left out ("*": every pass)
 

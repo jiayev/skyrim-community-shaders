@@ -72,29 +72,7 @@ namespace DCLF::Draws
 			RecordCopies(a_recording.Commands(), a_prepared, a_recording.FrameSlot());
 		}
 
-		/**
-		 * @brief The CPU mode's preparation (Api::PassDef::direct): Prepare's, from a_latch and the frame's adopted set (the copies' and
-		 * the pool's versions), then RecordCopies in a_pass's frame slot.
-		 */
-		static void Direct(const Api::DirectPass& a_pass, const std::shared_ptr<IndexPool>& a_pool, const LatchOf& a_latch, Api::DirectWork& a_out)
-		{
-			if (!a_pool || !a_pool->program || !a_latch.latch)
-				return;
-			IndexPoolPrepared prepared{};
-			prepared.pool = a_pool;
-			prepared.latch = a_latch.latch;
-			prepared.poolOffset = a_latch.poolOffset;
-			prepared.constants.latchIndex = a_latch.latch->SrvIndex();
-			prepared.constants.copiesIndex = a_pass.Srv(a_pool->copies);
-			prepared.constants.poolIndex = a_pass.Uav(a_pool->indices);
-			// The versions read, held with the work (a preparation's bindings hold them).
-			a_out.Add([prepared, copies = a_pass.Version(a_pool->copies), indices = a_pass.Version(a_pool->indices), slot = a_pass.frameSlot](rhi::CommandList& a_commands) {
-				if (copies && indices)
-					RecordCopies(a_commands, prepared, slot);
-			});
-		}
-
-		// The dispatch, from the latch's region of a_frameSlot (Record's and the CPU mode's).
+		// The dispatch, from the latch's region of a_frameSlot.
 		static void RecordCopies(rhi::CommandList& a_commands, const IndexPoolPrepared& a_prepared, std::uint32_t a_frameSlot)
 		{
 			if (!a_prepared.pool || !a_prepared.latch)

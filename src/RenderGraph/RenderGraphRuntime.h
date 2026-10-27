@@ -36,6 +36,7 @@ namespace rhi
 
 namespace org
 {
+	class ExternalEpochExecution;
 	class PersistentGraphHost;
 	class RenderGraph;
 	class Resource;
@@ -150,6 +151,15 @@ public:
 	 * @return false when inactive or the graph failed; callers fall back to their D3D11 path.
 	 */
 	bool ExecuteEpoch(Segment a_segment, const std::function<void(org::RenderGraph&)>& a_beforePrepare = {},
+		std::shared_ptr<const void> a_resourceOwner = {});
+
+	/**
+	 * @brief Render thread: an external epoch (org::PersistentGraphHost::SetExternalEpochs) submitted at the current point of the
+	 * D3D11 stream, as ExecuteEpoch submits one, but executed by the caller: its ticket's recording comes back to be executed in
+	 * DXVK's own command buffer (EmitExternalCommands, with its waits and signals), and nothing is flushed or submitted here. Null
+	 * when inactive or without async epochs (nothing ran); throws as the host's SubmitEpoch does.
+	 */
+	std::shared_ptr<org::ExternalEpochExecution> ExecuteExternalEpoch(Segment a_segment, const std::function<void(org::RenderGraph&)>& a_beforePrepare,
 		std::shared_ptr<const void> a_resourceOwner = {});
 
 	/**
