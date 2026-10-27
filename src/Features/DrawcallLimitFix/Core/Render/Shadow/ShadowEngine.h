@@ -149,7 +149,7 @@ namespace DCLF
 		ShadowLookupInputs postedShadowLookups;
 		/**
 		 * @brief The shadow views' placements (built at setup): every place the engine's shadow maps can take a view (cascade slices
-		 * and their volumetric copies, a light map slice whole or as a paraboloid pair's halves), each with its mode, state and slot.
+		 * and their volumetric copies, a light map slice whole, clamped or plain, or as a paraboloid pair's halves), each with its mode, state and slot.
 		 * The shadow epoch's shape is all of them; an empty slot does no work. A view at no placement, under another state or twice in
 		 * a frame is a defect (ShadowNotReady::Placement), flagged.
 		 */
