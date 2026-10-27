@@ -5,7 +5,7 @@
 #include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "D3D.h"
 #include "FileSystem.h"
-#include "IconsFontAwesome5.h"
+#include "IconsTabler.h"
 #include "Menu.h"
 #include "Menu/Fonts.h"
 #include "Menu/IconLoader.h"
@@ -172,6 +172,29 @@ namespace Util
 	bool ShowDebugSections()
 	{
 		return !debugSectionsHidden;
+	}
+
+	void StepFade(float& fade, bool visible, float deltaTime)
+	{
+		const float step = deltaTime / ThemeManager::Constants::UI_FADE_SECONDS;
+		fade = std::clamp(fade + (visible ? step : -step), 0.0f, 1.0f);
+	}
+
+	FadeScope::FadeScope(float fade) :
+		context(*ImGui::GetCurrentContext()),
+		hoveredWindow(context.HoveredWindow),
+		hoveredWindowUnderMoving(context.HoveredWindowUnderMovingWindow)
+	{
+		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * fade);
+		if (fade < 1.0f)
+			context.HoveredWindow = context.HoveredWindowUnderMovingWindow = nullptr;
+	}
+
+	FadeScope::~FadeScope()
+	{
+		context.HoveredWindow = hoveredWindow;
+		context.HoveredWindowUnderMovingWindow = hoveredWindowUnderMoving;
+		ImGui::PopStyleVar();
 	}
 
 	void TextUnformattedDisabled(const char* a_text, const char* a_textEnd)
@@ -439,7 +462,8 @@ namespace Util
 		labels.reserve(static_cast<size_t>(a_count));
 		for (int i = 0; i < a_count; ++i)
 			labels.emplace_back(a_labels[i] ? a_labels[i] : "");
-		return DrawGlassPillStrip(a_id, labels, a_selected, a_marked, a_muted);
+		return SceneWidgetInterceptor::InterceptInt(a_id, a_selected,
+			[&](int& a_bound) { return DrawGlassPillStrip(a_id, labels, a_bound, a_marked, a_muted); });
 	}
 
 	bool IsInsidePillTabBar()
@@ -510,7 +534,7 @@ namespace Util
 		const ImVec2 padding{ 12.0f * scale, 8.0f * scale };
 		const float gap = 8.0f * scale;
 		const float width = ImGui::GetContentRegionAvail().x;
-		const Icons::GlyphRef icon = Icons::FA(a_icon);
+		const Icons::GlyphRef icon = Icons::TI(a_icon);
 		const float iconWidth = Icons::CalcGlyphSize(icon).x;
 		const float wrapWidth = std::max(1.0f, width - padding.x * 2.0f - iconWidth - gap);
 		const ImVec2 textSize = ImGui::CalcTextSize(a_message, nullptr, false, wrapWidth);
@@ -541,19 +565,19 @@ namespace Util
 	float GetLockStatusBadgeSize()
 	{
 		const float scale = GetUIScale();
-		const char* icon = ICON_FA_LOCK;
-		const ImVec2 iconSize = Icons::CalcGlyphSize(Icons::FA(icon));
+		const char* icon = ICON_TI_LOCK;
+		const ImVec2 iconSize = Icons::CalcGlyphSize(Icons::TI(icon));
 		constexpr float kPad = 3.0f;
 		return std::max(iconSize.x, iconSize.y) + kPad * 2.0f * scale;
 	}
 
-	void DrawLockStatusBadge(ImVec2 a_min, bool a_locked, ImDrawList* a_drawList)
+	void DrawLockStatusBadge(ImVec2 a_min, bool a_locked, ImDrawList* a_drawList, bool a_hovered, bool a_held)
 	{
 		if (!a_drawList)
 			a_drawList = ImGui::GetWindowDrawList();
 
 		const float size = GetLockStatusBadgeSize();
-		const char* icon = a_locked ? ICON_FA_LOCK : ICON_FA_UNLOCK;
+		const char* icon = a_locked ? ICON_TI_LOCK : ICON_TI_LOCK_OPEN_2;
 		const auto& statusPalette = Menu::GetSingleton()->GetTheme().StatusPalette;
 		const ImVec4 statusColor = a_locked ? statusPalette.SuccessColor : statusPalette.Error;
 		ImVec4 fill = statusColor;
@@ -563,10 +587,12 @@ namespace Util
 
 		const ImVec2 max(a_min.x + size, a_min.y + size);
 		const float rounding = std::min(ImGui::GetStyle().FrameRounding, size * 0.35f);
+		auto _style = TransparentIconButtonStyle();
+		DrawRoundedButtonHighlight(a_min, max, a_hovered, a_held, rounding, a_drawList);
 		a_drawList->AddRectFilled(a_min, max, ImGui::GetColorU32(fill), rounding);
 		a_drawList->AddRect(a_min, max, ImGui::GetColorU32(border), rounding);
 		Icons::DrawCenteredGlyph(a_drawList, a_min, ImVec2(size, size),
-			Icons::FA(icon), ImGui::GetColorU32(statusColor));
+			Icons::TI(icon), ImGui::GetColorU32(statusColor));
 	}
 
 	bool LockStatusBadgeButton(const char* a_id, bool a_locked, const char* a_tooltip)
@@ -586,7 +612,7 @@ namespace Util
 		bool hovered = false;
 		bool held = false;
 		const bool clicked = ImGui::ButtonBehavior(bb, id, &hovered, &held);
-		DrawLockStatusBadge(min, a_locked);
+		DrawLockStatusBadge(min, a_locked, nullptr, hovered, held);
 		if (a_tooltip)
 			AddTooltip(a_tooltip);
 		return clicked;
@@ -672,7 +698,7 @@ namespace Util
 	{
 		if (!m_locked)
 			return;
-		const bool clicked = StatusBanner(ICON_FA_LOCK, a_message, Colors::GetWarning());
+		const bool clicked = StatusBanner(ICON_TI_LOCK, a_message, Colors::GetWarning());
 		if (a_outBannerClicked && clicked)
 			*a_outBannerClicked = true;
 		ImGui::Spacing();
@@ -725,7 +751,21 @@ namespace Util
 				shaderCache->DeleteDiskCache();
 			}
 			shaderCache->ClearContentStore();
+			shaderCache->SetRecachePending(true);
 		}
+	}
+
+	void DrawRecacheBanner()
+	{
+		auto* shaderCache = globals::shaderCache;
+		if (!shaderCache || !shaderCache->IsRecachePending())
+			return;
+		if (StatusBanner(ICON_TI_REFRESH,
+				T("ui.recache_banner",
+					"A full shader recache is pending and will run on the next game restart. Click to dismiss."),
+				Colors::GetWarning()))
+			shaderCache->SetRecachePending(false);
+		ImGui::Spacing();
 	}
 
 	void RequestClearShaderCacheConfirmation()
@@ -818,12 +858,13 @@ namespace Util
 
 	void ConfirmationPopup::Request()
 	{
+		assert(rememberedChoice == Choice::Confirm || rememberedChoice == Choice::Alternate);
 		if (dontAskAgainPersist && *dontAskAgainPersist) {
-			confirmed = true;
+			pendingChoice = rememberedChoice;
 			return;
 		}
 		show = true;
-		confirmed = false;
+		pendingChoice = Choice::None;
 		dontAskCheckbox = false;
 	}
 
@@ -834,10 +875,8 @@ namespace Util
 
 	ConfirmationPopup::Choice ConfirmationPopup::DrawChoice()
 	{
-		if (confirmed) {
-			confirmed = false;
-			return Choice::Confirm;
-		}
+		if (pendingChoice != Choice::None)
+			return std::exchange(pendingChoice, Choice::None);
 		if (!show)
 			return Choice::None;
 
@@ -851,7 +890,7 @@ namespace Util
 			ImGui::Spacing();
 
 			if (showDontAskAgain)
-				ImGui::Checkbox(T("ui.dont_ask_again", "Don't ask me again"), &dontAskCheckbox);
+				ImGui::Checkbox(dontAskAgainLabel.empty() ? T("ui.dont_ask_again", "Don't ask me again") : dontAskAgainLabel.c_str(), &dontAskCheckbox);
 
 			const ImVec2 buttonSize(ThemeManager::Constants::POPUP_BUTTON_WIDTH, 0.0f);
 			const int buttonCount = 1 + !confirmLabel.empty() + !alternateLabel.empty();
@@ -862,17 +901,16 @@ namespace Util
 				ImGui::SetCursorPosX(offset);
 
 			const auto pick = [&](Choice choice) {
+				if (choice == rememberedChoice && showDontAskAgain && dontAskCheckbox && dontAskAgainPersist)
+					*dontAskAgainPersist = true;
 				result = choice;
 				show = false;
 				ImGui::CloseCurrentPopup();
 			};
 
 			if (!confirmLabel.empty()) {
-				if (primaryConfirm ? SuccessButton(confirmLabel.c_str(), buttonSize) : ImGui::Button(confirmLabel.c_str(), buttonSize)) {
-					if (showDontAskAgain && dontAskCheckbox && dontAskAgainPersist)
-						*dontAskAgainPersist = true;
+				if (primaryConfirm ? SuccessButton(confirmLabel.c_str(), buttonSize) : ImGui::Button(confirmLabel.c_str(), buttonSize))
 					pick(Choice::Confirm);
-				}
 				if (focus == Focus::Confirm)
 					ImGui::SetItemDefaultFocus();
 				ImGui::SameLine();
@@ -904,7 +942,8 @@ namespace Util
 
 		float percentageData = (*data) * kPercentageScale;
 		bool retval = ImGui::SliderFloat(label, &percentageData, lb, ub, format, flags);
-		if (!SceneWidgetInterceptor::IsArmed())
+		// Only on an edit: the scaled round trip is not exact in float, so an idle write-back drifts the member.
+		if (retval && !SceneWidgetInterceptor::IsArmed())
 			(*data) = percentageData / kPercentageScale;
 		return retval;
 	}
@@ -1358,10 +1397,10 @@ namespace Util
 
 	float GetEditorChromeTextCursorOffsetY(float rowHeight)
 	{
-		// ImGui's text cursor is the top of the FontSize line box. Capitals occupy ~[0, Ascent],
-		// so centre that ink band in the row: offset = rowHeight/2 - Ascent/2.
-		const float ascent = ImGui::GetFontBaked()->Ascent;
-		return rowHeight * 0.5f - ascent * 0.5f;
+		// Centre capital-letter ink, measured from 'H' since cap height and ascent vary per font.
+		const ImFontGlyph* glyph = ImGui::GetFontBaked()->FindGlyph('H');
+		const float inkCenter = glyph ? (glyph->Y0 + glyph->Y1) * 0.5f : ImGui::GetFontSize() * 0.5f;
+		return rowHeight * 0.5f - inkCenter;
 	}
 
 	// Draws the custom floating header: the title (also the drag handle), an optional
@@ -1924,13 +1963,12 @@ namespace Util
 			IM_COL32(0, 0, 0, alpha));
 	}
 
-	void DrawBreathingText(const char* text, float speed, float minAlpha, float maxAlpha)
+	void DrawBreathingText(const char* text, std::optional<ImVec4> color, float speed, float minAlpha, float maxAlpha)
 	{
 		float alphaRange = maxAlpha - minAlpha;
 		float breathe = minAlpha + alphaRange * 0.5f * (1.0f + sinf((float)ImGui::GetTime() * speed));
-		auto& theme = globals::menu->GetTheme().Palette;
-		ImVec4 color = ImVec4(theme.Text.x, theme.Text.y, theme.Text.z, breathe);
-		ImGui::TextColored(color, "%s", text);
+		const ImVec4 base = color.value_or(globals::menu->GetTheme().Palette.Text);
+		ImGui::TextColored(ImVec4(base.x, base.y, base.z, breathe), "%s", text);
 	}
 
 	ImVec4 GetPulsingColor(const ImVec4& baseColor, float speed, float minBrightness, float maxBrightness)

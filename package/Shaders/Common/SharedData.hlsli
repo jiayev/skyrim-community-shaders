@@ -53,6 +53,10 @@ namespace SharedData
 		// Only read by the GRASS_OPTIMIZATIONS permutation, for grass drawn with an LOD mesh.
 		float MidLODBrightness;
 		float FarLODBrightness;
+		float PBRWrappedLightingAmount;
+		float SubsurfaceBalance;
+		float CanopyOcclusion;
+		float ClumpShading;
 	};
 
 	struct CPMSettings
@@ -214,7 +218,7 @@ namespace SharedData
 		float EnvIBLSaturation;
 		float SkyIBLSaturation;
 		float FogAmount;
-		uint DALCMode;       // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
+		uint DALCMode;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
 		uint EnableReflectionFallback;
 		float ReflectionFallbackDistance;
 		uint ENBSkyFalloff;  // Effects 11 owns IBL: darken sky irradiance from below
@@ -339,7 +343,8 @@ namespace SharedData
 
 		float MasserBillboardTan;
 		float SecundaBillboardTan;
-		float2 SkyScatteringPad0;
+		float SkyScaleMultiplier;
+		float SkyScatteringPad0;
 
 		uint EnableWater;
 		float WaterWavesAmplitude;
@@ -556,6 +561,9 @@ namespace SharedData
 		float MotionStretch;
 		float MotionTransparency;
 		float pad0;
+		float4 TextureBounds;
+		float2 TextureRadiusScale;
+		float2 pad1;
 	};
 
 	cbuffer FeatureData : register(b6)

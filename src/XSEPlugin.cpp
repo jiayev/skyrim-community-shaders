@@ -50,8 +50,9 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	while (!REX::W32::IsDebuggerPresent()) {};
 #endif
 	InitializeLog();
-	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION.string());
 	SKSE::Init(a_skse);
+	if (Plugin::BUILD_DESCRIBE != std::format("v{}", Util::GetFormattedVersion(Plugin::VERSION)))
+		logger::info("Build {}", Util::GetBuildLabel());
 	SKSE::AllocTrampoline(1 << 10);
 	return Load();
 }
@@ -191,7 +192,7 @@ bool Load()
 	};
 
 	for (const auto dll : incompatibleDLLs) {
-		if (LoadLibrary(dll)) {
+		if (std::filesystem::exists(dll)) {
 			auto errorMessage = std::format("Incompatible DLL {} detected", stl::utf16_to_utf8(dll).value_or("<unicode conversion error>"s));
 			logger::error("{}", errorMessage);
 			errors.push_back(errorMessage);

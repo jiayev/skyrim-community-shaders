@@ -109,7 +109,7 @@ using json = nlohmann::json;
  *
  * Each role can have different font family, style, and size scale.
  * UI fonts live under Data\Interface\CommunityShaders\Fonts\
- * Icon fonts (FA / Lucide / Tabler / Game Icons) are standalone ImFonts under Icons\glyphs\
+ * Icon fonts (FA / Tabler / Game Icons) are standalone ImFonts under Icons\glyphs\
  * (see Icons::FA / LC / TI helpers); they are not merged into UI role fonts.
  *
  * BLUR SHADER SYSTEM:
@@ -194,6 +194,7 @@ public:
 		static constexpr float UNDOCKED_ICON_ITEM_SPACING = 6.0f;
 		static constexpr float POPUP_BUTTON_WIDTH = 180.0f;
 		static constexpr float EDITOR_VIEWPORT_BACKGROUND_DIM_ALPHA = 0.35f;  // Extra backdrop dim while the CS Editor viewport is open
+		static constexpr float UI_FADE_SECONDS = 0.15f;                       // Time for a menu or editor widgets fade to run end to end
 
 		// Feature header constants
 		static constexpr float DEFAULT_FEATURE_TITLE_SCALE = 1.5f;  // Default scale for feature title text

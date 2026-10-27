@@ -32,10 +32,12 @@ namespace
 	auto* RealSliderFloat4 = &ImGui::SliderFloat4;
 	auto* RealDragFloat = &ImGui::DragFloat;
 	auto* RealDragFloat2 = &ImGui::DragFloat2;
+	auto* RealDragFloat3 = &ImGui::DragFloat3;
 	auto* RealDragFloat4 = &ImGui::DragFloat4;
 	auto* RealInputFloat = &ImGui::InputFloat;
 	auto* RealInputFloat2 = &ImGui::InputFloat2;
 	auto* RealInputFloat3 = &ImGui::InputFloat3;
+	auto* RealInputInt = &ImGui::InputInt;
 	auto* RealSliderInt = &ImGui::SliderInt;
 	auto* RealSliderScalar = &ImGui::SliderScalar;
 	auto* RealInputScalar = &ImGui::InputScalar;
@@ -93,6 +95,41 @@ namespace
 		return guard.Finish(RealSliderFloat(label, guard.Float(), vMin, vMax, format, flags));
 	}
 
+	SceneWidgetBinding::Value MakeScalarValue(float* a_v) { return SceneWidgetBinding::Value::Float(a_v); }
+	SceneWidgetBinding::Value MakeScalarValue(int* a_v) { return SceneWidgetBinding::Value::Int(a_v); }
+
+	/** @brief Binds a one-value float or int control; the scalar widgets differ only in trailing args. */
+	template <typename T, typename Real, typename... Args>
+	bool InterceptScalar(Real a_real, const char* a_label, T* a_v, Args... a_args)
+	{
+		InterceptedCall interceptedCall;
+		SceneWidgetBinding::Guard guard(a_label, MakeScalarValue(a_v));
+		return guard.Finish(a_real(a_label, static_cast<T*>(guard.Raw()), a_args...));
+	}
+
+	bool DetouredDragFloat(const char* label, float* v, float speed, float vMin, float vMax,
+		const char* format, ImGuiSliderFlags flags)
+	{
+		if (!ShouldIntercept())
+			return RealDragFloat(label, v, speed, vMin, vMax, format, flags);
+		return InterceptScalar(RealDragFloat, label, v, speed, vMin, vMax, format, flags);
+	}
+
+	bool DetouredInputFloat(const char* label, float* v, float step, float stepFast, const char* format,
+		ImGuiInputTextFlags flags)
+	{
+		if (!ShouldIntercept())
+			return RealInputFloat(label, v, step, stepFast, format, flags);
+		return InterceptScalar(RealInputFloat, label, v, step, stepFast, format, flags);
+	}
+
+	bool DetouredInputInt(const char* label, int* v, int step, int stepFast, ImGuiInputTextFlags flags)
+	{
+		if (!ShouldIntercept())
+			return RealInputInt(label, v, step, stepFast, flags);
+		return InterceptScalar(RealInputInt, label, v, step, stepFast, flags);
+	}
+
 	/** @brief Binds an N-component float control; the vector widgets differ only in N and trailing args. */
 	template <std::uint8_t ComponentCount, typename Real, typename... Args>
 	bool InterceptFloatVector(Real a_real, const char* a_label, float* a_v, Args... a_args)
@@ -127,32 +164,20 @@ namespace
 		return InterceptFloatVector<4>(RealSliderFloat4, label, v, vMin, vMax, format, flags);
 	}
 
-	bool DetouredDragFloat(const char* label, float* v, float speed, float vMin, float vMax,
-		const char* format, ImGuiSliderFlags flags)
-	{
-		if (!ShouldIntercept())
-			return RealDragFloat(label, v, speed, vMin, vMax, format, flags);
-		InterceptedCall interceptedCall;
-		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Float(v));
-		return guard.Finish(RealDragFloat(label, guard.Float(), speed, vMin, vMax, format, flags));
-	}
-
-	bool DetouredInputFloat(const char* label, float* v, float step, float stepFast,
-		const char* format, ImGuiInputTextFlags flags)
-	{
-		if (!ShouldIntercept())
-			return RealInputFloat(label, v, step, stepFast, format, flags);
-		InterceptedCall interceptedCall;
-		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Float(v));
-		return guard.Finish(RealInputFloat(label, guard.Float(), step, stepFast, format, flags));
-	}
-
 	bool DetouredDragFloat2(const char* label, float v[2], float speed, float vMin, float vMax,
 		const char* format, ImGuiSliderFlags flags)
 	{
 		if (!ShouldIntercept())
 			return RealDragFloat2(label, v, speed, vMin, vMax, format, flags);
 		return InterceptFloatVector<2>(RealDragFloat2, label, v, speed, vMin, vMax, format, flags);
+	}
+
+	bool DetouredDragFloat3(const char* label, float v[3], float speed, float vMin, float vMax,
+		const char* format, ImGuiSliderFlags flags)
+	{
+		if (!ShouldIntercept())
+			return RealDragFloat3(label, v, speed, vMin, vMax, format, flags);
+		return InterceptFloatVector<3>(RealDragFloat3, label, v, speed, vMin, vMax, format, flags);
 	}
 
 	bool DetouredDragFloat4(const char* label, float v[4], float speed, float vMin, float vMax,
@@ -324,10 +349,12 @@ namespace
 			{ "SliderFloat4", reinterpret_cast<PVOID*>(&RealSliderFloat4), reinterpret_cast<PVOID>(&DetouredSliderFloat4) },
 			{ "DragFloat", reinterpret_cast<PVOID*>(&RealDragFloat), reinterpret_cast<PVOID>(&DetouredDragFloat) },
 			{ "DragFloat2", reinterpret_cast<PVOID*>(&RealDragFloat2), reinterpret_cast<PVOID>(&DetouredDragFloat2) },
+			{ "DragFloat3", reinterpret_cast<PVOID*>(&RealDragFloat3), reinterpret_cast<PVOID>(&DetouredDragFloat3) },
 			{ "DragFloat4", reinterpret_cast<PVOID*>(&RealDragFloat4), reinterpret_cast<PVOID>(&DetouredDragFloat4) },
 			{ "InputFloat", reinterpret_cast<PVOID*>(&RealInputFloat), reinterpret_cast<PVOID>(&DetouredInputFloat) },
 			{ "InputFloat2", reinterpret_cast<PVOID*>(&RealInputFloat2), reinterpret_cast<PVOID>(&DetouredInputFloat2) },
 			{ "InputFloat3", reinterpret_cast<PVOID*>(&RealInputFloat3), reinterpret_cast<PVOID>(&DetouredInputFloat3) },
+			{ "InputInt", reinterpret_cast<PVOID*>(&RealInputInt), reinterpret_cast<PVOID>(&DetouredInputInt) },
 			{ "SliderInt", reinterpret_cast<PVOID*>(&RealSliderInt), reinterpret_cast<PVOID>(&DetouredSliderInt) },
 			{ "SliderScalar", reinterpret_cast<PVOID*>(&RealSliderScalar), reinterpret_cast<PVOID>(&DetouredSliderScalar) },
 			{ "InputScalar", reinterpret_cast<PVOID*>(&RealInputScalar), reinterpret_cast<PVOID>(&DetouredInputScalar) },
@@ -432,6 +459,13 @@ SceneWidgetInterceptor::ProxyScope::ProxyScope(const void* a_member, float a_dis
 SceneWidgetInterceptor::ProxyScope::~ProxyScope()
 {
 	armedProxy = previous;
+}
+
+bool SceneWidgetInterceptor::InterceptInt(const char* a_label, int& a_value, const std::function<bool(int&)>& a_draw)
+{
+	if (!ShouldIntercept())
+		return a_draw(a_value);
+	return InterceptScalar([&a_draw](const char*, int* a_bound) { return a_draw(*a_bound); }, a_label, &a_value);
 }
 
 const SceneWidgetInterceptor::Context* SceneWidgetInterceptor::GetArmedContext()

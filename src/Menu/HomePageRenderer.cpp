@@ -13,16 +13,6 @@
 
 // Static member definitions
 bool HomePageRenderer::isFirstTimeSetupShown = false;
-uint32_t HomePageRenderer::keyThatClosedDialog = 0;
-
-bool HomePageRenderer::ShouldSkipKeyRelease(uint32_t key)
-{
-	if (keyThatClosedDialog && key == keyThatClosedDialog) {
-		keyThatClosedDialog = 0;
-		return true;
-	}
-	return false;
-}
 
 void HomePageRenderer::RenderHomePage()
 {
@@ -67,10 +57,10 @@ void HomePageRenderer::RenderWelcomeSection()
 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
 	auto expectedTag = std::format("v{}", versionStr);
 	auto* i18n = I18n::GetSingleton();
-	std::string titleWithVersion = Plugin::BUILD_DESCRIBE == expectedTag ? i18n->Format("menu.home.welcome", { { "version", versionStr } }, "Welcome to Community Shaders {version}") : i18n->Format("menu.home.welcome_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Welcome to Community Shaders {version} [{build}]");
+	std::string titleWithVersion = i18n->Format("menu.home.welcome", { { "version", versionStr } }, "Welcome to Community Shaders {version}");
 	ImVec2 titleSize = ImGui::CalcTextSize(titleWithVersion.c_str());
-	ImGui::SetCursorPosX((windowSize.x - titleSize.x) * 0.5f);
-	ImGui::Text("%s", titleWithVersion.c_str());
+	ImGui::SetCursorPosX(std::max((windowSize.x - titleSize.x) * 0.5f, ImGui::GetCursorPosX()));
+	ImGui::TextWrapped("%s", titleWithVersion.c_str());
 
 	// Only pop font if we pushed one
 	if (titleFont) {
@@ -80,6 +70,12 @@ void HomePageRenderer::RenderWelcomeSection()
 	// Reset text scale back to normal
 	ImGui::SetWindowFontScale(1.0f);
 
+	if (Plugin::BUILD_DESCRIBE != expectedTag) {
+		const auto buildLabel = Util::GetBuildLabel();
+		ImGui::SetCursorPosX(std::max((windowSize.x - ImGui::CalcTextSize(buildLabel.c_str()).x) * 0.5f, ImGui::GetCursorPosX()));
+		Util::Text::WrappedDisabled("%s", buildLabel.c_str());
+	}
+
 	ImGui::Spacing();
 
 	// Intro text - centered
@@ -88,7 +84,7 @@ void HomePageRenderer::RenderWelcomeSection()
 		"This comprehensive collection of features brings modern rendering techniques\n"
 		"to enhance your visual experience.");
 	ImVec2 introSize = ImGui::CalcTextSize(introText);
-	ImGui::SetCursorPosX((windowSize.x - introSize.x) * 0.5f);
+	ImGui::SetCursorPosX(std::max((windowSize.x - introSize.x) * 0.5f, ImGui::GetCursorPosX()));
 	ImGui::TextWrapped("%s", introText);
 
 	ImGui::Spacing();
@@ -457,7 +453,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	ImGui::Spacing();
 
 	// Description - centered
-	const char* description = T("menu.setup.choose_hotkey", "Please choose a hotkey to access the menu:");
+	const char* description = T("menu.setup.choose_hotkey", "Click the key below to choose a menu hotkey:");
 	centerText(description);
 	ImGui::Text("%s", description);
 
@@ -470,12 +466,12 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	ImGui::SetWindowFontScale(isCapturing ? HOTKEY_TEXT_SCALE_CAPTURING : HOTKEY_TEXT_SCALE);
 
 	// Format hotkey with brackets to make it look like a button
+	const std::string toggleKeyName = Util::Input::KeyIdToString(menu->GetSettings().ToggleKey);
 	std::string hotkeyStr;
 	if (isCapturing) {
 		hotkeyStr = "[ ... ]";
 	} else {
-		auto& keys = menu->GetSettings().ToggleKey;
-		hotkeyStr = std::string("[ ") + Util::Input::KeyIdToString(keys) + " ]";
+		hotkeyStr = "[ " + toggleKeyName + " ]";
 	}
 
 	ImVec2 hotkeyTextSize = ImGui::CalcTextSize(hotkeyStr.c_str());
@@ -512,8 +508,8 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 
 	// Handle click to start hotkey capture
 	if (clicked && !isCapturing) {
-		// Prevent starting capture if this click was caused by Enter key,
-		// because we want Enter to close the dialog instead.
+		// Prevent starting capture if this click was caused by Enter key
+		// (keyboard nav), so a reflexive Enter press doesn't enter capture mode.
 		if (!ImGui::IsKeyPressed(ImGuiKey_Enter))
 			menu->settingToggleKey = true;
 	}
@@ -549,18 +545,14 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 
 	ImGui::Spacing();
 
-	// Check for Enter or Escape key to close, but only if not capturing a hotkey
-	bool escapePressed = ImGui::IsKeyPressed(ImGuiKey_Escape);
-	if ((ImGui::IsKeyPressed(ImGuiKey_Enter) || escapePressed) && !isCapturing) {
-		MarkFirstTimeSetupComplete(escapePressed ? VK_ESCAPE : VK_RETURN);
-	}
-
 	// Help text with breathing animation
-	const char* helpText = T("menu.setup.press_to_close", "Press Escape or Enter to continue");
+	const std::string helpText = I18n::GetSingleton()->Format("menu.setup.press_hotkey_to_continue",
+		{ { "key", toggleKeyName } },
+		"Press {key} to continue");
 
 	ImGui::SetWindowFontScale(HELP_TEXT_SCALE);
-	centerText(helpText);
-	Util::DrawBreathingText(helpText);
+	centerText(helpText.c_str());
+	Util::DrawBreathingText(helpText.c_str(), themeSettings.StatusPalette.InfoColor);
 
 	ImGui::SetWindowFontScale(1.0f);
 
@@ -580,7 +572,7 @@ bool HomePageRenderer::ShouldShowFirstTimeSetup()
 	return !menu->GetSettings().FirstTimeSetupCompleted;
 }
 
-void HomePageRenderer::MarkFirstTimeSetupComplete(uint32_t closingKey)
+void HomePageRenderer::MarkFirstTimeSetupComplete()
 {
 	// Set the flag in the Menu settings
 	auto menu = Menu::GetSingleton();
@@ -593,5 +585,4 @@ void HomePageRenderer::MarkFirstTimeSetupComplete(uint32_t closingKey)
 	globals::state->Save();
 
 	isFirstTimeSetupShown = true;
-	keyThatClosedDialog = closingKey;
 }

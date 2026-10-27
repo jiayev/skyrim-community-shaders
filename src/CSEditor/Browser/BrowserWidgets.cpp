@@ -2,7 +2,7 @@
 
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
-#include "IconsFontAwesome5.h"
+#include "IconsTabler.h"
 #include "Menu/Fonts.h"
 #include "Utils/UI.h"
 #include "imgui_internal.h"
@@ -29,7 +29,6 @@ namespace
 	constexpr float kTintedChipFillHoveredAlpha = 0.22f;
 	constexpr float kTintedChipBorderAlpha = 0.5f;
 	constexpr float kStripeWidth = 3.0f;
-	constexpr float kStripeInsetY = 3.0f;
 	/// Floor for the alternating row tint, so long lists stay scannable under themes that leave it clear.
 	constexpr float kMinRowShadeAlpha = 0.04f;
 	constexpr float kStarRadiusScale = 0.5f;
@@ -144,7 +143,7 @@ namespace BrowserUI
 			if (hovered)
 				ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
 			Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), clearMin, ImVec2(frameHeight, frameHeight),
-				Icons::FA(ICON_FA_TIMES), ImGui::GetColorU32(hovered ? ImGuiCol_Text : ImGuiCol_TextDisabled));
+				Icons::TI(ICON_TI_X), ImGui::GetColorU32(hovered ? ImGuiCol_Text : ImGuiCol_TextDisabled));
 			Util::AddTooltip(T(TKEY("search_clear"), "Clear search"));
 			ImGui::GetCurrentContext()->LastItemData = inputItem;
 		}
@@ -380,19 +379,24 @@ namespace BrowserUI
 		return pressed;
 	}
 
-	void SectionLabel(const char* label)
+	void SectionLabel(const char* label, bool alignRight)
 	{
-		const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+		const ImVec2 start = ImGui::GetCursorScreenPos();
+		const float right = start.x + ImGui::GetContentRegionAvail().x;
+		if (alignRight)
+			ImGui::SetCursorScreenPos(ImVec2(std::max(start.x, right - ImGui::CalcTextSize(label).x), start.y));
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 		ImGui::TextUnformatted(label);
 		ImGui::PopStyleColor();
 
 		const ImVec2 min = ImGui::GetItemRectMin();
 		const ImVec2 max = ImGui::GetItemRectMax();
-		const float x0 = max.x + kSectionLabelGap * Util::GetUIScale();
-		if (x0 < right) {
+		const float gap = kSectionLabelGap * Util::GetUIScale();
+		const float x0 = alignRight ? start.x : max.x + gap;
+		const float x1 = alignRight ? min.x - gap : right;
+		if (x0 < x1) {
 			const float y = (min.y + max.y) * 0.5f;
-			ImGui::GetWindowDrawList()->AddLine(ImVec2(x0, y), ImVec2(right, y), ImGui::GetColorU32(ImGuiCol_Separator));
+			ImGui::GetWindowDrawList()->AddLine(ImVec2(x0, y), ImVec2(x1, y), ImGui::GetColorU32(ImGuiCol_Separator));
 		}
 	}
 
@@ -422,12 +426,9 @@ namespace BrowserUI
 		ImGuiTable* table = ImGui::GetCurrentTable();
 		if (!table)
 			return;
-		const float scale = Util::GetUIScale();
 		const float x0 = ImGui::TableGetCellBgRect(table, table->CurrentColumn).Min.x;
-		const float y0 = table->RowPosY1 + kStripeInsetY * scale;
-		const float y1 = table->RowPosY1 + rowHeight - kStripeInsetY * scale;
-		const float width = kStripeWidth * scale;
-		ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + width, y1), color, width * 0.5f);
+		ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x0, table->RowPosY1),
+			ImVec2(x0 + kStripeWidth * Util::GetUIScale(), table->RowPosY1 + rowHeight), color);
 	}
 
 	namespace
@@ -529,7 +530,7 @@ namespace BrowserUI
 											 std::make_format_args(selected, hidden));
 		const ImVec4 accent = Util::Colors::GetAccent();
 		RightAlign(MeasureChip(label.c_str(), true));
-		if (Chip("##clearTicks", label.c_str(), Icons::FA(ICON_FA_TIMES), nullptr, &accent))
+		if (Chip("##clearTicks", label.c_str(), Icons::TI(ICON_TI_X), nullptr, &accent))
 			action = SelectionAction::Clear;
 		Util::AddTooltip(clearTooltip);
 		return action;
@@ -540,33 +541,40 @@ namespace BrowserUI
 		return ImGui::GetFrameHeight() + ImGui::GetStyle().CellPadding.y * 2.0f;
 	}
 
-	void SplitPane(const SplitPaneSpec& spec, float& stackedRatio, const PaneDrawer& drawList, const PaneDrawer& drawDetail)
+	void StackedSplit(const char* id, float& topRatio, float defaultTopRatio, const PaneDrawer& drawTop, const PaneDrawer& drawBottom)
 	{
 		constexpr float kSplitterThickness = 6.0f;
 		constexpr float kMinPaneHeight = 80.0f;
 
 		const float scale = Util::GetUIScale();
+		if (EditorWindow::GetSingleton()->resetLayout)
+			topRatio = defaultTopRatio;
+		const ImVec2 avail = ImGui::GetContentRegionAvail();
+		const float thickness = kSplitterThickness * scale;
+		const float minPaneHeight = kMinPaneHeight * scale;
+		float topHeight = std::clamp(avail.y * topRatio, minPaneHeight, std::max(minPaneHeight, avail.y - minPaneHeight - thickness));
+		drawTop(ImVec2(avail.x, topHeight));
+
+		const ImVec2 splitterPos = ImGui::GetCursorScreenPos();
+		float bottomHeight = ImGui::GetContentRegionAvail().y - thickness;
+		const ImRect splitterBounds(splitterPos, ImVec2(splitterPos.x + avail.x, splitterPos.y + thickness));
+		ImGui::PushID(id);
+		if (ImGui::SplitterBehavior(splitterBounds, ImGui::GetID("##StackedSplit"), ImGuiAxis_Y, &topHeight, &bottomHeight,
+				minPaneHeight, minPaneHeight, 0.0f, 0.0f, ImGui::GetColorU32(ImGuiCol_Separator)))
+			topRatio = topHeight / avail.y;
+		ImGui::PopID();
+		ImGui::Dummy(ImVec2(avail.x, thickness));
+		drawBottom(ImVec2(avail.x, 0.0f));
+	}
+
+	void SplitPane(const SplitPaneSpec& spec, float& stackedRatio, const PaneDrawer& drawList, const PaneDrawer& drawDetail)
+	{
+		const float scale = Util::GetUIScale();
 		const bool resetLayout = EditorWindow::GetSingleton()->resetLayout;
 		const ImVec2 avail = ImGui::GetContentRegionAvail();
 
 		if (avail.x < spec.besideMinWidth * scale) {
-			if (resetLayout)
-				stackedRatio = spec.defaultStackedRatio;
-			const float thickness = kSplitterThickness * scale;
-			const float minPaneHeight = kMinPaneHeight * scale;
-			float listHeight = std::clamp(avail.y * stackedRatio, minPaneHeight, std::max(minPaneHeight, avail.y - minPaneHeight - thickness));
-			drawList(ImVec2(avail.x, listHeight));
-
-			const ImVec2 splitterPos = ImGui::GetCursorScreenPos();
-			float detailHeight = ImGui::GetContentRegionAvail().y - thickness;
-			const ImRect splitterBounds(splitterPos, ImVec2(splitterPos.x + avail.x, splitterPos.y + thickness));
-			ImGui::PushID(spec.id);
-			if (ImGui::SplitterBehavior(splitterBounds, ImGui::GetID("##StackedSplit"), ImGuiAxis_Y, &listHeight, &detailHeight,
-					minPaneHeight, minPaneHeight, 0.0f, 0.0f, ImGui::GetColorU32(ImGuiCol_Separator)))
-				stackedRatio = listHeight / avail.y;
-			ImGui::PopID();
-			ImGui::Dummy(ImVec2(avail.x, thickness));
-			drawDetail(ImVec2(avail.x, 0.0f));
+			StackedSplit(spec.id, stackedRatio, spec.defaultStackedRatio, drawList, drawDetail);
 			return;
 		}
 

@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <functional>
 #include <imgui.h>
+#include <optional>
 #include <string>
 #include <vector>
 #include <windows.h>  // For WPARAM and virtual key constants
@@ -16,6 +17,8 @@
 // Forward declarations
 struct ID3D11Device;
 struct ID3D11ShaderResourceView;
+struct ImGuiContext;
+struct ImGuiWindow;
 struct ImRect;
 struct ImVec2;
 class Menu;
@@ -171,6 +174,25 @@ namespace Util
 	/** @brief False while a HideDebugSectionsGuard hides them; gate each feature's Debug header on this. */
 	bool ShowDebugSections();
 
+	/** @brief Eases fade toward 1 (visible) or 0 (hidden) over ThemeManager::Constants::UI_FADE_SECONDS. */
+	void StepFade(float& fade, bool visible, float deltaTime);
+
+	/** @brief Scales ImGui alpha by fade while alive; below 1 it also hides the mouse from windows drawn in scope. */
+	class FadeScope
+	{
+	public:
+		explicit FadeScope(float fade);
+		~FadeScope();
+
+		FadeScope(const FadeScope&) = delete;
+		FadeScope& operator=(const FadeScope&) = delete;
+
+	private:
+		ImGuiContext& context;
+		ImGuiWindow* hoveredWindow;
+		ImGuiWindow* hoveredWindowUnderMoving;
+	};
+
 	/**
 	 * Renders text using the disabled text color.
 	 * @param a_text Start of the text
@@ -252,8 +274,10 @@ namespace Util
 	 * @param a_min Top-left of the badge in screen space.
 	 * @param a_locked True draws a lock in SuccessColor; false draws unlock in Error.
 	 * @param a_drawList Optional; defaults to the current window draw list.
+	 * @param a_hovered Draws the transparent-icon-button hover overlay under the badge.
+	 * @param a_held Draws the pressed overlay instead.
 	 */
-	void DrawLockStatusBadge(ImVec2 a_min, bool a_locked, ImDrawList* a_drawList = nullptr);
+	void DrawLockStatusBadge(ImVec2 a_min, bool a_locked, ImDrawList* a_drawList = nullptr, bool a_hovered = false, bool a_held = false);
 
 	/**
 	 * @brief Interactive lock badge that toggles via ButtonBehavior.
@@ -320,6 +344,8 @@ namespace Util
 	 */
 	void RequestClearShaderCacheConfirmation();
 	void DrawClearShaderCacheConfirmation();
+	/** @brief Draws the banner telling the user that shaders were cleared and will be fully recompiled; click dismisses it. */
+	void DrawRecacheBanner();
 
 	/**
 	 * Reusable confirmation popup. Call RequestConfirmation() to trigger, DrawConfirmationPopup() each frame.
@@ -356,6 +382,10 @@ namespace Util
 		Focus focus = Focus::None;
 		bool showDontAskAgain = false;
 		bool* dontAskAgainPersist = nullptr;  // Optional external bool to persist preference
+		/// Empty uses the default "Don't ask me again".
+		std::string dontAskAgainLabel;
+		/// The button a ticked "Don't ask again" remembers; later requests answer with it without showing.
+		Choice rememberedChoice = Choice::Confirm;
 
 		ConfirmationPopup() = default;
 		ConfirmationPopup(std::string title, std::string message, std::string confirmLabel = "Confirm", std::string cancelLabel = "Cancel") :
@@ -370,7 +400,8 @@ namespace Util
 
 	private:
 		bool show = false;
-		bool confirmed = false;
+		/// The remembered answer to a request that skipped the popup, returned by the next DrawChoice.
+		Choice pendingChoice = Choice::None;
 		bool dontAskCheckbox = false;
 	};
 
@@ -1135,13 +1166,14 @@ namespace Util
 	void DrawModalBackground(uint8_t alpha = 160);
 
 	/**
-	 * @brief Draws text with a breathing/pulsing alpha animation using theme text color.
+	 * @brief Draws text with a breathing/pulsing alpha animation.
 	 * @param text The text to display
+	 * @param color Base color (default: theme text color)
 	 * @param speed Animation speed multiplier (default: 2.5f)
 	 * @param minAlpha Minimum alpha value (default: 0.7f)
 	 * @param maxAlpha Maximum alpha value (default: 1.0f)
 	 */
-	void DrawBreathingText(const char* text, float speed = 2.5f, float minAlpha = 0.7f, float maxAlpha = 1.0f);
+	void DrawBreathingText(const char* text, std::optional<ImVec4> color = std::nullopt, float speed = 2.5f, float minAlpha = 0.7f, float maxAlpha = 1.0f);
 
 	/**
 	 * @brief Returns a color with pulsing brightness animation applied.

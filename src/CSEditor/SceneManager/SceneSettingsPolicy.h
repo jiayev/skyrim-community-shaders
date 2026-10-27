@@ -70,6 +70,7 @@ namespace SceneSettingsPolicy
 
 	inline const std::vector<SettingPolicyPath> kLocationFeatureWhitelist = {
 		{ "ExponentialHeightFog" },
+		{ "HorizonFix" },
 		{ "ImageBasedLighting" },
 		{ "PhysicalSky" },
 		{ "PostProcessing" },

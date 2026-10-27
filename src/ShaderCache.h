@@ -117,6 +117,8 @@ namespace ShaderConstants
 		const int32_t PBRFlags = 14;
 		const int32_t PBRParams1 = 15;
 		const int32_t PBRParams2 = 16;
+		const int32_t PBRParams3 = 17;
+		const int32_t PBRParams4 = 18;
 	};
 
 	struct EffectPS
@@ -336,6 +338,8 @@ namespace SIE
 	private:
 		/** Tasks awaiting dispatch, ordered by cached priority and task id. */
 		std::set<ShaderCompilationTask, TaskPriorityLess> availableTasks;
+		/** Queued tasks the game asked for during background compilation; dispatched before availableTasks. */
+		std::set<ShaderCompilationTask, TaskPriorityLess> demandedTasks;
 		std::set<ShaderCompilationTask, TaskPriorityLess> tasksInProgress;
 		std::set<ShaderCompilationTask, TaskPriorityLess> processedTasks;  // completed or failed
 		std::deque<std::function<void()>> pendingAuxTasks;                 // see EnqueueAux/TryTakeNext
@@ -344,7 +348,7 @@ namespace SIE
 
 	struct ShaderCacheResult
 	{
-		ID3DBlob* blob;
+		winrt::com_ptr<ID3DBlob> blob;
 		ShaderCompilationTask::Status status;
 		system_clock::time_point compileTime = system_clock::now();
 		bool loadedFromDisk = false; /**< true when the shader blob was read from the disk cache rather than compiled */
@@ -352,6 +356,17 @@ namespace SIE
 
 	namespace SShaderCache
 	{
+		struct VertexShaderDeleter
+		{
+			void operator()(RE::BSGraphics::VertexShader* shader) const noexcept
+			{
+				std::destroy_at(shader);
+				delete[] reinterpret_cast<uint8_t*>(shader);
+			}
+		};
+
+		using VertexShaderPtr = std::unique_ptr<RE::BSGraphics::VertexShader, VertexShaderDeleter>;
+
 		/** @brief Reads a cached blob, deleting the file and returning null when it is unreadable or not intact DXBC. */
 		winrt::com_ptr<ID3DBlob> ReadIntactBlob(const std::wstring& diskPath);
 
@@ -420,6 +435,9 @@ namespace SIE
 		 * @param a_keepContentStore Keep the persistent shader store, whose blobs stay valid because they are keyed by their own inputs.
 		 */
 		void DeleteDiskCache(bool a_keepContentStore = false);
+		/** @brief True after a user action cleared every shader, until the menu banner is dismissed. */
+		bool IsRecachePending() const { return recachePending; }
+		void SetRecachePending(bool value) { recachePending = value; }
 		/** @brief Validates disk cache integrity against current shader sources and feature set. */
 		void ValidateDiskCache();
 		/** @brief Writes cache metadata (version, feature list) to the disk cache directory. */
@@ -487,7 +505,7 @@ namespace SIE
 		*/
 		bool Clear(const std::string& a_path);
 
-		bool AddCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, ID3DBlob* a_blob, bool fromDisk = false);
+		bool AddCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, winrt::com_ptr<ID3DBlob> a_blob, bool fromDisk = false);
 
 		enum class ClaimResult
 		{
@@ -495,12 +513,12 @@ namespace SIE
 			Claimed,   // Claimed as Pending; caller must compile and call AddCompletedShader
 			Failed     // Previous attempt failed; skipped until invalidation drops the entry
 		};
-		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(const std::string& key);
+		std::pair<ClaimResult, winrt::com_ptr<ID3DBlob>> ClaimCompilation(const std::string& key);
 		void ResolvePendingFailure(const std::string& key);
 
-		ID3DBlob* GetCompletedShader(const std::string& a_key);
-		ID3DBlob* GetCompletedShader(const SIE::ShaderCompilationTask& a_task);
-		ID3DBlob* GetCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);
+		winrt::com_ptr<ID3DBlob> GetCompletedShader(const std::string& a_key);
+		winrt::com_ptr<ID3DBlob> GetCompletedShader(const SIE::ShaderCompilationTask& a_task);
+		winrt::com_ptr<ID3DBlob> GetCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);
 		bool IsShaderLoadedFromDisk(const std::string& a_key);
 		ShaderCompilationTask::Status GetShaderStatus(const std::string& a_key);
 		std::string GetShaderStatsString(bool a_timeOnly = false, bool a_elapsedOnly = false);
@@ -907,12 +925,12 @@ namespace SIE
 
 		~ShaderCache();
 
-		template <typename ShaderType>
+		template <typename ShaderType, typename Deleter = std::default_delete<ShaderType>>
 		using ShaderMapArray = std::array<
-			ankerl::unordered_dense::map<uint32_t, std::unique_ptr<ShaderType>>,
+			ankerl::unordered_dense::map<uint32_t, std::unique_ptr<ShaderType, Deleter>>,
 			RE::BSShader::Type::Total>;
 
-		ShaderMapArray<RE::BSGraphics::VertexShader> vertexShaders;
+		ShaderMapArray<RE::BSGraphics::VertexShader, SShaderCache::VertexShaderDeleter> vertexShaders;
 		ShaderMapArray<RE::BSGraphics::PixelShader> pixelShaders;
 		ShaderMapArray<RE::BSGraphics::ComputeShader> computeShaders;
 
@@ -924,6 +942,7 @@ namespace SIE
 		bool hideError = false;
 		bool useFileWatcher = false;
 		bool preserveStandaloneCache = false;
+		bool recachePending = false;
 
 		std::stop_source ssource;
 		std::mutex vertexShadersMutex;
@@ -972,8 +991,6 @@ namespace SIE
 		void processQueue();
 		void handleFileAction(efsw::WatchID, const std::string& dir, const std::string& filename, efsw::Action action, std::string) override;
 
-		std::jthread fileWatcherThread;  // dedicated thread for processQueue (not in pool)
-
 	private:
 		ShaderFileDependencyTracker* deps;
 		struct fileAction
@@ -986,5 +1003,8 @@ namespace SIE
 		};
 		std::mutex actionMutex;
 		std::vector<fileAction> queue{};
+
+	public:
+		std::jthread fileWatcherThread;
 	};
 }

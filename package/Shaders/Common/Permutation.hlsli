@@ -82,6 +82,7 @@ namespace Permutation
 		static const uint NoSkyScattering = (1 << 9);
 		static const uint IsAurora = (1 << 10);
 		static const uint IsMoon = (1 << 11);
+		static const uint ProjectedTextureIsSRGB = (1 << 12);
 	}
 
 	namespace ExtraFeatureFlags
@@ -106,7 +107,7 @@ namespace Permutation
 		float EffectRadius;
 		uint BaseTextureIsWorking;
 		uint RenderToUI;
-		uint pad;
+		float GrassCanopyHeight;  // Model-space height of the grass mesh being drawn
 	};
 
 }

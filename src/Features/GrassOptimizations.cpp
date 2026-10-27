@@ -52,7 +52,7 @@ void GrassOptimizations::DrawSettings()
 	ImGui::SliderFloat(T(TKEY("full_detail_pixel_size"), "Full-Detail Pixel Size"), &settings.FullDetailPixelSize, 4.0f, 128.0f, "%.1f px");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("full_detail_pixel_size_tooltip"),
-							  "Instances whose on-screen radius is above this render at full density. Below it, density is increasingly thinned down to Minimum Density at Min Pixel Size. Increasing this setting improves performance by removing closer grass."));
+							  "Instances whose on-screen radius is above this render at full density. Below it, density thinning increases over the full INI grass distance. A shorter Grass Render Distance cuts this ramp off early without changing density closer to the player. Min Pixel Size remains a hard cutoff. Increasing this setting improves performance by removing closer grass."));
 	}
 
 	ImGui::SliderFloat(T(TKEY("min_pixel_size"), "Min Pixel Size"), &settings.MinPixelSize, 1.0f, 32.0f, "%.1f px");
@@ -64,7 +64,7 @@ void GrassOptimizations::DrawSettings()
 	Util::PercentageSlider(T(TKEY("min_density"), "Minimum Density"), &settings.MinDensity);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("min_density_tooltip"),
-							  "The percentage of grass that remains at the smallest (Min Pixel Size) LOD level before culling."));
+							  "The lowest density targeted by pixel-based thinning at the full INI grass distance. Closer grass retains more density, and Min Pixel Size still removes instances below its cutoff."));
 	}
 
 	Util::PercentageSlider(T(TKEY("mesh_cost_bias"), "Mesh Cost Bias"), &settings.MeshCostBias);
@@ -317,7 +317,7 @@ void GrassOptimizations::DrawBucket(GrassBucket& b)
 	}
 
 	// Batch material texture bindings instead of letting SetDirtyStates bind each slot separately.
-	constexpr uint32_t kMaterialTextureBits = 0x1F;
+	constexpr uint32_t kMaterialTextureBits = 0x7F;
 	const uint32_t materialTextures = shadowState.PSResourceModifiedBits & kMaterialTextureBits;
 	shadowState.PSResourceModifiedBits &= ~kMaterialTextureBits;
 	SetDirtyStates(0);
@@ -327,7 +327,7 @@ void GrassOptimizations::DrawBucket(GrassBucket& b)
 		ctx->PSSetShaderResources(firstTexture, textureCount, reinterpret_cast<ID3D11ShaderResourceView* const*>(&shadowState.PSTexture[firstTexture]));
 	}
 
-	// The vertex shader uses the bucket's cull constants to identify complex grass.
+	// Bind complexity and canopy heights for all tiers; the vertex shader selects each record's tier.
 	ID3D11Buffer* bucketCB = cullBucketCB->CB();
 	UINT bucketFirst = b.cullSlot * (kSlotBytes / 16);
 	UINT bucketNum = 16;
@@ -379,6 +379,13 @@ std::uint32_t GrassOptimizations::Hooks::AddGroup::thunk(RE::BSMultiStreamInstan
 	const auto index = func(shape, count, instanceData, instanceShorts, boundPadding);
 	globals::features::grassOptimizations.bucketStore.CaptureEngineGroup(shape, index);
 	return index;
+}
+
+void GrassOptimizations::Hooks::DoneAddingInstances::thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSTArray<std::uint32_t>& groupIndices)
+{
+	AttachQueuedGroups::pendingCapture.store(true, std::memory_order_release);
+	func(shape, groupIndices);
+	AttachQueuedGroups::pendingCapture.store(true, std::memory_order_release);
 }
 
 void GrassOptimizations::Hooks::RemoveGroup::thunk(RE::BSMultiStreamInstanceTriShape* shape, std::uint32_t index)
@@ -570,6 +577,7 @@ void GrassOptimizations::Hooks::Install()
 
 	stl::write_vfunc<0x0, BSMultiStreamInstanceTriShape_dtor>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
 	stl::write_vfunc<0x34, NiNode_OnVisible>(RE::VTABLE_NiNode[0]);
+	stl::write_vfunc<0x3A, DoneAddingInstances>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
 	stl::write_vfunc<0x3C, AddGroup>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
 	stl::write_vfunc<0x3D, RemoveGroup>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
 

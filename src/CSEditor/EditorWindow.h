@@ -374,6 +374,9 @@ public:
 	/** @brief The widget editing this form, the cell lighting widget included, or null. */
 	Widget* FindWidget(const FormEditSources::FormKey& key);
 
+	/** @brief Remembers the focused widget by form key, not object lifetime. */
+	void SetFocusedWidget(const Widget& widget) { lastFocusedWidgetKey = widget.GetFormKey(); }
+
 	/** @brief Steps the newest change back and says what it undid. */
 	void PerformUndo();
 
@@ -435,6 +438,8 @@ public:
 		bool browserShowInspector = true;
 		/// Browser category sidebar collapsed to icons.
 		bool browserSidebarCompact = false;
+		/// A tool's unwritten changes are discarded without asking when switching or closing.
+		bool skipToolDiscardPrompt = false;
 
 		// Per-widget-type window sizes (serialized as JSON for persistence)
 		json widgetTypeSizes;
@@ -511,7 +516,7 @@ private:
 	std::string settingsSelectedCategory = "Flags";
 
 	// Widget focus tracking for Ctrl+W
-	Widget* lastFocusedWidget = nullptr;
+	std::optional<FormEditSources::FormKey> lastFocusedWidgetKey;
 
 	/** @brief Locks the current weather once any in-progress transition finishes, unless the user already locked one. */
 	void LockWeatherForOverlay();
