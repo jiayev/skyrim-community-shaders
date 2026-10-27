@@ -65,6 +65,7 @@ namespace DCLF
 		// Cascade c draws into slice c with its ShadowmapCascadeRasterizerFix clone; every other view with depth bias mode 0.
 		const std::uint32_t plainState = EngineRasterStateId(0, 1, 0, 0, PassCapture::kFirstShadowMode + kSunShadowMode);
 		(void)EngineRasterStateId(0, 1, 0, 0, PassCapture::kFirstShadowMode + kParabolicShadowMode);
+		const std::uint32_t unclampedState = EngineRasterStateId(0, 1, 0, 0, PassCapture::kFirstShadowMode + kPlainShadowMode);
 		const auto cascadeState = [&](std::uint32_t a_cascade) {
 			if (a_cascade >= ShadowmapRasterizerFix::CascadeCount())
 				return plainState;
@@ -94,14 +95,16 @@ namespace DCLF
 					// The cascades' volumetric copies.
 					add(kSunShadowMode, index, slice, 0, desc.Width, desc.Height, plainState);
 				} else {
-					// Lights' map: a spot light takes a slice, a point light's paraboloid pair its two halves.
+					// Lights' map: a spot light takes a slice, clamped or plain (a light whose near clip leaves casters in front of it:
+					// Window Shadows Ultimate's), a point light's paraboloid pair its two halves.
 					add(kSunShadowMode, index, slice, 0, desc.Width, desc.Height, plainState);
+					add(kPlainShadowMode, index, slice, 0, desc.Width, desc.Height, unclampedState);
 					add(kParabolicShadowMode, index, slice, 0, desc.Width, desc.Height / 2, plainState);
 					add(kParabolicShadowMode, index, slice, desc.Height / 2, desc.Width, desc.Height / 2, plainState);
 				}
 			}
 		}
-		if (placements.empty() || !plainState)
+		if (placements.empty() || !plainState || !unclampedState)
 			return false;
 		shadowPlacements = std::move(placements);
 		// A revision input: the next revision reserves the latch and slots (ReserveShadowLatch).
@@ -112,13 +115,19 @@ namespace DCLF
 
 	std::size_t ShadowEngine::PlacementOf(const PendingView& a_view) const
 	{
+		// The view's mode's placement there first (a light slice has a clamped and a plain one); else any there (a defect).
+		std::size_t found = SIZE_MAX;
 		for (std::size_t p = 0; p < shadowPlacements.size(); ++p) {
 			const auto& placement = shadowPlacements[p];
 			if (placement.target == a_view.targetIndex && placement.slice == a_view.slice && placement.x == a_view.x && placement.y == a_view.y &&
-				placement.width == a_view.width && placement.height == a_view.height)
-				return p;
+				placement.width == a_view.width && placement.height == a_view.height) {
+				if (placement.modeIndex == a_view.modeIndex)
+					return p;
+				if (found == SIZE_MAX)
+					found = p;
+			}
 		}
-		return SIZE_MAX;
+		return found;
 	}
 
 	void ShadowEngine::NoteCapability(bool a_defect, std::string a_cause)

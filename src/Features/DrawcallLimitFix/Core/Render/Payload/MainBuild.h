@@ -346,6 +346,9 @@ namespace DCLF::Draws
 		std::unique_ptr<State> state;
 	};
 
+	// The plain render mode (0xD, ShadowMap: casters in front of the near plane clipped) as an index of the shadow modes: a spot light
+	// whose near clip the clamp would defeat.
+	constexpr std::uint32_t kPlainShadowMode = 0xD - PassCapture::kFirstShadowMode;
 	// The cascades' render mode (0xE, ShadowMapClamped) as an index of the shadow modes.
 	constexpr std::uint32_t kSunShadowMode = 0xE - PassCapture::kFirstShadowMode;
 	// The point lights' render mode (0xF, ShadowMapParabolic) as an index of the shadow modes.
