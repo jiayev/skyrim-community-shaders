@@ -11,6 +11,7 @@ namespace org
 
 namespace org::services
 {
+	struct ShrinkPolicy;
 	struct BackingAllocation;
 	struct BackingPoolHooks;
 	struct BackingRequest;
@@ -60,5 +61,12 @@ namespace DCLF
 		 * bound and its uploads wait on the GPU for that frame (FrameValues).
 		 */
 		std::uint32_t SceneCopies();
+
+		/**
+		 * @brief The one shrink policy of every growable scene buffer (CS_DCLF_SHRINK): the scene set's registrations, the payload's parts,
+		 * the CPU pipeline's sequences, FrameValues' pools and the layouts' capacities. Default: a buffer asked at most a quarter of its
+		 * capacity for 5 s (and 2 asks) shrinks to its growth policy's fresh size for the window's peak; off: grow-only; eager: at once.
+		 */
+		const org::services::ShrinkPolicy& Shrink();
 	}
 }

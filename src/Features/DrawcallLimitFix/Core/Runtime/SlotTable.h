@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <set>
 #include <vector>
 
 namespace DCLF
@@ -18,6 +19,11 @@ namespace DCLF
 	 *
 	 * A freed slot is retiring, not free: a published version of the tables may still name it. The owner takes the
 	 * retiring slots (TakeRetiring) into its retirement chain and gives each back (Recycle) once no publication that names it lives.
+	 *
+	 * Free slots are reused lowest first, so the slots in use stay packed at the bottom and the table's top falls as a scene unloads.
+	 * An owner that sizes GPU tables from Size() calls TrimTop after recycling, and cuts its columns to the size it returns: the free
+	 * slots past the last one in use (alive or retiring) are dropped. Generations are kept across a trim, so a count taken against a
+	 * dropped slot still lapses once the slot is made again.
 	 */
 	class SlotTable
 	{
@@ -33,14 +39,15 @@ namespace DCLF
 		{
 			Allocation allocation;
 			if (!freeList.empty()) {
-				allocation.slot = freeList.back();
-				freeList.pop_back();
+				allocation.slot = *freeList.begin();
+				freeList.erase(freeList.begin());
 			} else {
 				allocation.slot = static_cast<std::uint32_t>(alive.size());
 				allocation.grown = true;
 				alive.push_back(0);
 				refs.push_back(0);
-				generation.push_back(0);
+				if (generation.size() < alive.size())
+					generation.push_back(0);
 			}
 			alive[allocation.slot] = 1;
 			refs[allocation.slot] = 0;
@@ -73,8 +80,22 @@ namespace DCLF
 		void Recycle(std::uint32_t a_slot, std::uint32_t a_generation)
 		{
 			if (a_slot < alive.size() && !alive[a_slot] && generation[a_slot] == a_generation)
-				freeList.push_back(a_slot);
+				freeList.insert(a_slot);
 		}
+		/**
+		 * @brief Drops the free slots past the last one in use (alive or retiring: a publication may name it): the new Size(), to
+		 * which the owner cuts its columns. Retiring slots are never past it.
+		 */
+		std::size_t TrimTop()
+		{
+			while (!alive.empty() && !freeList.empty() && *freeList.rbegin() == alive.size() - 1) {
+				freeList.erase(std::prev(freeList.end()));
+				alive.pop_back();
+				refs.pop_back();
+			}
+			return alive.size();
+		}
+		std::size_t FreeCount() const { return freeList.size(); }
 		std::size_t Retiring() const { return retiring.size(); }
 		bool Alive(std::size_t a_slot) const { return a_slot < alive.size() && alive[a_slot]; }
 		std::uint32_t Generation(std::size_t a_slot) const { return a_slot < generation.size() ? generation[a_slot] : 0; }
@@ -139,7 +160,8 @@ namespace DCLF
 			std::uint32_t slot = 0, generation = 0;
 		};
 		std::vector<std::uint8_t> alive;
-		std::vector<std::uint32_t> refs, generation, freeList;
+		std::vector<std::uint32_t> refs, generation;  // generation: at least alive's size (kept across TrimTop)
+		std::set<std::uint32_t> freeList;            // lowest first
 		std::vector<Idle> retiring;  // freed, not on the free list yet (TakeRetiring)
 		std::deque<Idle> idle;  // last-reference events, in order
 		std::size_t aliveCount = 0, referencedCount = 0;

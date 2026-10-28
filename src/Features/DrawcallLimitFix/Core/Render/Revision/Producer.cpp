@@ -2,6 +2,7 @@
 // revision's shapes and latches from a publication and the frame's posted RevisionInputs, then AssembleRevision seals them. Also the
 // main shape's plans (shared with the commits).
 
+#include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
@@ -902,7 +903,12 @@ namespace DCLF
 		// sealed). CS_DCLF_PERSISTENT_PARITY makes it anyway and compares. The tables by what the pass reads of them (TablesWitness), the
 		// draw bound among it brought up to date from them first (the pass reads it as updated; a kept make's update is the next one's).
 		ImplSnapshotBuilder::RevisionReuse::Key key;
-		const std::uint32_t moved = RequirementsMoved(*this, reuse, a_publication, lookups, key);
+		std::uint32_t moved = RequirementsMoved(*this, reuse, a_publication, lookups, key);
+		// A shrink moves what the pass seals without any of the key moving (PooledBackings::Shrink): one due is asked by running the pass,
+		// and one settled is named by its seal.
+		if (!moved && (SceneBufferSet::Get().ShrinkPending() ||
+						  producer.mainWindows.Due(PooledBackings::Shrink(), org::services::ShrinkWindow::Clock::now())))
+			moved = 1u << ImplSnapshotBuilder::RevisionReuse::kMovedShrink;
 		const bool unchanged = moved == 0;
 		const bool parity = Diagnostics::Observe().scene;
 		if (unchanged && !parity) {

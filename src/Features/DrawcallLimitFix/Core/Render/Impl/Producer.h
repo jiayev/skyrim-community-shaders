@@ -42,6 +42,7 @@ namespace DCLF
 			RowBucketsCache rowBuckets;
 			// How the main epochs lay out the sequences (RequireMain; its first sizes Setup's), and the layout of the last sealed set.
 			MainLayout mainLayout;
+			MainLayoutWindows mainWindows;
 			bool mainLayoutMade = false;
 			// The bucket count words the last shadow shapes were made for (ShadowShapesHold).
 			std::uint32_t shadowBucketWords = 0;

@@ -940,6 +940,22 @@ snapshot is the only source of them (no rings, no duplicate copies).
     that frame on the GPU (`IUploadService::QueueStreamingWait`, the GPU point `BindFrameLeases` noted for the bound point): no
     thread waits, and the frame's draws already wait for its values (the frame-wait timeline), so fewer copies bound how far the CPU
     runs ahead instead of costing a copy of every row per frame in flight.
+-   **Shrinking.** One policy gives memory back for every growable scene buffer (`PooledBackings::Shrink`, `CS_DCLF_SHRINK`;
+    ORGModuleServices `ElasticCapacity.h`): a capacity the scene asked at most a quarter of for 5 s (and 2 asks) goes to its growth
+    policy's fresh size for that window's peak, so it is at least half used and grows back only past the peak (no thrash). It
+    applies to:
+    -   the scene set's registrations (`GrowableRegistration::shrink`, set by `SceneBufferSet::Make`): a smaller version in a batch
+        of its own that does not hold the seal; its contents follow the registration, never a copy of the predecessor;
+    -   the payload's parts and the CPU pipeline's sequences (`VersionedBufferBuildInput::shrink`; the window travels in the
+        versions): a Replace into a smaller class, the predecessor copied only up to the new version's used bytes;
+    -   FrameValues' pools (`FitCapacity` on the pool's class; a fresh backing is written whole);
+    -   the main layout's capacities (`MainLayoutWindows`: the slots' and Z buckets' ranges, refraction, the sequence ranges, the
+        decal sub-ranges), so the sequences and sort buffers sized from them follow.
+
+    Requirements that never fall cannot shrink anything, so the tables they come from let their top fall: `SlotTable` reuses free
+    slots lowest first, and the pipeline table is cut to its last slot in use after recycling (`TrimTop`,
+    `Coordinator::RecycleRetired`; the payload's pipeline rows and the layout's per-pipeline vectors follow it). Still grow-only:
+    object slots (their top is not published), the bone palettes, latch and view layouts (KB), and the readback staging sets.
 -   **Release.** A released backing is destroyed on the graph host's resource cleanup lane (`PooledBackings::Retire`), never on
     the thread that let it go (the render thread is the frame values' pools' acquirer). GPU resource destruction never runs on the
     render thread.

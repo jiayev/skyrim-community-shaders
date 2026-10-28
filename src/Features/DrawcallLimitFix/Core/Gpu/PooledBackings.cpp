@@ -5,6 +5,7 @@
 #include "RenderGraph/RenderGraphRuntime.h"
 
 #include <ORGModuleServices/BackingPool.h>
+#include <ORGModuleServices/ElasticCapacity.h>
 #include <OpenRenderGraph/PersistentGraphHost.h>
 #include <Render/Runtime/ResourceCleanupQueue.h>
 #include <Resources/Buffers/Buffer.h>
@@ -89,5 +90,18 @@ namespace DCLF::PooledBackings
 			return std::clamp(asked, 2u, RenderGraphRuntime::kGameFramesInFlight);
 		}();
 		return copies;
+	}
+
+	const org::services::ShrinkPolicy& Shrink()
+	{
+		static const org::services::ShrinkPolicy policy = [] {
+			const auto& value = SwitchValue(Switch::Shrink);
+			if (value == "off" || value == "0")
+				return org::services::ShrinkPolicy::Never();
+			if (value == "eager")
+				return org::services::ShrinkPolicy::WhenBelow(25, std::chrono::milliseconds(0), 1);
+			return org::services::ShrinkPolicy::WhenBelow(25, std::chrono::milliseconds(5000), 2);
+		}();
+		return policy;
 	}
 }

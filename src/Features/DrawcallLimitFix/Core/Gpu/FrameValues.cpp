@@ -44,6 +44,7 @@
 #include <Render/Runtime/IUploadService.h>
 #include <Resources/Buffers/Buffer.h>
 #include <ORGModuleServices/BackingPool.h>
+#include <ORGModuleServices/ElasticCapacity.h>
 #include <ORGModuleServices/GrowthPolicy.h>
 #include <rhi.h>
 #include <rhi_interop.h>
@@ -327,7 +328,8 @@ namespace DCLF
 		struct Pool
 		{
 			std::shared_ptr<org::services::BackingPool> pool;  // made with Impl
-			std::uint64_t capacity = 0;                        // render thread: the class last asked (kPoolGrowth)
+			std::uint64_t capacity = 0;                        // render thread: the class last asked (kPoolGrowth, shrunk by PooledBackings::Shrink)
+			org::services::ShrinkWindow window;                // render thread: capacity's run of low asks
 			std::atomic<std::uint64_t> newestContentEpoch{ 0 };  // the content epoch the newest producer brought its backing to
 			std::atomic<std::uint64_t> floor{ 0 };            // the trim floor at the last Kick (diagnostics)
 			std::atomic<std::uint64_t> acquires{ 0 }, made{ 0 }, runs{ 0 }, bytes{ 0 };  // since the last take
@@ -2256,7 +2258,9 @@ namespace DCLF
 	std::uint64_t FrameValues::Impl::LeasePool(Pool& a_pool, std::string_view a_name, std::uint32_t a_stride, bool a_deviceAddress, std::uint64_t a_needed, org::services::BackingLease& a_frameLease,
 		org::services::BackingLease& a_jobLease, std::optional<std::uint64_t>& a_oldestContentEpoch)
 	{
-		a_pool.capacity = kPoolGrowth.Next(a_pool.capacity, a_needed);
+		// The class follows the rows asked both ways: a smaller one once they stayed much smaller (a fresh backing, written whole: its
+		// contentEpoch is 0); the larger class's backings are released as they come back.
+		org::services::FitCapacity(a_pool.capacity, a_pool.window, std::max<std::uint64_t>(a_needed, 1), kPoolGrowth, PooledBackings::Shrink());
 		const auto name = fmt::format("cs.dclf.frame-values.{}", a_name);
 		org::services::BackingPool::AcquireInfo info;
 		auto lease = a_pool.pool->Acquire({ .capacityClass = a_pool.capacity, .stride = a_stride, .flags = { .deviceAddress = a_deviceAddress }, .name = name },

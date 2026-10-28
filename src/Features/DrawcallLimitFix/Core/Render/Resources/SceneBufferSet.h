@@ -65,6 +65,8 @@ namespace DCLF::Draws
 		std::uint64_t Asked(const GrowthBuild& a_build, const Versioned& a_buffer);
 		/** @brief The producer's report line, its counters reset; empty when nothing happened. */
 		std::string Report();
+		/** @brief Producer: a shrink waits to be observed or named (GrowableBufferSet::ShrinkPending): a kept revision makes again. */
+		bool ShrinkPending() const { return set.ShrinkPending(); }
 
 	private:
 		SceneBufferSet();

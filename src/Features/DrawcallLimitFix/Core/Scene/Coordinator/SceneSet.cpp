@@ -1340,6 +1340,16 @@ namespace DCLF::Scene
 			for (auto& events : a_batch.events)
 				EngineReleases::PushOwner(std::move(events));
 		});
+		// The pipeline table's top follows the slots in use (lowest-first reuse): past the last one alive or retiring nothing names
+		// a slot, so the columns are cut there, and with them every per-pipeline GPU table sized from them (the payload's pipeline
+		// rows, the main layout's ranges), which then shrink (PooledBackings::Shrink). The publication takes the cut family whole.
+		if (const auto top = tables.pipelineSlots.TrimTop(); top < tables.pipelines.size()) {
+			tables.PipelineColumns([top](auto& a_column, auto&&...) { a_column.erase(a_column.begin() + static_cast<std::ptrdiff_t>(top), a_column.end()); });
+			tables.TrimPipelineUsed(static_cast<std::uint32_t>(top));
+			tables.NotePipelinesWrite();
+			tables.NoteConstantsWrite();
+			++retirementStats.pipelinesTrimmed;
+		}
 	}
 
 	namespace

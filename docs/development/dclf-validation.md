@@ -157,6 +157,7 @@ Each compares a live path with a reference built from scratch and flags every mi
 | --- | --- | --- |
 | `CS_DCLF_WORKERS` | hardware threads - 2 | The preparation pool's threads (at least 1). |
 | `CS_DCLF_SCENE_COPIES` | 3 | The copies FrameValues' pools keep a class, 2 to the frames in flight: a frame's producer reuses the copy the oldest in-flight frame bound, its uploads waiting for that frame on the GPU. |
+| `CS_DCLF_SHRINK` | on | When the growable scene buffers give memory back (one policy, `PooledBackings::Shrink`): a buffer asked at most a quarter of its capacity for 5 s gets a version at the fresh size for that window's peak. `off`: grow-only; `eager`: at the first such ask, for stress and parity runs. |
 | `CS_DCLF_FANOUT` | `2` | The scene pass's evaluation: `0` interleaved on the scene lane (the reference), `1` every entry evaluated then merged on the lane, `2` evaluated on the preparation pool from 128 entries, merged in order. |
 | `CS_DCLF_ASYNC_PRIORITY` | unset | `normal`: the coordinator and scene threads keep normal priority instead of above normal; `noboost`: workers are not raised to a `ParallelFor` caller's priority. |
 | `CS_DCLF_ASYNC_COMPUTE` | on | `0`: the passes that prefer the compute queue (build-draws' queries, fades, portal batches, tree wind) run on the graphics queue, for timing them in the graphics queue's order. |

@@ -447,6 +447,14 @@ namespace DCLF::Draws
 		++rows.builds;
 		if (rows.material.Size() < tables.materials.size())
 			rows.material.Mutable().resize(tables.materials.size());
+		// The pipeline rows follow the pipeline table both ways: cut with its top (Coordinator::RecycleRetired), they drop the rows and
+		// write states past it, so a slot made again past the cut starts unwritten (its row is written whole and marked) and the part's
+		// next version is smaller (PayloadVersions; PooledBackings::Shrink gives the class back).
+		if (const auto slots = tables.pipelines.size(); rows.pipeline.Size() > slots) {
+			rows.pipeline.Mutable().resize(slots);
+			rows.pipelines.resize(slots);
+			rows.tablesHashes.resize(std::min(rows.tablesHashes.size(), slots));
+		}
 		if (rows.pipeline.Size() < tables.pipelines.size())
 			rows.pipeline.Mutable().resize(tables.pipelines.size());
 		rows.materials.resize(std::max(rows.materials.size(), tables.materials.size()));
