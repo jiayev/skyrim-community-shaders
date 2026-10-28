@@ -74,7 +74,9 @@ static const uint kThreads = 64 * 32;
 		// The entry's row's copy (its installed header names it); a row with none is not listed (MainRows::AnimatedRows::Animated).
 		const uint rowBase = row.RowOffset / kMaterialRowBytes * kMaterialRowBytes;
 		const uint k = vk::RawBufferLoad<uint>(base + rowBase + kMaterialRowHeader, 4);
-		if (k == kNoAnimatedRow || k >= animated)
+		// kNoAnimatedRow is past every count. One unsigned compare, no equality test: AMD's RDNA2 Windows compiler took
+		// `k == kNoAnimatedRow || k >= animated` as k == kNoAnimatedRow on the path past it, and stored every entry ~4 TB past the copy.
+		if (k >= animated)
 			continue;
 		const uint64_t at = copyBase + uint64_t(k) * kMaterialRowBytes + (row.RowOffset - rowBase);
 		[unroll] for (uint c = 0; c < 4; ++c)

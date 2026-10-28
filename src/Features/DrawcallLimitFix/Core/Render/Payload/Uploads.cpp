@@ -591,6 +591,13 @@ namespace DCLF
 		std::array<std::uint32_t, kTextureRegisters> frameTextures;
 		ResolveFrameTextures(commit, frameTextures);
 		CountMissingFrameTextures(commit, frameTextures);
+		// What is left unresolved reads zero through a null descriptor of its view's kind (GpuTextures::NullIndexFor: a buffer view's,
+		// a frame buffer's among them, a null buffer), the rest the null texture (FrameRecordOf). The views are this commit's (the depth
+		// commit resolves none).
+		if (!depthOnly)
+			for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters; ++t)
+				if (frameTextures[t] == kInvalidIndex)
+					frameTextures[t] = textures.NullIndexFor(frameTextureBindings[t].view);
 		WriteFrameRecord(commit, frameTextures);
 		lap(2);
 

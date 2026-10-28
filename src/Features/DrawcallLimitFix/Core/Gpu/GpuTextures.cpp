@@ -270,6 +270,9 @@ namespace DCLF
 		std::array<bool, kAddressModes * kFilterModes> samplerFailed{};
 		org::OwnedDescriptorBinding nullBinding;
 		std::uint32_t nullIndex = kInvalid;
+		// NullBufferIndex's: [0] structured or raw, [1] typed.
+		std::array<org::OwnedDescriptorBinding, 2> nullBufferBindings{};
+		std::array<std::uint32_t, 2> nullBufferIndices{ kInvalid, kInvalid };
 
 		~Impl()
 		{
@@ -673,6 +676,45 @@ namespace DCLF
 		return impl->nullIndex;
 	}
 
+	std::uint32_t GpuTextures::NullBufferIndex(bool a_typed)
+	{
+		auto& index = impl->nullBufferIndices[a_typed ? 1 : 0];
+		if (index != kInvalid)
+			return index;
+		std::shared_ptr<org::runtime::IDescriptorService> retained;
+		auto* service = Impl::ServiceNow(retained);
+		if (!service)
+			return kInvalid;
+		rhi::SrvDesc srv{};
+		srv.dimension = rhi::SrvDim::Buffer;
+		srv.buffer.kind = a_typed ? rhi::BufferViewKind::Typed : rhi::BufferViewKind::Structured;
+		if (a_typed)
+			srv.formatOverride = rhi::Format::R32_UInt;
+		else
+			srv.buffer.structureByteStride = sizeof(std::uint32_t);
+		auto& binding = impl->nullBufferBindings[a_typed ? 1 : 0];
+		binding = service->CreateOwnedShaderResourceView(RenderGraphRuntime::Get().DeviceOwner(), {}, {}, srv);
+		if (!binding) {
+			logger::warn("[DCLF] Null buffer descriptors are unsupported (VK_EXT_robustness2 nullDescriptor)");
+			return kInvalid;
+		}
+		index = binding.Index();
+		return index;
+	}
+
+	std::uint32_t GpuTextures::NullIndexFor(ID3D11ShaderResourceView* a_view)
+	{
+		if (!a_view)
+			return NullIndex();
+		D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+		a_view->GetDesc(&desc);
+		if (desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFEREX)
+			return NullBufferIndex(false);
+		if (desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFER)
+			return NullBufferIndex(desc.Format != DXGI_FORMAT_UNKNOWN);
+		return NullIndex();
+	}
+
 	GpuTextures::Binding GpuTextures::NullBinding()
 	{
 		return { NullIndex(), impl->nullBinding.Owner() };
@@ -749,6 +791,8 @@ namespace DCLF
 		impl->samplerFailed.fill(false);
 		impl->nullIndex = kInvalid;
 		impl->nullBinding = {};
+		impl->nullBufferIndices.fill(kInvalid);
+		impl->nullBufferBindings = {};
 		stats = {};
 	}
 }
