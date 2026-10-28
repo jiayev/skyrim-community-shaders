@@ -6,7 +6,7 @@ class TexturePreview
 {
 public:
 	/** @brief Displays a 2D texture or volume slice with mip, channel and range controls. */
-	void Draw(ID3D11ShaderResourceView* srv, const char* id, const char* label, float scale, bool scalar = false);
+	void Draw(ID3D11ShaderResourceView* srv, const char* id, const char* label, float scale, bool scalar = false, float2 defaultRange = { 0.f, 1.f });
 	/** @brief Releases the preview shader so it can be requested again. */
 	void ClearShaderCache();
 

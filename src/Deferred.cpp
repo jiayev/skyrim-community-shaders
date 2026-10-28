@@ -1,10 +1,12 @@
 #include "Deferred.h"
-#include "EnvironmentProbe.h"
+#include "Features/EnvironmentProbeFeature.h"
 #include "Features/ViewAtmosphere.h"
+#include "Rendering/EnvironmentProbe/Capture.h"
 
 #include <DDSTextureLoader.h>
 
 #include "I18n/I18n.h"
+#include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -646,6 +648,7 @@ void Deferred::CaptureDirectionalShadowMap()
 {
 	directionalShadowMap = nullptr;
 	directionalShadowMapFrame = UINT32_MAX;
+	directionalShadowParametersFrame = UINT32_MAX;
 	if (!globals::state->HasDirectionalShadows())
 		return;
 
@@ -661,6 +664,35 @@ void Deferred::CaptureDirectionalShadowMap()
 
 	directionalShadowMap = std::move(shadowMap);
 	directionalShadowMapFrame = globals::state->frameCount;
+
+	// Snapshot before later Utility draws reuse their native PerGeometry buffer.
+	winrt::com_ptr<ID3D11Buffer> parameters;
+	auto* context = globals::d3d::context;
+	context->PSGetConstantBuffers(2, 1, parameters.put());
+	if (!parameters)
+		return;
+	D3D11_BUFFER_DESC sourceDesc{}, snapshotDesc{};
+	parameters->GetDesc(&sourceDesc);
+	if (sourceDesc.ByteWidth < 64)
+		return;
+	if (directionalShadowParameters)
+		directionalShadowParameters->GetDesc(&snapshotDesc);
+	if (sourceDesc.ByteWidth != snapshotDesc.ByteWidth) {
+		snapshotDesc = {};
+		snapshotDesc.ByteWidth = sourceDesc.ByteWidth;
+		snapshotDesc.Usage = D3D11_USAGE_DEFAULT;
+		snapshotDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+		directionalShadowParameters = nullptr;
+		DX::ThrowIfFailed(globals::d3d::device->CreateBuffer(&snapshotDesc, nullptr, directionalShadowParameters.put()));
+		Util::SetResourceName(directionalShadowParameters.get(), "EnvironmentProbe::SunShadowParameters");
+	}
+	context->CopyResource(directionalShadowParameters.get(), parameters.get());
+	directionalShadowParametersFrame = globals::state->frameCount;
+}
+
+ID3D11Buffer* Deferred::GetDirectionalShadowParameters() const
+{
+	return directionalShadowParametersFrame == globals::state->frameCount && GetDirectionalShadowMap() ? directionalShadowParameters.get() : nullptr;
 }
 
 ID3D11ShaderResourceView* Deferred::GetDirectionalShadowMap() const
@@ -846,6 +878,7 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 
 	state->inWorld = false;
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
+	globals::features::environmentProbe.Render();
 };
 
 void Deferred::Hooks::Main_RenderWorld_Start::thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)

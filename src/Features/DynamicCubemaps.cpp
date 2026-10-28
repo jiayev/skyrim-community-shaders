@@ -8,6 +8,7 @@
 #include "I18n/I18n.h"
 #include "LinearLighting.h"
 #include "PhysicalSky.h"
+#include "Rendering/EnvironmentProbe/CameraPass.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -26,7 +27,8 @@ constexpr auto MIPLEVELS = 9;
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DynamicCubemaps::Settings,
 	EnabledSSR,
-	EnabledCreator);
+	EnabledCreator,
+	UseEnvironmentProbe);
 
 std::vector<std::pair<std::string_view, std::string_view>> DynamicCubemaps::GetShaderDefineOptions()
 {
@@ -40,6 +42,10 @@ std::vector<std::pair<std::string_view, std::string_view>> DynamicCubemaps::GetS
 
 void DynamicCubemaps::DrawSettings()
 {
+	ImGui::Checkbox(T(TKEY("use_environment_probe"), "Use environment probe capture"), reinterpret_cast<bool*>(&settings.UseEnvironmentProbe));
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted(T(TKEY("use_environment_probe_tooltip"), "Use the Environment Probe feature as the capture source. Capture, specular irradiance filtering, and compression are spread over an 8-frame cycle. When the probe is disabled, use the screen capture path."));
+
 	if (ImGui::TreeNodeEx(T(TKEY("screen_space_reflections"), "Screen Space Reflections"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		recompileFlag |= ImGui::Checkbox(T(TKEY("enable_ssr"), "Enable Screen Space Reflections"), reinterpret_cast<bool*>(&settings.EnabledSSR));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -186,25 +192,16 @@ bool MenuOpenCloseEventHandler::Register()
 
 void DynamicCubemaps::ClearShaderCache()
 {
+	probeTask = 0;
 	resetCapture[0] = resetCapture[1] = true;
 	cubemapValid[0] = cubemapValid[1] = false;
 	nextTask = NextTask::kCaptureInferAndIrradianceA;
-	if (detectCaptureLightingCS) {
-		detectCaptureLightingCS->Release();
-		detectCaptureLightingCS = nullptr;
-	}
-	if (updateCubemapCS) {
-		updateCubemapCS->Release();
-		updateCubemapCS = nullptr;
-	}
-	if (updateCubemapReflectionsCS) {
-		updateCubemapReflectionsCS->Release();
-		updateCubemapReflectionsCS = nullptr;
-	}
-	if (updateCubemapFakeReflectionsCS) {
-		updateCubemapFakeReflectionsCS->Release();
-		updateCubemapFakeReflectionsCS = nullptr;
-	}
+	for (auto* variants : { &detectCaptureLightingCS, &updateCubemapCS, &updateCubemapReflectionsCS, &updateCubemapFakeReflectionsCS })
+		for (auto*& shader : *variants)
+			if (shader) {
+				shader->Release();
+				shader = nullptr;
+			}
 	if (inferCubemapCS) {
 		inferCubemapCS->Release();
 		inferCubemapCS = nullptr;
@@ -227,40 +224,56 @@ void DynamicCubemaps::ClearShaderCache()
 	}
 }
 
-ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderDetectLighting()
+ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderDetectLighting(bool a_probe)
 {
-	if (!detectCaptureLightingCS) {
+	auto& shader = detectCaptureLightingCS[a_probe];
+	if (!shader) {
 		logger::debug("Compiling DetectCaptureLightingCS");
-		detectCaptureLightingCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\DetectCaptureLightingCS.hlsl", {}, "cs_5_0"));
+		std::vector<std::pair<const char*, const char*>> defines;
+		if (a_probe)
+			defines.emplace_back("PROBE_CAPTURE", "");
+		shader = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\DetectCaptureLightingCS.hlsl", defines, "cs_5_0"));
 	}
-	return detectCaptureLightingCS;
+	return shader;
 }
 
-ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdate()
+ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdate(bool a_probe)
 {
-	if (!updateCubemapCS) {
+	auto& shader = updateCubemapCS[a_probe];
+	if (!shader) {
 		logger::debug("Compiling UpdateCubemapCS");
-		updateCubemapCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", {}, "cs_5_0"));
+		std::vector<std::pair<const char*, const char*>> defines;
+		if (a_probe)
+			defines.emplace_back("PROBE_CAPTURE", "");
+		shader = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", defines, "cs_5_0"));
 	}
-	return updateCubemapCS;
+	return shader;
 }
 
-ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdateReflections()
+ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdateReflections(bool a_probe)
 {
-	if (!updateCubemapReflectionsCS) {
+	auto& shader = updateCubemapReflectionsCS[a_probe];
+	if (!shader) {
 		logger::debug("Compiling UpdateCubemapCS REFLECTIONS");
-		updateCubemapReflectionsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", { { "REFLECTIONS", "" } }, "cs_5_0"));
+		std::vector<std::pair<const char*, const char*>> defines{ { "REFLECTIONS", "" } };
+		if (a_probe)
+			defines.emplace_back("PROBE_CAPTURE", "");
+		shader = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", defines, "cs_5_0"));
 	}
-	return updateCubemapReflectionsCS;
+	return shader;
 }
 
-ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdateFakeReflections()
+ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderUpdateFakeReflections(bool a_probe)
 {
-	if (!updateCubemapFakeReflectionsCS) {
+	auto& shader = updateCubemapFakeReflectionsCS[a_probe];
+	if (!shader) {
 		logger::debug("Compiling UpdateCubemapCS FAKEREFLECTIONS");
-		updateCubemapFakeReflectionsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", { { "FAKEREFLECTIONS", "" } }, "cs_5_0"));
+		std::vector<std::pair<const char*, const char*>> defines{ { "FAKEREFLECTIONS", "" } };
+		if (a_probe)
+			defines.emplace_back("PROBE_CAPTURE", "");
+		shader = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DynamicCubemaps\\UpdateCubemapCS.hlsl", defines, "cs_5_0"));
 	}
-	return updateCubemapFakeReflectionsCS;
+	return shader;
 }
 
 ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderInferrence()
@@ -308,7 +321,7 @@ ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderBC6HEncode()
 	return bc6hEncodeCS;
 }
 
-void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
+void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections, bool a_probe)
 {
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
@@ -317,6 +330,11 @@ void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 	auto& main = renderer->GetRuntimeData().renderTargets[globals::deferred->forwardRenderTargets[0]];
 
 	ID3D11ShaderResourceView* srvs[2] = { depth.depthSRV, main.SRV };
+	auto& probe = EnvironmentProbe::GetCameraPass();
+	if (a_probe) {
+		srvs[0] = probe.Depth();
+		srvs[1] = probe.Radiance();
+	}
 	context->CSSetShaderResources(0, 2, srvs);
 
 	uint index = a_reflections ? 1 : 0;
@@ -341,6 +359,15 @@ void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 	updateData.CaptureIndex = index;
 	updateData.CaptureDeltaTime = std::max(0.0f, globals::state->timer - previousCaptureTime[index]);
 	updateData.ResetCapture = resetCapture[index];
+	if (a_probe) {
+		const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();
+		for (uint32_t face = 0; face < 8; ++face) {
+			const auto& origin = probe.Origins()[face];
+			updateData.ProbeOriginOffsets[face] = { (origin.x - camera.x) * 0.001f, (origin.y - camera.y) * 0.001f, (origin.z - camera.z) * 0.001f, 0 };
+		}
+		updateData.ProbeValidFaces = probe.ValidFaces();
+		updateData.ProbeFarDistance = probe.FarDistance;
+	}
 	previousCaptureTime[index] = globals::state->timer;
 	resetCapture[index] = false;
 
@@ -355,12 +382,12 @@ void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 
 	context->CSSetSamplers(0, 1, &computeSampler);
 
-	context->CSSetShader(GetComputeShaderDetectLighting(), nullptr, 0);
+	context->CSSetShader(GetComputeShaderDetectLighting(a_probe), nullptr, 0);
 	globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::DetectLightingReflections" : "DynamicCubemaps::DetectLighting");
 	context->Dispatch(1, 1, 1);
 	globals::profiler->EndPass();
 
-	context->CSSetShader(a_reflections ? (fakeReflections ? GetComputeShaderUpdateFakeReflections() : GetComputeShaderUpdateReflections()) : GetComputeShaderUpdate(), nullptr, 0);
+	context->CSSetShader(a_reflections ? (fakeReflections ? GetComputeShaderUpdateFakeReflections(a_probe) : GetComputeShaderUpdateReflections(a_probe)) : GetComputeShaderUpdate(a_probe), nullptr, 0);
 
 	globals::profiler->BeginPass(a_reflections ? "DynamicCubemaps::CaptureReflections" : "DynamicCubemaps::Capture");
 	context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
@@ -588,6 +615,14 @@ void DynamicCubemaps::UpdateCubemap()
 {
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Cubemap Update");
+	auto& probe = EnvironmentProbe::GetCameraPass();
+	const bool useProbe = settings.UseEnvironmentProbe && probe.enabled && !REL::Module::IsVR();
+	if (useProbe != usingEnvironmentProbe) {
+		usingEnvironmentProbe = useProbe;
+		probeTask = 0;
+		resetCapture[0] = resetCapture[1] = true;
+		nextTask = NextTask::kCaptureInferAndIrradianceA;
+	}
 
 	// Reset capture when game time jumps (wait menu, timescale changes, console commands)
 	if (auto calendar = globals::game::calendar) {
@@ -610,12 +645,49 @@ void DynamicCubemaps::UpdateCubemap()
 		recompileFlag = false;
 	}
 
-	if (!GetComputeShaderDetectLighting() || !GetComputeShaderUpdate() || !GetComputeShaderInferrence() || !GetComputeShaderSpecularIrradiance() || !GetComputeShaderBC6HEncode())
+	if (useProbe && (!probe.Radiance() || !probe.Depth()))
+		return;
+	if (!GetComputeShaderDetectLighting(useProbe) || !GetComputeShaderUpdate(useProbe) || !GetComputeShaderInferrence() || !GetComputeShaderSpecularIrradiance() || !GetComputeShaderBC6HEncode())
 		return;
 	if (activeReflections && !(fakeReflections ?
-									 (GetComputeShaderUpdateFakeReflections() && GetComputeShaderInferrenceFakeReflections()) :
-									 (GetComputeShaderUpdateReflections() && GetComputeShaderInferrenceReflections())))
+									 (GetComputeShaderUpdateFakeReflections(useProbe) && GetComputeShaderInferrenceFakeReflections()) :
+									 (GetComputeShaderUpdateReflections(useProbe) && GetComputeShaderInferrenceReflections())))
 		return;
+
+	if (useProbe) {
+		if (probeActiveReflections != activeReflections || probeFakeReflections != fakeReflections) {
+			probeTask = 0;
+			probeActiveReflections = activeReflections;
+			probeFakeReflections = fakeReflections;
+			resetCapture[1] = true;
+		}
+		// Four stages per variant; finish base before reflection because inference,
+		// filtering and compression share scratch textures. Published maps remain
+		// intact until all roughness mips are ready. With no reflection variant, keep
+		// the second half idle so the base map still updates once per eight frames.
+		const bool reflection = probeTask >= 4;
+		if (!reflection || activeReflections) {
+			if (resetCapture[reflection])
+				probeTask &= ~3u;
+			switch (probeTask & 3u) {
+			case 0:
+				UpdateCubemapCapture(reflection, true);
+				Inferrence(reflection);
+				break;
+			case 1:
+				Irradiance(reflection, 1, 2, true);
+				break;
+			case 2:
+				Irradiance(reflection, 2, MIPLEVELS, false);
+				break;
+			case 3:
+				CompressToBC6H(reflection);
+				break;
+			}
+		}
+		probeTask = (probeTask + 1) & 7u;
+		return;
+	}
 
 	static constexpr uint32_t kIrradianceSplit = 2;
 	static constexpr uint32_t kIrradianceSplitB = MIPLEVELS - 1;

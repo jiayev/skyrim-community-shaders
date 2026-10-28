@@ -6,7 +6,7 @@
 
 #define I18N_KEY_PREFIX "common.texture_preview."
 
-void TexturePreview::Draw(ID3D11ShaderResourceView* srv, const char* id, const char* label, float scale, bool scalar)
+void TexturePreview::Draw(ID3D11ShaderResourceView* srv, const char* id, const char* label, float scale, bool scalar, float2 defaultRange)
 {
 	ImGui::PushID(id);
 	if (!ImGui::TreeNode("texture", "%s", label)) {
@@ -54,8 +54,10 @@ void TexturePreview::Draw(ID3D11ShaderResourceView* srv, const char* id, const c
 		}
 		auto [it, inserted] = views.try_emplace(id);
 		auto& view = it->second;
-		if (inserted && scalar)
-			view.channel = 1;
+		if (inserted) {
+			view.channel = scalar ? 1 : 0;
+			view.range = defaultRange;
+		}
 		view.mip = std::clamp(view.mip, 0, static_cast<int>(levels) - 1);
 		ImGui::SliderInt(T(TKEY("debug_texture_mip"), "Mip level"), &view.mip, 0, static_cast<int>(levels) - 1);
 		width = std::max(width >> view.mip, 1u);
@@ -68,7 +70,7 @@ void TexturePreview::Draw(ID3D11ShaderResourceView* srv, const char* id, const c
 		ImGui::Combo(T(TKEY("debug_texture_channel"), "Channel"), &view.channel, channels, IM_ARRAYSIZE(channels));
 		ImGui::DragFloat2(T(TKEY("debug_texture_range"), "Display range"), &view.range.x, 0.01f);
 		if (ImGui::Button(T(TKEY("debug_texture_reset_range"), "Reset display range")))
-			view.range = { 0.f, 1.f };
+			view.range = defaultRange;
 		ImGui::Text(T(TKEY("debug_texture_dimensions"), "%u x %u x %u"), width, height, depth);
 		const ImVec2 displaySize{ width * scale, height * scale };
 		if (!ImGui::IsRectVisible(displaySize)) {

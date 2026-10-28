@@ -62,6 +62,10 @@ public:
 		float CaptureDeltaTime;
 		uint ResetCapture;
 		uint pad0[2];
+		float4 ProbeOriginOffsets[8];
+		uint ProbeValidFaces;
+		float ProbeFarDistance;
+		uint pad1[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(UpdateCubemapCB);
 
@@ -75,13 +79,17 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(CaptureLightingState);
 
 	std::unique_ptr<StructuredBuffer> captureLightingState;
-	ID3D11ComputeShader* detectCaptureLightingCS = nullptr;
+	std::array<ID3D11ComputeShader*, 2> detectCaptureLightingCS{};
 	float3 cameraPreviousPosAdjust[2] = {};
 	float previousCaptureTime[2] = {};
 
-	ID3D11ComputeShader* updateCubemapCS = nullptr;
-	ID3D11ComputeShader* updateCubemapReflectionsCS = nullptr;
-	ID3D11ComputeShader* updateCubemapFakeReflectionsCS = nullptr;
+	std::array<ID3D11ComputeShader*, 2> updateCubemapCS{};
+	std::array<ID3D11ComputeShader*, 2> updateCubemapReflectionsCS{};
+	std::array<ID3D11ComputeShader*, 2> updateCubemapFakeReflectionsCS{};
+	bool usingEnvironmentProbe = false;
+	uint32_t probeTask = 0;
+	bool probeActiveReflections = false;
+	bool probeFakeReflections = false;
 
 	ConstantBuffer* updateCubemapCB = nullptr;
 
@@ -152,7 +160,8 @@ public:
 	{
 		uint EnabledCreator = false;
 		uint EnabledSSR = true;
-		uint pad0[2];
+		uint UseEnvironmentProbe = false;
+		uint pad0;
 		float4 CubemapColor{ 1.0f, 1.0f, 1.0f, 0.0f };
 	};
 
@@ -198,10 +207,10 @@ public:
 	virtual void PostPostLoad() override;
 
 	virtual void ClearShaderCache() override;
-	ID3D11ComputeShader* GetComputeShaderDetectLighting();
-	ID3D11ComputeShader* GetComputeShaderUpdate();
-	ID3D11ComputeShader* GetComputeShaderUpdateReflections();
-	ID3D11ComputeShader* GetComputeShaderUpdateFakeReflections();
+	ID3D11ComputeShader* GetComputeShaderDetectLighting(bool a_probe = false);
+	ID3D11ComputeShader* GetComputeShaderUpdate(bool a_probe = false);
+	ID3D11ComputeShader* GetComputeShaderUpdateReflections(bool a_probe = false);
+	ID3D11ComputeShader* GetComputeShaderUpdateFakeReflections(bool a_probe = false);
 
 	ID3D11ComputeShader* GetComputeShaderInferrence();
 	ID3D11ComputeShader* GetComputeShaderInferrenceReflections();
@@ -209,7 +218,7 @@ public:
 
 	ID3D11ComputeShader* GetComputeShaderSpecularIrradiance();
 
-	void UpdateCubemapCapture(bool a_reflections);
+	void UpdateCubemapCapture(bool a_reflections, bool a_probe = false);
 
 	void Inferrence(bool a_reflections);
 

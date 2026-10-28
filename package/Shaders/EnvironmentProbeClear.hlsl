@@ -11,6 +11,7 @@ struct Output
 {
 	float4 Radiance: SV_Target0;
 	float Depth: SV_Target1;
+	float2 Normal: SV_Target2;
 };
 
 Output main(float4 position : SV_Position)
@@ -21,6 +22,7 @@ Output main(float4 position : SV_Position)
 	Output output;
 	output.Radiance = 0;
 	output.Depth = EnvironmentProbe::FarDistance;
+	output.Normal = 0;
 	return output;
 }
 #endif

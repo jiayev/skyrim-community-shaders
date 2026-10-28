@@ -525,9 +525,10 @@ namespace SIE
 		ShaderCompilationTask::Status GetShaderStatus(const std::string& a_key);
 		std::string GetShaderStatsString(bool a_timeOnly = false, bool a_elapsedOnly = false);
 
-		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
+		/** @brief Gets a shader; forceAsync queues a cache miss even for synchronous capture requests. */
+		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor, bool forceAsync = false);
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader& shader,
-			uint32_t descriptor);
+			uint32_t descriptor, bool forceAsync = false);
 		bool HasPixelShaders(RE::BSShader::Type type, std::span<const uint32_t> descriptors);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);

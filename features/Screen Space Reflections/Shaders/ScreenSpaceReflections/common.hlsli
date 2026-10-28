@@ -25,6 +25,15 @@ cbuffer SSRCB : register(b1)
 	float HitDistA;
 	float HitDistB;
 	float HitDistC;
+
+	uint SpecUseEnvironmentProbe;
+	uint ProbeValidFaces;
+	uint ProbeMaxSteps;
+	float ProbeFarDistance;
+	float4 ProbeOriginOffsets[8];
+	float ProbeBoundsRadius;
+	uint ReflectionCubemapValid;
+	float2 ProbePadding;
 };
 
 SamplerState samplerPointClamp : register(s0);

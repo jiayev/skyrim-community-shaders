@@ -6,11 +6,11 @@
 #include "Utils/VersionedRelocation.h"
 
 #include "EngineFix.h"
-#include "EnvironmentProbe.h"
 #include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "Menu/BackgroundBlur.h"
+#include "Rendering/EnvironmentProbe/Capture.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
@@ -172,6 +172,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 {
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
+	const bool asyncProbeShaders = EnvironmentProbe::UsesAsyncShaders();
 	if (EnvironmentProbe::IsRendering() && shader->shaderType.get() != RE::BSShader::Type::Lighting)
 		return false;
 	if (EnvironmentProbe::IsRendering())
@@ -183,8 +184,9 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		auto probeVertexDescriptor = vertexDescriptor;
 		auto probePixelDescriptor = pixelDescriptor;
 		state->ModifyShaderLookup(*shader, probeVertexDescriptor, probePixelDescriptor);
-		if (shaderCache->GetVertexShader(*shader, probeVertexDescriptor) == nullptr ||
-			shaderCache->GetPixelShader(*shader, probePixelDescriptor) == nullptr) {
+		auto* vertex = shaderCache->GetVertexShader(*shader, probeVertexDescriptor, asyncProbeShaders);
+		auto* pixel = shaderCache->GetPixelShader(*shader, probePixelDescriptor, asyncProbeShaders);
+		if (!vertex || !pixel) {
 			vertexDescriptor &= ~landscapeSeamsFlag;
 			pixelDescriptor &= ~landscapeSeamsFlag;
 		}
@@ -204,11 +206,19 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 
 	NormalizeLegacyUtilityDescriptors(*shader, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor);
 	state->ModifyShaderLookup(*shader, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor);
-	if (EnvironmentProbe::IsRendering() &&
-		(!shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor) ||
-			!shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor))) {
-		EnvironmentProbe::ShaderFailed();
-		return false;
+	if (EnvironmentProbe::IsRendering()) {
+		// Request both stages in the same frame; neither may fall back to a world-view shader.
+		auto* vertex = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor, asyncProbeShaders);
+		auto* pixel = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor, asyncProbeShaders);
+		if (!vertex || !pixel) {
+			const auto failed = [&](SIE::ShaderClass stage, uint32_t descriptor) {
+				return shaderCache->GetShaderStatus(SIE::ShaderCompilationTask(stage, *shader, descriptor).GetString()) == SIE::ShaderCompilationTask::Failed;
+			};
+			const bool pending = asyncProbeShaders && !failed(SIE::ShaderClass::Vertex, state->modifiedVertexDescriptor) &&
+			                     !failed(SIE::ShaderClass::Pixel, state->modifiedPixelDescriptor);
+			EnvironmentProbe::ShaderUnavailable(pending);
+			return false;
+		}
 	}
 
 	// Only check against non-shader bits

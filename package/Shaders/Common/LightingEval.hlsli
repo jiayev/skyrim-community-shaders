@@ -264,15 +264,24 @@ float3 GetThinSurfaceTransmissionLighting(float3 ambientColor, float3 transmissi
 #	endif
 )
 {
-#	if defined(IBL)
+#	if defined(ENVIRONMENT_PROBE)
+	ambientColor = 0;
+#		if defined(IBL)
+	if (SharedData::iblSettings.EnableIBL)
+		ambientColor = ImageBasedLighting::GetSkyIBLColor(-transmissionNormal);
+#		endif
+	worldPosition += EnvironmentProbe::WorldOriginDelta;
+#	else
+#		if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
-#		if defined(LIGHTING)
+#			if defined(LIGHTING)
 		if (useStaticIBL)
 			ambientColor = ImageBasedLighting::GetStaticDiffuseIBL(transmissionNormal, iblSampler);
 		else
-#		endif
+#			endif
 			ambientColor = ImageBasedLighting::GetDiffuseIBL(ambientColor, -transmissionNormal, worldPosition);
 	}
+#		endif
 #	endif
 #	if defined(DEFERRED)
 	if (SharedData::ssgiSettings.EnableIL != 0
@@ -290,7 +299,12 @@ float3 GetThinSurfaceTransmissionLighting(float3 ambientColor, float3 transmissi
 	                                                    saturate(Skylighting::EvaluateDiffuse(skylightingSH, transmissionNormal, Skylighting::GetFadeOutFactor(worldPosition)) /
 																 max(vertexAO, EPSILON_DIVISION));
 	skylightingDiffuse = PBR::GetFoliageShadowVisibility(skylightingDiffuse, skyOccluderOpacity);
+#		if defined(ENVIRONMENT_PROBE)
+	diffuseColor = ColorManagement::SceneColor::ScaleByLinear(diffuseColor, skylightingDiffuse);
+	transmittedAmbientColor = diffuseColor;
+#		else
 	Skylighting::ApplySkylighting(diffuseColor, transmittedAmbientColor, transmissionWeight, skylightingDiffuse);
+#		endif
 #	endif
 	return diffuseColor;
 }

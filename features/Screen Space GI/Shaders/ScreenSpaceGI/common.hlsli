@@ -44,6 +44,15 @@ cbuffer SSGICB : register(b1)
 	float DiffuseCubemapMult;
 	uint UseDynamicCubemap;
 	uint MultiBounceMode;
+	uint UseEnvironmentProbe;
+	uint ProbeValidFaces;
+	uint ProbeMaxSteps;
+	uint ProbeRays;
+	float ProbeFarDistance;
+	float ProbeBoundsRadius;
+	uint SkyIBLValid;
+	float ProbePadding;
+	float4 ProbeOriginOffsets[8];
 };
 
 SamplerState samplerPointClamp : register(s0);

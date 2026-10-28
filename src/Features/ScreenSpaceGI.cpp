@@ -8,6 +8,7 @@
 #include "I18n/I18n.h"
 #include "IBL.h"
 #include "NRD.h"
+#include "Rendering/EnvironmentProbe/CameraPass.h"
 #include "Skylighting.h"
 #include "State.h"
 #include "TerrainBlending.h"
@@ -29,6 +30,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AOPower,
 	GIStrength,
 	EnableMultiBounce,
+	UseEnvironmentProbe,
+	ProbeRays,
+	ProbeMaxSteps,
 	UseDynamicCubemapsAsFallback,
 	DiffuseCubemapMult,
 	EnableREBLUR,
@@ -144,6 +148,14 @@ void ScreenSpaceGI::DrawSettings()
 				resetReblurHistory = true;
 				hasMultiBounceHistory = false;
 			}
+			if (settings.EnableGI && settings.UseEnvironmentProbe) {
+				bool changed = ImGui::SliderInt(T(TKEY("probe_rays"), "Probe Rays Per Pixel"), (int*)&settings.ProbeRays, 1, 4, "%d", ImGuiSliderFlags_AlwaysClamp);
+				changed |= ImGui::SliderInt(T(TKEY("probe_steps"), "Probe Trace Steps"), (int*)&settings.ProbeMaxSteps, 8, 128, "%d", ImGuiSliderFlags_AlwaysClamp);
+				if (changed) {
+					resetReblurHistory = true;
+					hasMultiBounceHistory = false;
+				}
+			}
 		}
 	}
 
@@ -170,16 +182,28 @@ void ScreenSpaceGI::DrawSettings()
 				ImGui::Text("%s", T(TKEY("multi_bounce_tooltip"), "Feed the previous frame's reprojected, post-albedo indirect radiance back into the source radiance pyramid."));
 			}
 
-			if (ImGui::Checkbox(T(TKEY("use_dynamic_cubemaps_as_fallback"), "Use Dynamic Cubemaps as Fallback"), &settings.UseDynamicCubemapsAsFallback)) {
+			if (ImGui::Checkbox(T(TKEY("use_environment_probe"), "Environment Probe GI"), &settings.UseEnvironmentProbe)) {
 				resetReblurHistory = true;
 				hasMultiBounceHistory = false;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("%s", T(TKEY("use_dynamic_cubemaps_as_fallback_tooltip"), "Where indirect rays miss the screen, sample dynamic cubemaps for diffuse fallback."));
+				ImGui::Text("%s", T(TKEY("use_environment_probe_tooltip"), "Trace directions not covered by the screen in the shared environment probe. Misses use sky lighting only. Ray count and trace steps control cost independently."));
+			}
+			const char* fallbackLabel = settings.UseEnvironmentProbe ? T(TKEY("use_sky_fallback"), "Use Sky IBL as Fallback") : T(TKEY("use_dynamic_cubemaps_as_fallback"), "Use Dynamic Cubemaps as Fallback");
+			if (ImGui::Checkbox(fallbackLabel, &settings.UseDynamicCubemapsAsFallback)) {
+				resetReblurHistory = true;
+				hasMultiBounceHistory = false;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				if (settings.UseEnvironmentProbe)
+					ImGui::Text("%s", T(TKEY("use_sky_fallback_tooltip"), "Use only the sky component of Image Based Lighting when a probe ray misses. Interior sky lighting is zero. Environment cubemaps and directional ambient are excluded."));
+				else
+					ImGui::Text("%s", T(TKEY("use_dynamic_cubemaps_as_fallback_tooltip"), "Where indirect rays miss the screen, sample dynamic cubemaps for diffuse fallback."));
 			}
 			{
 				auto cubemapGuard = Util::DisableGuard(!settings.UseDynamicCubemapsAsFallback);
-				if (ImGui::SliderFloat(T(TKEY("diffuse_cubemap_multiplier"), "Diffuse Cubemap Multiplier"), &settings.DiffuseCubemapMult, 0.0f, 5.0f, "%.2f")) {
+				const char* multiplierLabel = settings.UseEnvironmentProbe ? T(TKEY("sky_multiplier"), "Sky IBL Multiplier") : T(TKEY("diffuse_cubemap_multiplier"), "Diffuse Cubemap Multiplier");
+				if (ImGui::SliderFloat(multiplierLabel, &settings.DiffuseCubemapMult, 0.0f, 5.0f, "%.2f")) {
 					resetReblurHistory = true;
 					hasMultiBounceHistory = false;
 				}
@@ -257,6 +281,8 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 
 	settings = o_json;
 	settings.NumSteps = std::clamp(settings.NumSteps, 1u, 32u);
+	settings.ProbeRays = std::clamp(settings.ProbeRays, 1u, 4u);
+	settings.ProbeMaxSteps = std::clamp(settings.ProbeMaxSteps, 8u, 128u);
 	if (settings.QuarterRes)
 		settings.HalfRes = false;
 	if (!settings.EnableREBLUR) {
@@ -548,7 +574,7 @@ void ScreenSpaceGI::ClearShaderCache()
 	queuedResetHistory = true;
 	outputReady = false;
 	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
-		&prefilterDepthsCompute, &prefilterRadianceCompute, &prefilterNormalCompute, &giCompute, &compositeCompute
+		&prefilterDepthsCompute, &prefilterRadianceCompute, &prefilterNormalCompute, &giCompute[0], &giCompute[1], &compositeCompute
 	};
 
 	for (auto shader : shaderPtrs)
@@ -571,10 +597,12 @@ void ScreenSpaceGI::CompileComputeShaders()
 			{ &prefilterDepthsCompute, "prefilterDepths.cs.hlsl", { { "LINEAR_FILTER", "" } } },
 			{ &prefilterRadianceCompute, "prefilterRadiance.cs.hlsl", {} },
 			{ &prefilterNormalCompute, "prefilterNormal.cs.hlsl", {} },
-			{ &giCompute, "diffuseGI.cs.hlsl", {} },
+			{ &giCompute[0], "diffuseGI.cs.hlsl", {} },
 		};
-	if (settings.EnableGI)
+	if (settings.EnableGI) {
 		shaderInfos.push_back({ &compositeCompute, "composite.cs.hlsl", {} });
+		shaderInfos.push_back({ &giCompute[1], "diffuseGI.cs.hlsl", { { "PROBE_CONTINUATION", "" } } });
+	}
 
 	for (auto& info : shaderInfos) {
 		if (info.programPtr == &compositeCompute) {
@@ -614,7 +642,7 @@ bool ScreenSpaceGI::ShadersOK()
 {
 	const bool useSH = settings.EnableGI && settings.EnableSH;
 	return texNoise && texWorkingDepth && texRadiance && texNormal && texNRDInput &&
-	       prefilterDepthsCompute && prefilterRadianceCompute && prefilterNormalCompute && giCompute &&
+	       prefilterDepthsCompute && prefilterRadianceCompute && prefilterNormalCompute && giCompute[0] && (!settings.EnableGI || giCompute[1]) &&
 	       (!settings.EnableGI || compositeCompute) && (!useSH || texNRDInputSH1);
 }
 
@@ -624,7 +652,7 @@ void ScreenSpaceGI::UpdateSB()
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
-	SSGICB data;
+	SSGICB data{};
 	{
 		const auto& projMat = globals::game::frameBufferCached.GetCameraProj();
 
@@ -643,7 +671,29 @@ void ScreenSpaceGI::UpdateSB()
 		data.AOPower = settings.AOPower;
 		data.GIStrength = settings.GIStrength;
 		data.DiffuseCubemapMult = settings.DiffuseCubemapMult;
-		data.UseDynamicCubemap = (settings.UseDynamicCubemapsAsFallback && globals::features::dynamicCubemaps.loaded) ? 1u : 0u;
+		auto& probe = EnvironmentProbe::GetCameraPass();
+		// Capture readiness must not silently restore Env energy in probe mode.
+		data.UseEnvironmentProbe = settings.EnableGI && settings.UseEnvironmentProbe && !REL::Module::IsVR();
+		if (usingEnvironmentProbe != bool(data.UseEnvironmentProbe)) {
+			usingEnvironmentProbe = data.UseEnvironmentProbe != 0;
+			resetReblurHistory = true;
+			hasMultiBounceHistory = false;
+		}
+		data.UseDynamicCubemap = settings.UseDynamicCubemapsAsFallback && (usingEnvironmentProbe ? globals::features::ibl.loaded : globals::features::dynamicCubemaps.loaded);
+		data.ProbeValidFaces = usingEnvironmentProbe && probe.enabled && probe.Radiance() && probe.Depth() && probe.Normals() ? probe.ValidFaces() : 0;
+		data.ProbeRays = std::clamp(settings.ProbeRays, 1u, 4u);
+		data.ProbeMaxSteps = std::clamp(settings.ProbeMaxSteps, 8u, 128u);
+		data.ProbeFarDistance = data.ProbeBoundsRadius = probe.FarDistance;
+		data.SkyIBLValid = globals::features::ibl.loaded && globals::features::ibl.skyIBLTexture && globals::features::ibl.skyIBLTexture->srv;
+		const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();
+		for (uint32_t face = 0; face < 8; ++face) {
+			if ((data.ProbeValidFaces & (1u << face)) == 0)
+				continue;
+			const auto& origin = probe.Origins()[face];
+			const RE::NiPoint3 offset{ origin.x - camera.x, origin.y - camera.y, origin.z - camera.z };
+			data.ProbeOriginOffsets[face] = { offset.x, offset.y, offset.z, 0 };
+			data.ProbeBoundsRadius = std::max(data.ProbeBoundsRadius, probe.FarDistance + offset.Length());
+		}
 		const bool hasContinuousHistory = hasMultiBounceHistory &&
 		                                  globals::state->frameCount == lastMultiBounceHistoryFrame + 1;
 		const bool trackMultiBounce = settings.EnableGI && settings.EnableMultiBounce;
@@ -808,15 +858,22 @@ void ScreenSpaceGI::DrawSSGI()
 		srvs.at(0) = texWorkingDepth->srv.get();
 		srvs.at(2) = texRadiance->srv.get();
 		srvs.at(3) = texNoise->srv.get();
-		if (dynamicCubemaps.loaded) {
+		if (dynamicCubemaps.loaded && !usingEnvironmentProbe) {
 			auto& reflections = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
 			srvs.at(4) = dynamicCubemaps.envTexture->srv.get();
 			srvs.at(5) = reflections.SRV;
 		}
-		if (dynamicCubemaps.loaded && skylighting.loaded)
+		if (skylighting.loaded && (usingEnvironmentProbe || dynamicCubemaps.loaded))
 			srvs.at(6) = skylighting.texProbeArray->srv.get();
 		srvs.at(8) = texNormal->srv.get();
-		ID3D11ShaderResourceView* envIBLSrv = ibl.loaded && ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr;
+		if (usingEnvironmentProbe) {
+			auto& probe = EnvironmentProbe::GetCameraPass();
+			srvs.at(7) = probe.Radiance();
+			srvs.at(9) = probe.Depth();
+			srvs.at(10) = probe.Normals();
+		}
+		ID3D11ShaderResourceView* envIBLSrv = !usingEnvironmentProbe && ibl.loaded && ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr;
+		ID3D11ShaderResourceView* skyIBLSrv = ibl.loaded && ibl.skyIBLTexture ? ibl.skyIBLTexture->srv.get() : nullptr;
 
 		uavs.at(0) = texNRDInput->uav.get();
 		if (useSH && texNRDInputSH1)
@@ -824,6 +881,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetShaderResources(76, 1, &envIBLSrv);
+		context->CSSetShaderResources(77, 1, &skyIBLSrv);
 		if (settings.QuarterRes) {
 			const float clearColor[4] = {};
 			context->ClearUnorderedAccessViewFloat(texNRDInput->uav.get(), clearColor);
@@ -831,7 +889,7 @@ void ScreenSpaceGI::DrawSSGI()
 				context->ClearUnorderedAccessViewFloat(texNRDInputSH1->uav.get(), clearColor);
 		}
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(giCompute.get(), nullptr, 0);
+		context->CSSetShader(giCompute[usingEnvironmentProbe].get(), nullptr, 0);
 
 		uint dispatchX = (settings.HalfRes || settings.QuarterRes) ? (resolution[0] + 1) / 2 : resolution[0];
 		uint dispatchY = settings.QuarterRes ? (resolution[1] + 1) / 2 : resolution[1];
@@ -841,6 +899,8 @@ void ScreenSpaceGI::DrawSSGI()
 
 		envIBLSrv = nullptr;
 		context->CSSetShaderResources(76, 1, &envIBLSrv);
+		skyIBLSrv = nullptr;
+		context->CSSetShaderResources(77, 1, &skyIBLSrv);
 	}
 
 	// REBLUR diffuse denoising via core NRD service

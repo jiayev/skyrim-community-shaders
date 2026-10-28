@@ -433,7 +433,7 @@ namespace SharedData
 		uint Enabled;
 		float SpecularMult;
 		float SpecCubemapMult;
-		uint pad0;
+		uint UseEnvironmentProbe;
 	};
 
 	struct ViewAtmosphereSettings

@@ -590,6 +590,7 @@ void LightLimitFix::DataLoaded()
 
 void LightLimitFix::ClearShaderCache()
 {
+	probeLightCullingCS = nullptr;
 	if (clusterBuildingCS) {
 		clusterBuildingCS->Release();
 		clusterBuildingCS = nullptr;
@@ -606,6 +607,46 @@ void LightLimitFix::ClearShaderCache()
 	std::vector<std::pair<const char*, const char*>> clusterDefines;
 	clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", clusterDefines, "cs_5_0");
 	clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", clusterDefines, "cs_5_0");
+}
+
+ID3D11ShaderResourceView* LightLimitFix::BuildProbeLightGrid(ID3D11Buffer* a_captureConstants)
+{
+	static_assert(MAX_LIGHTS == 1024);  // EnvironmentProbeLighting.hlsli: 32 mask words.
+	if (!probeLightCullingCS) {
+		probeLightCullingCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+			L"Data/Shaders/LightLimitFix/EnvironmentProbeGrid.cs.hlsl", {}, "cs_5_0")));
+		if (!probeLightCullingCS)
+			return nullptr;
+		Util::SetResourceName(probeLightCullingCS.get(), "LightLimitFix::Octahedral Light Cull");
+	}
+	if (!probeLightMasks) {
+		constexpr uint32_t count = 16 * 16 * 24 * 33;
+		auto desc = StructuredBufferDesc<uint32_t>(count, false);
+		desc.CPUAccessFlags = 0;
+		probeLightMasks = std::make_unique<Buffer>(desc, nullptr, "LightLimitFix::Octahedral Light Masks");
+		D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+		srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srv.Buffer.NumElements = count;
+		probeLightMasks->CreateSRV(srv);
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uav{};
+		uav.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uav.Buffer.NumElements = count;
+		probeLightMasks->CreateUAV(uav);
+	}
+	auto* context = globals::d3d::context;
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	context->PSSetShaderResources(36, 1, &nullSRV);
+	auto* source = lights->srv.get();
+	auto* target = probeLightMasks->uav.get();
+	context->CSSetShader(probeLightCullingCS.get(), nullptr, 0);
+	context->CSSetConstantBuffers(8, 1, &a_captureConstants);
+	context->CSSetShaderResources(0, 1, &source);
+	context->CSSetUnorderedAccessViews(0, 1, &target, nullptr);
+	context->Dispatch(16, 16, 24);
+	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+	context->CSSetShaderResources(0, 1, &nullSRV);
+	return probeLightMasks->srv.get();
 }
 
 void LightLimitFix::UpdateLights()

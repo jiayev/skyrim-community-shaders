@@ -8,6 +8,7 @@
 #include "Menu/ThemeManager.h"
 #include "Utils/Input.h"
 #include "Utils/Serialize.h"
+#include "Utils/TexturePreview.h"
 #include "Utils/UISurface.h"
 #include <algorithm>
 #include <array>

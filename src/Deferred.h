@@ -107,6 +107,9 @@ public:
 
 	/** @brief Returns the directional shadow array only with current-frame cascade data. */
 	ID3D11ShaderResourceView* GetDirectionalShadowMap() const;
+	ID3D11Buffer* GetDirectionalShadowParameters() const;
+
+	/** @brief Returns a snapshot of this frame's native shadow-mask receiver parameters. */
 
 	ID3D11BlendState* deferredBlendStates[7][2][13][2];
 	ID3D11BlendState* forwardBlendStates[7][2][13][2];
@@ -144,6 +147,8 @@ public:
 private:
 	winrt::com_ptr<ID3D11ShaderResourceView> directionalShadowMap;
 	uint32_t directionalShadowMapFrame = UINT32_MAX;
+	winrt::com_ptr<ID3D11Buffer> directionalShadowParameters;
+	uint32_t directionalShadowParametersFrame = UINT32_MAX;
 	uint32_t directionalShadowDataFrame = UINT32_MAX;
 
 	template <typename T>

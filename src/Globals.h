@@ -4,6 +4,7 @@
 
 struct CloudShadows;
 struct DynamicCubemaps;
+struct EnvironmentProbeFeature;
 struct VolumetricShadows;
 struct ExtendedMaterials;
 struct GrassCollision;
@@ -103,6 +104,7 @@ namespace globals
 	{
 		extern CloudShadows cloudShadows;
 		extern DynamicCubemaps dynamicCubemaps;
+		extern EnvironmentProbeFeature environmentProbe;
 		extern VolumetricShadows volumetricShadows;
 		extern ExtendedMaterials extendedMaterials;
 		extern GrassCollision grassCollision;

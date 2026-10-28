@@ -10,6 +10,7 @@
 #include <d3dcompiler.h>
 
 #include "Deferred.h"
+#include "Rendering/EnvironmentProbe/Capture.h"
 #include "State.h"
 #include "Utils/CompileDedupe.h"
 #include "Utils/D3D.h"
@@ -1940,6 +1941,28 @@ namespace SIE
 			return shaderBlob;
 		}
 
+		// Native constant groups are pooled by size across shader types. A probe can
+		// overwrite a Utility/Lighting group that was not bound when capture began;
+		// rebinding the saved pipeline cannot restore that group's contents.
+		static ID3D11Buffer* IsolateProbeConstants(const RE::BSShader& shader, uint32_t descriptor,
+			uint32_t stage, uint32_t group, ID3D11Buffer* original)
+		{
+			if (shader.shaderType.get() != RE::BSShader::Type::Lighting ||
+				!(descriptor & uint32_t(ShaderCache::LightingShaderFlags::EnvironmentProbe)))
+				return original;
+			static std::mutex mutex;
+			static std::array<std::array<std::unordered_map<UINT, winrt::com_ptr<ID3D11Buffer>>, 3>, 2> pools;
+			D3D11_BUFFER_DESC desc{};
+			original->GetDesc(&desc);
+			std::scoped_lock lock(mutex);
+			auto& buffer = pools[stage][group][desc.ByteWidth];
+			if (!buffer) {
+				DX::ThrowIfFailed(globals::d3d::device->CreateBuffer(&desc, nullptr, buffer.put()));
+				Util::SetResourceName(buffer.get(), "EnvironmentProbe::%s Constants group%u size%u", stage == 0 ? "VS" : "PS", group, desc.ByteWidth);
+			}
+			return buffer.get();
+		}
+
 		VertexShaderPtr CreateVertexShader(ID3DBlob& shaderData,
 			const RE::BSShader& shader, uint32_t descriptor)
 		{
@@ -1974,21 +1997,21 @@ namespace SIE
 					ShaderClass::Vertex, descriptor, shader);
 				if (bufferSizes[0] != 0) {
 					newShader->constantBuffers[0].buffer =
-						(REX::W32::ID3D11Buffer*)perTechniqueBuffersArray.get()[bufferSizes[0]];
+						(REX::W32::ID3D11Buffer*)IsolateProbeConstants(shader, descriptor, 0, 0, perTechniqueBuffersArray.get()[bufferSizes[0]]);
 				} else {
 					newShader->constantBuffers[0].buffer = nullptr;
 					newShader->constantBuffers[0].data = bufferData.get();
 				}
 				if (bufferSizes[1] != 0) {
 					newShader->constantBuffers[1].buffer =
-						(REX::W32::ID3D11Buffer*)perMaterialBuffersArray.get()[bufferSizes[1]];
+						(REX::W32::ID3D11Buffer*)IsolateProbeConstants(shader, descriptor, 0, 1, perMaterialBuffersArray.get()[bufferSizes[1]]);
 				} else {
 					newShader->constantBuffers[1].buffer = nullptr;
 					newShader->constantBuffers[1].data = bufferData.get();
 				}
 				if (bufferSizes[2] != 0) {
 					newShader->constantBuffers[2].buffer =
-						(REX::W32::ID3D11Buffer*)perGeometryBuffersArray.get()[bufferSizes[2]];
+						(REX::W32::ID3D11Buffer*)IsolateProbeConstants(shader, descriptor, 0, 2, perGeometryBuffersArray.get()[bufferSizes[2]]);
 				} else {
 					newShader->constantBuffers[2].buffer = nullptr;
 					newShader->constantBuffers[2].data = bufferData.get();
@@ -2027,21 +2050,21 @@ namespace SIE
 					ShaderClass::Pixel, descriptor, shader);
 				if (bufferSizes[0] != 0) {
 					newShader->constantBuffers[0].buffer =
-						(REX::W32::ID3D11Buffer*)perTechniqueBuffersArray.get()[bufferSizes[0]];
+						(REX::W32::ID3D11Buffer*)IsolateProbeConstants(shader, descriptor, 1, 0, perTechniqueBuffersArray.get()[bufferSizes[0]]);
 				} else {
 					newShader->constantBuffers[0].buffer = nullptr;
 					newShader->constantBuffers[0].data = bufferData.get();
 				}
 				if (bufferSizes[1] != 0) {
 					newShader->constantBuffers[1].buffer =
-						(REX::W32::ID3D11Buffer*)perMaterialBuffersArray.get()[bufferSizes[1]];
+						(REX::W32::ID3D11Buffer*)IsolateProbeConstants(shader, descriptor, 1, 1, perMaterialBuffersArray.get()[bufferSizes[1]]);
 				} else {
 					newShader->constantBuffers[1].buffer = nullptr;
 					newShader->constantBuffers[1].data = bufferData.get();
 				}
 				if (bufferSizes[2] != 0) {
 					newShader->constantBuffers[2].buffer =
-						(REX::W32::ID3D11Buffer*)perGeometryBuffersArray.get()[bufferSizes[2]];
+						(REX::W32::ID3D11Buffer*)IsolateProbeConstants(shader, descriptor, 1, 2, perGeometryBuffersArray.get()[bufferSizes[2]]);
 				} else {
 					newShader->constantBuffers[2].buffer = nullptr;
 					newShader->constantBuffers[2].data = bufferData.get();
@@ -2234,7 +2257,7 @@ namespace SIE
 	}
 
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
-		uint32_t descriptor)
+		uint32_t descriptor, bool forceAsync)
 	{
 		if (!SShaderCache::ResolveImageSpaceDescriptor(shader, descriptor)) {
 			return nullptr;
@@ -2250,8 +2273,8 @@ namespace SIE
 			// Track this shader as active
 			TrackActiveShader(ShaderClass::Vertex, shader, descriptor);
 
-			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Vertex, shader, descriptor, true);
-			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
+			if (blockedKeyIndex != -1 && !blockedKey.empty() &&
+				SIE::SShaderCache::GetShaderString(ShaderClass::Vertex, shader, descriptor, true) == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
 					blockedIDs.push_back(descriptor);
 					logger::debug("Skipping blocked shader {:X}:{} total: {}", descriptor, blockedKey, blockedIDs.size());
@@ -2269,8 +2292,8 @@ namespace SIE
 			}
 		}
 
-		if (IsAsync() && !(shader.shaderType.get() == RE::BSShader::Type::Lighting &&
-							 (descriptor & static_cast<uint32_t>(LightingShaderFlags::EnvironmentProbe)))) {
+		if (forceAsync || (IsAsync() && !(shader.shaderType.get() == RE::BSShader::Type::Lighting &&
+											(descriptor & static_cast<uint32_t>(LightingShaderFlags::EnvironmentProbe))))) {
 			compilationSet.Add({ ShaderClass::Vertex, shader, descriptor });
 		} else {
 			return MakeAndAddVertexShader(shader, descriptor);
@@ -2280,7 +2303,7 @@ namespace SIE
 	}
 
 	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
-		uint32_t descriptor)
+		uint32_t descriptor, bool forceAsync)
 	{
 		auto state = globals::state;
 
@@ -2296,8 +2319,8 @@ namespace SIE
 			// Track this shader as active
 			TrackActiveShader(ShaderClass::Pixel, shader, descriptor);
 
-			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Pixel, shader, descriptor, true);
-			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
+			if (blockedKeyIndex != -1 && !blockedKey.empty() &&
+				SIE::SShaderCache::GetShaderString(ShaderClass::Pixel, shader, descriptor, true) == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
 					blockedIDs.push_back(descriptor);
 					logger::debug("Skipping blocked shader {:X}:{} total: {}", descriptor, blockedKey, blockedIDs.size());
@@ -2315,8 +2338,8 @@ namespace SIE
 			}
 		}
 
-		if (IsAsync() && !(shader.shaderType.get() == RE::BSShader::Type::Lighting &&
-							 (descriptor & static_cast<uint32_t>(LightingShaderFlags::EnvironmentProbe)))) {
+		if (forceAsync || (IsAsync() && !(shader.shaderType.get() == RE::BSShader::Type::Lighting &&
+											(descriptor & static_cast<uint32_t>(LightingShaderFlags::EnvironmentProbe))))) {
 			compilationSet.Add({ ShaderClass::Pixel, shader, descriptor });
 		} else {
 			return MakeAndAddPixelShader(shader, descriptor);
@@ -2353,8 +2376,8 @@ namespace SIE
 			// Track this shader as active
 			TrackActiveShader(ShaderClass::Compute, shader, descriptor);
 
-			auto key = SIE::SShaderCache::GetShaderString(ShaderClass::Compute, shader, descriptor, true);
-			if (blockedKeyIndex != -1 && !blockedKey.empty() && key == blockedKey) {
+			if (blockedKeyIndex != -1 && !blockedKey.empty() &&
+				SIE::SShaderCache::GetShaderString(ShaderClass::Compute, shader, descriptor, true) == blockedKey) {
 				if (std::find(blockedIDs.begin(), blockedIDs.end(), descriptor) == blockedIDs.end()) {
 					blockedIDs.push_back(descriptor);
 					logger::debug("Skipping blocked shader {:X}:{} total: {}", descriptor, blockedKey, blockedIDs.size());
@@ -2422,6 +2445,7 @@ namespace SIE
 
 	void ShaderCache::Clear()
 	{
+		EnvironmentProbe::ClearShaderCache();
 		auto* state = globals::state;
 		if (globals::game::currentVertexShader && *globals::game::currentVertexShader == state->customVertexShader)
 			*globals::game::currentVertexShader = nullptr;
@@ -2494,7 +2518,10 @@ namespace SIE
 	}
 	bool ShaderCache::Clear(const std::string& a_path)
 	{
+		EnvironmentProbe::ClearShaderCache();
 		std::string lowerFilePath = Util::FixFilePath(a_path);
+		if (lowerFilePath.ends_with("environmentprobegeometry.hlsli"))
+			return true;
 
 		// Step 1: Lock hlslMapMutex to find and copy the relevant entries
 		std::set<hlslRecord> entries;
@@ -2560,6 +2587,8 @@ namespace SIE
 
 	void ShaderCache::Clear(RE::BSShader::Type a_type)
 	{
+		if (a_type == RE::BSShader::Type::Lighting)
+			EnvironmentProbe::ClearShaderCache();
 		logger::debug("Clearing cache for {}", magic_enum::enum_name(a_type));
 		std::lock_guard lockGuardV(vertexShadersMutex);
 		{
@@ -3660,7 +3689,21 @@ namespace SIE
 		if (!globals::state->IsDeveloperMode())
 			return;
 
-		auto key = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
+		// A capture performs many lookups of the same material permutation. Build its
+		// developer-facing macro string once per frame, while retaining every usage
+		// count. Frame-local keys also pick up feature/define edits on the next frame.
+		static thread_local uint32_t trackingFrame = UINT32_MAX;
+		static thread_local ankerl::unordered_dense::map<uint64_t, std::string> frameKeys;
+		const auto frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
+		if (trackingFrame != frame) {
+			frameKeys.clear();
+			trackingFrame = frame;
+		}
+		const uint64_t id = uint64_t(descriptor) | (uint64_t(shader.shaderType.underlying()) << 32) | (uint64_t(shaderClass) << 40);
+		auto [entry, inserted] = frameKeys.try_emplace(id);
+		if (inserted)
+			entry->second = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
+		const auto& key = entry->second;
 		std::lock_guard lock(activeShadersMutex);
 
 		auto& info = activeShaders[key];

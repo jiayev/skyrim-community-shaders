@@ -100,6 +100,9 @@ public:
 		float AOPower = 1.0f;
 		float GIStrength = 1.0f;
 		bool EnableMultiBounce = false;
+		bool UseEnvironmentProbe = true;
+		uint ProbeRays = 1u;
+		uint ProbeMaxSteps = 16u;
 		bool UseDynamicCubemapsAsFallback = true;
 		float DiffuseCubemapMult = 1.0f;
 		// NRD REBLUR
@@ -127,8 +130,18 @@ public:
 		float DiffuseCubemapMult;
 		uint UseDynamicCubemap;
 		uint MultiBounceMode;
+		uint UseEnvironmentProbe;
+		uint ProbeValidFaces;
+		uint ProbeMaxSteps;
+		uint ProbeRays;
+		float ProbeFarDistance;
+		float ProbeBoundsRadius;
+		uint SkyIBLValid;
+		float ProbePadding;
+		float4 ProbeOriginOffsets[8];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SSGICB);
+	static_assert(sizeof(SSGICB) == 240);
 	eastl::unique_ptr<ConstantBuffer> ssgiCB;
 
 	struct alignas(16) SharedData
@@ -172,7 +185,8 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> prefilterDepthsCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> prefilterRadianceCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> prefilterNormalCompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> giCompute = nullptr;
+	std::array<winrt::com_ptr<ID3D11ComputeShader>, 2> giCompute;
+	bool usingEnvironmentProbe = false;
 	winrt::com_ptr<ID3D11ComputeShader> compositeCompute = nullptr;
 
 	NRDReblurIntegration nrdReblur;

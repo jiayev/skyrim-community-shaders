@@ -291,6 +291,10 @@ public:
 	eastl::unique_ptr<Buffer> lightIndexCounter = nullptr;
 	eastl::unique_ptr<Buffer> lightIndexList = nullptr;
 	eastl::unique_ptr<Buffer> lightGrid = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> probeLightCullingCS;
+	std::unique_ptr<Buffer> probeLightMasks;
+	/** @brief Builds octahedral angular/radial light clusters; caller saves/restores D3D bindings. */
+	ID3D11ShaderResourceView* BuildProbeLightGrid(ID3D11Buffer* a_captureConstants);
 
 	std::uint32_t lightCount = 0;
 	std::uint32_t particleLightCount = 0;

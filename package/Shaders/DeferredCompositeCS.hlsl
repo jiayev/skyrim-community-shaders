@@ -303,7 +303,9 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 
 				float tracedAvailability = saturate(specNormHitDist / NRD_EPS);
 				float3 fallbackIrradiance = finalIrradiance * SharedData::ssrSettings.SpecCubemapMult;
-				finalIrradiance = lerp(fallbackIrradiance, tracedSpecular, tracedAvailability);
+				// Probe tracing already resolves misses against the Reflection Cubemap.
+				// Invalid/black denoised pixels must not reintroduce environment inference.
+				finalIrradiance = SharedData::ssrSettings.UseEnvironmentProbe != 0 ? tracedSpecular : lerp(fallbackIrradiance, tracedSpecular, tracedAvailability);
 			}
 #	endif
 

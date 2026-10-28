@@ -15,7 +15,13 @@
 #include "Common/SharedData.hlsli"
 #include "NRD/NRDReblurSH.hlsli"
 #include "ScreenSpaceReflections/common.hlsli"
-#if defined(IBL)
+
+SamplerState LinearSampler : register(s1);
+
+#if defined(PROBE_CONTINUATION)
+#	include "ScreenSpaceReflections/probeTrace.hlsli"
+#endif
+#if defined(IBL) && !defined(PROBE_CONTINUATION)
 #	include "IBL/IBL.hlsli"
 #endif
 
@@ -23,7 +29,7 @@ Texture2D<float> DepthTexture : register(t0);
 Texture2D<unorm float3> NormalRoughnessTexture : register(t1);
 Texture2D<float4> ScreenColorTexture : register(t2);
 Texture2D<float> DepthTextureMips : register(t3);
-#if defined(DYNAMIC_CUBEMAPS)
+#if defined(DYNAMIC_CUBEMAPS) && !defined(PROBE_CONTINUATION)
 TextureCube<float3> EnvTexture : register(t4);
 TextureCube<float3> EnvReflectionsTexture : register(t5);
 #	if defined(SKYLIGHTING)
@@ -33,8 +39,6 @@ TextureCube<float3> EnvReflectionsTexture : register(t5);
 #endif
 
 RWTexture2D<float4> OutSpecRadianceHitDist : register(u0);
-
-SamplerState LinearSampler : register(s1);
 
 ///////////////////////////////////////////////////////////////////////////////
 // Importance sampling helpers (from ssrt_common.hlsli)
@@ -246,7 +250,8 @@ float3 SSRT_HierarchicalRaymarch(float3 origin,
 	float2 screen_size,
 	int most_detailed_mip,
 	uint max_traversal_intersections,
-	out bool valid_hit)
+	out bool valid_hit,
+	out bool left_screen)
 {
 	const float3 inv_direction = abs(direction) > float(1.0e-12) ? float(1.0) / direction : SSRT_FLOAT_MAX;
 
@@ -265,15 +270,14 @@ float3 SSRT_HierarchicalRaymarch(float3 origin,
 
 	uint num_iters = 0;
 	while (num_iters < max_traversal_intersections && current_mip >= most_detailed_mip) {
-		if (any(position.xy > float2(1.0, 1.0)) || any(position.xy < float2(0.0, 0.0)))
+		if (any(position.xy >= 1.0) || any(position.xy < 0.0) || position.z >= 1.0 - 1e-6 || position.z < 0.0) {
 			break;
-		if (position.z > float(1.0) - float(1.0e-6))
-			break;
+		}
 
 		float2 current_mip_position = current_mip_resolution * position.xy;
 		float surface_z = SSRT_LoadDepth(current_mip_position, current_mip);
 		bool skipped_tile = SSRT_AdvanceRay(origin, direction, inv_direction, current_mip_position, current_mip_resolution_inv, floor_offset, uv_offset, surface_z, position, current_t);
-		bool nextMipIsOutOfRange = skipped_tile && (current_mip >= SSRT_DEPTH_HIERARCHY_MAX_MIP);
+		bool nextMipIsOutOfRange = skipped_tile && (current_mip >= int(SSRT_DEPTH_HIERARCHY_MAX_MIP));
 		if (!nextMipIsOutOfRange) {
 			current_mip += skipped_tile ? 1 : -1;
 			current_mip_resolution *= skipped_tile ? 0.5 : 2;
@@ -282,6 +286,7 @@ float3 SSRT_HierarchicalRaymarch(float3 origin,
 		++num_iters;
 	}
 
+	left_screen = any(position.xy >= 1.0) || any(position.xy < 0.0) || position.z >= 1.0 - 1e-6 || position.z < 0.0;
 	valid_hit = num_iters <= max_traversal_intersections;
 	return position;
 }
@@ -297,18 +302,20 @@ float SSRT_ValidateHit(float3 hit,
 	float depth_buffer_thickness,
 	out float ray_length,
 	out float occlusion,
-	out bool isBackfaceHit)
+	out bool isBackfaceHit,
+	out bool thicknessRejected)
 {
 	ray_length = 0.0f;
 	occlusion = 1.f;
 	isBackfaceHit = false;
+	thicknessRejected = false;
 
 	if ((hit.x < 0.0f) || (hit.y < 0.0f) || (hit.x > 1.0f) || (hit.y > 1.0f)) {
 		return 0.0f;
 	}
 
-	int2 texel_coords = int2(screen_size * hit.xy * FrameBuffer::DynamicResolutionParams1.xy);
-	float surface_z = SSRT_LoadDepth(texel_coords / 2, 1);
+	uint2 texel_coords = uint2(screen_size * hit.xy * FrameBuffer::DynamicResolutionParams1.xy);
+	float surface_z = SSRT_LoadDepth(texel_coords / 2u, 1);
 	if (surface_z == 1.0) {
 		return 0;
 	}
@@ -318,6 +325,9 @@ float SSRT_ValidateHit(float3 hit,
 	float distance = length(view_space_surface - view_space_hit);
 	float3 view_space_ray_direction = view_space_hit - view_space_ray_origin;
 	ray_length = length(view_space_ray_direction);
+	// Hi-Z cannot advance past a candidate that is already behind the surface
+	// and outside its thickness interval. Continue that physical ray in the probe.
+	thicknessRejected = hit.z > surface_z && distance >= depth_buffer_thickness;
 
 	float confidence = 1.0f - smoothstep(0.0f, depth_buffer_thickness, distance);
 	confidence *= confidence;
@@ -407,20 +417,22 @@ float SSRT_ValidateHit(float3 hit,
 
 	// Ray march
 	bool valid_hit;
+	bool left_screen;
 	float thickness = SpecThickness + roughness * 10.0;
 	float3 hit = SSRT_HierarchicalRaymarch(screen_uv_space_ray_origin,
 		screen_space_ray_direction,
 		depth_screen_size,
 		most_detailed_mip,
 		HIZ_MAX_ITERATIONS,
-		valid_hit);
+		valid_hit, left_screen);
 
 	float ray_length = 0.0f;
 	float occlusion = 1.0f;
 	bool isBackfaceHit = false;
+	bool thicknessRejected = false;
 	float confidence = 0.0f;
-	if (valid_hit) {
-		confidence = SSRT_ValidateHit(hit, uv, view_space_ray, screen_size, thickness, ray_length, occlusion, isBackfaceHit);
+	if (valid_hit && all(isfinite(hit))) {
+		confidence = SSRT_ValidateHit(hit, uv, view_space_ray, screen_size, thickness, ray_length, occlusion, isBackfaceHit, thicknessRejected);
 	}
 	float screenConfidence = isBackfaceHit ? 1.0 : confidence;
 	float3 sampleColor = 0;
@@ -428,9 +440,44 @@ float SSRT_ValidateHit(float3 hit,
 		sampleColor = ColorManagement::SceneToLinear(PreExposure::Decode(ScreenColorTexture.SampleLevel(LinearSampler, hit.xy * FrameBuffer::DynamicResolutionParams1.xy, 0).xyz));
 		sampleColor *= SharedData::ssrSettings.SpecularMult;
 	}
+#if defined(PROBE_CONTINUATION)
+	const bool resolvedProbePath = true;
+	if (thicknessRejected)
+		screenConfidence = 0;  // the rejected depth sample supplies no finite hit distance
+	if (resolvedProbePath && confidence < 0.999f) {
+		float3 worldDirection = normalize(mul(FrameBuffer::CameraViewInverse, float4(view_space_reflected_direction, 0)).xyz);
+		float3 worldOrigin = mul(FrameBuffer::CameraViewInverse, float4(view_space_ray, 1)).xyz;
+		float3 probeColor = 0;
+		float probeDistance = 0;
+		bool probeHit = false;
+		bool probeUnobstructed = false;
+		if (left_screen || thicknessRejected) {
+			float startDistance = ray_length + 0.5;
+			if (left_screen)
+				startDistance = ProbeScreenExitDistance(mul(FrameBuffer::CameraProj, float4(view_space_ray, 1)),
+					mul(FrameBuffer::CameraProj, float4(view_space_reflected_direction, 0)));
+			probeHit = TraceEnvironmentProbe(worldOrigin, worldDirection, startDistance, thickness, probeColor, probeDistance, probeUnobstructed);
+		}
+		float3 fallbackColor = 0;
+		if (probeHit) {
+			fallbackColor = probeColor * SharedData::ssrSettings.SpecularMult;
+			ray_length = probeDistance;
+			screenConfidence = 1;
+		} else if (SpecUseDynamicCubemap != 0 && ReflectionCubemapValid != 0) {
+			fallbackColor = ColorManagement::SceneToLinear(ReflectionCubemap.SampleLevel(LinearSampler, worldDirection, 0)) * SpecCubemapMult;
+			if (!probeUnobstructed)
+				fallbackColor *= ProbeUnknownVisibility(worldOrigin, worldDirection);
+			float ao = lerp(1.0, occlusion, OcclusionStrength);
+			fallbackColor *= GetSpecularOcclusionFromAmbientOcclusion(saturate(dot(normalize(view_space_ray), view_space_surface_normal)), ao, roughness);
+		}
+		sampleColor = lerp(fallbackColor, sampleColor, confidence);
+	}
+#else
+	const bool resolvedProbePath = false;
+#endif
 
-#if defined(DYNAMIC_CUBEMAPS)
-	if (SpecUseDynamicCubemap != 0 && (confidence < 0.999f)) {
+#if defined(DYNAMIC_CUBEMAPS) && !defined(PROBE_CONTINUATION)
+	if (!resolvedProbePath && SpecUseDynamicCubemap != 0 && (confidence < 0.999f)) {
 		float3 world_space_reflected_direction = mul(FrameBuffer::CameraViewInverse, float4(view_space_reflected_direction, 0)).xyz;
 		float3 biased_view_space_ray_direction = normalize(view_space_ray);
 		const float NdotV = saturate(dot(biased_view_space_ray_direction, view_space_surface_normal));
@@ -519,7 +566,10 @@ float SSRT_ValidateHit(float3 hit,
 	if (screenConfidence > 0.01f) {
 		normHitDist = REBLUR_FrontEnd_GetNormHitDist(ray_length, viewZ, kHitDistParams, roughness);
 	} else {
-		normHitDist = 0.0;
+		// A resolved probe miss contains the Reflection Cubemap (or intentional
+		// black when fallback is disabled). Keep it authoritative through REBLUR
+		// and the composite, which otherwise substitutes EnvReflectionsTexture.
+		normHitDist = resolvedProbePath ? 1.0 : 0.0;
 	}
 	OutSpecRadianceHitDist[outPixelPos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(sampleColor, normHitDist, true);
 }

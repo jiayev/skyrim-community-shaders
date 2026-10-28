@@ -17,11 +17,14 @@ namespace EnvironmentProbe
 	{
 		RE::NiPoint3 position{};
 		uint32_t faces = 0xFF;
-		bool cullDynamic = false;  ///< Excludes skinning, actors and interactive/movable references; retains static/tree references and unowned static geometry.
+		bool supplementalSunShadows = true;  ///< Coarse static sun shadows for receivers outside native CSM coverage.
+		bool cullDynamic = false;            ///< Excludes skinning, actors and interactive/movable references; retains static/tree references and unowned static geometry.
+		bool asyncShaders = false;           ///< Queue missing material shaders; return ShadersPending until a complete capture can be drawn.
 		float nearDistance = 1.0f;
 		float farDistance = 16384.0f;
 		ID3D11RenderTargetView* radiance = nullptr;  ///< Optional RGBA16_FLOAT/RGBA32_FLOAT, linear working-space radiance.
 		ID3D11RenderTargetView* depth = nullptr;     ///< Optional R32_FLOAT, radial distance in game units; farDistance means no hit.
+		ID3D11RenderTargetView* normals = nullptr;   ///< Optional R16G16_UNORM, octahedrally encoded world-space normal of the depth-writing surface.
 	};
 
 	enum class Result
@@ -29,7 +32,8 @@ namespace EnvironmentProbe
 		Success,
 		InvalidRequest,
 		Unavailable,
-		ShaderUnavailable
+		ShaderUnavailable,
+		ShadersPending
 	};
 
 	/**
@@ -37,19 +41,24 @@ namespace EnvironmentProbe
 	 * Call on Skyrim's render thread after main world rendering, before first-person/post-processing,
 	 * between techniques (not from a draw hook). The caller retains ownership of the RTVs.
 	 * Targets must be square, single-sample Texture2D RTVs of equal size; at least one output is required.
-	 * Selected faces are cleared and redrawn; other texels are untouched. Depth follows depth-writing Lighting geometry.
+	 * Selected faces are cleared and redrawn; other texels are untouched. Depth and normals follow depth-writing Lighting geometry.
 	 * Uses the loaded world, its current lights/shadow maps, and Lighting material features; no sky, other shader classes,
 	 * screen-space effects, fog, or post processing. No cubemap or reprojection is used. First use compiles permutations
-	 * synchronously. Any failure can leave selected faces incomplete. SE/AE only; VR returns Unavailable.
+	 * synchronously unless asyncShaders is set. ShadersPending and failures can leave selected faces incomplete;
+	 * callers must not publish those captures. SE/AE only; VR returns Unavailable.
 	 */
 	[[nodiscard]] Result Render(const Request& a_request);
 
 	/** @brief Installs the geometry filter; called once during core hook installation. */
 	void InstallHooks();
+	/** @brief Invalidates specialized projection shaders on the next capture. Safe from the file watcher. */
+	void ClearShaderCache();
 	/** @brief Whether the render thread is currently drawing a probe. */
 	bool IsRendering();
-	/** @brief Rejects a failed capture permutation instead of falling back to vanilla shaders. */
-	void ShaderFailed();
+	/** @brief Whether this capture queues missing material shaders without blocking the render thread. */
+	bool UsesAsyncShaders();
+	/** @brief Marks a missing capture permutation as pending or failed; never fall back to vanilla projection. */
+	void ShaderUnavailable(bool a_pending);
 	/** @brief Keeps the engine's output bindings on the probe before applying dirty state. */
 	void BeforeDraw();
 	/** @brief Binds probe outputs and constants after the engine and feature draw hooks. */

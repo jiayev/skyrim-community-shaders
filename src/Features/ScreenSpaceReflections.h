@@ -51,6 +51,8 @@ struct ScreenSpaceReflections : Feature
 
 	void DrawSSR();
 	void UpdateSB();
+	/** @brief Builds conservative per-octant probe depth bounds for newly captured faces. */
+	bool BuildProbeHierarchy();
 
 	ID3D11ShaderResourceView* GetOutputTexture();
 
@@ -72,6 +74,9 @@ struct ScreenSpaceReflections : Feature
 
 		bool UseDynamicCubemapsAsFallback = true;
 		float SpecCubemapMult = 1.0f;
+		bool UseEnvironmentProbe = true;
+		uint ProbeMaxSteps = 64;
+		bool ProbeHierarchicalTrace = true;
 
 		float HitDistA = 210.0f;
 		float HitDistB = 0.1f;
@@ -109,6 +114,15 @@ struct ScreenSpaceReflections : Feature
 		float HitDistA;
 		float HitDistB;
 		float HitDistC;
+
+		uint SpecUseEnvironmentProbe;
+		uint ProbeValidFaces;
+		uint ProbeMaxSteps;
+		float ProbeFarDistance;
+		float4 ProbeOriginOffsets[8];
+		float ProbeBoundsRadius;
+		uint ReflectionCubemapValid;
+		float ProbePadding[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SSRCB);
 	eastl::unique_ptr<ConstantBuffer> ssrCB;
@@ -118,7 +132,7 @@ struct ScreenSpaceReflections : Feature
 		uint Enabled;
 		float SpecularMult;
 		float SpecCubemapMult;
-		uint pad0;
+		uint UseEnvironmentProbe;
 	};
 
 	SharedData GetCommonBufferData();
@@ -140,11 +154,20 @@ struct ScreenSpaceReflections : Feature
 	winrt::com_ptr<ID3D11ComputeShader> prefilterHiZDepthCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> prefilterHiZMipsCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> depthDownsampleCompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> specularGICompute = nullptr;
+	std::array<winrt::com_ptr<ID3D11ComputeShader>, 3> specularGICompute;
+	winrt::com_ptr<ID3D11ComputeShader> probeDepthCompute, probeDepthReduceCompute;
+	eastl::unique_ptr<Texture2D> probeHierarchy;
+	eastl::unique_ptr<ConstantBuffer> probeHierarchyCB;
+	static constexpr uint kProbeHierarchyMips = 9;
+	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, kProbeHierarchyMips> probeHierarchySRVs;
+	std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, kProbeHierarchyMips> probeHierarchyUAVs;
+	std::array<uint32_t, 8> probeHierarchyFrames{};
+	uint probeHierarchySharedSeams = 0;
 
 	NRDReblurIntegration nrdReblurSpecular;
 	nrd::ReblurSettings reblurSpecularSettings{};
 	bool resetReblurHistory = true;
+	bool usingEnvironmentProbe = false;
 	// True only after the current DrawSSR invocation has produced a trace output.
 	bool outputReady = false;
 };

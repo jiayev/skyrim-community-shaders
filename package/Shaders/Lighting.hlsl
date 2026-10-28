@@ -4,7 +4,7 @@
 #define LIGHTING
 
 #if defined(ENVIRONMENT_PROBE)
-#	include "Common/EnvironmentProbe.hlsli"
+#	include "Common/EnvironmentProbeLighting.hlsli"
 #	undef TERRAIN_BLENDING
 #	undef SCREEN_SPACE_SHADOWS
 #	undef WATER_BLENDING
@@ -73,6 +73,7 @@ struct VS_OUTPUT
 	float4 Position: SV_POSITION0;
 #if defined(ENVIRONMENT_PROBE)
 	float3 OctantClip: SV_ClipDistance0;
+	nointerpolation uint OctantIndex: TEXCOORD13;
 #endif
 #if (defined(PROJECTED_UV) && !defined(SKINNED)) || defined(LANDSCAPE)
 	float4
@@ -296,6 +297,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	if defined(ENVIRONMENT_PROBE)
 	vsout.Position = EnvironmentProbe::Project(worldPosition.xyz);
 	vsout.OctantClip = EnvironmentProbe::ClipDistances(worldPosition.xyz);
+	vsout.OctantIndex = EnvironmentProbe::GetFace(EnvironmentProbe::FaceSign);
 #	endif
 
 	return vsout;
@@ -317,7 +319,7 @@ struct PS_OUTPUT
 {
 	float4 Diffuse: SV_Target0;
 	float Distance: SV_Target1;
-	float RadialDepth: SV_Depth;
+	float2 ProbeNormal: SV_Target2;
 };
 #elif defined(DEFERRED)
 struct PS_OUTPUT
@@ -1007,6 +1009,9 @@ bool UseSkylightingShadowVisibility()
 #	define LinearSampler SampColorSampler
 
 #	include "Common/ShadowSampling.hlsli"
+#	if defined(ENVIRONMENT_PROBE)
+#		include "Common/EnvironmentProbeShadows.hlsli"
+#	endif
 
 #	if defined(IBL)
 #		include "IBL/IBL.hlsli"
@@ -1026,7 +1031,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
 #	if defined(ENVIRONMENT_PROBE)
-	if (EnvironmentProbe::PixelFace(input.Position.xy) != EnvironmentProbe::GetFace(EnvironmentProbe::FaceSign))
+	if (EnvironmentProbe::PixelFace(input.Position.xy) != input.OctantIndex)
 		discard;
 	float probeDistance = length(input.WorldPosition.xyz);
 	clip(probeDistance - EnvironmentProbe::NearDistance);
@@ -1681,6 +1686,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	normal.xyz = GetWorldMapNormal(input, normal.xyz, sampledBaseColor.xyz);
 #	endif  // WORLD_MAP
 
+#	if defined(ENVIRONMENT_PROBE) && (!defined(LANDSCAPE) || defined(LOD_LAND_BLEND))
+	// Reject cutouts before evaluating material lighting and local shadows.
+#		include "Common/LightingAlpha.hlsli"
+#	endif
+
 #	if defined(LANDSCAPE)
 #		if defined(SNOW) && !defined(TRUE_PBR)
 	landSnowMask = LandscapeTexture1to4IsSnow.x * input.LandBlendWeights1.x;
@@ -1773,7 +1783,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	endif  // LOD_LAND_BLEND
 
-#	if defined(DO_ALPHA_TEST) && !defined(SPARKLE) && !(defined(LANDSCAPE) && !defined(LOD_LAND_BLEND))
+#	if defined(DO_ALPHA_TEST) && !defined(SPARKLE) && !(defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)) && !defined(ENVIRONMENT_PROBE)
 	float alpha = baseColor.w;
 #		if defined(EMAT) && !defined(LANDSCAPE)
 #			if defined(PARALLAX)
@@ -2545,7 +2555,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirSoftShadow = 1.0;
 	float dirVSMDetailedShadow = 1.0;
 
-#	if defined(VOLUMETRIC_SHADOWS)
+#	if defined(ENVIRONMENT_PROBE)
+	dirVSMDetailedShadow = EnvironmentProbe::GetSunShadow(input.WorldPosition.xyz);
+	dirSoftShadow = dirVSMDetailedShadow;
+#	elif defined(VOLUMETRIC_SHADOWS)
 	if (inWorld && !inReflection && ShadowSampling::HasDirectionalShadows()
 #		if defined(DEFERRED)
 	    && !UseSkylightingShadowVisibility()
@@ -2565,18 +2578,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirDetailedShadow = 1.0;
 	float dirTransmissionContactShadow = 1.0;
 
+#	if defined(ENVIRONMENT_PROBE)
+	dirDetailedShadow = dirVSMDetailedShadow;
+#	else
 	if ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) && (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir)) {
 		dirDetailedShadow *= shadowColor.x;
 
-#	if !defined(VOLUMETRIC_SHADOWS)
+#		if !defined(VOLUMETRIC_SHADOWS)
 		if (!UseSkylightingShadowVisibility())
 			dirSoftShadow = dirDetailedShadow;
-#	endif
+#		endif
 	}
-#	if !defined(DEFERRED)
+#		if !defined(DEFERRED)
 	else {
 		dirDetailedShadow = dirVSMDetailedShadow;
 	}
+#		endif
 #	endif
 
 #	if defined(SCREEN_SPACE_SHADOWS) && defined(DEFERRED)
@@ -2761,8 +2778,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	uint clusterIndex = 0;
 	uint lightOffset = 0;
 #			if defined(ENVIRONMENT_PROBE)
-	numClusteredLights = EnvironmentProbe::LightCount;
-	totalLightCount = numClusteredLights;
+	uint probeCluster = EnvironmentProbe::LightClusterAddress(input.Position.xy, probeDistance);
+	uint probeWords = LightLimitFix::lightList[probeCluster];
+	uint probeLights = 0;
+	uint probeLightBase = 0;
 #			else
 	if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		numClusteredLights = LightLimitFix::lightGrid[clusterIndex].lightCount;
@@ -2777,10 +2796,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	const bool localShadowSkinned = false;
 #			endif
 
+#			if defined(ENVIRONMENT_PROBE)
+	[loop] while ((probeWords | probeLights) != 0)
+#			else
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
+#			endif
 	{
 		LightLimitFix::Light light;
 #			if defined(ENVIRONMENT_PROBE)
+		if (probeLights == 0) {
+			uint word = firstbitlow(probeWords);
+			probeWords &= probeWords - 1;
+			probeLights = LightLimitFix::lightList[probeCluster + 1 + word];
+			probeLightBase = word * 32;
+		}
+		uint lightIndex = probeLightBase + firstbitlow(probeLights);
+		probeLights &= probeLights - 1;
 		light = LightLimitFix::lights[lightIndex];
 		light.positionWS.xyz -= EnvironmentProbe::LightOriginDelta;
 		// The screen shadow mask is unavailable. Cached local shadow maps remain valid.
@@ -2987,7 +3018,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 directionalAmbientColor = Color::Ambient(max(0, mul(DirectionalAmbient, float4(ambientNormal, 1.0))));
 
-#	if defined(IBL)
+#	if defined(IBL) && !defined(ENVIRONMENT_PROBE)
 	if (SharedData::iblSettings.EnableIBL) {
 		if (SharedData::iblSettings.UseStaticIBL && !inWorld && !inReflection) {
 			directionalAmbientColor = ImageBasedLighting::GetStaticDiffuseIBL(ambientNormal, SampColorSampler);
@@ -3010,7 +3041,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		vertexColor = 1;
 #		endif
 #		if defined(SKYLIGHTING)
-	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPosition.xyz, ambientNormal);
+	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, ambientNormal);
 #		endif
 #	else
 	float encodedVertexAO = max(max(input.Color.r, input.Color.g), input.Color.b);
@@ -3028,7 +3059,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(TRUE_PBR)
 	vertexAO = lerp(1, vertexAO, SharedData::truePBRSettings.VertexAOStrength);
 #			endif
-	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPosition.xyz, ambientNormal, vertexAO);
+	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, ambientNormal, vertexAO);
 #			if defined(TRUE_PBR)
 	[branch] if (isFoliage && (PBRFlags & PBR::Flags::Subsurface) != 0)
 		skylightingDiffuse = PBR::GetFoliageShadowVisibility(skylightingDiffuse, material.Thickness);
@@ -3036,13 +3067,25 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	endif  // defined (HAIR)
 
-#	if defined(IBL)
+#	if !defined(ENVIRONMENT_PROBE)
+#		if defined(IBL)
 	float3 skyIBLColor = 0;
 	if (SharedData::iblSettings.EnableIBL) {
 		if (!(SharedData::iblSettings.UseStaticIBL && !inWorld && !inReflection)) {
 			directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -ambientNormal, input.WorldPosition.xyz);
 		}
 	}
+#		endif
+
+#	else  // ENVIRONMENT_PROBE: only externally supplied sky ambient
+	directionalAmbientColor = 0;
+#		if defined(IBL)
+	if (SharedData::iblSettings.EnableIBL)
+		directionalAmbientColor = ImageBasedLighting::GetSkyIBLColor(-ambientNormal);
+#		endif
+#		if defined(SKYLIGHTING)
+	directionalAmbientColor = ColorManagement::SceneColor::ScaleByLinear(directionalAmbientColor, skylightingDiffuse);
+#		endif
 #	endif
 
 #	if defined(DEFERRED)
@@ -3052,11 +3095,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(PSEUDO_SUN_BOUNCE)
 	float3 specularBounce = 0;
+#		if !defined(ENVIRONMENT_PROBE)
 	if (!SharedData::InInterior && inWorld && SharedData::pseudoSunBounceSettings.intensity > 0.0) {
 		float cloudShadows = 1;
-#		if defined(CLOUD_SHADOWS)
+#			if defined(CLOUD_SHADOWS)
 		cloudShadows = CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, LinearSampler);
-#		endif
+#			endif
 		SunBounce::SH2_RGB sunBounceSH = SunBounce::CalcSunBounceSH(SharedData::DirLightDirection.xyz, dirLightColor * cloudShadows,
 			SharedData::pseudoSunBounceSettings.groundAlbedo, SharedData::pseudoSunBounceSettings.wallAlbedo);
 
@@ -3072,14 +3116,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		bounceLighting.b = SphericalHarmonics::Unproject(sunBounceSH.B, -ambientNormal);
 
 		bounceLighting = max(0, bounceLighting);
-#		if defined(SKYLIGHTING)
+#			if defined(SKYLIGHTING)
 		float3 bouncedSkylighting = saturate(MultiBounceAO(SharedData::pseudoSunBounceSettings.groundAlbedo, skylightingDiffuse) * skylightingDiffuse);
 		bounceLighting *= bouncedSkylighting;
 		specularBounce *= bouncedSkylighting;
-#		endif
+#			endif
 
 		directionalAmbientColor += bounceLighting * SharedData::pseudoSunBounceSettings.intensity;
 	}
+#		endif
 #	endif
 
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
@@ -3239,7 +3284,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 	skylightingAlbedo /= Color::PBRLightingScale;
 #		endif
+#		if !defined(ENVIRONMENT_PROBE)
 	Skylighting::ApplySkylighting(color.xyz, directionalAmbientColor, skylightingAlbedo, skylightingDiffuse);
+#		endif
 #	endif
 
 #	if !defined(DEFERRED)
@@ -3359,67 +3406,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
 	psout.Diffuse.w = 0;
 #	else
-#		if !defined(DO_ALPHA_TEST) || defined(SPARKLE)
-	float alpha = baseColor.w;
-#			if defined(EMAT) && !defined(LANDSCAPE)
-#				if defined(PARALLAX)
-	alpha = TexColorSampler.SampleBias(SampColorSampler, uvOriginal, SharedData::MipBias).w;
-#				elif defined(TRUE_PBR)
-	[branch] if (PBRParallax)
-	{
-		alpha = TexColorSampler.SampleBias(SampColorSampler, uvOriginal, SharedData::MipBias).w;
-	}
-#				endif
-#			endif
-#			if defined(DO_ALPHA_TEST)
-	[branch] if ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::AdditionalAlphaMask) != 0)
-	{
-		uint2 alphaMask = input.Position.xy;
-		alphaMask.x = ((alphaMask.x << 2) & 12);
-		alphaMask.x = (alphaMask.y & 3) | (alphaMask.x & ~3);
-		const float maskValues[16] = {
-			0.003922,
-			0.533333,
-			0.133333,
-			0.666667,
-			0.800000,
-			0.266667,
-			0.933333,
-			0.400000,
-			0.200000,
-			0.733333,
-			0.066667,
-			0.600000,
-			0.996078,
-			0.466667,
-			0.866667,
-			0.333333,
-		};
-
-		float testTmp = 0;
-		if (MaterialData.z - maskValues[alphaMask.x] < 0) {
-			discard;
-		}
-	}
-	else
-#			endif  // defined(DO_ALPHA_TEST)
-	{
-		alpha *= MaterialData.z;
-	}
-#			if !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
-	alpha *= input.Color.w;
-#			endif  // !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
-#			if defined(DO_ALPHA_TEST)
-#				if defined(DEPTH_WRITE_DECALS)
-	if (alpha - 0.0156862754 < 0) {
-		discard;
-	}
-	alpha = saturate(1.05 * alpha);
-#				endif  // DEPTH_WRITE_DECALS
-	if (alpha - AlphaTestRefRS < 0) {
-		discard;
-	}
-#			endif      // DO_ALPHA_TEST
+#		if !defined(ENVIRONMENT_PROBE) && (!defined(DO_ALPHA_TEST) || defined(SPARKLE))
+#			include "Common/LightingAlpha.hlsli"
 #		endif
 
 #		if defined(ANISOTROPIC_ALPHA)
@@ -3583,7 +3571,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(ENVIRONMENT_PROBE)
 	psout.Distance = probeDistance;
-	psout.RadialDepth = probeDistance / EnvironmentProbe::FarDistance;
+	// Match screen SSGI's source-facing convention, including two-sided materials.
+	float3 probeNormal = dot(worldNormal, input.WorldPosition.xyz) > 0 ? -worldNormal : worldNormal;
+	psout.ProbeNormal = GBuffer::EncodeNormal(normalize(probeNormal));
 #	else
 	psout.Diffuse.rgb = PreExposure::EncodeScene(psout.Diffuse.rgb);
 #	if defined(DEFERRED)

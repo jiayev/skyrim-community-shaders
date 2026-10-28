@@ -31,14 +31,25 @@ float smoothbumpstep(float edge0, float edge1, float x)
 		colorFinal *= sqrt(saturate(500.0 * length(position)));
 		capture = lerp(capture, colorFinal, lerpFactor);
 	} else {
-		float distance = length(historyPosition.xyz);
-		float distanceFactor = smoothbumpstep(0.0, 2.0, distance);
-		if (distance < 1.0)
-			distanceFactor = sqrt(distanceFactor);
-#if defined(FAKEREFLECTIONS)
-		distanceFactor = max(distanceFactor, smoothstep(0.0, 2.0, distance));
+#if defined(PROBE_CAPTURE)
+		if (ProbeTexelAvailable(uv)) {
+			// A freshly captured empty ray must release its old surface immediately.
+			history = 0.0;
+			historyPosition = 0.0;
+			capture = 0.0;
+		} else {
 #endif
-		capture = history * distanceFactor;
+			float distance = length(historyPosition.xyz);
+			float distanceFactor = smoothbumpstep(0.0, 2.0, distance);
+			if (distance < 1.0)
+				distanceFactor = sqrt(distanceFactor);
+#if defined(FAKEREFLECTIONS)
+			distanceFactor = max(distanceFactor, smoothstep(0.0, 2.0, distance));
+#endif
+			capture = history * distanceFactor;
+#if defined(PROBE_CAPTURE)
+		}
+#endif
 	}
 
 	DynamicCubemapPosition[ThreadID] = historyPosition;

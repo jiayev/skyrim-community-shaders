@@ -8,6 +8,7 @@
 #include "Features/DeveloperTools.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/Effects11.h"
+#include "Features/EnvironmentProbeFeature.h"
 #include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
@@ -255,6 +256,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::wetnessEffects,
 		&globals::features::lightLimitFix,
 		&globals::features::dynamicCubemaps,
+		&globals::features::environmentProbe,
 		&globals::features::cloudShadows,
 		&globals::features::waterEffects,
 		&globals::features::performanceOverlay,

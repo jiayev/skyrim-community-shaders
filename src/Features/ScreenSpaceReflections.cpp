@@ -5,6 +5,7 @@
 #include "I18n/I18n.h"
 #include "IBL.h"
 #include "NRD.h"
+#include "Rendering/EnvironmentProbe/CameraPass.h"
 #include "Skylighting.h"
 #include "State.h"
 #include "Upscaling.h"
@@ -24,6 +25,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	OcclusionStrength,
 	UseDynamicCubemapsAsFallback,
 	SpecCubemapMult,
+	UseEnvironmentProbe,
+	ProbeMaxSteps,
+	ProbeHierarchicalTrace,
 	HitDistA,
 	HitDistB,
 	HitDistC,
@@ -79,9 +83,13 @@ void ScreenSpaceReflections::DrawSettings()
 	{
 		auto visualGuard = Util::DisableGuard(!settings.Enabled);
 		ImGui::SliderFloat(T(TKEY("specular_multiplier"), "Specular Multiplier"), &settings.SpecularMult, 0.0f, 5.0f, "%.2f");
-		ImGui::Checkbox(T(TKEY("use_dynamic_cubemaps_as_fallback"), "Use Dynamic Cubemaps as Fallback"), &settings.UseDynamicCubemapsAsFallback);
+		if (ImGui::Checkbox(T(TKEY("use_environment_probe"), "Continue SSR rays in environment probe"), &settings.UseEnvironmentProbe))
+			resetReblurHistory = true;
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T(TKEY("use_environment_probe_tooltip"), "Continue the same ray through the enabled octahedral probe when it leaves the screen or a depth candidate exceeds the thickness limit. If it still misses, use the Reflection Cubemap. Disabling this option or the probe restores the original reflection path."));
+		ImGui::Checkbox(T(TKEY("use_cubemap_fallback"), "Use cubemap fallback"), &settings.UseDynamicCubemapsAsFallback);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("use_dynamic_cubemaps_as_fallback_tooltip"), "When ray marching misses, fall back to dynamic cubemaps for reflections."));
+			ImGui::TextUnformatted(T(TKEY("use_cubemap_fallback_tooltip"), "Use the Reflection Cubemap after probe tracing misses, or Dynamic Cubemaps when probe continuation is disabled."));
 		}
 		{
 			auto cubemapGuard = Util::DisableGuard(!settings.UseDynamicCubemapsAsFallback);
@@ -91,6 +99,13 @@ void ScreenSpaceReflections::DrawSettings()
 		if (showAdvanced) {
 			ImGui::Separator();
 			ImGui::SliderInt(T(TKEY("max_steps"), "Max Steps"), (int*)&settings.SpecMaxSteps, 1, 256);
+			if (settings.UseEnvironmentProbe) {
+				ImGui::SliderInt(T(TKEY("probe_max_steps"), "Probe Max Steps"), (int*)&settings.ProbeMaxSteps, 8, 128);
+				if (ImGui::Checkbox(T(TKEY("probe_hierarchical_trace"), "Hierarchical Probe Trace"), &settings.ProbeHierarchicalTrace))
+					resetReblurHistory = true;
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted(T(TKEY("probe_hierarchical_trace_tooltip"), "Skip empty regions using the probe's own depth hierarchy. Disable to compare with the original probe ray march. Screen-space Hi-Z tracing is unchanged."));
+			}
 			ImGui::SliderFloat(T(TKEY("thickness"), "Thickness"), &settings.SpecThickness, 0.0f, 50.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("normal_bias"), "Normal Bias"), &settings.NormalBias, 0.0f, 1.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -305,7 +320,10 @@ void ScreenSpaceReflections::ClearShaderCache()
 	prefilterHiZDepthCompute = nullptr;
 	prefilterHiZMipsCompute = nullptr;
 	depthDownsampleCompute = nullptr;
-	specularGICompute = nullptr;
+	probeDepthCompute = nullptr;
+	probeDepthReduceCompute = nullptr;
+	for (auto& shader : specularGICompute)
+		shader = nullptr;
 	CompileComputeShaders();
 }
 
@@ -334,8 +352,22 @@ void ScreenSpaceReflections::CompileComputeShaders()
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", "" });
 		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceReflections") / "specularGI.cs.hlsl";
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), defines, "cs_5_0")))
-			specularGICompute.attach(rawPtr);
+		for (uint32_t probe = 0; probe < 3; ++probe) {
+			if (probe == 1)
+				defines.push_back({ "PROBE_CONTINUATION", "" });
+			if (probe == 2)
+				defines.push_back({ "PROBE_HIERARCHY", "" });
+			if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), defines, "cs_5_0")))
+				specularGICompute[probe].attach(rawPtr);
+		}
+	}
+	{
+		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceReflections") / "probeDepth.cs.hlsl";
+		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), {}, "cs_5_0")))
+			probeDepthCompute.attach(rawPtr);
+		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), { { "REDUCE_PROBE_DEPTH", "" } }, "cs_5_0")))
+			probeDepthReduceCompute.attach(rawPtr);
+		probeHierarchyFrames.fill(UINT32_MAX);
 	}
 
 	recompileFlag = false;
@@ -343,7 +375,125 @@ void ScreenSpaceReflections::CompileComputeShaders()
 
 bool ScreenSpaceReflections::ShadersOK()
 {
-	return prefilterHiZDepthCompute && prefilterHiZMipsCompute && depthDownsampleCompute && specularGICompute;
+	return prefilterHiZDepthCompute && prefilterHiZMipsCompute && depthDownsampleCompute && specularGICompute[0] && specularGICompute[1];
+}
+
+bool ScreenSpaceReflections::BuildProbeHierarchy()
+{
+	auto& probe = EnvironmentProbe::GetCameraPass();
+	if (!probeDepthCompute || !probeDepthReduceCompute || !probe.Depth() || !probe.ValidFaces())
+		return false;
+	auto* device = globals::d3d::device;
+	auto* context = globals::d3d::context;
+	constexpr uint size = EnvironmentProbe::CameraPass::Resolution / 2;
+	if (!probeHierarchy) {
+		const D3D11_TEXTURE2D_DESC desc{
+			.Width = size,
+			.Height = size,
+			.MipLevels = kProbeHierarchyMips,
+			.ArraySize = 8,
+			.Format = DXGI_FORMAT_R32G32_FLOAT,
+			.SampleDesc = { 1, 0 },
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
+		};
+		probeHierarchy = eastl::make_unique<Texture2D>(desc, "SSR::Probe Depth Hierarchy");
+		const D3D11_SHADER_RESOURCE_VIEW_DESC fullView{
+			.Format = desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY,
+			.Texture2DArray = { .MostDetailedMip = 0, .MipLevels = kProbeHierarchyMips, .FirstArraySlice = 0, .ArraySize = 8 }
+		};
+		probeHierarchy->CreateSRV(fullView);
+		for (uint mip = 0; mip < kProbeHierarchyMips; ++mip) {
+			auto view = fullView;
+			view.Texture2DArray.MostDetailedMip = mip;
+			view.Texture2DArray.MipLevels = 1;
+			DX::ThrowIfFailed(device->CreateShaderResourceView(probeHierarchy->resource.get(), &view, probeHierarchySRVs[mip].put()));
+			Util::SetResourceName(probeHierarchySRVs[mip].get(), "SSR::Probe Depth Hierarchy SRV mip%u", mip);
+			const D3D11_UNORDERED_ACCESS_VIEW_DESC output{
+				.Format = desc.Format,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY,
+				.Texture2DArray = { .MipSlice = mip, .FirstArraySlice = 0, .ArraySize = 8 }
+			};
+			DX::ThrowIfFailed(device->CreateUnorderedAccessView(probeHierarchy->resource.get(), &output, probeHierarchyUAVs[mip].put()));
+			Util::SetResourceName(probeHierarchyUAVs[mip].get(), "SSR::Probe Depth Hierarchy UAV mip%u", mip);
+		}
+		probeHierarchyFrames.fill(UINT32_MAX);
+	}
+	struct alignas(16) BuildData
+	{
+		uint faces[8]{};
+		uint size;
+		float farDistance;
+		uint sharedSeams{};
+		uint padding{};
+	} data{};
+	uint dirty = 0;
+	for (uint face = 0; face < 8; ++face) {
+		if ((probe.ValidFaces() & (1u << face)) == 0)
+			continue;
+		if (probeHierarchyFrames[face] != probe.CaptureFrames()[face])
+			dirty |= 1u << face;
+		const auto& a = probe.Origins()[face];
+		const auto& b = probe.Origins()[face ^ 4u];
+		if ((probe.ValidFaces() & (1u << (face ^ 4u))) && a.x == b.x && a.y == b.y && a.z == b.z)
+			data.sharedSeams |= 1u << face;
+	}
+	const uint changedCaptures = dirty;
+	dirty |= (data.sharedSeams ^ probeHierarchySharedSeams) & probe.ValidFaces();
+	for (uint face = 0; face < 8; ++face)
+		if ((data.sharedSeams & (1u << face)) && (changedCaptures & (1u << (face ^ 4u))))
+			dirty |= 1u << face;
+	uint count = 0;
+	for (uint face = 0; face < 8; ++face)
+		if (dirty & (1u << face))
+			data.faces[count++] = face;
+	if (!count)
+		return true;
+	if (!probeHierarchyCB)
+		probeHierarchyCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<BuildData>(), "SSR::Probe Depth Build Constants");
+	data.size = size;
+	data.farDistance = probe.FarDistance;
+	winrt::com_ptr<ID3D11Buffer> savedCB;
+	context->CSGetConstantBuffers(0, 1, savedCB.put());
+	const auto restoreCB = savedCB.get();
+	const auto cb = probeHierarchyCB->CB();
+	ID3D11ShaderResourceView* none = nullptr;
+	std::array<ID3D11UnorderedAccessView*, 5> outputs{};
+	const auto unbind = [&]() {
+		context->CSSetShaderResources(0, 1, &none);
+		outputs.fill(nullptr);
+		context->CSSetUnorderedAccessViews(0, uint(outputs.size()), outputs.data(), nullptr);
+	};
+	globals::profiler->BeginPass("ScreenSpaceReflections::ProbeHierarchy");
+	TracyD3D11Zone(globals::state->tracyCtx, "SSR - Probe Depth Hierarchy");
+	unbind();
+	probeHierarchyCB->Update(data);
+	context->CSSetConstantBuffers(0, 1, &cb);
+	auto* source = probe.Depth();
+	context->CSSetShaderResources(0, 1, &source);
+	for (uint mip = 0; mip < 5; ++mip)
+		outputs[mip] = probeHierarchyUAVs[mip].get();
+	context->CSSetUnorderedAccessViews(0, uint(outputs.size()), outputs.data(), nullptr);
+	context->CSSetShader(probeDepthCompute.get(), nullptr, 0);
+	context->Dispatch((size + 15) / 16, (size + 15) / 16, count);
+	unbind();
+	data.size = size >> 4;
+	probeHierarchyCB->Update(data);
+	source = probeHierarchySRVs[4].get();
+	context->CSSetShaderResources(0, 1, &source);
+	for (uint mip = 1; mip < 5; ++mip)
+		outputs[mip] = probeHierarchyUAVs[mip + 4].get();
+	context->CSSetUnorderedAccessViews(0, uint(outputs.size()), outputs.data(), nullptr);
+	context->CSSetShader(probeDepthReduceCompute.get(), nullptr, 0);
+	context->Dispatch(1, 1, count);
+	unbind();
+	context->CSSetConstantBuffers(0, 1, &restoreCB);
+	globals::profiler->EndPass();
+	for (uint index = 0; index < count; ++index)
+		probeHierarchyFrames[data.faces[index]] = probe.CaptureFrames()[data.faces[index]];
+	probeHierarchySharedSeams = data.sharedSeams;
+	return true;
 }
 
 void ScreenSpaceReflections::UpdateSB()
@@ -352,7 +502,7 @@ void ScreenSpaceReflections::UpdateSB()
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
-	SSRCB data;
+	SSRCB data{};
 	data.TexDim = res;
 	data.RcpTexDim = float2(1.0f) / res;
 	data.FrameDim = dynres;
@@ -370,6 +520,28 @@ void ScreenSpaceReflections::UpdateSB()
 	data.HitDistA = settings.HitDistA;
 	data.HitDistB = settings.HitDistB;
 	data.HitDistC = settings.HitDistC;
+	auto& probe = EnvironmentProbe::GetCameraPass();
+	data.SpecUseEnvironmentProbe = settings.UseEnvironmentProbe && probe.enabled && !REL::Module::IsVR();
+	if (usingEnvironmentProbe != bool(data.SpecUseEnvironmentProbe)) {
+		usingEnvironmentProbe = data.SpecUseEnvironmentProbe != 0;
+		resetReblurHistory = true;
+	}
+	if (data.SpecUseEnvironmentProbe)
+		data.SpecUseDynamicCubemap = settings.UseDynamicCubemapsAsFallback;
+	data.ProbeValidFaces = data.SpecUseEnvironmentProbe && probe.Radiance() && probe.Depth() ? probe.ValidFaces() : 0;
+	data.ProbeMaxSteps = std::clamp(settings.ProbeMaxSteps, 8u, 128u);
+	data.ProbeFarDistance = probe.FarDistance;
+	data.ProbeBoundsRadius = probe.FarDistance;
+	const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();
+	for (uint32_t face = 0; face < 8; ++face) {
+		if ((data.ProbeValidFaces & (1u << face)) == 0)
+			continue;
+		const auto& origin = probe.Origins()[face];
+		const RE::NiPoint3 offset{ origin.x - camera.x, origin.y - camera.y, origin.z - camera.z };
+		data.ProbeOriginOffsets[face] = { offset.x, offset.y, offset.z, 0 };
+		data.ProbeBoundsRadius = std::max(data.ProbeBoundsRadius, probe.FarDistance + offset.Length());
+	}
+	data.ReflectionCubemapValid = globals::game::renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS].SRV != nullptr;
 
 	ssrCB->Update(data);
 }
@@ -410,11 +582,15 @@ void ScreenSpaceReflections::DrawSSR()
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 
 	auto resetViews = [&]() {
-		ID3D11ShaderResourceView* nullSRVs[8] = {};
+		ID3D11ShaderResourceView* nullSRVs[11] = {};
 		ID3D11UnorderedAccessView* nullUAVs[8] = {};
-		context->CSSetShaderResources(0, 8, nullSRVs);
+		context->CSSetShaderResources(0, 11, nullSRVs);
 		context->CSSetUnorderedAccessViews(0, 8, nullUAVs, nullptr);
 	};
+
+	bool useProbeHierarchy = usingEnvironmentProbe && settings.ProbeHierarchicalTrace && specularGICompute[2] && BuildProbeHierarchy();
+	// The probe builder owns b0 and u0..4; screen tracing retains its original bindings.
+	context->CSSetConstantBuffers(1, 1, &cb);
 
 	// Hi-Z depth pyramid
 	{
@@ -492,14 +668,19 @@ void ScreenSpaceReflections::DrawSSR()
 		auto& skylighting = globals::features::skylighting;
 
 		resetViews();
-		std::array<ID3D11ShaderResourceView*, 7> specSRVs = { nullptr };
+		std::array<ID3D11ShaderResourceView*, 11> specSRVs = { nullptr };
 		specSRVs[0] = depth.depthSRV;
 		specSRVs[1] = normal.SRV;
 		specSRVs[2] = main.SRV;
 		specSRVs[3] = texHiZDepth->srv.get();
 		specSRVs[4] = dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr;
 		specSRVs[5] = dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr;
-		specSRVs[6] = dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr;
+		specSRVs[6] = skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr;
+		auto& probe = EnvironmentProbe::GetCameraPass();
+		specSRVs[7] = probe.Radiance();
+		specSRVs[8] = probe.Depth();
+		specSRVs[9] = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS].SRV;
+		specSRVs[10] = useProbeHierarchy ? probeHierarchy->srv.get() : nullptr;
 		ID3D11ShaderResourceView* envIBLSrv = ibl.loaded && ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr;
 
 		ID3D11UnorderedAccessView* specUAV = texNRDSpecInput->uav.get();
@@ -507,7 +688,10 @@ void ScreenSpaceReflections::DrawSSR()
 		context->CSSetShaderResources(0, (uint)specSRVs.size(), specSRVs.data());
 		context->CSSetShaderResources(76, 1, &envIBLSrv);
 		context->CSSetUnorderedAccessViews(0, 1, &specUAV, nullptr);
-		context->CSSetShader(specularGICompute.get(), nullptr, 0);
+		context->CSSetShader(specularGICompute[useProbeHierarchy ? 2 : usingEnvironmentProbe ? 1 :
+																							   0]
+								 .get(),
+			nullptr, 0);
 
 		uint specDispatchX = settings.HalfRes ? (resolution[0] + 1) / 2 : resolution[0];
 		uint specDispatchY = resolution[1];
@@ -592,6 +776,6 @@ ScreenSpaceReflections::SharedData ScreenSpaceReflections::GetCommonBufferData()
 	data.Enabled = (loaded && settings.Enabled && !recompileFlag && ShadersOK() && texHiZDepth && texNRDSpecInput) ? 1u : 0u;
 	data.SpecularMult = settings.SpecularMult;
 	data.SpecCubemapMult = settings.UseDynamicCubemapsAsFallback && globals::features::dynamicCubemaps.loaded ? settings.SpecCubemapMult : 0.0f;
-	data.pad0 = 0;
+	data.UseEnvironmentProbe = settings.UseEnvironmentProbe && EnvironmentProbe::GetCameraPass().enabled && !REL::Module::IsVR();
 	return data;
 }

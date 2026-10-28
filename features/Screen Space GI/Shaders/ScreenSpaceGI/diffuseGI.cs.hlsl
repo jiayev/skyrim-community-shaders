@@ -68,7 +68,7 @@
 Texture2D<float> srcWorkingDepth : register(t0);
 Texture2D<float3> srcRadiance : register(t2);
 Texture2D<unorm float2> srcNoise : register(t3);
-#if defined(DYNAMIC_CUBEMAPS)
+#if defined(DYNAMIC_CUBEMAPS) && !defined(PROBE_CONTINUATION)
 TextureCube<float3> EnvTexture : register(t4);
 TextureCube<float3> ReflectionCubemap : register(t5);
 #	if defined(SKYLIGHTING)
@@ -84,33 +84,16 @@ RWTexture2D<float4> outSH1 : register(u2);
 #endif
 
 static const float SSGI_NORMAL_BIAS = 0.01;
-static const uint SSGI_MAX_RAY = 32;
 static const uint SSGI_ROTATION_COUNT = 1;
 static const uint SSGI_FALLBACK_SAMPLE_COUNT = 4;
 static const float SSGI_EXP_FACTOR = 2.0;
 static const float SSGI_FALLBACK_POWER = 1.0;
 static const float SSGI_FALLBACK_MIP = 3.0;
 
-// sin/cos of the positive bit-center offsets from the projected receiver normal.
-// The negative half is mirrored, reducing the table and avoiding per-bit sincos.
-static const float2 SSGI_BIT_SIN_COS[SSGI_MAX_RAY / 2] = {
-	float2(0.9987954562, 0.0490676743),
-	float2(0.9891765100, 0.1467304745),
-	float2(0.9700312532, 0.2429801799),
-	float2(0.9415440652, 0.3368898534),
-	float2(0.9039892931, 0.4275550934),
-	float2(0.8577286100, 0.5141027442),
-	float2(0.8032075315, 0.5956993045),
-	float2(0.7409511254, 0.6715589548),
-	float2(0.6715589548, 0.7409511254),
-	float2(0.5956993045, 0.8032075315),
-	float2(0.5141027442, 0.8577286100),
-	float2(0.4275550934, 0.9039892931),
-	float2(0.3368898534, 0.9415440652),
-	float2(0.2429801799, 0.9700312532),
-	float2(0.1467304745, 0.9891765100),
-	float2(0.0490676743, 0.9987954562)
-};
+#include "ScreenSpaceGI/visibility.hlsli"
+#if defined(PROBE_CONTINUATION)
+#	include "ScreenSpaceGI/probeGI.hlsli"
+#endif
 
 // Engine-specific screen & temporal noise loader
 float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)  // without TAA, temporalIndex is always 0
@@ -121,71 +104,7 @@ float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)  // without TAA, 
 	return srcNoise.Load(uint3(noiseCoord, 0));
 }
 
-uint ComputeOccludedBitfield(float minHorizon, float maxHorizon, inout uint globalOccludedBitfield)
-{
-	uint startHorizonInt = min((uint)(saturate(minHorizon) * SSGI_MAX_RAY), SSGI_MAX_RAY);
-	uint angleHorizonInt = min((uint)ceil(saturate(maxHorizon - minHorizon) * SSGI_MAX_RAY), SSGI_MAX_RAY - startHorizonInt);
-
-	if (angleHorizonInt == 0)
-		return 0;
-
-	uint angleHorizonBitfield = 0xFFFFFFFFu;
-	if (angleHorizonInt < SSGI_MAX_RAY)
-		angleHorizonBitfield = (1u << angleHorizonInt) - 1u;
-	uint currentOccludedBitfield = angleHorizonBitfield << startHorizonInt;
-	currentOccludedBitfield &= ~globalOccludedBitfield;
-	globalOccludedBitfield |= currentOccludedBitfield;
-	return currentOccludedBitfield;
-}
-
-// Integrate the newly covered angular zones using the spherical Jacobian for
-// a view-axis slice. RotationCount uniformly samples plane azimuth over PI;
-// Lambert's 1/PI therefore cancels the azimuthal Monte Carlo factor. The
-// returned value is diffuse illumination divided by PI, ready for one albedo
-// multiplication at composite time.
-void IntegrateBitfield(
-	uint bitfield,
-	float3 projectedNormal, float3 projectedNormalTangent,
-	float projectedNormalLength, float projectedNormalSin, float projectedNormalCos,
-	float3 sourceNormal, bool requireSourceFacing,
-	out float scalarWeight, out float3 directionWeight)
-{
-	scalarWeight = 0;
-	directionWeight = 0;
-
-	const float bitAngle = Math::PI / float(SSGI_MAX_RAY);
-	// Midpoint integration of cos(theta) * |sin(theta)| over all bins yields
-	// bitAngle / sin(bitAngle). Using sin(bitAngle) is the corresponding analytic
-	// finite-bin normalization, so a constant-radiance white furnace returns 1.
-	const float normalizedBitMeasure = sin(bitAngle);
-	// Newly covered hit bits never overlap, so sparse iteration caps all hit
-	// integration work across the ray march at 32 iterations per slice.
-	[loop] while (bitfield != 0)
-	{
-		uint bit = (uint)firstbitlow(bitfield);
-		bitfield &= bitfield - 1u;
-
-		uint mirroredBit = bit < SSGI_MAX_RAY / 2 ? bit : SSGI_MAX_RAY - 1 - bit;
-		float2 bitSinCos = SSGI_BIT_SIN_COS[mirroredBit];
-		float bitSin = bit < SSGI_MAX_RAY / 2 ? bitSinCos.x : -bitSinCos.x;
-		float bitCos = bitSinCos.y;
-
-		float3 direction = projectedNormal * bitCos + projectedNormalTangent * bitSin;
-		// Outgoing Lambertian radiance is angle-independent over the source's
-		// front hemisphere. Gate the back hemisphere, but do not multiply by a
-		// second source cosine.
-		if (requireSourceFacing && dot(sourceNormal, -direction) <= 0.0)
-			continue;
-
-		float sineFromView = bitSin * projectedNormalCos + bitCos * projectedNormalSin;
-		float weight = projectedNormalLength * bitCos * abs(sineFromView) * normalizedBitMeasure;
-
-		scalarWeight += weight;
-		directionWeight += direction * weight;
-	}
-}
-
-#if defined(DYNAMIC_CUBEMAPS)
+#if defined(DYNAMIC_CUBEMAPS) && !defined(PROBE_CONTINUATION)
 float3 SampleDiffuseFallbackCubemap(float3 worldPos, float3 worldNormal, float3 worldDir)
 {
 	float3 envSampleRaw = EnvTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
@@ -279,7 +198,7 @@ void CalculateGI(
 	float3 fallbackDirection = 0;
 #endif
 
-	[loop] for (uint rotation = 0; rotation < SSGI_ROTATION_COUNT; rotation++)
+	[unroll] for (uint rotation = 0; rotation < SSGI_ROTATION_COUNT; rotation++)
 	{
 		float phi = (rotation + noiseDirection) * (Math::PI / SSGI_ROTATION_COUNT);
 		float3 directionVec = 0;
@@ -377,7 +296,27 @@ void CalculateGI(
 
 		normHitDist += float(countbits(globalOccludedBitfield)) / float(SSGI_MAX_RAY);
 
-#if defined(DYNAMIC_CUBEMAPS)
+#if defined(PROBE_CONTINUATION) && defined(GI)
+		// Separate noise dimension from the slice azimuth and screen-step jitter.
+		float sampleNoise = SpatioTemporalNoise(noiseCoord + uint2(61, 37), FrameIndex + 17).y;
+		uint rayCount = clamp(ProbeRays, 1u, SSGI_MAX_PROBE_RAYS);
+		OpenBitfieldSamples samples = SampleOpenBitfield(~globalOccludedBitfield,
+			projectedNormalNormalized, projectedNormalTangent, projectedNormalLength, sinN, cosN,
+			rayCount, sampleNoise);
+		if (samples.weight > 0) {
+			float3 worldPos = ViewToWorldPosition(pixCenterPos, FrameBuffer::CameraViewInverse);
+			[loop] for (uint ray = 0; ray < rayCount; ++ray)
+			{
+				float3 directionVS = GetOpenBitfieldDirection(samples, ray);
+				float3 worldDir = normalize(ViewToWorldVector(directionVS, FrameBuffer::CameraViewInverse));
+				float3 sampleRadiance = SampleProbeGI(worldPos, worldDir, max(0.5, Thickness * viewspaceZ));
+				totalRadiance += sampleRadiance * samples.weight;
+#	ifdef SSGI_SH
+				totalDirection += directionVS * (_NRD_LinearToYCoCg(sampleRadiance).x * samples.weight);
+#	endif
+			}
+		}
+#elif defined(DYNAMIC_CUBEMAPS) && !defined(PROBE_CONTINUATION)
 		if (UseDynamicCubemap != 0) {
 			float3 worldPos = ViewToWorldPosition(pixCenterPos, FrameBuffer::CameraViewInverse);
 			float3 worldNormal = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse);

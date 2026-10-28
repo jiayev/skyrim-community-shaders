@@ -8,6 +8,7 @@
 #include "Features/DeveloperTools.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/Effects11.h"
+#include "Features/EnvironmentProbeFeature.h"
 #include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
@@ -71,6 +72,7 @@ namespace globals
 	{
 		CloudShadows cloudShadows{};
 		DynamicCubemaps dynamicCubemaps{};
+		EnvironmentProbeFeature environmentProbe{};
 		VolumetricShadows volumetricShadows{};
 		ExtendedMaterials extendedMaterials{};
 		GrassCollision grassCollision{};

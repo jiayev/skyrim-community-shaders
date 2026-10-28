@@ -1,5 +1,6 @@
 #include "State.h"
-#include "EnvironmentProbe.h"
+#include "Rendering/EnvironmentProbe/Capture.h"
+#include "Rendering/EnvironmentProbe/Scene.h"
 
 #include <algorithm>
 #include <cmath>
@@ -344,6 +345,7 @@ void State::Reset()
 	tonemapOwner.reset();
 	// Publish for off-thread readers (e.g. the MCP listener thread).
 	frameCountAtomic.store(frameCount, std::memory_order_relaxed);
+	EnvironmentProbe::Scene::BeginFrame();
 
 	if (auto* imageSpaceManager = globals::game::imageSpaceManager) {
 		auto& BSImagespaceShaderApplyReflections = imageSpaceManager->GetRuntimeData().BSImagespaceShaderApplyReflections;
