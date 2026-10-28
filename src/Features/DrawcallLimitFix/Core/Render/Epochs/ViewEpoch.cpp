@@ -421,7 +421,7 @@ namespace DCLF
 			LatchedUploads frame(a_shape.latched[ViewFrame::kFrameList], uploads, latchSlot);
 			// Its copies of the main frame buffers (Deferred's sun cascades at t98, written at EarlyPrepasses and again before the cube's faces),
 			// each from the buffer bound at its register now and that buffer's CPU mirror: this frame's contents, named at the register.
-			// Unfillable (nothing bound there, or the mirror holds less): the copy reads zero and the register null.
+			// Unfillable (nothing bound there, or the mirror holds less): the copy reads zero and the register a null buffer (structured).
 			if (const auto frameBuffers = own->frameBuffers.load(std::memory_order_acquire)) {
 				auto& mirror = ConstantMirror::Get();
 				for (const auto& frameBuffer : *frameBuffers) {
@@ -433,6 +433,8 @@ namespace DCLF
 					}
 					if (LatchFrameBuffer(frame, frameBuffer, contents))
 						state.frameTextures[frameBuffer.textureRegister] = frameBuffer.copy->GetSRVInfo(0).slot.index;
+					else
+						state.frameTextures[frameBuffer.textureRegister] = GpuTextures::Get().NullBufferIndex(false);
 				}
 			}
 			const auto shared = SharedDataBlock(), feature = FeatureDataBlock();

@@ -117,8 +117,16 @@ namespace DCLF
 		 */
 		std::shared_ptr<const void> Seal(std::vector<std::shared_ptr<const void>> a_owners) const;
 
-		/** @brief A null view's descriptor heap index (reads zero); kInvalid when unsupported. */
+		/** @brief A null texture view's descriptor heap index (reads zero); kInvalid when unsupported. */
 		std::uint32_t NullIndex();
+		/**
+		 * @brief A null buffer view's descriptor heap index (reads zero): a typed buffer's (a texel buffer), else a structured or raw
+		 * buffer's (a storage buffer); kInvalid when unsupported. A register a shader reads as a buffer needs one: the descriptors are
+		 * typed, and a null texture's read as a buffer is not zero on every GPU (RDNA's names an address).
+		 */
+		std::uint32_t NullBufferIndex(bool a_typed);
+		/** @brief The null descriptor of a_view's kind: NullBufferIndex for a buffer view, else NullIndex (no view: NullIndex). */
+		std::uint32_t NullIndexFor(ID3D11ShaderResourceView* a_view);
 		/** @brief The null descriptor and its exact device-generation owner. */
 		Binding NullBinding();
 

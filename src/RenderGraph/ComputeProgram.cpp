@@ -62,14 +62,20 @@ namespace
 		return request;
 	}
 
-	rhi::PipelinePtr CreatePipeline(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, const std::vector<std::byte>& a_binary, const std::string& a_entry)
+	// a_source: the program's shader, the label its pipeline's debugging dumps go under (BASICRHI_VK_DUMP_ISA, DXVK_PIPELINE_STATS).
+	rhi::PipelinePtr CreatePipeline(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, const std::vector<std::byte>& a_binary, const std::string& a_entry,
+		const std::filesystem::path& a_source)
 	{
 		rhi::PipelinePtr pipeline;
 		const rhi::SubobjLayout layout{ a_layout };
 		// DXC keeps the HLSL entry point's name in the SPIR-V.
 		const rhi::SubobjShader shader{ rhi::ShaderStage::Compute, { a_binary.data(), static_cast<std::uint32_t>(a_binary.size()) }, a_entry.c_str() };
 		const rhi::PipelineStreamItem items[] = { rhi::Make(layout), rhi::Make(shader) };
-		if (a_device.CreatePipeline(items, 2, pipeline) != rhi::Result::Ok)
+		const std::string label = a_source.stem().string();
+		rhi::vulkan::set_pipeline_statistics_label(label.c_str());
+		const auto result = a_device.CreatePipeline(items, 2, pipeline);
+		rhi::vulkan::set_pipeline_statistics_label(nullptr);
+		if (result != rhi::Result::Ok)
 			return {};
 		return pipeline;
 	}
@@ -89,7 +95,8 @@ namespace
 				return a_done({ .error = compiler ? fmt::format("missing shader source {}", path.string()) : std::string("no runtime shader compiler") });
 			// The compiler copies the source; a memory-cache hit (nothing changed) completes here, on this thread.
 			(void)compiler->CompileAsync(MakeRequest(a_desc, path, source),
-				[a_program, a_device, a_request, a_done = std::move(a_done), entry = Util::WStringToString(a_desc.entry)](const org::services::ShaderArtifact& a_artifact) {
+				[a_program, a_device, a_request, a_done = std::move(a_done), entry = Util::WStringToString(a_desc.entry), source = std::filesystem::path(a_desc.source)](
+					const org::services::ShaderArtifact& a_artifact) {
 					if (!a_artifact)
 						return a_done({ .error = fmt::format("SPIR-V build ({}) failed:\n{}", entry, a_artifact.diagnostics.substr(0, 2000)) });
 					const std::uint64_t fingerprint = HashBinary(a_artifact.binary);
@@ -98,7 +105,7 @@ namespace
 					const auto program = a_program.lock();
 					if (!program)
 						return a_done({ .fingerprint = a_request.fingerprint });  // released: nothing binds it
-					auto pipeline = CreatePipeline(a_device, program->layout->GetHandle(), a_artifact.binary, entry);
+					auto pipeline = CreatePipeline(a_device, program->layout->GetHandle(), a_artifact.binary, entry, source);
 					if (!pipeline)
 						return a_done({ .error = fmt::format("the compute pipeline ({}) could not be created", entry) });
 					a_done({ .payload = std::make_shared<rhi::PipelinePtr>(std::move(pipeline)), .fingerprint = fingerprint });
@@ -151,7 +158,7 @@ std::shared_ptr<const ComputeProgram> ComputeProgram::Load(rhi::Device a_device,
 		logger::error("[ORG] {}: the pipeline layout could not be created", a_desc.source);
 		return {};
 	}
-	auto pipeline = CreatePipeline(a_device, program->layout->GetHandle(), artifact.binary, entry);
+	auto pipeline = CreatePipeline(a_device, program->layout->GetHandle(), artifact.binary, entry, a_desc.source);
 	if (!pipeline) {
 		logger::error("[ORG] {}: the compute pipeline could not be created", a_desc.source);
 		return {};
