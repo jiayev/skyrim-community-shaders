@@ -134,12 +134,13 @@ namespace DCLF
 		if (a_submit.prepare) {
 			result.optional = a_submit.prepare(a_submit.context, impl->resources.get(), shape.get());
 		}
-		// The CPU pipeline's graph: the forward site, from this frame's colour commit (Direct/Sites.h), in place of the recording.
+		// The CPU pipeline's graph: the forward site, from this frame's colour commit (Direct/Sites.h), and the recording of the epoch's
+		// CPU pipeline passes, its late draw pass among them (Direct/SitePasses.cpp), which the site's execution runs.
 		bool drawn = true;
 		const bool ok = Direct::ExecuteEpoch(traits.segment, [&] {
 			if (revision.direct)
 				drawn = Direct::ForwardReached(result.optional);
-			else
+			if (revision.recordings && !revision.recordings->recordings.empty())
 				impl->SubmitRevisionRecording(a_epoch, *revision.recordings, 0);
 			owners.Seal(impl->scene.get());
 		}, owners.Handle());

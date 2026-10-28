@@ -19,6 +19,8 @@
 //   copies), view.* (Core's, through Core/Render/Passes/CorePasses.cpp), or a feature's (Features/<Name>/): main-view.* (the main view's
 //   draws: Features/MainView), shadows.* (the shadow epoch's, the occlusion maps' with it: Features/Shadows/Engine), forward.*,
 //   tree-wind.*, fades.*, texture-transforms.*, tree-lod.*, grass.*, gpu-occlusion.* (the depth pyramid's producer).
+// - The CPU-driven pipeline (dclf:pipeline=cpu) keeps an epoch's CPU pipeline passes (Api::PassDef::cpuPipeline) and adds its last key,
+//   its draw site's late pass (core.*direct, view.direct: Core/Render/Direct/SitePasses.cpp), which the GPU path leaves out.
 // - A pass's own conditions decide whether it is added (no sort, no forward range, no HZB, no state from its setup, the graph's
 //   conditions: an interior leaves grass and tree LOD out, a cull mode without occlusion the phase 2 block; the pass is skipped, not the key).
 // - Anchors exist only for diagnostics (diag.*): each adds the diagnostics' observers' passes at that point, any number of them.
@@ -104,6 +106,7 @@ namespace DCLF::Schedule
 			"core.z.visibility-readback",
 			"fades.events",
 			"diag.after-depth",
+			"core.z.direct",
 		};
 		// The colour epoch: the build, the sort by pipeline, the forward range's sort, the colour draws.
 		constexpr std::string_view kMainColour[] = {
@@ -115,11 +118,13 @@ namespace DCLF::Schedule
 			"diag.before-colour",
 			"main-view.colour",
 			"diag.after-colour",
+			"core.direct",
 		};
 		// The forward epoch: the forward range's blended draws, then the refraction normals.
 		constexpr std::string_view kForward[] = {
 			"forward.draw",
 			"forward.refraction",
+			"core.forward-direct",
 		};
 		// The shadow epoch: every shadow view's and the occlusion maps' (Skylighting's sky map, the precipitation mask) latched copies,
 		// culling (one dispatch: the maps' views are rows of the views' table) and draws. The maps are drawn here, not at the engine's
@@ -132,12 +137,14 @@ namespace DCLF::Schedule
 			"shadows.build-draws",
 			"shadows.view",
 			"shadows.cull-counters",
+			"core.shadow-direct",
 		};
 		// First person's colour epoch: the colour draws, then the forward range (its depth epoch's passes, the cull, the depth draw and the
 		// forward range's sort, are the depth epoch's: kMainDepth).
 		constexpr std::string_view kFirstPersonColour[] = {
 			"view.colour",
 			"view.forward",
+			"view.direct",
 		};
 
 		// In the scene revisions' slot order (an epoch is its row's index); the frame runs them in kFrameOrder. The main epochs decide the

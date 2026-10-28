@@ -855,7 +855,48 @@ namespace DCLF::Direct::detail
 		}
 	}
 
-	/** @brief DXVK's CS thread: a site's commands into DXVK's command buffer (EmitExternalCommands' callback). */
+	namespace
+	{
+		// DXVK's CS thread: the run whose execution is being recorded (SiteCallback), for its epoch's late pass (RecordExecutingSite).
+		thread_local SiteRun* executing = nullptr;
+	}
+
+	bool RecordExecutingSite(Site a_site, rhi::CommandList& a_list)
+	{
+		auto* run = executing;
+		if (!run || run->site != a_site || !run->valid)
+			return false;
+		auto full = rhi::FullMemoryBarrier();
+		rhi::BarrierBatch barrier{};
+		barrier.globals = { &full, 1u };
+		a_list.Barriers(barrier);
+		// Its passes: all of them in secondaries but the parallel lists' executions (SiteOut).
+		SiteOut out{ a_list, run->slot->cs.lists, run->device, run->bindings.resourceHeap, run->bindings.samplerHeap };
+		switch (run->site) {
+		case Site::Shadow:
+			RecordShadowSite(out, *run);
+			break;
+		case Site::Depth:
+			RecordDepthSite(out, *run);
+			break;
+		case Site::Colour:
+			RecordColourSite(out, *run);
+			break;
+		case Site::Forward:
+			RecordForwardSite(out, *run);
+			break;
+		case Site::FirstPerson:
+			RecordFirstPersonSite(out, *run);
+			break;
+		default:
+			break;
+		}
+		out.Flush();
+		run->recordedDraws = true;
+		return true;
+	}
+
+	/** @brief DXVK's CS thread: a site's commands into DXVK's command buffer (EmitExternalCommands' callback): its epoch's execution. */
 	void SiteCallback(void* a_user, VkCommandBuffer a_commandBuffer)
 	{
 		auto& run = *static_cast<SiteRun*>(a_user);
@@ -872,45 +913,17 @@ namespace DCLF::Direct::detail
 		for (const auto* view : run.views)
 			drawnBefore += std::atomic_ref<std::uint32_t>(slot.counters.drawn[static_cast<std::size_t>(view->type)]).load(std::memory_order_relaxed);
 		run.adopted = rhi::vulkan::AdoptCommandBuffer(run.device, a_commandBuffer, rhi::QueueKind::Graphics);
-		if (run.adopted && run.valid) {
-			auto& list = run.adopted.Get();
-			auto full = rhi::FullMemoryBarrier();
-			rhi::BarrierBatch barrier{};
-			barrier.globals = { &full, 1u };
-			// The epoch's ORG execution: the commits' uploads and its CPU pipeline passes, with ORG's barriers, its entry and exit full (the
-			// external queue boundary). Without (a site of an epoch with none), the commits' staged uploads, then a barrier against
-			// everything after (their destinations are the draws').
-			if (run.execution)
-				run.execution->Execute(list);
-			if (run.uploads) {
-				rhi::CommandList* uploads = run.uploads;
-				list.ExecuteCommands({ &uploads, 1u });
-				list.Barriers(barrier);
-			}
-			// Its passes: all of them in secondaries but the parallel lists' executions (SiteOut).
-			SiteOut out{ list, slot.cs.lists, run.device, run.bindings.resourceHeap, run.bindings.samplerHeap };
-			switch (run.site) {
-			case Site::Shadow:
-				RecordShadowSite(out, run);
-				break;
-			case Site::Depth:
-				RecordDepthSite(out, run);
-				break;
-			case Site::Colour:
-				RecordColourSite(out, run);
-				break;
-			case Site::Forward:
-				RecordForwardSite(out, run);
-				break;
-			case Site::FirstPerson:
-				RecordFirstPersonSite(out, run);
-				break;
-			default:
-				break;
-			}
-			out.Flush();
+		if (run.adopted && run.valid && run.execution) {
+			// The epoch's ORG execution: the commits' uploads, its CPU pipeline passes, then its late pass, which records the draws
+			// (RecordExecutingSite), with ORG's barriers, its entry and exit full (the external queue boundary).
+			executing = &run;
+			run.execution->Execute(run.adopted.Get());
+			executing = nullptr;
+			if (!run.recordedDraws && !std::exchange(S().loggedNoLatePass, true))
+				logger::error("[DCLF] CPU pipeline: the {} site's epoch was executed without its late pass (no draws pass in its recording): it draws nothing", site);
 		} else if (!std::exchange(S().loggedNotAdopted, true)) {
-			logger::error("[DCLF] CPU pipeline: DXVK's command buffer could not be adopted, or the site's targets have no views: the {} site draws nothing", site);
+			logger::error("[DCLF] CPU pipeline: DXVK's command buffer could not be adopted, the site's targets have no views, or its epoch gave no execution: "
+						  "the {} site draws nothing", site);
 		}
 		// Every view's queue empty for the slot's next frame, whatever was recorded.
 		for (auto* view : run.views)
@@ -931,41 +944,14 @@ namespace DCLF::Direct::detail
 	void SignalCallback(void*, VkCommandBuffer) {}
 
 	/**
-	 * @brief Render thread, after the epoch body: the site queued: the uploads the commits staged recorded into a secondary of the render
-	 * thread's (executed first in the callback, so DXVK's list is not ended), and the callback with the frame values' wait.
+	 * @brief Render thread, after the epoch body: the site's callback queued, with the frame values' wait and its execution's waits and
+	 * signals (the execution carries the commits' uploads: its leading lists, the host recorded them with its ticket).
 	 */
 	bool Emit(SiteRun& a_run)
 	{
 		ZoneScopedN("CS.DCLF.Cpu.Emit");
 		auto& s = S();
-		auto& slot = *a_run.slot;
 		auto* host = RenderGraphRuntime::Get().Host();
-		// An execution carries the uploads (its leading lists: the host recorded them with its ticket).
-		if (auto* graph = host && !a_run.execution ? host->Graph() : nullptr)
-			if (auto* uploads = slot.render.lists.Next(s.device)) {
-				ZoneScopedN("CS.DCLF.Cpu.EmitUploads");
-				rhi::SecondaryInheritance outside{};
-				outside.insideRendering = false;
-				outside.debugName = "DCLF direct uploads";
-				if (uploads->BeginSecondary(outside) == rhi::Result::Ok) {
-					std::shared_ptr<void> keepAlive;
-					bool recorded = false;
-					std::vector<rhi::CommandList> recordedLists;
-					(void)graph->RecordPendingUploads(host->Device(), *uploads, static_cast<std::uint8_t>(host->CurrentFrameSlot()), keepAlive, recorded, recordedLists);
-					uploads->End();
-					if (recorded)
-						a_run.uploads = uploads;
-					if (keepAlive)
-						slot.holds.push_back(std::shared_ptr<const void>(std::move(keepAlive)));
-					// Lists a producer recorded itself are primaries: no secondary can carry them, and DCLF's producers record none.
-					if (!recordedLists.empty()) {
-						s.window.recordedUploadLists += recordedLists.size();
-						if (!std::exchange(s.loggedRecordedLists, true))
-							logger::error("[DCLF] CPU pipeline: {} upload lists a producer recorded reached a CPU frame's site, which cannot submit them <- UPLOADS NOT TAKEN",
-								recordedLists.size());
-					}
-				}
-			}
 		const auto wait = FrameValues::Get().FrameWaitPoint();
 		auto& waits = s.emitWaits;
 		auto& signals = s.emitSignals;
@@ -1057,7 +1043,6 @@ namespace DCLF::Direct::detail
 			a_slot.workers[w].arena.Reset();
 			replace(a_slot.workers[w].lists);
 		}
-		replace(a_slot.render.lists);
 		replace(a_slot.cs.lists);
 		a_slot.queuesUsed = 0;
 		a_slot.runs.clear();

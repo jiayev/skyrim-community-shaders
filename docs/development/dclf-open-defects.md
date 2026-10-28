@@ -352,6 +352,12 @@ The cache's per-light `LocalShadow` flag, its `FirstPerson` / `WorldEyePosition`
     (`coc RiverwoodSleepingGiantInn`, DCLF on) with frame generation on. The hazard's cause is also unproven. The workaround stays
     until one of these resolves it: Streamline without `VK_EXT_descriptor_heap`, the graph's last command buffer resetting the
     descriptor-heap state, a capture with a tool that supports descriptor heaps, or a standalone reproduction for NVIDIA.
+-   **Streamline's depth subresource on D32S8 (AMD).** The RX580 backs the game's D24S8 depth with `D32_SFLOAT_S8_UINT` (DXVK's
+    fallback). `cs_ImageAspect` (`Features/Upscaling/Streamline.cpp`) gives Streamline a depth-only subresource for that image.
+    Streamline's FSR path then barriers it with the depth aspect alone (`VUID-VkImageMemoryBarrier-image-03320`) and views it as
+    `D32_SFLOAT` (`VUID-VkImageViewCreateInfo-image-12397`). FSR's `rw_luma_history` storage view mismatches its format too.
+    **Check:** a `cpuv` run on the RX580 (validation layer) with FSR on. **Next:** give barriers both aspects on depth-stencil
+    formats; keep the view's depth-only aspect.
 -   **BasicRHI's `frontCCW` under Vulkan.** `frontCCW` has D3D's meaning on both backends. SARP and BasicRenderer set it true for
     glTF content. Their D3D12 behaviour is unchanged, but they have not been run under Vulkan since the mapping changed.
 

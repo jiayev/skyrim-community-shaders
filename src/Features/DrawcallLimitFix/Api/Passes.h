@@ -60,7 +60,10 @@ namespace DCLF::Api
 	 * - cpuPipeline: the pass is in its epoch in the CPU-driven pipeline too (dclf:pipeline=cpu), whose graph has its epochs external
 	 *   (Core/Render/Epochs/GraphConditions.h): the revisions record it, and its site executes the recording in DXVK's command buffer
 	 *   before its draws, on the graphics queue (a preferred queue is not taken there). False: the pass is left out there (the CPU does
-	 *   its work, or it draws: the direct sites record the draws).
+	 *   its work).
+	 * - recordAtExecution (with cpuPipeline): the pass is in the CPU-driven pipeline only, recorded by its site's execution on DXVK's CS
+	 *   thread into DXVK's command buffer (ORG's late batch: ExternalPassDesc::RecordAtExecution), once its views' culls are in: the
+	 *   direct sites' draws (Core/Render/Direct/SitePasses.cpp).
 	 */
 	/** @brief A pass's frame rows (PassDef::frameRows): its frame's backing's device address and rows (0: none this frame). */
 	struct FrameRows
@@ -82,5 +85,6 @@ namespace DCLF::Api
 		std::uint64_t (*animatedRows)() = nullptr;
 		FrameRows (*frameRows)() = nullptr;
 		bool cpuPipeline = false;
+		bool recordAtExecution = false;
 	};
 }

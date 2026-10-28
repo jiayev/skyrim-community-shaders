@@ -18,6 +18,7 @@
 // start (one host wait, the slots' depth ahead) before it resets them. The ORG latch regions the commits write are the same slot's
 // (PersistentGraphHost::BeginExternalFrameSlot), so they are not rewritten while the GPU reads them either.
 
+#include "Features/DrawcallLimitFix/Api/Passes.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Direct.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 
@@ -43,6 +44,12 @@ namespace DCLF::Draws
 
 namespace DCLF::Direct
 {
+	/**
+	 * @brief The draw sites' late passes (SitePasses.cpp), registered with Core's: one last in each site's epoch, in the CPU pipeline's
+	 * graph only (Api::PassDef::recordAtExecution), which records the site's draws.
+	 */
+	std::span<const Api::PassDef> SitePassDefs();
+
 	/** @brief Any thread: whether the frame draws through the direct sites (the graph as built is the CPU pipeline's). */
 	bool CpuFrame();
 
@@ -139,7 +146,6 @@ namespace DCLF::Direct
 		double slotWaitMs = 0.0;
 		// The CPU frames' render thread and DXVK CS thread CPU time (FrameStart to FrameStart), and their wall time.
 		double renderBusyUs = 0.0, csBusyUs = 0.0, wallUs = 0.0;
-		std::uint64_t recordedUploadLists = 0;  // producers' recorded upload lists a CPU frame could not take (UploadsNotTaken)
 	};
 
 	/** @brief Render thread (the reports): the window's counters since the last take. */

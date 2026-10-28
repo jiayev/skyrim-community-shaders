@@ -281,8 +281,13 @@ namespace DCLF
 		if (!owners)
 			return IndirectDraws::ViewSubmit::NoOwners;
 		bool reached = false;
+		// With the recording of the epoch's CPU pipeline passes, its late draw pass among them (Direct/SitePasses.cpp), which the site's
+		// execution runs.
+		const auto revision = RevisionOf(a_epoch);
 		const bool ok = Direct::ExecuteEpoch(a_segment, [&] {
 			reached = Direct::FirstPersonColourReached();
+			if (revision && revision.recordings && !revision.recordings->recordings.empty())
+				SubmitRevisionRecording(a_epoch, *revision.recordings, 0);
 			owners.Seal(scene.get());
 		}, owners.Handle());
 		if (!ok)

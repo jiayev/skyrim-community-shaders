@@ -42,11 +42,11 @@ namespace DCLF::Reports
 			[&] { double d = 0; for (auto v : w.sum.drawn) d += v; return d / n; }(), w.sum.pushes / n, w.sum.binds / n, w.sum.sameBinds / n, w.renderBusyUs / n,
 			w.wallUs > 0.0 ? 100.0 * w.renderBusyUs / w.wallUs : 0.0, w.csBusyUs / n, w.wallUs > 0.0 ? 100.0 * w.csBusyUs / w.wallUs : 0.0);
 		return fmt::format("[DCLF] [CPU] {} frames, record {}, batches of {} lanes (the setting), per-snapshot views: {}; a frame's cull (pool) by view: {}; record (DXVK's CS thread) by site: {}; {}; "
-						   "{:.1f} secondaries a frame, {} callback waits for a batch, {} frame slot waits ({:.2f} ms), {} forward row waits, {:.1f} geometry slots a frame changed since their set (not drawn){}{}{}",
+						   "{:.1f} secondaries a frame, {} callback waits for a batch, {} frame slot waits ({:.2f} ms), {} forward row waits, {:.1f} geometry slots a frame changed since their set (not drawn){}{}",
 			w.frames, mode.record == Direct::RecordMode::Parallel ? "parallel" : "serial", Draws::BatchLanes(), cadences.empty() ? "none" : cadences, views.empty() ? "none" : views,
 			sites.empty() ? "none" : sites, calls, w.sum.secondaries / n, w.sum.waits, w.slotWaits, w.slotWaitMs, w.rowWaits,
 			w.sum.staleGeometry / n, w.notQueued ? fmt::format(", {} callbacks not queued <- NOT QUEUED", w.notQueued) : std::string(),
-			w.recordedUploadLists ? fmt::format(", {} recorded upload lists not taken <- UPLOADS NOT TAKEN", w.recordedUploadLists) : std::string(), empty) +
+			empty) +
 			[] { const auto profile = Direct::TakeCullProfileLine(); return profile.empty() ? std::string() : "; cull profile (window): " + profile; }();
 	}
 }

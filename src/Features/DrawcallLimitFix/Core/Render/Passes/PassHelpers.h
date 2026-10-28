@@ -65,7 +65,7 @@ namespace DCLF::Draws
 	using PassQueue = Api::PassQueue;
 	template <class Epoch>
 	void AddPass(std::vector<org::RenderGraph::ExternalPassDesc>& a_out, PassKind a_kind, std::string a_name, std::shared_ptr<org::RenderPass> a_pass, Epoch a_epoch,
-		PassQueue a_queue = PassQueue::Default)
+		PassQueue a_queue = PassQueue::Default, bool a_recordAtExecution = false)
 	{
 		using Desc = org::RenderGraph::ExternalPassDesc;
 		auto desc = a_kind == PassKind::Copy ? Desc::Copy(std::move(a_name), std::move(a_pass)) :
@@ -76,6 +76,9 @@ namespace DCLF::Draws
 			desc.PreferQueue(AsyncComputeQueue());
 		else if (a_queue == PassQueue::Default && a_kind != PassKind::Render)
 			desc.PreferQueue(org::QueueKind::Graphics);
+		// Recorded by its external epoch's execution (Api::PassDef::recordAtExecution): ORG's late batch.
+		if (a_recordAtExecution)
+			desc.RecordAtExecution();
 		a_out.push_back(std::move(desc.Epoch(a_epoch)));
 	}
 
