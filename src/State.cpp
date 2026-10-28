@@ -297,12 +297,12 @@ bool State::HandlePostProcessing(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_
  * shader descriptor tracking, increments and atomically publishes the frame
  * count, and disables reflection and improved snow shaders.
  */
-void State::SetGrassSphereNormal(bool sphereNormal)
+void State::SetGrassFlags(bool sphereNormal, bool pbr)
 {
-	if (sphereNormal)
-		permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(ExtraShaderDescriptors::GrassSphereNormal);
-	else
-		permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(ExtraShaderDescriptors::GrassSphereNormal);
+	constexpr auto sphereNormalFlag = static_cast<uint32_t>(ExtraShaderDescriptors::GrassSphereNormal);
+	constexpr auto pbrFlag = static_cast<uint32_t>(ExtraShaderDescriptors::GrassPBR);
+	permutationData.ExtraShaderDescriptor = (permutationData.ExtraShaderDescriptor & ~(sphereNormalFlag | pbrFlag)) |
+	                                        (sphereNormal ? sphereNormalFlag : 0) | (pbr ? pbrFlag : 0);
 }
 
 void State::Reset()
