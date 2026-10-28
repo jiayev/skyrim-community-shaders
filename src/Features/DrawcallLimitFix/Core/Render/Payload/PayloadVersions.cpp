@@ -2,6 +2,8 @@
 // state graph, the snapshot's payload naming them, and the frame's payload read from the installed one (PayloadVersions.h).
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
+
+#include <ORGModuleServices/ElasticCapacity.h>
 #include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
@@ -462,7 +464,9 @@ namespace DCLF::Draws
 				// Changed for this source: its journal moved, its rows, or (a tailed part, or one no journal keeps) the source is another.
 				const bool changed = !chain.last || source.units[k] != chain.lastUnits || epoch != chain.lastHeld.journalEpoch ||
 				                     ((Tailed(part) || !epoch) && source.serial != chain.lastSerial);
-				if (!changed)
+				// A part whose shrink is due is made again unchanged (into its smaller class): a chain is asked only on change, and a
+				// part that went quiet after the scene shrank would keep its class.
+				if (!changed && !chain.last->shrinkWindow.Due(PooledBackings::Shrink(), org::services::ShrinkWindow::Clock::now()))
 					continue;
 				if (!chain.pool)
 					chain.pool = MakePool(k);
@@ -485,6 +489,9 @@ namespace DCLF::Draws
 				// A grown class: a quarter's headroom, not the build's power of two (a part that changes every frame keeps a backing a frame
 				// in flight: HexRim's pipeline rows were 4 of 16 MB for 9.5 MB of rows).
 				input.growth = org::services::GrowthPolicy::Headroom(25, 64);
+				// A smaller class once the part stays much smaller (its rows' top fell: lowest-first slots); the predecessor's copy is
+				// clipped to this version's rows.
+				input.shrink = PooledBackings::Shrink();
 				input.flags.deviceAddress = kPools[k].deviceAddress;
 				input.previous = chain.last;
 				input.backingPool = chain.pool;

@@ -191,6 +191,11 @@ both ways (no overlap, no hole). **Check:** a turn-only run's first `grass draws
 
 ## Failing or flaky parity checks
 
+-   **Extras parity after `coc` teleports (`extras parity ... <- DIFFER`).** On the 1.6.1170 heavy save's teleport route (nine `coc`
+    stops, `CS_DCLF_PERSISTENT_PARITY` + `CS_DCLF_SET_PARITY`), one or two report windows right after an exterior load find hundreds to
+    thousands of objects whose completed extras row is 0 at component 11 where the engine's routines give a value (terrain and mountain
+    pieces: `MountainTrim02:4`, `Block (1, 0)`; largest difference up to 262144). It happens with `CS_DCLF_SHRINK=off` too (tp7,
+    2026-10-28), so the shrink policy is not its cause; the windows after it are clean. Not chased yet.
 -   **Set parity: freed object slots stamped drawn by the GPU (`<- SET PARITY`).** In 3 of 8 moving full parity runs on the
     tree-forest route (vp3, vp6, vp7), always in two consecutive windows around frames 3360-3700 while cells stream in front of
     the player: 5-18 "depth without colour", 8-23 "colour without depth" and 14-62 "drawn outside the set" a window. Every sample

@@ -354,10 +354,10 @@ namespace DCLF
 				heldText += fmt::format(" {}:{}", std::get<0>(held[i]), std::get<1>(held[i]));
 			if (!held.empty())
 				heldText += fmt::format(" (oldest at {})", std::get<2>(held.front()));
-			return fmt::format("{} retired, {} recycled in {} batches, {} dropped by a clear; {} object slots retiring; {} snapshots held past the pool "
-							   "(publication:holders){}, published {}",
-				s.retired, s.recycled, s.batches, s.dropped, tables.objectsRetiring, held.size(), heldText,
-				publishedTables ? publishedTables->publishedSequence : 0);
+			return fmt::format("{} retired, {} recycled in {} batches, {} dropped by a clear; {} object slots retiring; pipeline slots {} of {} alive "
+							   "({} top cuts); {} snapshots held past the pool (publication:holders){}, published {}",
+				s.retired, s.recycled, s.batches, s.dropped, tables.objectsRetiring, tables.pipelineSlots.AliveCount(), tables.pipelines.size(),
+				s.pipelinesTrimmed, held.size(), heldText, publishedTables ? publishedTables->publishedSequence : 0);
 		}
 		TablesPublication TakeTablesPublication() { return std::exchange(tablesPublication, TablesPublication{ .pool = tablesPool.size() }); }
 		const Stats& GetStats() const { return stats; }
@@ -549,6 +549,7 @@ namespace DCLF
 		struct RetirementStats
 		{
 			std::uint64_t retired = 0, recycled = 0, dropped = 0, batches = 0;
+			std::uint64_t pipelinesTrimmed = 0;  // recycles that cut the pipeline table's top (RecycleRetired)
 		} retirementStats;
 
 		// The mirror's reads and the batch's pins: State/Mirror.h (CoordinatorMirror).

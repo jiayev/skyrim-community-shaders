@@ -417,6 +417,13 @@ namespace DCLF
 		bool MaterialUsed(std::size_t a_slot) const { return BitSet(usedMaterialBits, a_slot); }
 		void UnmarkMaterial(std::uint32_t a_slot) { if (a_slot / 64 < usedMaterialBits.size()) usedMaterialBits[a_slot / 64] &= ~(1ull << (a_slot % 64)); }
 		void UnmarkPipeline(std::uint32_t a_slot) { if (a_slot / 64 < usedPipelineBits.size()) usedPipelineBits[a_slot / 64] &= ~(1ull << (a_slot % 64)); }
+		/** @brief The used pipeline set cut to a_slots (pipelineSlots.TrimTop): no bit past the table. */
+		void TrimPipelineUsed(std::uint32_t a_slots)
+		{
+			usedPipelineBits.resize(std::min<std::size_t>(usedPipelineBits.size(), (std::size_t(a_slots) + 63) / 64));
+			if (a_slots % 64 && a_slots / 64 < usedPipelineBits.size())
+				usedPipelineBits[a_slots / 64] &= (1ull << (a_slots % 64)) - 1;
+		}
 		void ClearUsed()
 		{
 			std::fill(usedMaterialBits.begin(), usedMaterialBits.end(), 0);

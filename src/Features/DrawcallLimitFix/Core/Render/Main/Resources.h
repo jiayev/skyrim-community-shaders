@@ -20,6 +20,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 
 #include "RenderGraph/ComputeProgram.h"
+#include <ORGModuleServices/ElasticCapacity.h>
 #include <Render/LatchBlock.h>
 #include <RenderPasses/Base/TypedRenderGraphPass.h>
 #include <Resources/Buffers/Buffer.h>
@@ -83,6 +84,25 @@ namespace DCLF::Draws
 	};
 	/** @brief The main layout's first sequence ranges (CS_DCLF_TABLE_START=small: a few draws, to test growth). */
 	MainLayout InitialMainLayout();
+
+	/**
+	 * @brief The main layout's capacities' runs of low asks (org::services::FitCapacity with PooledBackings::Shrink): a capacity the
+	 * scene asked much less of for the window goes back to the power of two past the window's peak, moving its layout counter as growth
+	 * does, so the buffers sized from it shrink with it. Kept beside MainLayout (compared whole), the revision producer's.
+	 */
+	struct MainLayoutWindows
+	{
+		std::vector<org::services::ShrinkWindow> slots, zBuckets;  // per pipeline slot
+		org::services::ShrinkWindow refraction, sequenceDraws, sequenceDecals, decalRanges;
+
+		/** @brief Whether one of the windows would shrink at its next ask: a kept revision makes again so that it is asked. */
+		bool Due(const org::services::ShrinkPolicy& a_policy, org::services::ShrinkWindow::Clock::time_point a_now) const
+		{
+			const auto due = [&](const org::services::ShrinkWindow& a_window) { return a_window.Due(a_policy, a_now); };
+			return std::ranges::any_of(slots, due) || std::ranges::any_of(zBuckets, due) || due(refraction) || due(sequenceDraws) || due(sequenceDecals) ||
+			       due(decalRanges);
+		}
+	};
 
 	struct Resources
 	{

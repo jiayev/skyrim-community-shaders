@@ -3,6 +3,8 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
 
+#include <ORGModuleServices/ElasticCapacity.h>
+
 namespace DCLF::Draws
 {
 	namespace
@@ -39,7 +41,7 @@ namespace DCLF::Draws
 			// Every version is made into a pooled backing, kept from reuse until the frames that read it retired (BindAdopted).
 			hooks.pool = MakeGrowthPool();
 			hooks.grown = [](const org::services::GrowableRegistration& a_buffer, std::uint64_t a_from, std::uint64_t a_to, std::uint64_t a_bytes) {
-				logger::info("[DCLF] {}: {} grown to {} ({} KB), as graph work", a_buffer.name, a_from, a_to, a_bytes / 1024);
+				logger::info("[DCLF] {}: {} {} to {} ({} KB), as graph work", a_buffer.name, a_from, a_to < a_from ? "shrunk" : "grown", a_to, a_bytes / 1024);
 			};
 			return hooks;
 		}())
@@ -60,6 +62,8 @@ namespace DCLF::Draws
 		registration.buffer = versioned;
 		registration.extent = a_spec.extent;
 		registration.policy = a_spec.policy;
+		// One policy gives every scene buffer's memory back once the scene asks much less of it (CS_DCLF_SHRINK).
+		registration.shrink = PooledBackings::Shrink();
 		registration.contents = a_spec.contents;
 		registration.capture = std::move(a_spec.capture);
 		// Every entry carries its version's device address (the shaders read most of them by address).
@@ -107,7 +111,7 @@ namespace DCLF::Draws
 		const auto stats = set.TakeStats();
 		if (!stats.batches && !stats.grown && !stats.failed && !stats.latches && !stats.sealed && !stats.kept)
 			return {};
-		return fmt::format("{} growth batches posted, {} buffers grown, {} failed; {} latch blocks made; {} sets sealed, {} seals kept the last set", stats.batches,
-			stats.grown, stats.failed, stats.latches, stats.sealed, stats.kept);
+		return fmt::format("{} growth batches posted, {} buffers grown ({} of them shrunk), {} failed; {} latch blocks made; {} sets sealed, {} seals kept the last set",
+			stats.batches, stats.grown, stats.shrunk, stats.failed, stats.latches, stats.sealed, stats.kept);
 	}
 }

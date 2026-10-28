@@ -288,10 +288,11 @@ namespace DCLF
 				kMovedLookups,
 				kMovedShadowRows,
 				kMovedVolatiles,
+				kMovedShrink,  // a shrink due or settled (SceneBufferSet::ShrinkPending, MainLayoutWindows::Due)
 				kMovedParts
 			};
 			static constexpr std::array<const char*, kMovedParts> kMovedNames{ "tables", "catalog", "tables generation", "request", "inputs", "lookups", "shadow rows",
-				"volatiles" };
+				"volatiles", "shrink" };
 			std::uint64_t ranUnkept = 0;
 			std::array<std::uint64_t, kMovedParts> movedBy{};
 			/** @brief A make that ran the pass: counted, by the parts of the key that moved (a_moved, a bit by Moved; ~0u: none to keep). */

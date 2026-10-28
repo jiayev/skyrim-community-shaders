@@ -29,6 +29,7 @@ namespace DCLF
 		Workers,
 		FrameWorkers,
 		SceneCopies,
+		Shrink,
 		Fanout,
 		Precompile,
 		Cull,

@@ -72,6 +72,9 @@ namespace DCLF
 			{ FrameWorkers, "CS_DCLF_FRAME_WORKERS", F, N, false, "the frame-critical threads (default a quarter of the preparation pool, at least 2; 0: none, the preparation workers alone take frame-critical jobs)" },
 			{ SceneCopies, "CS_DCLF_SCENE_COPIES", F, N, false,
 				"the copies a frame's scene values keep per pool class (FrameValues' rows; default 3, 2 to the frames in flight): a frame's producer reuses the copy the oldest in-flight frame bound, its uploads waiting on the GPU for that frame" },
+			{ Shrink, "CS_DCLF_SHRINK", F, N, false,
+				"when the growable scene buffers give memory back (one policy for all, PooledBackings::Shrink): default once a buffer was asked at most a quarter of its capacity for 5 s; "
+				"off: grow-only; eager: at the first such ask (stress and parity runs)" },
 			{ Fanout, "CS_DCLF_FANOUT", F, N, false,
 				"the scene pass's evaluation rounds and joins (T6b3e): 0 interleaved on the scene lane (the reference), 1 every entry evaluated then merged, on the lane; 2 (default) evaluated on the preparation pool from 128 entries, merged in order" },
 			{ Precompile, "CS_DCLF_PRECOMPILE", F, Reduced::Zero, false, "0: DCLF's SPIR-V programs compile on first use instead of alongside the engine's shaders" },

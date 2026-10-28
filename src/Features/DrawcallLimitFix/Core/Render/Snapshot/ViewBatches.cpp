@@ -7,6 +7,8 @@
 #include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatchesInternal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
+
+#include <ORGModuleServices/ElasticCapacity.h>
 #include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneGraph.h"
 
@@ -346,6 +348,8 @@ namespace DCLF::Draws
 			input.elementCount = a_upload.total;
 			input.capacity = std::max<std::uint64_t>(input.elementCount, 1);
 			input.growth = org::services::GrowthPolicy::Headroom(25, 64);
+			// Smaller again once the lists stay much smaller (the copy is the predecessor's up to this version's sequences).
+			input.shrink = PooledBackings::Shrink();
 			input.flags.deviceAddress = true;
 			input.backingPool = SequencesPool();
 			// Every version into a backing no frame reads (the pool's retirement), never patched in place: a full build's whole, the
