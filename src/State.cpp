@@ -179,6 +179,10 @@ void State::Draw()
 		if (globals::menu->overlayVisible && globals::features::performanceOverlay.loaded && globals::features::performanceOverlay.IsOverlayVisible())
 			Debug();
 
+		// Active Shaders counts draws per frame whether or not the performance overlay is up
+		if (IsDeveloperMode() && shaderTrackingFrameChecker.IsNewFrame())
+			globals::shaderCache->ResetFrameShaderTracking();
+
 		updateShader = false;
 	}
 }
@@ -198,9 +202,6 @@ void State::Debug()
 			c = 0;
 		for (auto& ft : frameTimePerType)
 			ft = 0.0f;
-
-		// Reset active shader tracking for developer mode
-		globals::shaderCache->ResetFrameShaderTracking();
 
 		// Start timing for this frame
 		if (frameTimingFrequency.QuadPart == 0) {
@@ -707,6 +708,7 @@ void State::MarkSettingsSaved()
 
 void State::CheckFeatureSettingsChanged(Feature* feature)
 {
+	InvalidateEditsUnderBaselines(feature);
 	if (settingsChanged || !feature->loaded || !feature->UsesMainSettings())
 		return;
 	const auto name = feature->GetName();
@@ -821,6 +823,7 @@ void State::LoadFromJson(nlohmann::json& settings)
 			feature->Load(settings);
 		}
 	}
+	InvalidateEditsUnderBaselines();
 }
 
 void State::Save()
@@ -978,10 +981,61 @@ bool State::HasEditsUnderBaselines(Feature* feature)
 
 void State::InvalidateEditsUnderBaselines(Feature* feature)
 {
-	if (feature)
-		editsUnderBaselines.erase(feature->GetName());
-	else
+	if (feature) {
+		const auto name = feature->GetName();
+		editsUnderBaselines.erase(name);
+		userEdits.erase(name);
+	} else {
 		editsUnderBaselines.clear();
+		userEdits.clear();
+	}
+	++userEditsRevision;
+}
+
+bool State::HasUserEdits(Feature* feature)
+{
+	const auto name = feature->GetName();
+	if (const auto found = userEdits.find(name); found != userEdits.end())
+		return found->second;
+	bool edited = false;
+	if (feature->loaded && feature->UsesMainSettings()) {
+		if (const auto* base = GetFeatureBase(name)) {
+			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+			json current;
+			feature->SaveSettings(current);
+			edited = !DiffFromBase(current, *base).empty();
+		}
+	}
+	userEdits[name] = edited;
+	return edited;
+}
+
+json State::GetUserEdits(Feature* feature)
+{
+	if (!feature->loaded || !feature->UsesMainSettings())
+		return json::object();
+	const auto* base = GetFeatureBase(feature->GetName());
+	if (!base)
+		return json::object();
+	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+	json current;
+	feature->SaveSettings(current);
+	return DiffFromBase(current, *base);
+}
+
+void State::PrimeUserEdits()
+{
+	const auto stale = [this](Feature* feature) {
+		return feature->loaded && feature->UsesMainSettings() && !userEdits.contains(feature->GetName());
+	};
+	if (std::ranges::none_of(Feature::GetFeatureList(), stale))
+		return;
+	// One suspension for the lot; the guards HasUserEdits takes inside it only nest
+	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+	for (auto* feature : Feature::GetFeatureList()) {
+		if (stale(feature))
+			HasUserEdits(feature);
+	}
 }
 
 void State::ClearFeatureEditsUnderBaselines(Feature* feature)
