@@ -132,8 +132,15 @@ public:
 	/**
 	 * @brief Keeps GPU/CPU pass timing running for the next few frames; call it each frame a consumer reads the results.
 	 * @param frames Frames to stay active for. Timing stops once no consumer has asked within that window.
+	 * A shorter request never cuts a longer one short, so the overlay cannot end a DevBench window.
 	 */
-	void KeepActive(uint32_t frames = 2) { activeUntilFrame.store(frameCounter.load(std::memory_order_relaxed) + frames, std::memory_order_relaxed); }
+	void KeepActive(uint32_t frames = 2)
+	{
+		const uint64_t until = frameCounter.load(std::memory_order_relaxed) + frames;
+		uint64_t current = activeUntilFrame.load(std::memory_order_relaxed);
+		while (current < until && !activeUntilFrame.compare_exchange_weak(current, until, std::memory_order_relaxed)) {
+		}
+	}
 	/** @brief True while a consumer asked for timings within its KeepActive window. */
 	bool IsActive() const { return frameCounter.load(std::memory_order_relaxed) <= activeUntilFrame.load(std::memory_order_relaxed); }
 
