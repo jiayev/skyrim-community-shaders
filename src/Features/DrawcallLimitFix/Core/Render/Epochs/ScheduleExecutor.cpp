@@ -30,6 +30,7 @@ namespace DCLF::Draws
 			decltype(Api::PassDef::animatedRows) animatedRows = nullptr;
 			decltype(Api::PassDef::frameRows) frameRows = nullptr;
 			bool cpuPipeline = false;
+			bool recordAtExecution = false;
 			bool viewName = false;  // passName names "{view}"
 		};
 
@@ -291,13 +292,15 @@ namespace DCLF::Draws
 	void RegisterPassDef(const Api::PassDef& a_pass, std::string_view a_who)
 	{
 		auto& state = State();
-		if (a_pass.key.empty() || !a_pass.make == !a_pass.emit || (a_pass.make && a_pass.passName.empty()) || (a_pass.emit && (a_pass.setup || a_pass.latchWord || a_pass.animatedRows || a_pass.frameRows)))
+		if (a_pass.key.empty() || !a_pass.make == !a_pass.emit || (a_pass.make && a_pass.passName.empty()) || (a_pass.emit && (a_pass.setup || a_pass.latchWord || a_pass.animatedRows || a_pass.frameRows)) ||
+			(a_pass.recordAtExecution && !a_pass.cpuPipeline))
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete pass {}", a_who, a_pass.key));
 		for (const auto& entry : state.passes)
 			if (entry.key == a_pass.key)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered pass {}, which {} has", a_who, a_pass.key, entry.who));
 		state.passes.push_back({ std::string(a_pass.key), std::string(a_pass.passName), std::string(a_who), a_pass.kind, a_pass.queue, a_pass.make, a_pass.emit,
-			a_pass.setup, a_pass.latchWord, a_pass.animatedRows, a_pass.frameRows, a_pass.cpuPipeline, a_pass.passName.find(kViewToken) != std::string_view::npos });
+			a_pass.setup, a_pass.latchWord, a_pass.animatedRows, a_pass.frameRows, a_pass.cpuPipeline, a_pass.recordAtExecution,
+			a_pass.passName.find(kViewToken) != std::string_view::npos });
 	}
 
 	Api::TriggerId FindTrigger(const Api::FrameSchedule& a_schedule, std::string_view a_id, std::string_view a_who)
@@ -575,7 +578,7 @@ namespace DCLF::Draws
 						continue;
 					context.view = &view;
 				}
-				if (cpu && !cpuPass(entry))
+				if (cpu ? !cpuPass(entry) : entry.recordAtExecution)
 					continue;
 				if (entry.emit) {
 					if (!cpu)
@@ -592,7 +595,7 @@ namespace DCLF::Draws
 				}
 				if (auto pass = entry.make(context))
 					AddPass(a_out, entry.kind, NameOf(entry, context), std::move(pass), context.epoch,
-						cpu && entry.queue == Api::PassQueue::Compute ? Api::PassQueue::Default : entry.queue);
+						cpu && entry.queue == Api::PassQueue::Compute ? Api::PassQueue::Default : entry.queue, entry.recordAtExecution);
 			}
 		}
 	}

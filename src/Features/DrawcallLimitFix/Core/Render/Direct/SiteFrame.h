@@ -136,11 +136,10 @@ namespace DCLF::Direct::detail
 		std::shared_ptr<const Draws::PassFrame> shape;
 		std::shared_ptr<Draws::Resources> resources;
 		std::shared_ptr<const TargetViews> targets;  // the main sites' (null: the site attaches its own)
-		// Its epoch's ORG execution (an external epoch's: the commits' uploads, then its CPU pipeline passes with ORG's barriers),
-		// executed by its callback ahead of its draws in place of uploads; its waits and signals join DXVK's submission.
+		// Its epoch's ORG execution (an external epoch's: the commits' uploads, its CPU pipeline passes, then its draws as the epoch's late
+		// pass, SitePasses.cpp, with ORG's barriers), executed by its callback; its waits and signals join DXVK's submission.
 		std::shared_ptr<org::ExternalEpochExecution> execution;
 		std::shared_ptr<const CullFrame> cullFrame;  // its views' culls' (written by their dispatch alone)
-		rhi::CommandList* uploads = nullptr;          // the commits' staged uploads, recorded on the render thread
 		RecordBindings bindings, refractionBindings;
 		std::vector<SiteView*> views;
 		SiteView *main = nullptr, *decal = nullptr, *forward = nullptr, *refractionView = nullptr;
@@ -149,6 +148,8 @@ namespace DCLF::Direct::detail
 		bool valid = true;
 		// Its callback executed batches' secondaries (Parallel mode: their draws were counted when the pool recorded them, before it ran).
 		bool executedSecondaries = false;
+		// Its execution's late pass recorded its draws (RecordExecutingSite).
+		bool recordedDraws = false;
 		// The site file's own state for this run (ShadowSite.cpp's views and maps, ViewSites.cpp's hosted views, Families.cpp's draws), by
 		// file; released with the run at the slot's retirement.
 		std::shared_ptr<void> shadowState, viewState, familyState;
@@ -167,7 +168,7 @@ namespace DCLF::Direct::detail
 		bool used = false;         // a frame used it since its last Release
 		std::unique_ptr<Worker[]> workers;
 		std::uint32_t workerCount = 0;
-		Worker render, cs;  // the render thread's (the uploads) and DXVK's CS thread's
+		Worker cs;  // DXVK's CS thread's
 		std::vector<std::unique_ptr<CulledQueue>> queues;  // reused: an EventQueue's ring is never freed
 		std::size_t queuesUsed = 0;
 		std::deque<SiteView> views;
@@ -219,7 +220,7 @@ namespace DCLF::Direct::detail
 		std::shared_ptr<const TargetViews> targets;
 		std::atomic<std::uint32_t> nextWorker{ 0 };
 		WindowCounters window;
-		bool loggedNoCallback = false, loggedRecordedLists = false, loggedNotAdopted = false, loggedExternal = false;
+		bool loggedNoCallback = false, loggedNotAdopted = false, loggedNoLatePass = false, loggedExternal = false;
 		// Emit's scratch (render thread): a site's waits and signals for DXVK's submission.
 		std::vector<RenderGraphRuntime::ExternalCommandsWait> emitWaits, emitSignals;
 	};
@@ -328,6 +329,14 @@ namespace DCLF::Direct::detail
 	 * batches, in list order.
 	 */
 	std::vector<const CulledBatch*> RecordViewPass(SiteOut& a_out, SiteRun& a_run, SiteView& a_view, rhi::PassBeginInfo a_begin, RecordBindings const& a_bindings);
+
+	/**
+	 * @brief DXVK's CS thread, inside a site's execution (ExternalEpochExecution::Execute), from its epoch's late pass (SitePasses.cpp):
+	 * the run being executed, if it is a_site's, records its draws into a_list (the pass's list: DXVK's buffer), after a full barrier
+	 * (its epoch's CPU pipeline passes write memory the graph does not track, by address). False: no run of a_site is being executed,
+	 * or its inputs are incomplete.
+	 */
+	bool RecordExecutingSite(Site a_site, rhi::CommandList& a_list);
 
 	// ---- The site files' hooks ----
 

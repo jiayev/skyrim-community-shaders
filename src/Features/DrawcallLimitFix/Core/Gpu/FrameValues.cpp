@@ -520,6 +520,9 @@ namespace DCLF
 				cause.example = a_example();
 		}
 		std::atomic<std::uint64_t> done{ 0 };
+		// The newest producer's signal (QueueStreamingSignal), written before its done: read by the render thread once done reaches the
+		// frame's sequence (the next producer is kicked only after that frame's EndFrame).
+		std::shared_ptr<org::TrackedUploadTicket> signal;
 		std::atomic<std::uint64_t> sampledSeq{ 0 };  // the newest producer whose sampling is done (WaitSampled), before its done
 		void MarkSampled(std::uint64_t a_seq)
 		{
@@ -750,7 +753,8 @@ namespace DCLF
 		if (!marked)
 			MarkSampled(a_job.seq);
 		// Always signal: every batch of the frame waits for it.
-		if (!a_job.uploads || !a_job.uploads->QueueStreamingSignal(a_job.timeline, a_job.seq))
+		signal = a_job.uploads ? a_job.uploads->QueueStreamingSignal(a_job.timeline, a_job.seq) : nullptr;
+		if (!signal)
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: frame values {} could not signal the frame's wait; the GPU would wait for it forever", a_job.seq));
 		const auto total = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
 		for (auto max = maxTotalUs.load(std::memory_order_relaxed); total > max && !maxTotalUs.compare_exchange_weak(max, total, std::memory_order_relaxed);) {}
@@ -2474,6 +2478,29 @@ namespace DCLF
 		if (!s.kicked)
 			return;
 		s.kicked = false;
+		// Before the frame's Present enters DXVK: its signal on the copy queue. DXVK presents under the submission lock the upload queue
+		// takes (RenderGraphRuntime's upload submissions), and a present that waits for the frame's GPU work (AMD's windowed present
+		// does) would hold that lock from the signal the work waits for: a deadlock. Usually long done here; else the GPU would wait too.
+		{
+			ZoneScopedN("CS.DCLF.FrameValues.SignalSubmitted");
+			for (auto done = s.done.load(std::memory_order_acquire); done < s.seq; done = s.done.load(std::memory_order_acquire))
+				s.done.wait(done, std::memory_order_acquire);
+			if (const auto ticket = s.signal) {
+				const auto pending = [&] {
+					const auto state = ticket->state.load(std::memory_order_acquire);
+					return state == org::TrackedUploadTicketState::Queued || state == org::TrackedUploadTicketState::Claimed;
+				};
+				if (pending()) {
+					auto changes = std::make_shared<std::atomic<std::uint32_t>>(0u);
+					ticket->SetChangeCallback([changes] {
+						changes->fetch_add(1, std::memory_order_release);
+						changes->notify_all();
+					});
+					for (auto seen = changes->load(std::memory_order_acquire); pending(); seen = changes->load(std::memory_order_acquire))
+						changes->wait(seen, std::memory_order_acquire);
+				}
+			}
+		}
 		BindFrameLeases(s.frameLeases, s.registeredFrameLeases, s.boundPoints);
 	}
 

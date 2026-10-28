@@ -137,8 +137,10 @@ public:
 	org::PersistentGraphHost* Host();
 	/**
 	 * @brief The host's frame-wait timeline (PersistentGraphHost::SetFrameWaitTimeline): signalled from the dedicated upload queue by a
-	 * producer of per-frame values after their copies, and waited for by every batch submitted while its value is set. Null when
-	 * inactive or without a dedicated upload queue (nothing could signal it beside the frame).
+	 * producer of per-frame values after their copies, and waited for by every batch submitted while its value is set. The producer's
+	 * signal must be submitted before the frame's Present enters DXVK: upload submissions take DXVK's submission lock, which DXVK
+	 * holds across a present, and a present that waits for the frame's GPU work (AMD's windowed one) would deadlock against it (DCLF:
+	 * FrameValues::EndFrame). Null when inactive or without a dedicated upload queue (nothing could signal it beside the frame).
 	 */
 	std::shared_ptr<rhi::TimelinePtr> FrameWaitTimeline() const;
 	/** @brief Retains the adopted BasicRHI wrapper for owned external bindings. */
