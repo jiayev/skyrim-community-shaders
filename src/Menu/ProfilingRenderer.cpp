@@ -186,6 +186,7 @@ void ProfilingRenderer::SetupTimingTableColumns(bool includePercentColumn)
 void ProfilingRenderer::RenderGraph()
 {
 	auto& profiler = (*globals::profiler);
+	profiler.KeepActive();
 	const auto& results = profiler.GetResults();
 	bool cpuMode = (timingMode == TimingMode::CPU);
 
@@ -237,6 +238,7 @@ void ProfilingRenderer::GraphState::Render(const std::vector<legit::ProfilerTask
 void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 {
 	auto& profiler = (*globals::profiler);
+	profiler.KeepActive();
 
 	bool cpuMode = (timingMode == TimingMode::CPU);
 	if (showModeToggle) {
@@ -394,6 +396,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 {
 	auto& profiler = (*globals::profiler);
+	profiler.KeepActive();
 	const auto& results = profiler.GetResults();
 
 	RenderTimingModeToggle();
@@ -523,6 +526,7 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 bool ProfilingRenderer::HasFeatureTimers(const std::string& featurePrefix)
 {
 	const auto prefix = GetFeatureTimerPrefix(featurePrefix);
+	globals::profiler->KeepActive();
 	const auto& results = globals::profiler->GetResults();
 
 	return std::ranges::any_of(results, [&prefix](const auto& result) {
