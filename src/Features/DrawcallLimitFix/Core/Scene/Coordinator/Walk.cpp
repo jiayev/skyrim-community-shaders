@@ -85,6 +85,7 @@ namespace DCLF::Scene
 			DCLF_SCENE_PART(Prologue, "CS.DCLF.Scene.Prologue");
 			auto& gpu = GpuResources::Scene();
 			gpu.BeginFrame();
+			NoteRelocatedGeometry(gpu.TakeRelocated());
 			const bool resolveBuffers = gpu.Enabled();
 			frameResolveBuffers = resolveBuffers;
 			if (resolveBuffers != graphWasActive) {
@@ -943,7 +944,8 @@ namespace DCLF::Scene
 		                               tables.geometries[geometryIt->second].indexCount != a_source.indexCount ||
 		                               (resolveBuffers && (!tables.geometryImports[geometryIt->second].vertexOwner || !tables.geometryImports[geometryIt->second].indexOwner)) ||
 		                               tables.geometries[geometryIt->second].vertexBuffer != a_source.vertexBuffer ||
-		                               tables.geometries[geometryIt->second].indexBuffer != a_source.indexBuffer);
+		                               tables.geometries[geometryIt->second].indexBuffer != a_source.indexBuffer ||
+		                               (resolveBuffers && !denseWalk && relocatedGeometrySlots.contains(geometryIt->second)));
 		if (staleGeometry)
 			++stats.geometriesRefreshed;
 		if (newGeometry || staleGeometry) {
@@ -985,6 +987,8 @@ namespace DCLF::Scene
 			if (staleGeometry)
 				refreshedGeometry.push_back(slot);
 			tables.geometries[slot] = record;
+			if (!denseWalk)
+				relocatedGeometrySlots.erase(slot);
 			// A stale slot's old leases outlive the frames in flight (TakeRetiredImports).
 			for (auto* owner : { &tables.geometryImports[slot].vertexOwner, &tables.geometryImports[slot].indexOwner })
 				if (*owner)
@@ -2257,6 +2261,8 @@ namespace DCLF::Scene
 		geometryResolvedLastWalk = resolveBuffers;
 		staleGeometrySlots.insert(staleGeometrySlots.end(), freedGeometry.begin(), freedGeometry.end());
 		freedGeometry.clear();
+		staleGeometrySlots.insert(staleGeometrySlots.end(), relocatedGeometry.begin(), relocatedGeometry.end());
+		relocatedGeometry.clear();
 		if (!staleGeometrySlots.empty()) {
 			std::sort(staleGeometrySlots.begin(), staleGeometrySlots.end());
 			staleGeometrySlots.erase(std::unique(staleGeometrySlots.begin(), staleGeometrySlots.end()), staleGeometrySlots.end());
@@ -2319,6 +2325,23 @@ namespace DCLF::Scene
 					shadowSetsDirty = true;
 					shadowDirtySlots.push_back(s);
 				}
+			}
+		}
+	}
+
+	void Coordinator::NoteRelocatedGeometry(const std::vector<ID3D11Buffer*>& a_buffers)
+	{
+		if (a_buffers.empty())
+			return;
+		// A linear pass, only on a pass after moves: a slot's leases are its record's buffers'.
+		const ankerl::unordered_dense::set<ID3D11Buffer*> moved(a_buffers.begin(), a_buffers.end());
+		for (std::uint32_t g = 0; g < tables.geometries.size(); ++g) {
+			if (!tables.geometrySlots.Alive(g))
+				continue;
+			const auto& record = tables.geometries[g];
+			if ((moved.contains(record.vertexBuffer) || moved.contains(record.indexBuffer)) && relocatedGeometrySlots.insert(g).second) {
+				relocatedGeometry.push_back(g);
+				++stats.geometriesRelocated;
 			}
 		}
 	}

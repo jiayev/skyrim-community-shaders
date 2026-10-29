@@ -38,6 +38,11 @@ namespace DCLF::Scene
 				waiting.insert(waiting.end(), it->second.begin(), it->second.end());
 				mb.inFlight.erase(it);
 			}
+			// Answered with an import a move superseded meanwhile: the waiting slots ask again (the new storage's import).
+			if (a_reply.view && GpuTextures::Superseded(a_reply.binding.owner.get())) {
+				++mb.stats.superseded;
+				return;
+			}
 			if (a_reply.binding.owner) {
 				auto& cached = mb.cache[a_reply.view];
 				cached.owner = a_reply.binding.owner;
@@ -56,6 +61,7 @@ namespace DCLF::Scene
 		for (const std::uint32_t slot : waiting)
 			ResolveMaterialBinding(slot);
 		mb.arrived.clear();
+		FollowRelocatedTextures();
 		// The records written since the last pass: the joins' new slots and the posts' records (the tables' material log; a cursor
 		// behind it resolves every used slot).
 		const auto& log = tables.materialLog;
@@ -95,7 +101,8 @@ namespace DCLF::Scene
 			ID3D11ShaderResourceView*& a_seen)
 		{
 			const void* owner = owners ? (a_feature ? owners->features[a_at] : owners->textures[a_at]).get() : nullptr;
-			if (sameGeneration && a_seen == a_view && owner && a_index != Lookups::kNone)
+			// Kept unless a move superseded its import (pinless): then asked anew, the superseded one held meanwhile.
+			if (sameGeneration && a_seen == a_view && owner && a_index != Lookups::kNone && !(a_view && GpuTextures::Superseded(owner)))
 				return;
 			auto binding = self.MaterialViewBinding(a_view, a_sourceTag, slot);
 			if (binding.pending && wasResolved && owner && a_index != Lookups::kNone) {
@@ -127,7 +134,45 @@ namespace DCLF::Scene
 		}
 	};
 
-	void Coordinator::ResolveMaterialBinding(std::uint32_t a_slot)
+	void Coordinator::FollowRelocatedTextures()
+	{
+		auto& mb = materialBindings;
+		std::vector<ID3D11ShaderResourceView*> moved;
+		const bool complete = GpuTextures::Get().RelocatedViews(mb.relocationCursor, moved);
+		if (complete && moved.empty())
+			return;
+		// The log overran (moves missed): every slot, whose bindings each check theirs.
+		const ankerl::unordered_dense::set<ID3D11ShaderResourceView*> views(moved.begin(), moved.end());
+		for (std::uint32_t slot = 0; slot < lookups.materials.size(); ++slot) {
+			const auto& entry = lookups.materials[slot];
+			if (!entry.key.first)
+				continue;
+			bool names = false;
+			for (auto* view : entry.views)
+				names = names || (view && views.contains(view));
+			for (auto* view : entry.featureViews)
+				names = names || (view && views.contains(view));
+			// A view's owner only: a null view's is the null descriptor's, not an import.
+			if (!complete && entry.bindingBlock) {
+				const auto& block = *entry.bindingBlock;
+				for (std::size_t t = 0; t < std::min(block.textures.size(), entry.views.size()); ++t)
+					names = names || (entry.views[t] && GpuTextures::Superseded(block.textures[t].get()));
+				for (std::size_t f = 0; f < std::min(block.features.size(), entry.featureViews.size()); ++f)
+					names = names || (entry.featureViews[f] && GpuTextures::Superseded(block.features[f].get()));
+			}
+			if (!names)
+				continue;
+			++mb.stats.followed;
+			// A used slot takes the new storage's imports (the superseded ones held meanwhile); an unused one, which nothing draws, lets
+			// its bindings go (the old storage with them): it resolves anew once used again.
+			if (slot < tables.materials.size() && tables.materialSlots.Alive(slot) && tables.MaterialUsed(slot))
+				ResolveMaterialBinding(slot, true);
+			else
+				RetireMaterialBinding(slot);
+		}
+	}
+
+	void Coordinator::ResolveMaterialBinding(std::uint32_t a_slot, bool a_force)
 	{
 		auto& mb = materialBindings;
 		// Only a used slot: the used set certifies the views a record holds (Tables, "The three shared tables"). A slot freed keeps its
@@ -146,7 +191,7 @@ namespace DCLF::Scene
 		const std::uint32_t textureGeneration = GpuTextures::Get().Generation();
 		// An unchanged record keeps its bindings (no periodic restamp); a held view waits for its answer, which resolves the slot again.
 		// Read before the entry is written: a write copies its chunk when a publication shares it (SharedChunks).
-		if (const auto& current = lookups.materials[a_slot]; current.key == key && current.resolved && !mb.held[a_slot] &&
+		if (const auto& current = lookups.materials[a_slot]; !a_force && current.key == key && current.resolved && !mb.held[a_slot] &&
 															 current.recordVersion == tables.materialVersion[a_slot] && current.written == material.textureWritten &&
 															 current.texturesGeneration == textureGeneration)
 			return;
@@ -246,7 +291,8 @@ namespace DCLF::Scene
 		if (const auto it = mb.arrived.find(a_view); it != mb.arrived.end())
 			return it->second;
 		if (const auto it = mb.cache.find(a_view); it != mb.cache.end()) {
-			if (auto owner = it->second.owner.lock()) {
+			// Not an import a move superseded (pinless): its view imports anew.
+			if (auto owner = it->second.owner.lock(); owner && !(a_view && GpuTextures::Superseded(owner.get()))) {
 				++mb.stats.cached;
 				return { it->second.index, std::move(owner) };
 			}

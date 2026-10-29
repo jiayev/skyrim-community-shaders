@@ -15,6 +15,8 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuResources.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/ImportRelocations.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
@@ -291,6 +293,14 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 					 "{} rejected, {} resolved in {:.1f} ms (slowest {:.3f} ms)",
 			gpu.cached, gpu.rejected, gpu.resolvedTotal, gpu.resolveMsTotal, gpu.resolveMsMax, gpu.prefetchTaken, gpu.prefetchReleased, treeGpu.cached,
 			treeGpu.rejected, treeGpu.resolvedTotal, treeGpu.resolveMsTotal, treeGpu.resolveMsMax);
+		// Pinless imports: DXVK's moves of them, and what followed (the old storages are held until their imports' users let them go).
+		if (RenderGraphRuntime::Get().PinlessImports()) {
+			const auto moves = DCLF::ImportRelocations::GetStats();
+			logger::info("[DCLF] pinless imports: {} image and {} buffer moves taken, {} old storages held; textures: {} imports superseded, {} pinned "
+						 "(written by the GPU); buffers: {} entries moved, {} moves of no entry, {} prefetched descriptions superseded (tree LOD's: {} moved, {} of none)",
+				moves.images, moves.buffers, moves.storagesHeld, textures.superseded, textures.pinned, gpu.relocated, gpu.relocationsIgnored, gpu.prefetchSuperseded,
+				treeGpu.relocated, treeGpu.relocationsIgnored);
+		}
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
 		logger::info("[DCLF] pass capture: {} registrations from {} threads ({} overflowed)", capture.captured, capture.threads, capture.overflowed);
 		// The render thread's scene time a frame (the scene passes are the coordinator's: its "scene pump" and "scene pass CPU" lines).

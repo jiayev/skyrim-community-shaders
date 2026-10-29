@@ -4,8 +4,10 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Core/Gpu/ImportRelocations.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 
 struct ID3D11ShaderResourceView;
@@ -33,7 +35,12 @@ namespace DCLF
 	 * Request, Seal and Fixed are any thread's (the scene work's material and shared bindings): a request goes to the import
 	 * thread through a lock-free queue, which answers it as an event into the requester's queue, from the registry or by importing
 	 * with the context the render thread published (PublishImportContext, with the null descriptor and the samplers: Fixed). The
-	 * registry's lock is the render thread's (ResolveBinding) and the import thread's alone.
+	 * registry's lock is the render thread's (ResolveBinding, NoteRelocations) and the import thread's alone.
+	 *
+	 * Pinless (RenderGraphRuntime::PinlessImports): an import tracks the image instead of pinning it (one the GPU writes is still
+	 * pinned), so DXVK may move it. A move (NoteRelocations) supersedes the views' imports of the old storage: each keeps reading it,
+	 * held by the import's backing until the import's last owner lets it go, and leaves the registry, so the next lookup of its view
+	 * imports the new storage. The moved views are logged (RelocatedViews) for the bindings' holders to resolve again.
 	 */
 	class GpuTextures
 	{
@@ -60,6 +67,8 @@ namespace DCLF
 			std::uint64_t importedAsync = 0;   // imports the import thread made
 			std::uint32_t requestsPending = 0;    // Request: not answered yet
 			std::uint64_t requestsAnswered = 0;  // Request: answered
+			std::uint64_t superseded = 0;        // pinless: imports a relocation superseded
+			std::uint32_t pinned = 0;            // pinless: imports DXVK pinned all the same (images the GPU writes)
 		};
 		struct Binding
 		{
@@ -140,6 +149,24 @@ namespace DCLF
 		 * distinguish a successor import at a reused SRV address.
 		 */
 		std::uint32_t Generation() const { return generation.load(std::memory_order_acquire); }  // any thread
+
+		/**
+		 * @brief Render thread, at frame start (ImportRelocations::Poll): DXVK's image relocations. Each supersedes the imports of the
+		 * storage it replaced: their backings hold the old storage, their views leave the registry and are logged (RelocatedViews).
+		 * One taken before its import registered applies when it does.
+		 */
+		void NoteRelocations(std::span<const ImportRelocations::Relocation> a_relocations);
+
+		/**
+		 * @brief Any thread: the views whose imports a relocation superseded since a_cursor (advanced past them), each view at most as
+		 * often as it moved: a lookup imports its new storage. False when the log no longer reaches back to a_cursor (some were missed:
+		 * every binding should be resolved again).
+		 */
+		bool RelocatedViews(std::uint64_t& a_cursor, std::vector<ID3D11ShaderResourceView*>& a_out) const;
+
+		/** @brief Whether a_owner (a view's Binding's owner: an import, never a null view's) was superseded by a relocation. Any thread. */
+		static bool Superseded(const void* a_owner);
+
 		Stats GetStats() const;
 
 		void Clear();

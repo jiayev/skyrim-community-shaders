@@ -44,6 +44,7 @@
 #include "Features/Upscaling.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
+#include "Features/VRAMBudget.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
 #include "Menu.h"
@@ -95,6 +96,7 @@ namespace globals
 		TerrainShadows terrainShadows{};
 		UnifiedWater unifiedWater{};
 		VolumetricLighting volumetricLighting{};
+		VRAMBudget vramBudget{};
 		WaterEffects waterEffects{};
 		PerformanceOverlay performanceOverlay{};
 		WetnessEffects wetnessEffects{};

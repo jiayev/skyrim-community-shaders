@@ -237,6 +237,11 @@ struct RenderGraphRuntime::Impl
 	PFN_dxvkEnqueueInteropSubmissions enqueueSubmissions = nullptr;
 	PFN_dxvkGetInteropResourceInfo getResourceInfo = nullptr;
 	PFN_dxvkGetInteropResourceInfos getResourceInfos = nullptr;
+	// Optional (newer DXVK), all four or none: pinless imports (CS_ORG_PINNED_IMPORTS=1 keeps pinning).
+	PFN_dxvkTrackInteropResources trackResources = nullptr;
+	PFN_dxvkUntrackInteropResources untrackResources = nullptr;
+	PFN_dxvkPollInteropRelocations pollRelocations = nullptr;
+	PFN_dxvkReleaseInteropStorage releaseStorage = nullptr;
 #if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
 	std::unique_ptr<org::services::ShaderCompiler> shaderCompiler;
 #endif
@@ -1216,6 +1221,18 @@ bool RenderGraphRuntime::Initialize()
 	// Optional: game resources for the graph (Drawcall Limit Fix).
 	state->getResourceInfo = ResolveExport<PFN_dxvkGetInteropResourceInfo>(d3d11, "dxvkGetInteropResourceInfo");
 	state->getResourceInfos = ResolveExport<PFN_dxvkGetInteropResourceInfos>(d3d11, "dxvkGetInteropResourceInfos");
+	if (!EnvEquals("CS_ORG_PINNED_IMPORTS", "1")) {
+		state->trackResources = ResolveExport<PFN_dxvkTrackInteropResources>(d3d11, "dxvkTrackInteropResources");
+		state->untrackResources = ResolveExport<PFN_dxvkUntrackInteropResources>(d3d11, "dxvkUntrackInteropResources");
+		state->pollRelocations = ResolveExport<PFN_dxvkPollInteropRelocations>(d3d11, "dxvkPollInteropRelocations");
+		state->releaseStorage = ResolveExport<PFN_dxvkReleaseInteropStorage>(d3d11, "dxvkReleaseInteropStorage");
+		if (!state->trackResources || !state->untrackResources || !state->pollRelocations || !state->releaseStorage) {
+			state->trackResources = nullptr;
+			state->untrackResources = nullptr;
+			state->pollRelocations = nullptr;
+			state->releaseStorage = nullptr;
+		}
+	}
 	state->emitCommandBufferCallback = ResolveExport<PFN_dxvkEmitCommandBufferCallback>(d3d11, "dxvkEmitCommandBufferCallback");
 	// Optional: recordings into DXVK's own command buffer (Drawcall Limit Fix's CPU-driven pipeline).
 	state->emitExternalCommands = ResolveExport<PFN_dxvkEmitExternalCommands>(d3d11, "dxvkEmitExternalCommands");
@@ -1474,9 +1491,10 @@ bool RenderGraphRuntime::Initialize()
 #endif
 	IndirectCommandsFeatureInfo indirect{};
 	if ((*impl->device)->QueryFeatureInfo(&indirect.header) == rhi::Result::Ok) {
-		logger::info("[ORG] Indirect commands: generated commands {}, index buffer arguments {}, pipeline sets {} (up to {} pipelines); game resource export {}{}",
+		logger::info("[ORG] Indirect commands: generated commands {}, index buffer arguments {}, pipeline sets {} (up to {} pipelines); game resource export {}{}{}",
 			indirect.constantArguments, indirect.indexBufferArguments, indirect.pipelineSets, indirect.maxPipelineSetCount,
-			impl->getResourceInfo ? "available" : "missing", impl->getResourceInfos ? " (batched)" : " (not batched)");
+			impl->getResourceInfo ? "available" : "missing", impl->getResourceInfos ? " (batched)" : " (not batched)",
+			impl->trackResources ? ", pinless (relocations followed)" : ", pinned");
 	}
 	return true;
 }
@@ -2105,6 +2123,49 @@ bool RenderGraphRuntime::DescribeResources(std::span<IUnknown* const> a_objects,
 	return described;
 }
 
+bool RenderGraphRuntime::PinlessImports() const
+{
+	return impl && impl->trackResources;
+}
+
+bool RenderGraphRuntime::TrackResources(std::span<IUnknown* const> a_objects, std::span<DxvkOrgInteropTrackedResource> a_resources, std::span<HRESULT> a_results)
+{
+	if (!PinlessImports() || a_resources.size() != a_objects.size() || a_results.size() != a_objects.size())
+		return false;
+	for (auto& resource : a_resources) {
+		resource = {};
+		resource.version = DXVK_ORG_TRACKED_RESOURCE_VERSION;
+		resource.info.version = DXVK_ORG_INTEROP_VERSION;
+	}
+	const auto start = std::chrono::steady_clock::now();
+	const bool described = SUCCEEDED(impl->trackResources(globals::d3d::device, static_cast<UINT>(a_objects.size()), a_objects.data(), a_resources.data(), a_results.data()));
+	describeCalls.fetch_add(1, std::memory_order_relaxed);
+	describeObjects.fetch_add(a_objects.size(), std::memory_order_relaxed);
+	describeNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count(), std::memory_order_relaxed);
+	return described;
+}
+
+void RenderGraphRuntime::UntrackResources(std::span<IUnknown* const> a_objects)
+{
+	if (PinlessImports() && !a_objects.empty())
+		impl->untrackResources(globals::d3d::device, static_cast<UINT>(a_objects.size()), a_objects.data());
+}
+
+std::uint32_t RenderGraphRuntime::PollRelocations(std::span<DxvkOrgInteropRelocation> a_relocations)
+{
+	std::uint32_t count = 0;
+	if (PinlessImports() && !a_relocations.empty() &&
+		FAILED(impl->pollRelocations(globals::d3d::device, a_relocations.data(), static_cast<std::uint32_t>(a_relocations.size()), &count)))
+		count = 0;
+	return count;
+}
+
+void RenderGraphRuntime::ReleaseStorage(std::span<void* const> a_storages)
+{
+	if (PinlessImports() && !a_storages.empty())
+		impl->releaseStorage(globals::d3d::device, static_cast<UINT>(a_storages.size()), a_storages.data());
+}
+
 bool RenderGraphRuntime::EmitExternalCommands(void (*a_record)(void* a_user, VkCommandBuffer a_commandBuffer), void* a_user,
 	std::span<const ExternalCommandsWait> a_waits, std::span<const ExternalCommandsWait> a_signals, bool a_bindsState, const char* a_label,
 	bool a_fullBarrier)
@@ -2190,6 +2251,11 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment, const std::function<void(org::Ren
 	std::shared_ptr<const void>) { return false; }
 bool RenderGraphRuntime::DescribeResource(IUnknown*, DxvkOrgInteropResourceInfo&) { return false; }
 bool RenderGraphRuntime::DescribeResources(std::span<IUnknown* const>, std::span<DxvkOrgInteropResourceInfo>, std::span<HRESULT>) { return false; }
+bool RenderGraphRuntime::PinlessImports() const { return false; }
+bool RenderGraphRuntime::TrackResources(std::span<IUnknown* const>, std::span<DxvkOrgInteropTrackedResource>, std::span<HRESULT>) { return false; }
+void RenderGraphRuntime::UntrackResources(std::span<IUnknown* const>) {}
+std::uint32_t RenderGraphRuntime::PollRelocations(std::span<DxvkOrgInteropRelocation>) { return 0; }
+void RenderGraphRuntime::ReleaseStorage(std::span<void* const>) {}
 bool RenderGraphRuntime::EmitExternalCommands(void (*)(void*, VkCommandBuffer), void*, std::span<const ExternalCommandsWait>,
 	std::span<const ExternalCommandsWait>, bool, const char*, bool) { return false; }
 org::services::ShaderCompiler* RenderGraphRuntime::ShaderCompiler() { return nullptr; }

@@ -216,6 +216,38 @@ typedef HRESULT(__stdcall* PFN_dxvkGetInteropResourceInfo)(ID3D11Device* pDevice
 // dxvkGetInteropResourceInfo for many objects: the buffers needing a stable address are pinned by one chunk on DXVK's worker
 // thread, one synchronization in all. pResults[i] is object i's result.
 typedef HRESULT(__stdcall* PFN_dxvkGetInteropResourceInfos)(ID3D11Device* pDevice, UINT count, IUnknown* const* pObjects, DxvkOrgInteropResourceInfo* pInfos, HRESULT* pResults);
+
+// Pinless imports. dxvkTrackInteropResources describes resources like dxvkGetInteropResourceInfos without pinning them: each
+// call counts one import of each object's resource, and while it has any, DXVK may still move it, only with moves that copy its
+// contents (renames that discard them are suppressed). Each move is a relocation (dxvkPollInteropRelocations) holding the old
+// storage, valid and in the described layout until dxvkReleaseInteropStorage. Tracked resources are never evicted. The client
+// keeps a reference on each object until dxvkUntrackInteropResources (any thread) ends the import.
+#define DXVK_ORG_TRACKED_RESOURCE_VERSION 1u
+// A tracked resource the GPU writes (a render target, depth, storage image or buffer) is pinned instead: it never moves, as its
+// old storage would read stale after a move.
+#define DXVK_ORG_TRACKED_PINNED 1u
+struct DxvkOrgInteropTrackedResource
+{
+	uint32_t version;  // DXVK_ORG_TRACKED_RESOURCE_VERSION
+	uint32_t flags;    // DXVK_ORG_TRACKED_PINNED
+	uint64_t cookie;         // names the resource (not the view) in relocations; never reused
+	uint64_t storageSerial;  // the storage info describes: a relocation with a greater serial replaced it
+	DxvkOrgInteropResourceInfo info;  // info.version: DXVK_ORG_INTEROP_VERSION
+};
+struct DxvkOrgInteropRelocation
+{
+	uint64_t cookie;
+	uint64_t storageSerial;  // the new storage's
+	void* storage;           // the old storage, alive until dxvkReleaseInteropStorage
+	uint32_t kind;           // DxvkOrgInteropResourceKind
+	uint32_t reserved;
+};
+typedef HRESULT(__stdcall* PFN_dxvkTrackInteropResources)(ID3D11Device* pDevice, UINT count, IUnknown* const* pObjects, DxvkOrgInteropTrackedResource* pResources, HRESULT* pResults);
+typedef HRESULT(__stdcall* PFN_dxvkUntrackInteropResources)(ID3D11Device* pDevice, UINT count, IUnknown* const* pObjects);
+// Takes up to capacity relocations, oldest first (any thread). Each taken must be released, including those of resources no
+// longer imported.
+typedef HRESULT(__stdcall* PFN_dxvkPollInteropRelocations)(ID3D11Device* pDevice, DxvkOrgInteropRelocation* pRelocations, uint32_t capacity, uint32_t* pCount);
+typedef HRESULT(__stdcall* PFN_dxvkReleaseInteropStorage)(ID3D11Device* pDevice, UINT count, void* const* pStorages);
 // Address of the immediate context's submission counter: +1 each time DXVK closes a command list (implicit
 // flushes, Flush(), the flush ahead of an enqueued submission). Read on the immediate context's thread.
 typedef HRESULT(__stdcall* PFN_dxvkGetSubmissionCounter)(ID3D11Device* pDevice, const volatile uint64_t** ppCounter);

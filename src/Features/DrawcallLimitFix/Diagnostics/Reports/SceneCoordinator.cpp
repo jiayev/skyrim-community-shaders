@@ -226,10 +226,11 @@ namespace DCLF::Reports
 					}
 				});
 				const auto& bs = mb.stats;
-				text += fmt::format("[DCLF] material bindings (T6b2c: the scene work's): {} views requested, {} answered ({} rejected, {} stale), {} served from the "
-									"answers kept ({} kept); {} entries resolved, {} retired, {} changes versioned into the scene lane's lookups; pending now: {} views "
-									"requested and not answered, {} used slots waiting, {} holding their previous view\n",
-					bs.requested, bs.answered, bs.rejected, bs.stale, bs.cached, mb.cache.size(), bs.resolved, bs.retired, bs.versioned, mb.inFlight.size(), waiting, holding);
+				text += fmt::format("[DCLF] material bindings (T6b2c: the scene work's): {} views requested, {} answered ({} rejected, {} stale, {} superseded by a move), {} "
+									"served from the answers kept ({} kept); {} entries resolved, {} retired, {} resolved again for a moved view, {} changes versioned into "
+									"the scene lane's lookups; pending now: {} views requested and not answered, {} used slots waiting, {} holding their previous view\n",
+					bs.requested, bs.answered, bs.rejected, bs.stale, bs.superseded, bs.cached, mb.cache.size(), bs.resolved, bs.retired, bs.followed, bs.versioned,
+					mb.inFlight.size(), waiting, holding);
 				mb.stats = {};
 			}
 			// The shared, projected, mask and shadow texture bindings the scene work makes.
@@ -455,9 +456,9 @@ namespace DCLF::Reports
 				logger::info("[DCLF] fading: {} screen-door fading objects drawn by DCLF over {} frames", fading, fadingFrames);
 			// The features' lines here (Features/Skins' skinned line, then Features/Decals' candidates), the components' with their context.
 			V::componentsReportLines(s, Api::ReportPoint::SceneCoordinatorLastPass, a_sceneFrame);
-			logger::info("[DCLF] derived cache (the last pass): {} served, {} recomputed and compared, {} differ{}; slots alive {} geometries / {} pipelines / {} materials, {} swept, {} geometries refreshed in place, {} slot violations{}",
+			logger::info("[DCLF] derived cache (the last pass): {} served, {} recomputed and compared, {} differ{}; slots alive {} geometries / {} pipelines / {} materials, {} swept, {} geometries refreshed in place ({} for moved buffers), {} slot violations{}",
 				stats.derivedHits, stats.derivedChecked, stats.derivedDiffers, stats.derivedDiffers ? " <- STALE" : "",
-				stats.geometriesAlive, stats.pipelinesAlive, stats.materialsAlive, stats.slotsSwept, stats.geometriesRefreshed,
+				stats.geometriesAlive, stats.pipelinesAlive, stats.materialsAlive, stats.slotsSwept, stats.geometriesRefreshed, stats.geometriesRelocated,
 				stats.slotViolations, stats.slotViolations ? " <- SLOT VIOLATION" : "");
 			if (stats.classifyHits || stats.classifyChecked)
 				logger::info("[DCLF] classification cache (the last pass): {} served from the cache, {} recomputed and compared, {} differ{}",
