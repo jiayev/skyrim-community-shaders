@@ -920,6 +920,7 @@ namespace DCLF
 			a_readback.fullWrites.fetch_add(full ? 1 : 0, std::memory_order_relaxed);
 			list->tables = a_newest.tables;
 			list->publication = a_newest.publication;
+			list->retirement = a_newest.retirement;
 			if (candidates)
 				list->candidates = a_newest.candidates;
 			return list;
@@ -1127,6 +1128,7 @@ namespace DCLF
 				batch->reset = armed.reset || std::exchange(a_readback.carryReset, false);
 				batch->tables = std::move(armed.tables);
 				batch->publication = armed.publication;
+				batch->retirement = std::move(armed.retirement);
 				batch->candidates = std::move(armed.candidates);
 				batch->complete = a_count <= a_capacity;
 				const auto* list = reinterpret_cast<const VisibilityEvent*>(a_words + kVisibilityEventHeaderWords);
@@ -1139,6 +1141,7 @@ namespace DCLF
 			a_readback.carryReset = a_readback.carryReset || armed.reset;
 			armed.tables.reset();
 			armed.candidates.reset();
+			armed.retirement.reset();
 		}
 	}
 
@@ -1257,6 +1260,7 @@ namespace DCLF
 		armed.reset = reset;
 		armed.tables = Scene::FrameView::Get().AcceptedTables();
 		armed.publication = Scene::FrameView::Get().InstalledSequence();
+		armed.retirement = Scene::FrameView::Get().InstalledRetirement();
 		// For the wide writes' plain entry roots.
 		armed.candidates = Scene::FrameView::Get().GetSunCandidates();
 		// Decode a harvested batch now, so its writes reach the next Main::Update (one frame less latency).
@@ -1335,17 +1339,17 @@ namespace DCLF
 		for (auto* list = ordered; list;) {
 			// A batch older than the last cut applies sets only; the post-cut full write restores the clears.
 			const bool beforeCut = cut && list->frame < cut;
-			// Its nodes are its publication's (the one installed when its frame was armed), which holds none of them: alive while no
-			// stamp past it was released. One released past (a decode that outlived the release horizon) writes nothing and asks for a
-			// full write, which follows from the installed publication.
+			// Its nodes are its publication's (the one installed when its frame was armed), alive while it holds the publication's
+			// retirement node. One whose publication was released all the same (a list made without its node: a defect) writes nothing
+			// and asks for a full write, which follows from the installed publication.
 			const bool alive = EngineReleases::Alive(list->publication);
 			const std::uint32_t age = Scene::FrameView::Get().GetFrame() - list->frame;
 			for (std::uint32_t seen = r.writeAgeMax.load(std::memory_order_relaxed); age > seen && !r.writeAgeMax.compare_exchange_weak(seen, age, std::memory_order_relaxed);) {}
 			if (!alive) {
 				static std::uint32_t expiredLogged = 0;
 				if (expiredLogged++ < 6)
-					logger::info("[DCLF] readback writes past the release horizon: list publication {} (frame {}), released through {}, releasable {}, installed {} (frame {})",
-						list->publication, list->frame, EngineReleases::releasedThrough.load(), EngineReleases::Releasable(), Scene::FrameView::Get().InstalledSequence(),
+					logger::info("[DCLF] readback writes of a released publication: list publication {} (frame {}), released through {}, handed over through {}, installed {} (frame {})",
+						list->publication, list->frame, EngineReleases::releasedThrough.load(), EngineReleases::pushedThrough.load(), Scene::FrameView::Get().InstalledSequence(),
 						Scene::FrameView::Get().GetFrame());
 				r.writesExpired.fetch_add(list->writes.size(), std::memory_order_relaxed);
 				r.refreshWanted.store(true, std::memory_order_release);

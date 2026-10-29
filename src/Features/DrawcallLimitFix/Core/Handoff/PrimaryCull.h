@@ -551,6 +551,7 @@ namespace DCLF
 		struct PlanBatch
 		{
 			std::shared_ptr<const EntrySpace> candidates;
+			std::shared_ptr<const void> retirement;  // the installed publication's retirement node at the kick: the roots stay alive until taken
 			std::vector<PlannedEntry> entries;
 		};
 		EventQueue<PlanBatch*, 64> plansReady;  // the pool's, drained by TakePlans

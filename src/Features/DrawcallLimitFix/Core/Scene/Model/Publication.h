@@ -50,6 +50,10 @@ namespace DCLF
 		ToggleSet toggles{};
 		std::uint32_t tablesGeneration = 0;  // the tables' generation (GetTablesGeneration while it is the frame's)
 		std::shared_ptr<const SceneTables> tables;
+		// The retirement chain's node published with its tables: the slots and imports retired after them are freed once no publication
+		// up to it lives. Held by the frame's path alone - the builder, the installed frame, the GPU executions that draw it, the readback
+		// slots armed with it (Readback::Armed::retirement) - so its holders are bounded by the frames in flight.
+		std::shared_ptr<const void> retirementHold;
 		std::shared_ptr<const SetSnapshot> claims;
 		std::array<std::uint32_t, 3> lackingCount{};
 		// The lookups the draws were built with, parallel to the tables, and the catalog they were resolved from, whose

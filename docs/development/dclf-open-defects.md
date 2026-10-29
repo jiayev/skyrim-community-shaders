@@ -151,6 +151,37 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     missing for those frames. Waiting on the catalog at the frame's start could exceed the 5 s bound while the pipelines compile.
     This needs its own design: for example, the old catalog keeps drawing into compatible formats until the new one is installed.
 
+## Memory retention
+
+-   **About 2.5 GB more dedicated VRAM after leaving an exterior, outside D3D11.** On the short retention tour (save, `coc Whiterun`,
+    `coc RiverwoodSleepingGiantInn`, `pcb`, 45 s in the inn; `tour.sh` in the session scratch folder, runs p1onT3 and p1offT3 on
+    2026-10-28), Task Manager's dedicated usage ends at 13,854 MiB with DCLF and 11,308 MiB without. With DCLF it does not drop
+    after `pcb`. The DXVK allocation trace (`DXVK_ALLOC_TRACE=10`) finds no D3D11 difference:
+
+    | After `pcb` | DCLF on | DCLF off |
+    |---|---|---|
+    | Live device-local, total | 8,464 MiB | 9,129 MiB |
+    | SkyrimSE.exe | 4,513 MiB | 5,178 MiB |
+    | CommunityShaders.dll | 2,608 MiB | 2,608 MiB |
+
+    So the difference is Vulkan memory the trace does not see. The candidates are DXVK keeping freed chunks resident after DCLF's
+    higher peak, and ORG/BasicRHI's own allocations. The engine-reference retention that held about 5 GB of game textures is fixed
+    (`dclf-scene-lifetime-survey.md`, section 12).
+
+    **Cause (runs dxon2/dxoff2):** DXVK's chunk statistics (`describeDevicePoolChunks` in the alloc trace) show that defragmentation
+    cannot run with DCLF on.
+    -   DCLF on, after `pcb`: all 33 device-local chunks hold locked allocations (3,150 of them), and 4,564 of 7,636 MiB is used.
+    -   DCLF off: no locks. Defragmentation shrinks the pool from 38 to 24 chunks.
+
+    Every ORG import (`GetResourceInfo` → `ensureBufferAddress`/`LockImage`) locks its resource's address for the resource's whole
+    life. About 2,300 of the 3,150 locks are live imports (1,795 buffers, 523 textures); the rest are resources DCLF no longer
+    imports. The peak was 11,702 locks.
+
+    The DCLF-on figure of 2,168 MiB outside DXVK, against 1,285 off, is separate (BasicRHI's allocator) and still open.
+
+    **Fix direction:** relocation-following imports (DXVK reports each move of an imported read-only resource; DCLF re-imports it
+    through the stale-slot and retired-import paths). Pinning stays only for the few writable or CS-owned imports.
+
 ## Payload and table defects
 
 -   **An entry write the incremental visibility pass skips.** Under motion, `CS_DCLF_PERSISTENT_PARITY` reports

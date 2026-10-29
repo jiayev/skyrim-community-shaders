@@ -254,9 +254,7 @@ namespace DCLF
 		// one applying the events alone runs here, so the queues do not wait for a frame.
 		if (const bool ran = std::exchange(frameRan, false); Policy::ScenePassInline() && !ran)
 			Scene::Coordinator::Get().ApplyEventsInline();
-		// What the scene work let go of: dropped on the engine's main thread with nothing reading them. The horizon first: the scene work
-		// releases what no frame of the last kReleaseFrames installed a publication naming.
-		EngineReleases::NoteInstalled(Scene::FrameView::Get().InstalledSequence());
+		// What the scene work let go of: dropped on the engine's main thread with nothing reading them.
 		EngineReleases::Release();
 		counters.timing.eventsMs += MillisecondsSince(start);
 	}

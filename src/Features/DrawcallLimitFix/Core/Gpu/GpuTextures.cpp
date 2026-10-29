@@ -160,10 +160,15 @@ namespace DCLF
 		struct Entry;
 		struct Registry
 		{
+			/**
+			 * @brief A view's import. A rejection is permanent for the device generation, and is kept by key without holding the view
+			 * (a held view would keep its texture alive after the game let it go): the view carries kRejectedTag with the slot's serial,
+			 * and a lookup that finds a rejected slot confirms the tag, so a new view at a freed one's address is not taken for it.
+			 */
 			struct Slot
 			{
 				std::weak_ptr<Entry> live;
-				std::shared_ptr<Entry> rejected;  // permanent rejection pins its source identity for this device generation
+				bool rejected = false;
 				std::uint64_t serial = 0;
 			};
 			std::mutex mutex;
@@ -200,7 +205,7 @@ namespace DCLF
 					if (binding)
 						owner->liveCount.fetch_sub(1, std::memory_order_relaxed);
 					std::scoped_lock lock(owner->mutex);
-					if (const auto found = owner->entries.find(key); found != owner->entries.end() && found->second.serial == serial)
+					if (const auto found = owner->entries.find(key); found != owner->entries.end() && found->second.serial == serial && !found->second.rejected)
 						owner->entries.erase(found);
 				}
 			}
@@ -311,6 +316,25 @@ namespace DCLF
 
 		// The registry's answer for a view; under its lock. The registry holds entries weakly: an import in flight is owned by
 		// the import thread, and an import goes when nobody holds it any more.
+		// {8B1E3F52-6C0D-4E2A-9A61-3D5C2F7B4E10}: a view DCLF rejected, with its registry slot's serial.
+		static constexpr GUID kRejectedTag = { 0x8b1e3f52, 0x6c0d, 0x4e2a, { 0x9a, 0x61, 0x3d, 0x5c, 0x2f, 0x7b, 0x4e, 0x10 } };
+		/** @brief A slot's rejection kept by key (the registry's lock held): the view tagged with the slot's serial, the entry not held. */
+		static void MarkRejected(Registry::Slot& a_slot, const Entry& a_entry)
+		{
+			if (a_slot.rejected)
+				return;
+			a_slot.rejected = true;
+			if (a_entry.view)
+				a_entry.view->SetPrivateData(kRejectedTag, sizeof(a_slot.serial), &a_slot.serial);
+		}
+		/** @brief Whether a_view is the view a rejected slot of a_serial was for. */
+		static bool Tagged(ID3D11ShaderResourceView* a_view, std::uint64_t a_serial)
+		{
+			std::uint64_t serial = 0;
+			UINT size = sizeof(serial);
+			return a_view && SUCCEEDED(a_view->GetPrivateData(kRejectedTag, &size, &serial)) && size == sizeof(serial) && serial == a_serial;
+		}
+
 		static Found Find(Registry& a_registry, ID3D11ShaderResourceView* a_view, Binding& a_binding)
 		{
 			const auto found = a_registry.entries.find(a_view);
@@ -325,7 +349,7 @@ namespace DCLF
 					a_binding.pending = true;
 					return Found::Pending;
 				case State::Rejected:
-					slot.rejected = std::move(live);
+					MarkRejected(slot, *live);
 					a_binding = { kInvalid, {} };
 					return Found::Rejected;
 				case State::Ready:
@@ -335,8 +359,12 @@ namespace DCLF
 				}
 			}
 			if (slot.rejected) {
-				a_binding = { kInvalid, {} };
-				return Found::Rejected;
+				if (Tagged(a_view, slot.serial)) {
+					a_binding = { kInvalid, {} };
+					return Found::Rejected;
+				}
+				// Another view at a released one's address.
+				a_registry.entries.erase(found);
 			}
 			return Found::Unknown;
 		}
@@ -485,7 +513,7 @@ namespace DCLF
 				if (reject != Reject::None) {
 					std::scoped_lock lock(table.mutex);
 					if (const auto found = table.entries.find(key); found != table.entries.end() && found->second.serial == entry->serial)
-						found->second.rejected = entry;
+						MarkRejected(found->second, *entry);
 				}
 				binding = AnswerOf(entry, reject);
 			}
@@ -589,7 +617,7 @@ namespace DCLF
 				slot.live = entry;
 				slot.serial = entry->serial;
 				if (reject != Reject::None)
-					slot.rejected = entry;
+					Impl::MarkRejected(slot, *entry);
 			}
 			if (reject != Reject::None)
 				return { kInvalid, {} };

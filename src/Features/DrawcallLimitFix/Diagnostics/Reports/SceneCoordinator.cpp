@@ -508,8 +508,8 @@ namespace DCLF::Reports
 					posted, posts.pipelinesApplied, posts.stale, posts.techniquesEvaluated, posts.techniquesWritten, posts.techniqueInputsMoved);
 			const auto replay = std::exchange(Diagnostics::SceneDiagnostics().replay, {});
 			if (const auto publication = s.TakeTablesPublication(); publication.published) {
-				logger::info("[DCLF] tables published (step 6): {} snapshots ({} written again, {} made, pool {}), {:.3f} ms each on the coordinator (max {:.3f}), one per pass that changed something (T6b3d); lookups with them (T6b2c step 5): {} copied ({} chunks written again since, {:.3f} ms a copy, max {:.3f}), {} the last copy shared again (unchanged)",
-					publication.published, publication.reused, publication.made, publication.pool, publication.ms / publication.published, publication.maxMs,
+				logger::info("[DCLF] tables published (step 6): {} snapshots ({} written again, {} made, pool {}, {} free ones let go of), {:.3f} ms each on the coordinator (max {:.3f}), one per pass that changed something (T6b3d); lookups with them (T6b2c step 5): {} copied ({} chunks written again since, {:.3f} ms a copy, max {:.3f}), {} the last copy shared again (unchanged)",
+					publication.published, publication.reused, publication.made, publication.pool, publication.trimmed, publication.ms / publication.published, publication.maxMs,
 					publication.lookupsCopied, publication.lookupsChunks, publication.lookupsMs / std::max<std::uint64_t>(publication.lookupsCopied, 1), publication.lookupsMaxMs,
 					publication.lookupsShared);
 				const double n = double(publication.published);

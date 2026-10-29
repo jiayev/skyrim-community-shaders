@@ -26,8 +26,10 @@ namespace DCLF::Scene
 		static constexpr std::size_t kReplayMinSlots = 96, kReplayMinMaterials = 24;
 		// Material records a replay chunk copies (2.4 KB each).
 		static constexpr std::size_t kReplayMaterialGrain = 32;
-		// The last published snapshot.
+		// The last published snapshot, and the retirement chain's node published with it, which every publication carrying those tables
+		// holds (ScenePublication::retirementHold).
 		std::shared_ptr<SceneTables> publishedTables;
+		std::shared_ptr<const void> publishedRetirement;
 		using PublicationDeltas = DCLF::PublicationDeltas;
 		std::uint64_t publicationSequence = 0;
 		std::uint32_t publicationCommitFrame = 0;    // the commit the next publication applies

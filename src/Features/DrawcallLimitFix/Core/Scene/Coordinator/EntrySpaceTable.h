@@ -88,8 +88,8 @@ namespace DCLF::Scene
 		// by the old): the caller writes that entry again.
 		std::vector<const RE::BSGeometry*> released;
 		// The entry roots the last publication names, by index: the only references a candidate set holds (its snapshots hold none).
-		// An index Publish writes under another root lets its old one go into retiredRoots, which the caller stamps with the publication
-		// (ReleaseRing::Retire): released once no frame of the horizon reads a publication that names it.
+		// An index Publish writes under another root lets its old one go into retiredRoots, which the caller retires through its chain
+		// (released once no publication that names it lives).
 		std::vector<RE::NiPointer<RE::NiAVObject>> owned;
 		std::vector<RE::NiPointer<RE::NiRefObject>> retiredRoots;
 

@@ -131,10 +131,14 @@ namespace DCLF::Scene
 			return;
 		const std::uint8_t cause = a_force ? 1 : 0;
 		channels.categoryAppliedGeneration.store(capture->generation, std::memory_order_release);
-		// Pins held by the capture until the render thread drops it.
-		for (const auto& pin : capture->pins) {
-			batchPins.insert_or_assign(pin.get(), pin.get());
-			++referenceStats.pins;
+		// Pins held by the capture until this batch is over (Channels::categoryPinsReleased), taken at its first application alone: a
+		// forced diff of an applied capture finds them let go of.
+		if (capture->generation > categoryPinsGeneration) {
+			categoryPinsGeneration = capture->generation;
+			for (const auto& pin : capture->pins) {
+				batchPins.insert_or_assign(pin.get(), pin.get());
+				++referenceStats.pins;
+			}
 		}
 		categorySignature = capture->signature;
 		viewRoots = capture->viewRoots;

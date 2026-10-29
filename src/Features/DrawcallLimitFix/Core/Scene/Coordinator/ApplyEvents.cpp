@@ -294,11 +294,13 @@ namespace DCLF::Scene
 			unpublishedNs = batch->oldestNs;
 			unpublishedFrame = batch->oldestFrame;
 		}
-		// Its events hold engine references (detached subtrees a published table may still name): released through the ReleaseRing.
+		// Its events hold engine references (detached subtrees a published table may still name): retired through the chain.
 		if (batch->head || !batch->switches.empty())
-			releases.Open().owners.push_back(std::move(batch));
+			retirement.Open().owners.push_back(std::move(batch));
 		// No reference is made from the pins after the apply. Let go, not cleared: a burst's buckets would be cleared again by every pass.
+		// The category captures' pins taken so far may go (the render thread drops them).
 		batchPins = {};
+		channels.categoryPinsReleased.store(categoryPinsGeneration, std::memory_order_release);
 	}
 
 	void Coordinator::RefreshBatchCategories(const BatchIndex& a_index)

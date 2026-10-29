@@ -653,6 +653,12 @@ namespace DCLF::Scene
 		const std::uint64_t applied = channels.categoryAppliedGeneration.load(std::memory_order_acquire);
 		while (categoryCapturesHeld.size() > 1 && categoryCapturesHeld.front()->generation < applied)
 			categoryCapturesHeld.pop_front();
+		// The pins of the kept ones the coordinator is done with (its references made): every node and geometry under the cells they
+		// captured would be held until the next cell change. The category nodes themselves stay held (`held`).
+		const std::uint64_t pinsReleased = channels.categoryPinsReleased.load(std::memory_order_acquire);
+		for (const auto& held : categoryCapturesHeld)
+			if (held->generation <= pinsReleased && !held->pins.empty())
+				std::exchange(held->pins, {});
 		const std::uint64_t signature = RefreshCategorySignature(a_force, frame);
 		if (!a_force && categoryCapture && signature == categoryCapture->signature)
 			return timed();

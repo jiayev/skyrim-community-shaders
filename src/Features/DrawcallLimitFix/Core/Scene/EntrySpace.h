@@ -31,7 +31,8 @@ namespace DCLF
 
 		std::uint32_t generation = 0;
 		// The first publication that may carry it: the entry nodes it names live while EngineReleases::Alive(publication) (their table
-		// owns them, released by the horizon; the snapshot holds none, so a reader keeping it keeps no engine object alive).
+		// owns them, retired through the coordinator's chain; the snapshot holds none, so a reader keeping it keeps no engine object
+		// alive).
 		std::uint64_t publication = 0;
 		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> entries;     // entry node -> entry index
 		std::vector<const RE::NiAVObject*> entryNodes;                                  // entry index -> entry node (null: free)
