@@ -2289,13 +2289,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float skylightingShadowVisibility = 1.0;
 #		endif
 #		if defined(DEFERRED)
-	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
-		,
-		skylightingShadowVisibility,
-		false
+	// One probe pass serves both lookups when the height clamp leaves the position unchanged.
+	const bool skylightingWantsShadowVis = inWorld && UseSkylightingShadowVisibility();
+	const float3 positionMSShadowVis = Skylighting::ClampToArrayHeight(positionMSSkylight);
+	const bool skylightingShadowVisShared = skylightingWantsShadowVis && positionMSShadowVis.z == positionMSSkylight.z;
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal, skylightingShadowVisibility, skylightingShadowVisShared);
+	[branch] if (skylightingWantsShadowVis && !skylightingShadowVisShared)
+		Skylighting::Sample(positionMSShadowVis, worldNormal, skylightingShadowVisibility);
+#			else
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal);
 #			endif
-	);
 #		else
 	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
@@ -2306,7 +2310,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 									  ) :
 	                              Skylighting::UNIT_SH;
 #		endif
-#		if defined(SKYLIGHTING_SHADOW_VIS)
+#		if defined(SKYLIGHTING_SHADOW_VIS) && !defined(DEFERRED)
 	// Height clamped so shadow visibility stays valid above the volume, unlike the diffuse SH fade
 	[branch] if (inWorld && UseSkylightingShadowVisibility())
 		Skylighting::Sample(Skylighting::ClampToArrayHeight(positionMSSkylight), worldNormal, skylightingShadowVisibility);
@@ -3117,12 +3121,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 vanillaFogColor = fogColor;
 	float vanillaFogFactor = fogFactor;
 	if (SharedData::exponentialHeightFogSettings.enabled) {
-		float4 exponentialHeightFog;
-		if (inReflection) {
-			exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogNoVolumetric(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
-		} else {
-			exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
-		}
+		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogInternal(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, true, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1), !inReflection);
 		fogColor = exponentialHeightFog.xyz;
 		fogFactor = exponentialHeightFog.w;
 	}
