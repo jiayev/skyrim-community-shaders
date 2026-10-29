@@ -11,13 +11,16 @@
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
+#include "Features/PostProcessing.h"
 #include "Features/RemoteControl/NvPerf.h"
+#include "Features/ScreenshotFeature.h"
 #include "GpuEventTimers.h"
 #include "Globals.h"
 
 #include <Tracy/Tracy.hpp>
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "State.h"
+#include "Vram/VramLedger.h"
 
 #include <ORGModuleServices/PipelineRegistry.h>
 #include <OpenRenderGraph/PersistentGraphHost.h>
@@ -299,6 +302,36 @@ namespace DCLF
 					// "dclf:mark[=<label>]": nothing but this line in the log, a phase's boundary for the run's analysis.
 					if (command == "dclf:mark" || command.rfind("dclf:mark=", 0) == 0)
 						return;
+					// "dclf:shot=<label>": this frame's back buffer saved as <log directory>/dclf-shots/<label>.png (the Screenshot feature's
+					// format, at this Present), so a run's captures are tied to the frames its commands ran at; "Saved screenshot to" marks each
+					// written.
+					if (command.rfind("dclf:shot=", 0) == 0) {
+						const auto dir = logger::log_directory().value_or(std::filesystem::path{}) / "dclf-shots";
+						globals::features::screenshotFeature.RequestCapture(dir / (command.substr(10) + ".png"));
+						return;
+					}
+					// "dclf:vram-json": VRAM attribution's snapshot (the menu's Memory dump) written to the log directory.
+					if (command == "dclf:vram-json") {
+						const auto path = Vram::WriteJson(logger::log_directory().value_or(std::filesystem::path{}));
+						logger::info("[DCLF] VRAM attribution written to {}", path.string());
+						return;
+					}
+					// "dclf:pp=<sub-feature type>=0|1": a Post Processing effect's menu toggle (GetType(), e.g. "Depth of Field"), so a run
+					// can check that disabling an effect frees its textures and enabling it creates them again.
+					if (command.rfind("dclf:pp=", 0) == 0) {
+						const auto separator = command.rfind('=');
+						const auto type = command.substr(8, separator - 8);
+						bool found = false;
+						for (auto& pipe : globals::features::postProcessing.pipeline) {
+							if (pipe && pipe->GetType() == type) {
+								pipe->enabled = command.substr(separator + 1) != "0";
+								found = true;
+							}
+						}
+						if (!found)
+							logger::warn("[DCLF] dclf:pp: no Post Processing effect '{}'", type);
+						return;
+					}
 					// "dclf:feature=0|1": the feature's menu toggle (as CS_DCLF_TEST_TOGGLE flips it), for in-session on/off A/Bs.
 					if (command.rfind("dclf:feature=", 0) == 0) {
 						globals::state->SetFeatureDisabled(Harness().feature, command.substr(13) == "0");

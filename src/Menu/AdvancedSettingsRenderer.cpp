@@ -763,7 +763,7 @@ void AdvancedSettingsRenderer::RenderTestingSection()
 		if (Vram::Debug::Enabled())
 			ImGui::TextUnformatted(T("menu.advanced.vram_debug_on", "VRAM debug mode is on"));
 		else
-			ImGui::TextDisabled("%s", T("menu.advanced.vram_debug_off", "Set CS_VRAM_DEBUG=1 and restart to trace unattributed memory"));
+			ImGui::TextDisabled("%s", T("menu.advanced.vram_debug_off", "Set CS_VRAM_DEBUG=1 and restart to list the render graph's device memory by call site"));
 
 		ImGui::Spacing();
 		if (Util::LabeledButton("##TestConditions", Icons::TI(MenuIcons::kTestScene), T("menu.advanced.test_conditions", "Test Conditions")))

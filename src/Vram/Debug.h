@@ -11,14 +11,16 @@
 #endif
 
 /**
- * @brief VRAM attribution's debug mode (CS_VRAM_DEBUG=1, from the environment or the switches file): finds the creators of memory
- * no owner scope or name claims. Decided before the D3D11 device exists, since it changes what DXVK records per resource.
+ * @brief VRAM attribution's tracing: finds the creators of memory no owner scope or name claims.
  *
- * - DXVK records each buffer's and image's creation stack; unattributed resources are traced to the first frame outside DXVK
- *   (SkyrimSE.exe -> the game, another module -> that plugin, CS -> the function).
- * - Every vkAllocateMemory/vkFreeMemory the render graph makes goes through a ledger, so ORG's device memory is exact and its
- *   allocations no tracked resource claims are listed by call site.
+ * Always on (with DXVK's attribution exports):
+ * - DXVK records each buffer's and image's creation stack; a resource without an owner or a name is traced to the first frame
+ *   outside DXVK (SkyrimSE.exe -> the game, another module -> that plugin, CS -> the function).
  * - The game's texture loads (BSShaderManager::GetTexture) label their textures "Game/Textures/<folder>" with their path.
+ *
+ * Debug mode (CS_VRAM_DEBUG=1, from the environment or the switches file) adds a ledger every vkAllocateMemory/vkFreeMemory the
+ * render graph makes goes through, so ORG's device memory is exact and its allocations no tracked resource claims are listed by
+ * call site.
  */
 namespace Vram::Debug
 {

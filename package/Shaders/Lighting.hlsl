@@ -29,6 +29,19 @@ uint PixelDescriptor()
 #endif
 }
 
+#if defined(DCLF_BINDLESS_DRAW)
+// The draw's shadow lights (Light Limit Fix's ShadowBitMask, LightLimitFix.hlsli's ShadowBitMaskOf). GetRenderPasses gives a pass
+// shadow lights only where it lets the pass have deferred shadows (FUN_1414fcf80's flag, AE 0x1414adfb0): a translucent object
+// takes none unless it is screen-door faded, a decal or kAssumeShadowmask, which is when its static bits (StaticShadowBits) carry
+// DefShadow. BuildDrawsCS selects them by the bound alone, so a pass without DefShadow drops them here: a blended object would
+// otherwise take each light unshadowed (no DefShadow, no shadow mask) where the engine leaves it out.
+uint DCLFShadowLightMask()
+{
+	return (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) ? DCLFLocalShadowMask : 0;
+}
+#	define DCLF_SHADOW_LIGHT_MASK DCLFShadowLightMask()
+#endif
+
 #include "Common/Random.hlsli"
 #include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"

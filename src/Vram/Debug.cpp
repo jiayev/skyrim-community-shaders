@@ -228,6 +228,8 @@ namespace Vram::Debug
 				if (!a_path || !a_textureOut)
 					return;
 				// A queued load finishes on a loader thread later: hold the texture until it has its D3D11 resource.
+				if (!DxvkAvailable())
+					return;
 				if (!TryTag(a_textureOut.get(), a_path)) {
 					std::lock_guard lock(g_textureMutex);
 					g_pendingTextures.push_back({ a_textureOut, a_path, std::chrono::steady_clock::now() });
@@ -246,29 +248,24 @@ namespace Vram::Debug
 
 	void ConfigureDxvk(HMODULE a_dxvkD3D11)
 	{
-		if (!Enabled() || !a_dxvkD3D11)
+		if (!a_dxvkD3D11)
 			return;
 		const auto configure = reinterpret_cast<PFN_dxvkConfigureMemoryDebug>(reinterpret_cast<void*>(::GetProcAddress(a_dxvkD3D11, "dxvkConfigureMemoryDebug")));
 		if (!configure) {
-			logger::warn("[VRAM] CS_VRAM_DEBUG: dxvk_d3d11.dll has no dxvkConfigureMemoryDebug; no creation stacks");
+			logger::info("[VRAM] dxvk_d3d11.dll has no dxvkConfigureMemoryDebug; resources without an owner are not traced to their creators");
 			return;
 		}
 		configure(DXVK_MEMORY_DEBUG_CREATION_STACKS);
-		logger::info("[VRAM] CS_VRAM_DEBUG: DXVK records every resource's creation stack");
+		logger::info("[VRAM] DXVK records every resource's creation stack");
 	}
 
 	void InstallGameHooks()
 	{
-		if (!Enabled())
-			return;
 		stl::detour_thunk<BSShaderManager_GetTexture>(REL::RelocationID(98986, 105640));
-		logger::info("[VRAM] CS_VRAM_DEBUG: game texture loads are labeled with their paths");
 	}
 
 	void ProcessPendingTextures()
 	{
-		if (!Enabled())
-			return;
 		std::vector<PendingTexture> ready;
 		{
 			std::lock_guard lock(g_textureMutex);

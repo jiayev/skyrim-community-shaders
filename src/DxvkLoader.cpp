@@ -191,7 +191,7 @@ namespace DxvkLoader
 		// binding model negotiation callback, must be registered before the game creates that device.
 		RenderGraphRuntime::RequestDeviceFeatures(d3d11Mod);
 
-		// VRAM attribution's debug mode changes what DXVK records per resource: before the device exists.
+		// VRAM attribution's creation stacks are recorded as resources are created: before the device exists.
 		Vram::Debug::ConfigureDxvk(d3d11Mod);
 
 		// Frame generation enables synchronous present when it takes ownership.

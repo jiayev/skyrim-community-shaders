@@ -1373,6 +1373,7 @@ void HDRDisplay::UpgradeLDRRenderTargets()
 		ID3D11Texture2D* newTexture = nullptr;
 		if (FAILED(device->CreateTexture2D(&newDesc, nullptr, &newTexture)))
 			continue;
+		Util::SetResourceName(newTexture, "HDR::%s", std::string(magic_enum::enum_name(targetId)).c_str());
 
 		ID3D11RenderTargetView* newRTV = nullptr;
 		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};

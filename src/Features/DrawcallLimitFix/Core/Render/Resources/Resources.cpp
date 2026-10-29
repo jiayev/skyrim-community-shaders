@@ -200,8 +200,10 @@ namespace DCLF::Draws
 			if (a_device.CreateQueryPool(desc, passStats->pool) != rhi::Result::Ok || !passStats->pool) {
 				logger::warn("[DCLF] pass statistics: no pipeline statistics query pool");
 			} else {
-				for (std::uint32_t i = 0; i < slots; ++i)
+				for (std::uint32_t i = 0; i < slots; ++i) {
 					passStats->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(PassStats::kKinds) * PassStats::kFields * sizeof(std::uint64_t)));
+					passStats->readback.back()->SetName("cs.dclf.pass-stats-readback");
+				}
 				passStats->written.resize(slots);
 				a_state.passStats = std::move(passStats);
 				logger::info("[DCLF] pass statistics on: {} frame slots", slots);

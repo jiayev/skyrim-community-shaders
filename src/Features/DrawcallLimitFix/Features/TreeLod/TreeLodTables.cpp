@@ -93,8 +93,10 @@ namespace DCLF::Features::TreeLod
 			}
 			if (auto* host = RenderGraphRuntime::Get().Host()) {
 				auto counts = std::make_shared<TreeLodCounts>();
-				for (std::uint32_t i = 0; i < host->FrameSlots(); ++i)
+				for (std::uint32_t i = 0; i < host->FrameSlots(); ++i) {
 					counts->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, sizeof(VisibleHeader) + kStageSlots * kStageWords * 4));
+					counts->readback.back()->SetName("cs.dclf.tree-lod-counts-readback");
+				}
 				counts->filled.assign(host->FrameSlots(), 0u);
 				tables->counts = std::move(counts);
 			}

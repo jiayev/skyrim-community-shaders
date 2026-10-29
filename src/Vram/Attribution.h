@@ -15,7 +15,10 @@ namespace Vram
 	/** @brief "CS/<owner>" for a CS D3D11 name ("SSGI::Radiance" -> "CS/ScreenSpaceGI"); empty for a name without a prefix. */
 	std::string OwnerFromD3DName(std::string_view a_name);
 
-	/** @brief "CS/<owner>" for a CS render-graph name ("cs.dclf.grass-instances" -> "CS/DrawcallLimitFix"); empty otherwise. */
+	/**
+	 * @brief "CS/<owner>" for a CS render-graph name ("cs.dclf.grass-instances" -> "CS/DrawcallLimitFix"), "ORG/Internal" for the
+	 * graph's own ("org.staged-uploads"); empty otherwise.
+	 */
 	std::string OwnerFromOrgName(std::string_view a_name);
 
 	/** @brief "CS/<feature short name>" for a_feature's owner scopes; the string lives as long as the process. */

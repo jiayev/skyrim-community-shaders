@@ -19,6 +19,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/Upscaling.h"
 #include "Utils/ColorSpace.h"
+#include "Vram/DxvkMemory.h"
 
 #include <algorithm>
 #include <array>
@@ -191,6 +192,8 @@ void PostProcessing::DrawSettings()
 				if (!drawForcedEnabled(T("feature.post_processing.enabled", "Enabled"), *feat))
 					ImGui::Checkbox(T("feature.post_processing.enabled", "Enabled"), &feat->enabled);
 				if (feat->IsActive()) {
+					// Some settings pages preview the feature's textures before its first frame has run.
+					EnsureResources(*feat);
 					ImGui::Indent();
 					feat->DrawSettings();
 					ImGui::Unindent();
@@ -403,8 +406,44 @@ void PostProcessing::ApplyContextualDefaults(json& a_defaults) const
 	}
 }
 
+std::shared_ptr<PostProcessFeature> PostProcessing::MakePipelineFeature(FeaturePipelineIndex idx)
+{
+	switch (idx) {
+	case FeaturePipelineIndex::DoF:
+		return std::make_shared<DoF>();
+	case FeaturePipelineIndex::Vignette:
+		return std::make_shared<Vignette>();
+	case FeaturePipelineIndex::LocalExposure:
+		return std::make_shared<LocalExposure>();
+	case FeaturePipelineIndex::AutoExposure:
+		return std::make_shared<HistogramAutoExposure>();
+	case FeaturePipelineIndex::MotionBlur:
+		return std::make_shared<MotionBlur>();
+	case FeaturePipelineIndex::PhysicalGlare:
+		return std::make_shared<PhysicalGlare>();
+	case FeaturePipelineIndex::CODBloom:
+		return std::make_shared<CODBloom>();
+	case FeaturePipelineIndex::LensFlare:
+		return std::make_shared<LensFlare>();
+	case FeaturePipelineIndex::Composite:
+		return std::make_shared<Composite>();
+	case FeaturePipelineIndex::ColorGrading:
+		return std::make_shared<ColorGrading>();
+	case FeaturePipelineIndex::LUT:
+		return std::make_shared<LUT>();
+	case FeaturePipelineIndex::Camera:
+		return std::make_shared<Camera>();
+	case FeaturePipelineIndex::Border:
+		return std::make_shared<Border>();
+	default:
+		return nullptr;
+	}
+}
+
 void PostProcessing::BuildPipeline()
 {
+	// Spelled out rather than through MakePipelineFeature: the scene settings catalog generator
+	// discovers the sub-features from these assignments.
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)] = std::make_shared<LocalExposure>();
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] = std::make_shared<HistogramAutoExposure>();
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)] = std::make_shared<ColorGrading>();
@@ -419,6 +458,41 @@ void PostProcessing::BuildPipeline()
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)] = std::make_shared<Camera>();
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)] = std::make_shared<Border>();
 	ApplyDefaultEnabledStates();
+}
+
+void PostProcessing::EnsureResources(PostProcessFeature& feature)
+{
+	if (feature.resourcesReady)
+		return;
+	// Set up from the pipeline's hook or the menu rather than the feature's own setup, so the owner is not in scope.
+	Vram::OwnerScope vramScope("CS/PostProcessing");
+	feature.SetupResources();
+	feature.resourcesReady = true;
+}
+
+void PostProcessing::SyncPipelineResources()
+{
+	for (size_t index = 0; index < pipeline.size(); ++index) {
+		auto& pipe = pipeline[index];
+		if (!pipe)
+			continue;
+		if (pipe->IsActive()) {
+			EnsureResources(*pipe);
+			continue;
+		}
+		if (!pipe->resourcesReady)
+			continue;
+
+		// A fresh instance is the never-set-up state every sub-feature already supports, so this frees its
+		// GPU resources without a per-feature release path. Async compiles of the old one hold a weak_ptr.
+		json featureSettings{};
+		pipe->SaveSettings(featureSettings);
+		auto fresh = MakePipelineFeature(static_cast<FeaturePipelineIndex>(index));
+		fresh->owner = this;
+		fresh->enabled = pipe->enabled;
+		fresh->LoadSettings(featureSettings);
+		pipe = std::move(fresh);
+	}
 }
 
 void PostProcessing::ApplyDefaultEnabledStates()
@@ -449,8 +523,9 @@ void PostProcessing::RestoreDefaultSettings()
 
 void PostProcessing::ClearShaderCache()
 {
+	// Sub-features without resources compile their shaders when they are set up.
 	for (auto& pipe : pipeline) {
-		if (pipe)
+		if (pipe && pipe->resourcesReady)
 			pipe->ClearShaderCache();
 	}
 }
@@ -515,11 +590,10 @@ void PostProcessing::SetupResources()
 
 	BuildPipeline();
 
+	// Sub-features are set up when they first run active (SyncPipelineResources), so disabled ones allocate nothing.
 	for (auto& pipe : pipeline) {
-		if (pipe) {
+		if (pipe)
 			pipe->owner = this;
-			pipe->SetupResources();
-		}
 	}
 
 	bokehResources.Setup();
@@ -645,6 +719,7 @@ void PostProcessing::DrawBeforeUpscaling()
 		if (pipe && pipe->IsAutoEnabled())
 			pipe->UpdateAutoEnabled();
 	}
+	SyncPipelineResources();
 
 	// go through each fx
 	for (auto& pipe : pipeline) {
@@ -705,6 +780,7 @@ void PostProcessing::PreProcess(RE::RENDER_TARGET a_input)
 		if (pipe && pipe->IsAutoEnabled())
 			pipe->UpdateAutoEnabled();
 	}
+	SyncPipelineResources();
 
 	// go through each fx
 	bool colorGraded = false;

@@ -1659,6 +1659,7 @@ void Upscaling::SeparateFromGraphEpochs()
 			logger::error("[Upscaling] The graph epoch separator could not be created; the upscaler may follow an epoch directly");
 			return;
 		}
+		Util::SetResourceName(texture.get(), "Upscaling::EpochSeparator");
 	}
 	const UINT values[4] = { 1, 2, 3, 4 };
 	globals::d3d::context->ClearUnorderedAccessViewUint(epochSeparator.get(), values);

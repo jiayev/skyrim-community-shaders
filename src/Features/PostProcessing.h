@@ -101,6 +101,19 @@ struct PostProcessing : Feature
 
 	void UpdateVanillaEffects(bool active);
 
+	/** @brief Creates the sub-feature at a pipeline slot, at its defaults and without GPU resources. */
+	static std::shared_ptr<PostProcessFeature> MakePipelineFeature(FeaturePipelineIndex idx);
+
+	/** @brief Runs the sub-feature's SetupResources once per instance. */
+	void EnsureResources(PostProcessFeature& feature);
+
+	/**
+	 * @brief Sets up every active sub-feature and frees inactive ones, so disabled effects hold no GPU memory.
+	 * An inactive sub-feature with resources is replaced by a fresh instance carrying its settings and enabled state.
+	 * Call after the auto-enabled update and before the pipeline draws.
+	 */
+	void SyncPipelineResources();
+
 	/// shared_ptr, not unique_ptr: see PostProcessFeature's weak_ptr callback contract.
 	std::array<std::shared_ptr<PostProcessFeature>, static_cast<size_t>(FeaturePipelineIndex::COUNT)> pipeline;
 

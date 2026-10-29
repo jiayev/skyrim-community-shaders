@@ -360,8 +360,10 @@ namespace DCLF::Diagnostics
 		// The compare pass's program and a host copy of its results per frame slot; the record stands only with them.
 		auto& foliage = a_made.record;
 		foliage.program = ComputeProgram::Load(a_made.device, { .source = kFoliageParityShader, .constantWords = kFoliageParityConstantWords });
-		for (std::uint32_t i = 0; i < a_made.slots; ++i)
+		for (std::uint32_t i = 0; i < a_made.slots; ++i) {
 			foliage.readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(kFoliageResultWords) * sizeof(std::uint32_t)));
+			foliage.readback.back()->SetName("cs.dclf.foliage-parity-readback");
+		}
 		foliage.readbackFrame.assign(a_made.slots, 0u);
 		if (!foliage.program || !foliage.resultsAddress || !foliage.idsAddress[0] || !foliage.idsAddress[1] || !foliage.coloursAddress[0] ||
 			!foliage.coloursAddress[1]) {
