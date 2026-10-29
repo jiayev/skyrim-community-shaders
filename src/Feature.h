@@ -5,6 +5,7 @@
 #include "FeatureVersions.h"
 #include "I18n/I18n.h"
 #include "Utils/RestartSettings.h"
+#include "Vram/DxvkMemory.h"
 
 #include <span>
 #include <string_view>
@@ -57,6 +58,8 @@ struct Feature
 	virtual std::string GetName() = 0;
 	virtual std::string GetShortName() = 0;
 	virtual std::string GetDisplayName() { return GetName(); }
+	/** @brief "CS/<short name>": the VRAM owner of what DXVK creates during the feature's callbacks (ForEachLoadedFeature). */
+	const char* GetVramOwner();
 	virtual std::string GetFeatureModLink() { return ""; }
 	virtual std::string_view GetShaderDefineName() { return ""; }
 
@@ -381,6 +384,8 @@ public:
 	{
 		for (auto* feature : GetFeatureList()) {
 			if (feature->loaded) {
+				// What DXVK creates during the callback is the feature's memory (VRAM attribution).
+				Vram::OwnerScope vramScope(feature->GetVramOwner());
 				const bool gpuEvent = emitGpuZone && s_beginGpuEvent && s_endGpuEvent;
 				if (gpuEvent)
 					s_beginGpuEvent(std::format("{}::{}", feature->GetShortName(), methodName));

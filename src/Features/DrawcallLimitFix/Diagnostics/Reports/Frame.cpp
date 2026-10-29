@@ -31,6 +31,7 @@
 #include "RenderGraph/MemoryWindow.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "State.h"
+#include "Vram/VramLedger.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 namespace DCLF::Reports
@@ -322,6 +323,9 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 		// The graph's tracked memory (ORG's tracking world: DCLF's tables, pools and targets with the rest of the graph's).
 		if (const auto memory = RenderGraphMemory::ReportLine(12, 16); !memory.empty())
 			logger::info("[DCLF] {}", memory);
+		// All of it, DXVK's included, by owner and reconciled against the driver's heap usage.
+		if (const auto vram = Vram::ReportLine(16); !vram.empty())
+			logger::info("[DCLF] {}", vram);
 		// The features' lines here (Features/HiddenNodes: CS_DCLF_HIDDEN_WATCH's watch of the hidden bit stores).
 		DCLF::Extensions::ReportLinesAt(DCLF::Api::ReportPoint::Statistics, frame);
 		timing = {};

@@ -2,6 +2,7 @@
 
 #include "Aftermath.h"
 #include "RenderGraph/RenderGraphRuntime.h"
+#include "Vram/Debug.h"
 
 #include <filesystem>
 
@@ -189,6 +190,9 @@ namespace DxvkLoader
 		// The render graph adopts DXVK's device; the features it needs, and the descriptor
 		// binding model negotiation callback, must be registered before the game creates that device.
 		RenderGraphRuntime::RequestDeviceFeatures(d3d11Mod);
+
+		// VRAM attribution's debug mode changes what DXVK records per resource: before the device exists.
+		Vram::Debug::ConfigureDxvk(d3d11Mod);
 
 		// Frame generation enables synchronous present when it takes ownership.
 		if (auto setSync = reinterpret_cast<void (*)(uint32_t)>(::GetProcAddress(d3d11Mod, "dxvkSetSyncPresent")))

@@ -43,6 +43,8 @@
 #include "Features/VolumetricLighting.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "Utils/ImportCallSites.h"
+#include "Vram/Debug.h"
+#include "Vram/VramLedger.h"
 
 #include <xmmintrin.h>
 #include <unordered_map>
@@ -775,8 +777,13 @@ struct BSShaderRenderTargets_Create
 	static void thunk()
 	{
 		Util::SetGameSettingValue<std::int32_t>("iNumFocusShadow:Display", iNumFocusShadow, 0);
-		func();
+		{
+			// Everything the game creates here is its render targets (VRAM attribution); each is then labeled by name.
+			Vram::OwnerScope vramScope("Game/RenderTarget");
+			func();
+		}
 		globals::ReInit();
+		Vram::TagGameRenderTargets();
 		globals::state->Setup();
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
@@ -894,6 +901,7 @@ namespace Hooks
 
 			globals::InstallD3DHooks(globals::d3d::context);
 
+			Vram::OwnerScope vramScope("CS/Menu");
 			globals::menu->Init();
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -1364,6 +1372,8 @@ namespace Hooks
 		} else {
 			logger::info("BSBatchRenderer::RenderPassImmediately prefetch disabled via CS_NO_PASS_PREFETCH");
 		}
+
+		Vram::Debug::InstallGameHooks();
 
 		logger::info("Hooking BSGraphics::Renderer::InitD3D");
 		stl::write_thunk_call<BSGraphics_Renderer_Init_InitD3D>(REL::RelocationID(75595, 77226).address() + REL::Relocate(0x50, 0x2BC));

@@ -47,6 +47,7 @@
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Utils/Format.h"
+#include "Vram/Attribution.h"
 
 #include "State.h"
 #include "TruePBR.h"
@@ -324,6 +325,21 @@ bool Feature::ToggleAtBootSetting()
 	state->CheckCoreSettingsChanged();
 
 	return state->IsFeatureDisabled(featureName);  // Return the new state
+}
+
+const char* Feature::GetVramOwner()
+{
+	// Cached outside the class: a member would change every feature's layout (and padding). Read on every feature callback.
+	static std::shared_mutex mutex;
+	static std::unordered_map<const Feature*, const char*> owners;
+	{
+		std::shared_lock lock(mutex);
+		if (const auto it = owners.find(this); it != owners.end())
+			return it->second;
+	}
+	const char* owner = Vram::FeatureOwner(GetShortName());
+	std::unique_lock lock(mutex);
+	return owners.emplace(this, owner).first->second;
 }
 
 void Feature::DrawUnloadedUI()
