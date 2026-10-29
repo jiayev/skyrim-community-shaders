@@ -9,14 +9,14 @@
 
 namespace Util
 {
+	bool UnderUsvfs()
+	{
+		static const bool loaded = ::GetModuleHandleW(L"usvfs_x64.dll") != nullptr;
+		return loaded;
+	}
+
 	namespace
 	{
-		bool UnderUsvfs()
-		{
-			static const bool loaded = ::GetModuleHandleW(L"usvfs_x64.dll") != nullptr;
-			return loaded;
-		}
-
 		// The file's real path (\\?\ form), past any redirection; empty if it has none.
 		std::wstring FinalPath(HANDLE a_file)
 		{

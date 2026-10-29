@@ -1566,7 +1566,7 @@ namespace SIE
 			return nullptr;
 		}
 
-		bool WriteBlobAtomic(const std::wstring& diskPath, ID3DBlob* blob)
+		bool WriteBlobAtomic(const std::wstring& diskPath, ID3DBlob* blob, std::string* failure)
 		{
 			// A temp name per call: two compiles of one key (two threads, or two game instances) must not
 			// write or delete each other's temp file. Both renames carry the same bytes, so either may win.
@@ -1574,10 +1574,22 @@ namespace SIE
 			const std::wstring tempPath = std::format(L"{}.{}-{}-{}.tmp", diskPath, GetCurrentProcessId(), GetCurrentThreadId(),
 				tempCounter.fetch_add(1, std::memory_order_relaxed));
 			std::error_code ec;
-			if (SUCCEEDED(D3DWriteBlobToFile(blob, tempPath.c_str(), true))) {
+			const HRESULT hr = D3DWriteBlobToFile(blob, tempPath.c_str(), true);
+			if (SUCCEEDED(hr)) {
 				Util::RenameSerialized(tempPath, diskPath, ec);
 				if (!ec)
 					return true;
+			}
+			if (failure) {
+				// The cache paths are relative to the working directory, so name where they actually resolved.
+				std::error_code absoluteError;
+				const auto absolutePath = std::filesystem::absolute(diskPath, absoluteError);
+				const std::string where = absoluteError ? Util::WStringToString(diskPath) : Util::WStringToString(absolutePath.wstring());
+				const char* vfs = Util::UnderUsvfs() ? "under usvfs" : "no usvfs";
+				*failure = FAILED(hr) ?
+				               std::format("writing its temp file failed: 0x{:08X} {} ({}, {})", static_cast<uint32_t>(hr),
+								   std::system_category().message(static_cast<int>(hr)), where, vfs) :
+				               std::format("renaming its temp file onto it failed: {} {} ({}, {})", ec.value(), ec.message(), where, vfs);
 			}
 			std::filesystem::remove(tempPath, ec);
 			return false;
@@ -1991,8 +2003,8 @@ namespace SIE
 					}
 				}
 
-				if (!WriteBlobAtomic(diskPath, shaderBlob.get())) {
-					logger::error("Failed to save shader to {}", Util::WStringToString(diskPath));
+				if (std::string failure; !WriteBlobAtomic(diskPath, shaderBlob.get(), &failure)) {
+					logger::error("Failed to save shader to {}: {}", Util::WStringToString(diskPath), failure);
 				} else {
 					logger::debug("Saved shader to {}", Util::WStringToString(diskPath));
 				}
@@ -3107,8 +3119,8 @@ namespace SIE
 						const auto cacheDir = GetStandaloneComputeCacheDir(srcPath);
 						std::error_code ec;
 						std::filesystem::create_directories(cacheDir, ec);
-						if (!SIE::SShaderCache::WriteBlobAtomic(diskPath, shaderBlob.get())) {
-							logger::error("Failed to save standalone {} shader to {}", stageName, Util::WStringToString(diskPath));
+						if (std::string failure; !SIE::SShaderCache::WriteBlobAtomic(diskPath, shaderBlob.get(), &failure)) {
+							logger::error("Failed to save standalone {} shader to {}: {}", stageName, Util::WStringToString(diskPath), failure);
 						} else {
 							logger::debug("Saved standalone {} shader {}:{} to {}", stageName, srcPathStr, entryPoint, Util::WStringToString(diskPath));
 						}

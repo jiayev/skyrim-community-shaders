@@ -15,4 +15,7 @@ namespace Util
 	 * file, which every cache's load rejects (header and size checks). Without usvfs, or where that fails, std::filesystem::rename.
 	 */
 	void RenameSerialized(const std::filesystem::path& a_from, const std::filesystem::path& a_to, std::error_code& a_ec);
+
+	/** @brief True when Mod Organizer's usvfs is loaded in the process, so file access under Data/ is redirected. */
+	bool UnderUsvfs();
 }

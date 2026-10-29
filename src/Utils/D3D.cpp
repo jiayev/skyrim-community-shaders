@@ -636,7 +636,8 @@ namespace Util
 			}
 			Util::RenameSerialized(tmp, path, ec);
 			if (ec) {
-				logger::error("SaveTextureToFile: failed to rename file");
+				logger::error("SaveTextureToFile: failed to rename {} onto {}: {} {} ({})", Util::WStringToString(tmp), Util::WStringToString(path.wstring()),
+					ec.value(), ec.message(), Util::UnderUsvfs() ? "under usvfs" : "no usvfs");
 				fs::remove(tmp);
 				return HRESULT_FROM_WIN32(static_cast<DWORD>(ec.value()));
 			}
