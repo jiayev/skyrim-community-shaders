@@ -11,6 +11,7 @@ namespace DCLF::Scene
 	struct CoordinatorCategories
 	{
 		std::shared_ptr<const CategoryCapture> categoryTaken;
+		std::uint64_t categoryPinsGeneration = 0;  // the newest capture whose pins went into a batch (read once: the render thread drops them after)
 		// The signature the category set was last rebuilt for.
 		std::uint64_t categorySignature = 0;
 		ankerl::unordered_dense::set<RE::NiNode*> categoryNodes;

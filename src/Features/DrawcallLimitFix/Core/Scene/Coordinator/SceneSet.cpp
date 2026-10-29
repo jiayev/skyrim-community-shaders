@@ -956,6 +956,7 @@ namespace DCLF::Scene
 		publication->toggles = publicationCommitToggleSet;
 		publication->tablesGeneration = tablesGeneration;
 		publication->tables = publishedTables;
+		publication->retirementHold = publishedRetirement;
 		publication->claims = publicationClaims ? publicationClaims : std::make_shared<const SetSnapshot>();
 		publication->lackingCount = setLackingCount;
 		publication->lookups = publishedLookups;
@@ -1328,12 +1329,17 @@ namespace DCLF::Scene
 					break;
 				}
 			}
-			// Imports go to the epochs (held until their executions retire).
+			// Imports go to the epochs (held until their executions retire); engine references are released at Present on the render
+			// thread, once the readers of publications up to the batch's are told (EngineReleases::Alive).
 			for (auto& owner : a_batch.imports)
 				retiredImports.push_back(std::move(owner));
+			EngineReleases::NoteReleased(a_batch.lastPublication);
+			referencesReleased += a_batch.references.size() + a_batch.owners.size();
+			for (auto& reference : a_batch.references)
+				EngineReleases::Push(std::move(reference));
+			for (auto& owner : a_batch.owners)
+				EngineReleases::PushOwner(std::move(owner));
 		});
-		// The engine references the horizon passed, released at Present on the render thread.
-		referencesReleased += releases.Drain();
 		// The pipeline table's top follows the slots in use (lowest-first reuse): past the last one alive or retiring nothing names
 		// a slot, so the columns are cut there, and with them every per-pipeline GPU table sized from them (the payload's pipeline
 		// rows, the main layout's ranges), which then shrink (PooledBackings::Shrink). The publication takes the cut family whole.
@@ -1475,7 +1481,6 @@ namespace DCLF::Scene
 				auto& pooled = a_pool[i];
 				if (pooled.use_count() != 1 || pooled == a_published)
 					continue;
-				pooled->retirementHold.reset();
 				first = (std::min)(first, i);
 				const bool reached = a_replayable[i] && a_tables.changeLog.Readable(pooled->changeLog.End()) && a_tables.materialLog.Readable(pooled->materialLog.End());
 				const std::uint64_t reach = reached ? pooled->changeLog.End() + pooled->materialLog.End() + 1 : 0;
@@ -1979,6 +1984,43 @@ namespace DCLF::Scene
 		}
 	}
 
+	namespace
+	{
+		/**
+		 * @brief The free pooled tables past kFreeTables let go of, the nearest the logs kept (as Publish and the spare choose). A free one
+		 * holds its geometry slots' import leases (game vertex and index buffers) until it is replayed: kept, an idle copy would keep
+		 * buffers the scene let go of. In use, published, or the spare's target: kept.
+		 */
+		void TrimTablesPool(std::vector<std::shared_ptr<SceneTables>>& a_pool, std::vector<std::uint8_t>& a_replayable, const std::shared_ptr<SceneTables>& a_published,
+			std::uint64_t& a_trimmed)
+		{
+			constexpr std::size_t kFreeTables = 2;
+			const auto* spareTarget = Spare().target;
+			std::vector<std::size_t> idle;
+			for (std::size_t i = 0; i < a_pool.size(); ++i)
+				if (a_pool[i].use_count() == 1 && a_pool[i] != a_published && a_pool[i].get() != spareTarget)
+					idle.push_back(i);
+			if (idle.size() <= kFreeTables)
+				return;
+			const auto reach = [&](std::size_t a_i) { return a_replayable[a_i] ? a_pool[a_i]->changeLog.End() + a_pool[a_i]->materialLog.End() + 1 : 0; };
+			std::sort(idle.begin(), idle.end(), [&](std::size_t a_left, std::size_t a_right) { return reach(a_left) > reach(a_right); });
+			std::vector<std::uint8_t> drop(a_pool.size(), 0);
+			for (std::size_t k = kFreeTables; k < idle.size(); ++k)
+				drop[idle[k]] = 1;
+			std::size_t kept = 0;
+			for (std::size_t i = 0; i < a_pool.size(); ++i) {
+				if (drop[i])
+					continue;
+				a_pool[kept] = std::move(a_pool[i]);
+				a_replayable[kept] = a_replayable[i];
+				++kept;
+			}
+			a_pool.resize(kept);
+			a_replayable.resize(kept);
+			a_trimmed += idle.size() - kFreeTables;
+		}
+	}
+
 	void Coordinator::PublishTables()
 	{
 		ZoneScopedN("CS.DCLF.Scene.PublishTables");
@@ -2062,16 +2104,17 @@ namespace DCLF::Scene
 		// Its node collects what is freed after it.
 		{
 			ZoneScopedN("CS.DCLF.Scene.PublishTables.Retirement");
-			snapshot.retirementHold = retirement.Publish();
+			// The node closed here was held by the publications made so far (the one made next holds the new one).
+			retirement.Open().lastPublication = publicationSequence;
+			publishedRetirement = retirement.Publish();
 			snapshot.publishedSequence = publicationSequence;
-			// The engine references let go of so far: this publication (made next) is the first not to name them.
-			releases.Close(publicationSequence + 1);
 		}
 		publishedTables = target;
 		++publication.published;
 		{
 			ZoneScopedN("CS.DCLF.Scene.PublishTables.SpareDispatch");
 			DispatchTablesSpare(tablesPool, tablesPoolReplayable, publishedTables);
+			TrimTablesPool(tablesPool, tablesPoolReplayable, publishedTables, publication.trimmed);
 		}
 		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		publication.ms += ms;

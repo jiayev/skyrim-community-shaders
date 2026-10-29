@@ -325,6 +325,50 @@ must never be skipped:
 - Caches keep `SnapshotKey`s and catch up through the change runs (`ChangedEntriesSince`). Readers that need a past generation's CPU
   data hold a lease on a pooled snapshot. A lease costs DCLF heap only.
 
+### Implemented (2026-10-28)
+
+**Release horizon.** `Core/Engine/EngineReleases.h` and `Core/Engine/ReleaseRing.h` implement the split:
+- The coordinator's `releases` ring takes every engine reference it lets go of, stamped with the first publication that no longer
+  names it. These are root owners and fade, tree and face owners (through `HandBack`), material references, tracker event batches,
+  and the candidate tables' entry roots.
+- The ring drains a batch to `EngineReleases` once every frame of the last `kReleaseFrames` (32) installed that publication or a
+  later one. `EngineReleases::Alive(P)` tells a reader of publication P whether any stamp past P was released.
+
+**Readers holding old data check `Alive` before they dereference a node:**
+- the cut's plan jobs;
+- the point-light filter's parent reads;
+- the visibility readback's writes, from GPU readback and the CPU cull path alike;
+- the fade write-back stores.
+
+Their write lists and stores carry the publication installed when they were armed. A list past the horizon writes nothing and asks
+for a full write. The report shows these as "past the release horizon (oldest list N frames)".
+
+**Candidate snapshots.** `EntrySpace` holds no references. `EntrySpaceTable::owned` holds the published entries' roots by index.
+
+**Retirement chain.** The chain node now belongs to `ScenePublication::retirementHold`, no longer to `SceneTables`. Its holders are
+the frame's path:
+- the builder;
+- the installed frame;
+- the GPU executions, through the adopted snapshot;
+- the armed readback slots, through `Readback::Armed::retirement`.
+
+A reader keeping tables, candidates or a derived cache keeps no slot from reuse, no import alive and no engine object alive. Slots
+and imports still go through the chain, which no longer carries engine references.
+
+**Pools.** `TrimTablesPool` and `EntrySpaceTable::TrimPool` keep two free entries. A free pooled tables copy otherwise holds its
+geometry import leases.
+
+**Rejected game textures.** `GpuTextures` keeps a rejection by key and tags the view with `SetPrivateData`. It no longer holds the
+SRV for the device generation.
+
+**Category capture pins.** These are released once the coordinator's batch that applied the capture is over
+(`Channels::categoryPinsReleased`). Only the capture's category nodes stay held.
+
+**Not changed, and bounded:**
+- `ExecutionOwners` still hold the adopted snapshot until the GPU retires each execution. That is frame-bounded, and the snapshot
+  names no engine object.
+- Lookups binding owners (texture imports the GPU reads) stay with the publication.
+
 ## Verification of the doc itself
 
 - Spot-checked the BasicRenderer citations (`RendererSceneIngestion.cpp:349-383, 445-457`; `PublishedRendererState.h:310-320`,

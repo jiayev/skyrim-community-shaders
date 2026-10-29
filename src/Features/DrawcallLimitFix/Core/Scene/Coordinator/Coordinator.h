@@ -34,7 +34,7 @@
 #include "Features/DrawcallLimitFix/Core/Scene/Model/SceneIdentity.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/Retirement.h"
-#include "Features/DrawcallLimitFix/Core/Engine/ReleaseRing.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
@@ -335,6 +335,7 @@ namespace DCLF
 			// Publications that kept the family (its stamp stood): the table families' by registration (the fade roots among them).
 			std::array<std::uint64_t, Extensions::kTableFamilySlots> familiesKept{};
 			std::size_t pool = 0;
+			std::uint64_t trimmed = 0;  // free pooled tables let go of past the two kept (TrimTablesPool)
 			// Lookups per publication (PublishLookups): copied, or the last shared again unchanged; chunks rewritten since the last copy;
 			// copy time.
 			std::uint64_t lookupsCopied = 0, lookupsShared = 0, lookupsChunks = 0;
@@ -356,11 +357,11 @@ namespace DCLF
 			if (!held.empty())
 				heldText += fmt::format(" (oldest at {})", std::get<2>(held.front()));
 			return fmt::format("{} retired, {} recycled in {} batches, {} dropped by a clear; {} object slots retiring; pipeline slots {} of {} alive "
-							   "({} top cuts); {} snapshots held past the pool (publication:holders){}, published {}; engine references {} released, {} "
-							   "waiting (oldest stamp {}, horizon {}, publication {})",
+							   "({} top cuts); {} snapshots held past the pool (publication:holders){}, published {}; engine references {} released "
+							   "(through publication {}, publication {})",
 				s.retired, s.recycled, s.batches, s.dropped, tables.objectsRetiring, tables.pipelineSlots.AliveCount(), tables.pipelines.size(),
 				s.pipelinesTrimmed, held.size(), heldText, publishedTables ? publishedTables->publishedSequence : 0, std::exchange(referencesReleased, 0),
-				releases.Pending(), releases.OldestStamp(), EngineReleases::Releasable(), publicationSequence);
+				EngineReleases::pushedThrough.load(std::memory_order_relaxed), publicationSequence);
 		}
 		TablesPublication TakeTablesPublication() { return std::exchange(tablesPublication, TablesPublication{ .pool = tablesPool.size() }); }
 		const Stats& GetStats() const { return stats; }
@@ -531,31 +532,33 @@ namespace DCLF
 		private:
 			RE::BSShaderMaterial* material = nullptr;
 		};
-		// Per material slot: its engine reference on the material, so the pointer is not reused while live; released through the
-		// ReleaseRing (ReleaseMaterial).
+		// Per material slot: its engine reference on the material, so the pointer is not reused while live; retired through the chain
+		// (ReleaseMaterial).
 		std::vector<MaterialReference> materialOwners;
 		/**
-		 * @brief The slots and imports the coordinator let go of that a published table version may still name (by index, or on the GPU).
-		 * Each publication holds the chain node opened with it; once none up to it lives, RecycleRetired frees the slots and hands the
-		 * imports to the epochs. Engine references never go here: they go to the ReleaseRing (releases), whose release no reader holds back.
+		 * @brief What the coordinator let go of that a publication may still name: slots (by index), imports (on the GPU), and engine
+		 * references (nodes, materials, tracker events' detached subtrees, the candidate tables' entry roots). Each publication holds the
+		 * chain node published with its tables (ScenePublication::retirementHold), and only the frame's path holds publications - the
+		 * builder, the installed frame, the GPU executions, the readers that write to nodes later (readback write lists, fade stores, the
+		 * cut's plans) - so a batch is returned as soon as the last frame that could read what it names is done: RecycleRetired frees the
+		 * slots, hands the imports to the epochs and the references to EngineReleases (released at Present).
 		 */
 		struct RetiredBatch
 		{
 			std::vector<Tables::RetiredSlot> slots;
 			std::vector<std::shared_ptr<const void>> imports;
-			bool Empty() const { return slots.empty() && imports.empty(); }
+			std::vector<RE::NiPointer<RE::NiRefObject>> references;
+			std::vector<std::shared_ptr<void>> owners;  // whose last release runs the engine's destructors (event batches, material references)
+			std::uint64_t lastPublication = 0;           // the last publication that held its node (EngineReleases::NoteReleased)
+			bool Empty() const { return slots.empty() && imports.empty() && references.empty() && owners.empty(); }
 		};
 		RetirementChain<RetiredBatch> retirement;
-		// The engine references let go of (nodes, materials, tracker events: detached subtrees), by the first publication that does not
-		// name them; released once no frame of the horizon reads one that does (EngineReleases). The tables publication stamps the open
-		// batch; the candidate tables stamp their entry roots as they publish.
-		ReleaseRing releases;
 		std::size_t referencesReleased = 0;  // since the last report
-		/** @brief A material's engine reference, released through the ReleaseRing (the last reference deletes the engine's material). */
+		/** @brief A material's engine reference, retired through the chain (the last reference deletes the engine's material). */
 		void ReleaseMaterial(MaterialReference&& a_material)
 		{
 			if (a_material)
-				releases.Open().owners.push_back(std::make_shared<MaterialReference>(std::move(a_material)));
+				retirement.Open().owners.push_back(std::make_shared<MaterialReference>(std::move(a_material)));
 		}
 		struct RetirementStats
 		{
@@ -1495,7 +1498,7 @@ namespace DCLF
 		void HandBack(RE::NiPointer<T>&& a_reference)
 		{
 			if (a_reference)
-				releases.Open().references.emplace_back(std::move(a_reference));
+				retirement.Open().references.emplace_back(std::move(a_reference));
 		}
 		template <class T>
 		void HandBack(std::vector<RE::NiPointer<T>>& a_references)

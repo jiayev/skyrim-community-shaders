@@ -628,6 +628,7 @@ namespace DCLF
 			return;
 		auto batch = std::make_unique<PlanBatch>();
 		batch->candidates = cut.candidates;
+		batch->retirement = Scene::FrameView::Get().InstalledRetirement();
 		batch->entries.reserve(cut.planQueue.size());
 		for (const std::uint32_t e : std::exchange(cut.planQueue, {})) {
 			if (e >= cut.awaiting.size() || cut.awaiting[e] != kPlanQueued)
@@ -643,8 +644,9 @@ namespace DCLF
 		cutStats.plansKicked += batch->entries.size();
 		plansOutstanding += batch->entries.size();
 		// The subtree walks read engine memory: a lease per entry, so the window's Close waits on one entry at most. A refused one is
-		// sent back unplanned and kicked again, as is every entry of a batch the release horizon passed (its roots may be released: its
-		// snapshot holds none). The batch goes back whole to the render thread, which drops its snapshot.
+		// sent back unplanned and kicked again. The batch holds the installed publication's retirement node, so its roots stay alive
+		// (the snapshot holds none), and a batch whose snapshot is older than that publication's checks it was not released. The
+		// batch goes back whole to the render thread, which drops its snapshot.
 		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "CS.DCLF.CutPlans",
 				[this, batch = batch.release()](const auto&) {
 					ZoneScopedN("CS.DCLF.CutPlans");

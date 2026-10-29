@@ -78,8 +78,10 @@ namespace DCLF::Scene
 		// The category nodes new to the coordinator's set: their children's keys.
 		ankerl::unordered_dense::map<const RE::NiNode*, std::vector<const RE::NiAVObject*>> children;
 		// Every node and geometry under its new category nodes and new roots, held for the coordinator's references (copies of these) until
-		// it has applied a newer capture. "New" is against the capture the coordinator applied last, so each capture pins all it names.
-		std::vector<RE::NiPointer<RE::NiRefObject>> pins;
+		// its batch that applied the capture is done (Channels::categoryPinsReleased). "New" is against the capture the coordinator applied
+		// last, so each capture pins all it names. The render thread lets go of them then (FrameView::CaptureCategories), the capture
+		// otherwise immutable: the coordinator reads them at the capture's first application alone.
+		mutable std::vector<RE::NiPointer<RE::NiRefObject>> pins;
 		// By view, a CategoryRoot view's root (Api::ViewContribution::captureRoot: the player's first-person root while its toggle is on),
 		// both a category node and a root (filed under itself), or null.
 		std::array<const RE::NiNode*, Extensions::kEngineViews> viewRoots{};
@@ -200,6 +202,8 @@ namespace DCLF::Scene
 		// The capture RefreshCategoryNodes last diffed against: which captures the render thread may let go of, and what is new to the
 		// coordinator's set.
 		std::atomic<std::uint64_t> categoryAppliedGeneration{ 0 };
+		// The newest category capture whose pins the coordinator is done with (its applying batch over): the render thread lets them go.
+		std::atomic<std::uint64_t> categoryPinsReleased{ 0 };
 		std::atomic<bool> categoryDetachSeen{ false };  // a pass drained a detach: the next frame start's category capture is forced
 
 		// Counted on both sides, taken by the reports.

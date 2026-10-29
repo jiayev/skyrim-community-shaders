@@ -62,8 +62,9 @@ namespace DCLF::Features::Fades
 		std::vector<std::uint32_t> appliedFrame;
 		std::atomic<bool> running{ false };
 		/**
-		 * @brief What a task found to write: the stores in event order, and the tables they were judged against, held until the main
-		 * thread makes them (WriteFadeStores) so no node they name is let go first. The task touches no engine memory.
+		 * @brief What a task found to write: the stores in event order, and the tables they were judged against. Their nodes are the
+		 * installed publication's then, alive while the stores hold its retirement node (retirement), until the main thread makes them
+		 * (WriteFadeStores). The task touches no engine memory.
 		 */
 		struct Stores
 		{
@@ -78,6 +79,8 @@ namespace DCLF::Features::Fades
 				std::uint32_t levels = 0;
 				float blend = 0.0f;
 			};
+			std::uint64_t publication = 0;          // the oldest publication among the stores' tables
+			std::shared_ptr<const void> retirement;  // the oldest stores' publication's retirement node (it holds every newer one)
 			std::shared_ptr<const SceneTables> tables;
 			std::vector<Store> stores;
 		};

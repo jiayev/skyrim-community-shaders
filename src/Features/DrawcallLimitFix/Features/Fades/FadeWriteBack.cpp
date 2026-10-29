@@ -6,6 +6,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneTracker.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneExecutor.h"
@@ -41,8 +42,9 @@ namespace DCLF::Features::Fades
 		std::unique_ptr<FadeWriteBack::Stores> stores{ writeBack.ready.exchange(nullptr, std::memory_order_acq_rel) };
 		if (!stores)
 			return;
-		// DCLF is not running: the engine culls every root this frame.
-		if (!a_live) {
+		// DCLF is not running (the engine culls every root this frame), or their publication was released all the same (stores made
+		// without its node: a defect; the next stores come from the installed one).
+		if (!a_live || !EngineReleases::Alive(stores->publication)) {
 			writeBack.dropped.fetch_add(stores->stores.size(), std::memory_order_relaxed);
 			return;
 		}
@@ -107,9 +109,11 @@ namespace DCLF::Features::Fades
 			writeBack.busy.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
-		// The task judges events against the frame's immutable tables, which the stores hold (and with them the root nodes).
+		// The task judges events against the frame's immutable tables; their nodes are the installed publication's.
 		std::shared_ptr<const SceneTables> tables = Scene::FrameView::Get().AcceptedTables();
-		auto find = [fades = std::move(fades), tables] {
+		const std::uint64_t publication = Scene::FrameView::Get().InstalledSequence();
+		auto retirement = Scene::FrameView::Get().InstalledRetirement();
+		auto find = [fades = std::move(fades), tables, publication, retirement = std::move(retirement)] {
 			ZoneScopedN("CS.DCLF.FadeWriteBack");
 			auto& state = *fades->fadeWriteBack;
 			// The roots as those tables list them (the root states' view).
@@ -122,6 +126,8 @@ namespace DCLF::Features::Fades
 			std::stable_sort(batches.begin(), batches.end(), [](const auto* a_a, const auto* a_b) { return a_a->frame < a_b->frame; });
 			auto stores = std::make_unique<FadeWriteBack::Stores>();
 			stores->tables = tables;
+			stores->publication = publication;
+			stores->retirement = retirement;
 			for (auto* batch : batches) {
 				for (const auto& event : batch->events) {
 					if (!tables)
@@ -145,6 +151,8 @@ namespace DCLF::Features::Fades
 			if (std::unique_ptr<FadeWriteBack::Stores> earlier{ state.ready.exchange(nullptr, std::memory_order_acq_rel) }) {
 				earlier->stores.insert(earlier->stores.end(), stores->stores.begin(), stores->stores.end());
 				earlier->tables = std::move(stores->tables);
+				// The earlier stores' node is kept: an older node holds every newer one.
+				earlier->publication = std::min(earlier->publication, stores->publication);
 				stores = std::move(earlier);
 			}
 			if (!stores->stores.empty())

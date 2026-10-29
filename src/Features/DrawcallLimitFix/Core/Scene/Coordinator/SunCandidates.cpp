@@ -156,8 +156,9 @@ namespace DCLF::Scene
 		// A snapshot for every walk that moved an entry (and the first): the readers bring themselves up to it entry by entry.
 		if (lightTable.changed || !lightCandidates)
 			lightCandidates = lightTable.Publish(lightCandidatesGeneration, publicationSequence + 1, [this](const RE::NiAVObject* a_root) { return OwnedRoot(a_root); });
-		// The roots it let go of: the next publication (which carries it) is the first not to name them.
-		releases.Retire(publicationSequence + 1, lightTable.TakeRetiredRoots());
+		// The roots it let go of, named by the publications made so far: retired through the chain.
+		for (auto& root : lightTable.TakeRetiredRoots())
+			HandBack(std::move(root));
 		Diagnostics::Notify(Diagnostics::CandidatesUpdated{ *this, false });
 		(void)changed;
 	}
@@ -253,7 +254,8 @@ namespace DCLF::Scene
 		// A snapshot for every walk that moved an entry (and the first): the readers bring themselves up to it entry by entry.
 		if (sunTable.changed || !sunCandidates)
 			sunCandidates = sunTable.Publish(sunCandidatesGeneration, publicationSequence + 1, [this](const RE::NiAVObject* a_root) { return OwnedRoot(a_root); });
-		releases.Retire(publicationSequence + 1, sunTable.TakeRetiredRoots());
+		for (auto& root : sunTable.TakeRetiredRoots())
+			HandBack(std::move(root));
 		Diagnostics::Notify(Diagnostics::CandidatesUpdated{ *this, true });
 		(void)changed;
 	}

@@ -170,9 +170,8 @@ namespace DCLF::Draws
 			kWriteGeometry,
 		};
 		/**
-		 * @brief The kAccumulated writes prepared from one decode's newest batch, for the main thread. Its nodes are alive while the
-		 * release horizon has not passed its tables' and candidates' publications (EngineReleases::Alive); only the main thread lets go of
-		 * them.
+		 * @brief The kAccumulated writes prepared from one decode's newest batch, for the main thread. Its nodes are its publication's,
+		 * alive while it holds that publication's retirement node (retirement); only the main thread lets go of it.
 		 */
 		struct Writes
 		{
@@ -190,7 +189,8 @@ namespace DCLF::Draws
 			bool full = false;        // every stood-in root and geometry, not only the changes (a refresh, a reset, a cut's first batch)
 			std::uint64_t publication = 0;  // the publication installed at the arm: its nodes are alive while EngineReleases::Alive(publication)
 			std::shared_ptr<const SceneTables> tables;
-			std::shared_ptr<const EntrySpace> candidates;  // the plain entry roots' (by key: alive within the horizon)
+			std::shared_ptr<const EntrySpace> candidates;  // the plain entry roots'
+			std::shared_ptr<const void> retirement;         // the publication's retirement node: every node named stays alive until the write
 			std::vector<Write> writes;
 			Writes* next = nullptr;
 		};
@@ -217,6 +217,7 @@ namespace DCLF::Draws
 			bool reset = false;     // the frame's commit zeroed the reported words: the decoder's verdicts start again
 			bool complete = true;   // every change fit (no verdict arrives a frame late)
 			std::uint64_t publication = 0;  // the armed frame's installed publication
+			std::shared_ptr<const void> retirement;  // its retirement node: the slots the events name stay theirs until decoded
 			std::shared_ptr<const SceneTables> tables;  // the frame's (the occupants); let go by the render thread alone
 			std::shared_ptr<const EntrySpace> candidates;   // the frame's entries (the wide writes' plain entry roots)
 			std::vector<VisibilityEvent> events;
@@ -230,6 +231,7 @@ namespace DCLF::Draws
 			std::uint32_t frame = 0;
 			bool reset = false;
 			std::uint64_t publication = 0;  // the frame's installed publication
+			std::shared_ptr<const void> retirement;  // its retirement node (Batch::retirement)
 			std::shared_ptr<const SceneTables> tables;
 			std::shared_ptr<const EntrySpace> candidates;
 		};
@@ -278,8 +280,8 @@ namespace DCLF::Draws
 		ankerl::unordered_dense::map<const void*, bool> rootVerdicts;
 		// Since the last report: writes made, unchanged, and left (no longer stood in; a clear older than a cut); cuts; time.
 		std::atomic<std::uint64_t> writesSet{ 0 }, writesCleared{ 0 }, writesUnchanged{ 0 }, writesHeldByCut{ 0 };
-		std::atomic<std::uint64_t> writesExpired{ 0 };
-		std::atomic<std::uint32_t> writeAgeMax{ 0 };  // the oldest write list applied, in frames since its arm (the release horizon's margin)  // writes whose lists the release horizon passed (WriteAccumulated: none written)
+		std::atomic<std::uint64_t> writesExpired{ 0 };  // writes of a list whose publication was released (none: each holds its node)
+		std::atomic<std::uint32_t> writeAgeMax{ 0 };    // the oldest write list applied, in frames since its arm
 		std::atomic<std::uint64_t> cutWrites{ 0 }, fullWrites{ 0 }, cuts{ 0 }, writeNs{ 0 }, writeBatches{ 0 };
 		// The main thread's, since the last report: wide writes, nodes between set (and walks short of their root), and the cell
 		// roots (PrimaryCull::ListUpkeep's kAccumulated).

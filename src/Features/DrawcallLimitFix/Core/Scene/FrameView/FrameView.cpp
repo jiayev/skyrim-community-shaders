@@ -60,6 +60,7 @@ namespace DCLF::Scene
 	}
 
 	std::uint64_t FrameView::InstalledSequence() const { return installed ? installed->sequence : 0; }
+	std::shared_ptr<const void> FrameView::InstalledRetirement() const { return installed ? installed->retirementHold : nullptr; }
 
 	void FrameView::HandOverAtFrameStart(std::shared_ptr<const void> a_adopted)
 	{

@@ -75,7 +75,7 @@ namespace DCLF::Scene
 		materialDependents.clear();
 		// The scene work's record upkeep named the cleared slots.
 		ResetMaterialRecords();
-		// Released at Present through the ReleaseRing, as ClearMaterialSlot's (the last reference deletes the engine's material: never
+		// Released at Present through the retirement chain, as ClearMaterialSlot's (the last reference deletes the engine's material: never
 		// on the pump, which runs this on a loading pass).
 		for (auto& owner : materialOwners)
 			ReleaseMaterial(std::move(owner));
