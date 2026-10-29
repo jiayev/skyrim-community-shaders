@@ -38,7 +38,7 @@ struct VRAMBudget : Feature
 
 	struct Settings
 	{
-		float ThresholdPercent = 90.0f;  // Share of the driver's VRAM budget above which cells are unloaded
+		float ThresholdPercent = 80.0f;  // Share of the driver's VRAM budget above which cells are unloaded
 	};
 
 	Settings settings;

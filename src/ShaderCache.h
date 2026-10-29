@@ -378,8 +378,11 @@ namespace SIE
 		/** @brief Reads a cached blob, deleting the file and returning null when it is unreadable or not intact DXBC. */
 		winrt::com_ptr<ID3DBlob> ReadIntactBlob(const std::wstring& diskPath);
 
-		/** @brief Writes through a sibling temp file and a rename, so a crash mid-write cannot leave a torn blob at diskPath. */
-		bool WriteBlobAtomic(const std::wstring& diskPath, ID3DBlob* blob);
+		/**
+		 * @brief Writes through a sibling temp file and a rename, so a crash mid-write cannot leave a torn blob at diskPath.
+		 * @param failure When non-null and the write fails, set to the step that failed and the system's error for it.
+		 */
+		bool WriteBlobAtomic(const std::wstring& diskPath, ID3DBlob* blob, std::string* failure = nullptr);
 	}
 
 	class UpdateListener;
