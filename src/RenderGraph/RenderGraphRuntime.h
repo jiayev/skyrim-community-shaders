@@ -13,6 +13,8 @@
 #include <winrt/base.h>
 
 struct DxvkOrgInteropResourceInfo;
+struct DxvkOrgInteropTrackedResource;
+struct DxvkOrgInteropRelocation;
 
 // The Vulkan handles EmitExternalCommands takes, declared as vulkan_core.h does on 64-bit targets (identical redeclarations),
 // so this header stays free of Vulkan includes.
@@ -227,6 +229,24 @@ public:
 	 * chunk). a_results[i] is object i's result. False when the DXVK build lacks the batched export (nothing was described).
 	 */
 	bool DescribeResources(std::span<IUnknown* const> a_objects, std::span<DxvkOrgInteropResourceInfo> a_infos, std::span<HRESULT> a_results);
+
+	/**
+	 * @brief Whether imports can be tracked instead of pinned (the DXVK exports exist; CS_ORG_PINNED_IMPORTS=1 turns it off).
+	 * Fixed once the runtime is up.
+	 */
+	bool PinlessImports() const;
+	/**
+	 * @brief DescribeResources without pinning (dxvkTrackInteropResources): counts one import of each object's resource, which
+	 * DXVK may still move; each move is a relocation (PollRelocations) holding the old storage until ReleaseStorage. Each success
+	 * must be ended with UntrackResources once nothing uses it, with the D3D11 object still referenced. False when unavailable.
+	 */
+	bool TrackResources(std::span<IUnknown* const> a_objects, std::span<DxvkOrgInteropTrackedResource> a_resources, std::span<HRESULT> a_results);
+	/** @brief Ends one import of each object's resource (any thread). */
+	void UntrackResources(std::span<IUnknown* const> a_objects);
+	/** @brief Takes reported relocations, oldest first (any thread); each one's storage must be released. */
+	std::uint32_t PollRelocations(std::span<DxvkOrgInteropRelocation> a_relocations);
+	/** @brief Releases relocations' old storage once the GPU no longer uses it (any thread). */
+	void ReleaseStorage(std::span<void* const> a_storages);
 
 	/** @brief A timeline semaphore point an external recording waits for or signals (stages 0: all commands). */
 	struct ExternalCommandsWait

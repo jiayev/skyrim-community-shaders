@@ -29,6 +29,7 @@ struct TerrainHelper;
 struct TerrainShadows;
 struct UnifiedWater;
 struct VolumetricLighting;
+struct VRAMBudget;
 struct WaterEffects;
 struct PerformanceOverlay;
 struct WetnessEffects;
@@ -122,6 +123,7 @@ namespace globals
 		extern TerrainShadows terrainShadows;
 		extern UnifiedWater unifiedWater;
 		extern VolumetricLighting volumetricLighting;
+		extern VRAMBudget vramBudget;
 		extern WaterEffects waterEffects;
 		extern PerformanceOverlay performanceOverlay;
 		extern WetnessEffects wetnessEffects;

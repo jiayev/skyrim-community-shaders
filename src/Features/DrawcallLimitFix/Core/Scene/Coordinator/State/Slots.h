@@ -42,6 +42,11 @@ namespace DCLF::Scene
 		} slotReferences;
 		std::vector<std::uint32_t> freedGeometry;
 		std::vector<std::uint32_t> staleGeometrySlots;
+		// Pinless imports: the geometry slots drawing a buffer DXVK moved, stale until resolved again (their leases hold the old
+		// storage they read meanwhile), and those still to be scheduled (ScheduleStaleGeometry). The pass's tables' slots: never the
+		// dense walk's.
+		ankerl::unordered_dense::set<std::uint32_t> relocatedGeometrySlots;
+		std::vector<std::uint32_t> relocatedGeometry;
 		/**
 		 * @brief GeometryScan's index (geometry slot to object slots), keys only and checked again at the scan: an entry may go stale, none
 		 * is missing. Every object slot under the head geometry slot its last write gave it (MergeWrite, WriteLayer), and every geometry

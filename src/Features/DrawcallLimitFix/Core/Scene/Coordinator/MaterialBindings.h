@@ -48,6 +48,8 @@ namespace DCLF
 			std::uint64_t resolved = 0;   // entries that turned resolved
 			std::uint64_t retired = 0;    // entries dropped with their slot
 			std::uint64_t versioned = 0;  // entry changes versioned into the lookups (VersionMaterialBindings)
+			std::uint64_t followed = 0;   // pinless: entries resolved again for a moved view (FollowRelocatedTextures)
+			std::uint64_t superseded = 0;  // pinless: answers whose import a move superseded meanwhile (asked again)
 		};
 		/** @brief The work the bindings saved, for the material records' line (Coordinator::RefreshMaterialRecords, which resets it). */
 		struct Work
@@ -78,6 +80,7 @@ namespace DCLF
 		// The used set as the last pass saw it: a slot set since is resolved (a member joined on a slot made earlier).
 		std::vector<std::uint64_t> usedSeen;
 		LogCursor cursor;  // the tables' material log
+		std::uint64_t relocationCursor = 0;  // GpuTextures::RelocatedViews
 		std::uint64_t cookie = 1;  // the requests' since the last reset: an answer with another is stale
 		GpuTextures::Replies replies{ &WakeSceneTextureReply };  // an answer wakes the scene pump
 		Stats stats;

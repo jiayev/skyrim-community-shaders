@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameData.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/ImportRelocations.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
@@ -127,8 +128,10 @@ namespace DCLF
 		// The candidate entries changed since the sun exclusion's snapshot leave it (the engine culls them); the rest stand (the exclusion
 		// contribution's frameStart: Features/Shadows/Local's SunExclusionSlot::BeginFrame).
 		Extensions::ShadowExclusionFrameStart();
-		// The lookups are the installed publication's; what only the frame has goes to the scene lane (PostLookupInputs).
+		// The lookups are the installed publication's; what only the frame has goes to the scene lane (PostLookupInputs). DXVK's moves
+		// of the pinless imports first: the superseded textures leave the registry, the buffers go to their instances' next pass.
 		Diagnostics::Notify<Diagnostics::FramePoint::LookupsInstalled>();
+		ImportRelocations::Poll();
 		draws.PostLookupInputs();
 		{
 			// The claims are installed on every covered frame. Before the first (NotDrawingYet: tables, resources and the first revision

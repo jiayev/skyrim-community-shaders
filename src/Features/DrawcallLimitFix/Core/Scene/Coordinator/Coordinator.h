@@ -171,6 +171,7 @@ namespace DCLF
 			std::uint32_t derivedDiffers = 0;
 			std::uint32_t slotsSwept = 0;
 			std::uint32_t geometriesRefreshed = 0;
+			std::uint32_t geometriesRelocated = 0;  // slots made stale by a move of their buffers (pinless imports), since the start
 			std::uint32_t slotViolations = 0;  // objects whose slots failed CheckObjectSlots (the gate: 0)
 			std::uint32_t shadowCasters = 0;  // records the engine would draw into a shadow map
 			std::array<std::uint32_t, 16> shadowRejects{};  // by ShadowReject, over the frame's records
@@ -1025,7 +1026,12 @@ namespace DCLF
 		/** @brief After the records' writers: drains the answers, then resolves the changed (material log) and newly used slots. */
 		void UpdateMaterialBindings();
 		/** @brief A used slot's entry written from its record; bindings requested for views with none known. */
-		void ResolveMaterialBinding(std::uint32_t a_slot);
+		void ResolveMaterialBinding(std::uint32_t a_slot, bool a_force = false);
+		/**
+		 * @brief UpdateMaterialBindings': the used slots naming a view whose import a move superseded (GpuTextures::RelocatedViews),
+		 * resolved again. A superseded binding is never kept, cached or taken from an answer; it is held until the new one is answered.
+		 */
+		void FollowRelocatedTextures();
 		/** @brief ResolveMaterialBinding's per-texture binder: one slot's textures bound or cleared, its owner changes collected (MaterialBindings.cpp). */
 		struct MaterialTextureBinder;
 		/**
@@ -1177,6 +1183,8 @@ namespace DCLF
 		void FinishDeltaWalk(PartTimer& a_timer);
 		/** @brief FinishDeltaWalk's geometry scan: the kept objects drawing a stale or freed geometry slot scheduled (or retired). */
 		void ScheduleStaleGeometry();
+		/** @brief The prologue's: the slots drawing a buffer whose import DXVK moved (GpuResources::TakeRelocated), made stale. */
+		void NoteRelocatedGeometry(const std::vector<ID3D11Buffer*>& a_buffers);
 		/** @brief FinishDeltaWalk's third round: the kept objects drawing a geometry slot re-resolved in place, scheduled and evaluated. */
 		void ScheduleRefreshedGeometry(PartTimer& a_timer);
 		/**

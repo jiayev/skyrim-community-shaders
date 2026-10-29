@@ -177,10 +177,35 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     life. About 2,300 of the 3,150 locks are live imports (1,795 buffers, 523 textures); the rest are resources DCLF no longer
     imports. The peak was 11,702 locks.
 
-    The DCLF-on figure of 2,168 MiB outside DXVK, against 1,285 off, is separate (BasicRHI's allocator) and still open.
+    **Fixed (2026-10-29): pinless imports.** DCLF's game imports no longer pin anything. The DXVK fork tracks them
+    (`dxvkTrackInteropResources`) and reports each move with the old storage (`dxvkPollInteropRelocations`). DCLF takes the moves
+    at frame start (`Core/Gpu/ImportRelocations`) and imports again:
+    -   textures: the import is superseded and its slot detached; material bindings resolve again;
+    -   buffers: the entry goes and the geometry slots go stale.
 
-    **Fix direction:** relocation-following imports (DXVK reports each move of an imported read-only resource; DCLF re-imports it
-    through the stale-slot and retired-import paths). Pinning stays only for the few writable or CS-owned imports.
+    The old storage is attached to the old import's owner and released behind the GPU.
+
+    A few things stay pinned:
+    -   images and buffers the GPU writes (render targets, depth, storage);
+    -   the Resources.cpp imports, which still use `GetResourceInfo`.
+
+    `CS_ORG_PINNED_IMPORTS=1` restores the old pinned path.
+
+    | After `pcb` | DCLF on, pinned (dxon2) | DCLF on, pinless (pinon4) | DCLF off (pinoff2) |
+    |---|---|---|---|
+    | Device-local chunks | 33, all locked | 25 | 24 |
+    | DXVK allocated / used | 11,574 / 8,439 MiB | 9,398 / 7,479 MiB | 10,082 / 9,105 MiB |
+    | Dedicated VRAM at the end | 13,742 MiB | 10,997 MiB | 11,308 MiB |
+
+    Still open:
+    -   **Outside DXVK.** 2,167 MiB with DCLF on against 1,285 off (BasicRHI's allocator); process usage is 11,565 against
+        11,367 MiB.
+    -   **Imports that don't follow a move.** Grass, tree LOD and shared bindings keep their superseded imports. That is correct,
+        because the old storage stays valid, but it holds the old storage, and its chunk, until they let go. Reported as "old
+        storages held" in the "pinless imports" line and the alloc trace.
+    -   **A release stall under stress only.** With `DXVK_ORG_RELOCATE_STRESS=64` (run pinstress2), publications 11136 and 11140
+        kept their holders from 23:31 to the end, and engine references stopped releasing. VRAM was over budget and the frame rate
+        was 12 fps. Not seen in the realistic runs; investigate if it shows up without stress.
 
 ## Payload and table defects
 

@@ -142,6 +142,8 @@ namespace DCLF::Scene
 		}
 		geometryIndex.erase(tables.geometrySlotKey[a_slot]);
 		tables.geometrySlotKey[a_slot] = nullptr;
+		if (!denseWalk)
+			relocatedGeometrySlots.erase(a_slot);
 		// The leases outlive the frames in flight (TakeRetiredImports).
 		auto& import = tables.geometryImports[a_slot];
 		for (auto* owner : { &import.vertexOwner, &import.indexOwner })
