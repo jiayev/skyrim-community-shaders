@@ -3456,7 +3456,7 @@
     "menu.advanced.vertex_tooltip": "Replace Vertex Shaders. When false, will disable the custom Vertex Shaders for the types above. For developers to test whether CS shaders match vanilla behavior. ",
     "menu.advanced.vram_attribution": "VRAM Attribution",
     "menu.advanced.vram_attribution_tooltip": "Every D3D11 and render graph resource with its owner and size, by owner, source or heap, reconciled against the driver's heap usage.",
-    "menu.advanced.vram_debug_off": "Set CS_VRAM_DEBUG=1 and restart to trace unattributed memory",
+    "menu.advanced.vram_debug_off": "Set CS_VRAM_DEBUG=1 and restart to list the render graph's device memory by call site",
     "menu.advanced.vram_debug_on": "VRAM debug mode is on",
     "menu.advanced.vram_dump": "Dump VRAM Attribution",
     "menu.advanced.vram_dump_tooltip": "Writes every resource, heap and reconciliation line as JSON next to the Community Shaders log, for comparing runs.",

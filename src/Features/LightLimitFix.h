@@ -402,6 +402,13 @@ public:
 	 * UpdateCamera) does not reach, so the two would choose different lights (dclf-open-defects.md).
 	 */
 	static bool LocalShadowsBlockedByDCLF();
+	/**
+	 * @brief This frame's light index list: the render graph's when it culled the clusters, else the D3D11 fallback's.
+	 * Valid for consumers that run after Prepass.
+	 */
+	ID3D11ShaderResourceView* GetLightIndexListSRV() const;
+	/** @brief This frame's light grid, from the same source as GetLightIndexListSRV. */
+	ID3D11ShaderResourceView* GetLightGridSRV() const;
 	/** @brief True when local shadows are enabled and the cache texture exists. */
 	bool IsLocalShadowCacheActive() const { return IsLocalShadowsEnabled() && localShadowCache; }
 	/** @brief Draws the experimental local shadow settings. */

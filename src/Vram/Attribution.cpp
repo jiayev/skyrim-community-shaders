@@ -28,6 +28,8 @@ namespace Vram
 				{ "llf", "LightLimitFix" },
 				{ "sss", "SubsurfaceScattering" },
 				{ "hdr", "HDRDisplay" },
+				{ "ibl", "ImageBasedLighting" },
+				{ "state", "Core" },
 				{ "dof", "PostProcessing" },
 				{ "physicalglare", "PostProcessing" },
 				{ "motionblur", "PostProcessing" },
@@ -71,6 +73,9 @@ namespace Vram
 
 	std::string OwnerFromOrgName(std::string_view a_name)
 	{
+		// The graph's own ("org.staged-uploads", "UploadManager page").
+		if (a_name.starts_with("org.") || a_name.starts_with("UploadManager"))
+			return "ORG/Internal";
 		if (!a_name.starts_with("cs."))
 			return {};
 		const auto rest = a_name.substr(3);

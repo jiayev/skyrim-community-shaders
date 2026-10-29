@@ -85,16 +85,17 @@ namespace Vram
 
 	/**
 	 * @brief The latest snapshot, refreshed when older than a_maxAgeSeconds (DXVK's part lags a request by its CS thread's
-	 * turnaround). Any thread.
+	 * turnaround). Render thread: a refresh labels the game's render targets (TagGameRenderTargets), which it recreates.
 	 */
 	Snapshot Current(double a_maxAgeSeconds = 0.5);
 
 	/**
-	 * @brief Labels the game's render targets, depth stencils and cubemaps "Game/RenderTarget/<name>" (replacing the generic
-	 * owner their creation scope gave them). Right after the game creates them, before CS's setup replaces any (Deferred's
-	 * replacements get their own owner from their scope).
+	 * @brief Labels the game's render targets, depth stencils, cubemaps, 3D targets and swap chain back buffer: owner
+	 * "Game/<kind>/<slot>", and the slot's name where the texture has none. Render thread.
+	 * @param a_overwrite Replace the owner a creation scope gave (right after the game creates them, before CS's setup replaces
+	 * any); otherwise only unowned textures take it, so CS's replacements keep their feature's.
 	 */
-	void TagGameRenderTargets();
+	void TagGameRenderTargets(bool a_overwrite);
 
 	/** @brief One line (no newline): device-local totals, the largest a_owners owners, and the residuals. */
 	std::string ReportLine(std::size_t a_owners);

@@ -32,8 +32,13 @@ namespace LightLimitFix
 	// Read where used, not as statics: a plain draw's object word (DCLF_PULLED) is its sequence's, which its main loads after the
 	// statics are initialised.
 	int RoomIndexOf() { return DCLFObjects[DCLFObjectIndex].RoomIndex; }
-	// The shadow lights are the draw's, selected by BuildDrawsCS this frame (the object word), not the record's.
+	// The shadow lights are the draw's, selected by BuildDrawsCS this frame (the object word), not the record's; as the host shader
+	// narrows them (Lighting.hlsl: none for a pass without DefShadow).
+#	if defined(DCLF_SHADOW_LIGHT_MASK)
+	uint ShadowBitMaskOf() { return DCLF_SHADOW_LIGHT_MASK; }
+#	else
 	uint ShadowBitMaskOf() { return DCLFLocalShadowMask; }
+#	endif
 #else
 	NSCB_ALIAS(LightLimitFix, int, RoomIndex)
 	NSCB_ALIAS(LightLimitFix, uint, ShadowBitMask)

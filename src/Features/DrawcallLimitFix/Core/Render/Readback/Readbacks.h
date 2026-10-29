@@ -87,8 +87,10 @@ namespace DCLF::Draws
 				return;
 			auto* set = new StagingSet();
 			set->events = a_events;
-			for (std::uint32_t i = 0; i < frameSlots; ++i)
+			for (std::uint32_t i = 0; i < frameSlots; ++i) {
 				set->buffers.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, bytesFor(a_events)));
+				set->buffers.back()->SetName("cs.dclf.event-ring-readback");
+			}
 			set->next = sets.load(std::memory_order_relaxed);
 			while (!sets.compare_exchange_weak(set->next, set, std::memory_order_release, std::memory_order_relaxed)) {}
 			setsAdded.fetch_add(1, std::memory_order_relaxed);
@@ -341,8 +343,10 @@ namespace DCLF::Draws
 		CounterReadback(std::uint32_t a_frameSlots, std::uint32_t a_sources) :
 			sources(a_sources)
 		{
-			for (std::uint32_t i = 0; i < a_frameSlots; ++i)
+			for (std::uint32_t i = 0; i < a_frameSlots; ++i) {
 				buffers.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(std::max(a_sources, 1u)) * kSourceWords * sizeof(std::uint32_t)));
+				buffers.back()->SetName("cs.dclf.cull-counter-readback");
+			}
 		}
 		static constexpr std::uint32_t StampOf(std::uint32_t a_frame) { return a_frame & 0x0FFFFFFFu; }  // as the commits write it
 		std::uint32_t sources = 0;

@@ -783,7 +783,7 @@ struct BSShaderRenderTargets_Create
 			func();
 		}
 		globals::ReInit();
-		Vram::TagGameRenderTargets();
+		Vram::TagGameRenderTargets(true);
 		globals::state->Setup();
 	}
 	static inline REL::Relocation<decltype(thunk)> func;

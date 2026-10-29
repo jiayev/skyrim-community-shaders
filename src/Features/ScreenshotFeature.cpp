@@ -860,6 +860,15 @@ void ScreenshotFeature::Reset()
 void ScreenshotFeature::ProcessCaptureRequest()
 {
 	ProcessPendingReadbacks();
+	captureOutputPath.clear();
+	{
+		std::lock_guard lock(requestedPathsMutex);
+		if (!requestedPaths.empty()) {
+			captureOutputPath = std::move(requestedPaths.front());
+			requestedPaths.pop();
+			captureRequested = true;
+		}
+	}
 	if (captureRequested.exchange(false)) {
 		try {
 			Capture();
@@ -975,8 +984,10 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
 		} else {
 			logger::info("Saved screenshot to {}", screenshot.outputPath.string());
-			ShowInGameNotification(std::format("Screenshot saved: {}",
-				screenshot.outputPath.filename().string()));
+			// A scripted capture's notification would show in the next one.
+			if (screenshot.notify)
+				ShowInGameNotification(std::format("Screenshot saved: {}",
+					screenshot.outputPath.filename().string()));
 		}
 	}
 	CoUninitialize();
@@ -1078,8 +1089,16 @@ void ScreenshotFeature::Capture()
 	screenshot.saveAsHdrAvif = saveAsHdrAvif;
 	screenshot.saveAsSdrPng = saveAsSdrPng;
 	screenshot.hdrPngBitDepth = static_cast<int>(hdrPngBitDepth);
-	screenshot.outputPath = BuildScreenshotPath(screenshotPath, saveAsHdrAvif ? ".avif" : (saveAsHdrPng || saveAsSdrPng ? ".png" : ".bmp"));
-	screenshot.copyToClipboard = copyToClipboard;
+	const char* extension = saveAsHdrAvif ? ".avif" : (saveAsHdrPng || saveAsSdrPng ? ".png" : ".bmp");
+	screenshot.outputPath = captureOutputPath.empty() ? BuildScreenshotPath(screenshotPath, extension) : std::filesystem::path(captureOutputPath).replace_extension(extension);
+	screenshot.copyToClipboard = copyToClipboard && captureOutputPath.empty();
+	screenshot.notify = captureOutputPath.empty();
 	pendingReadbacks.push_back(std::move(screenshot));
+}
+
+void ScreenshotFeature::RequestCapture(std::filesystem::path a_outputPath)
+{
+	std::lock_guard lock(requestedPathsMutex);
+	requestedPaths.push(std::move(a_outputPath));
 }
 #undef I18N_KEY_PREFIX

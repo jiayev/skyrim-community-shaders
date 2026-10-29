@@ -272,7 +272,7 @@ void GrassCollision::StoodDownUpdate(const GrassShared::StoodDownFrame& a_frame)
 
 void GrassCollision::SetupResources()
 {
-	perFrame = new ConstantBuffer(ConstantBufferDesc<PerFrame>());
+	perFrame = new ConstantBuffer(ConstantBufferDesc<PerFrame>(), "GrassCollision::PerFrameCB");
 
 	{
 		D3D11_TEXTURE2D_DESC texDesc = {
@@ -300,7 +300,7 @@ void GrassCollision::SetupResources()
 			.Texture2D = { .MipSlice = 0 }
 		};
 
-		collisionTexture = new Texture2D(texDesc);
+		collisionTexture = new Texture2D(texDesc, "GrassCollision::Collision");
 		collisionTexture->CreateSRV(srvDesc);
 		collisionTexture->CreateUAV(uavDesc);
 	}

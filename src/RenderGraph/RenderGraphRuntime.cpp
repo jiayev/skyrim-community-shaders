@@ -2214,6 +2214,9 @@ winrt::com_ptr<ID3D11Buffer> RenderGraphRuntime::WrapBuffer(org::Resource& a_buf
 	if (FAILED(impl->createBufferFromVkBuffer(globals::d3d::device, &a_desc, buffer, result.put()))) {
 		logger::error("[ORG] WrapBuffer: DXVK rejected '{}'", a_buffer.GetName());
 		result = nullptr;
+	} else {
+		// The D3D11 view of the graph's buffer: named after it, so VRAM attribution lists the two together.
+		Util::SetResourceName(result.get(), "%s (D3D11)", a_buffer.GetName().c_str());
 	}
 	return result;
 }
