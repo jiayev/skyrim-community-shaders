@@ -113,6 +113,6 @@ namespace DCLF::Features::Reflection
 
 	Api::Feature Feature()
 	{
-		return { "reflection", &Install, &InstallHooks };
+		return { .name = "reflection", .install = &Install, .earlyHooks = &InstallHooks, .preflight = &ReflectionFaces::Preflight };
 	}
 }

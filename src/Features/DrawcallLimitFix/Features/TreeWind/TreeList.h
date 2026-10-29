@@ -14,4 +14,6 @@ namespace DCLF::Features::TreeWind::TreeList
 	 */
 	void Install();
 	bool Installed();
+	/** @brief Install's call, before any hook is written (HookSites): a CALL, as the thunk chains. */
+	void Preflight();
 }

@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 
 #include "GrassShared/GrassCapture.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "GrassShared/GrassMeshLibrary.h"
 
 #include <cstring>
@@ -97,6 +98,13 @@ namespace DCLF::Features::Grass
 		// GrassShared holds two sinks (Grass Optimizations' and this), added before its hooks install; installing them again is nothing.
 		GrassShared::AddSink({ .add = &OnAdd, .removeGroup = &OnRemoveGroup, .remove = &OnRemove, .rejected = &OnRejected });
 		GrassShared::InstallCapture();
+		HookSites::NoteDetour("the grass capture's attach queue detour", GrassShared::CaptureDetourAttached() ? 1 : 0);
 		installed = true;
+	}
+
+	void PreflightHooks()
+	{
+		for (const auto& site : GrassShared::CaptureCallSites())
+			HookSites::RequireCall(site.name, site.address);
 	}
 }

@@ -4,6 +4,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLodMirror.h"
 
@@ -122,10 +123,13 @@ namespace DCLF::Features::TreeLod
 	void InstallHooks()
 	{
 		auto at = [](std::uintptr_t a_offset) { return REL::Offset(a_offset).address(); };
-		if (!SceneWriter::Has(SWF_CAP_TREE_LOD_CALLS) || !Engine::CallsTo(at(kBlockUpdateSite), at(kBlockUpdate))) {
-			logger::warn("[DCLF] tree LOD: the scene writer framework has no tree LOD calls, or the block update's call differs; tree LOD is not mirrored");
+		if (!SceneWriter::Has(SWF_CAP_TREE_LOD_CALLS)) {
+			logger::warn("[DCLF] tree LOD: the scene writer framework has no tree LOD calls; tree LOD is not mirrored");
 			return;
 		}
+		// Chained onto whatever the call holds (PreflightHooks required a CALL).
+		if (!Engine::CallsTo(at(kBlockUpdateSite), at(kBlockUpdate)))
+			logger::info("[DCLF] tree LOD: the block update's call is hooked by {}; DCLF's thunk chains onto it", HookSites::BranchTargetModule(at(kBlockUpdateSite)));
 		const bool subscribed = SceneWriter::SubscribeCall(SWF_HOOK_TREE_LOD_REFILL, &OnRefill) &&
 		                        SceneWriter::SubscribeCall(SWF_HOOK_INSTANCE_ADD_GROUP, &OnAddGroup, SWF_PHASE_POST) &&
 		                        SceneWriter::SubscribeCall(SWF_HOOK_INSTANCE_REMOVE_GROUP, &OnRemoveGroup, SWF_PHASE_POST);
@@ -133,5 +137,11 @@ namespace DCLF::Features::TreeLod
 			stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused the tree LOD calls after reporting them installed");
 		stl::write_thunk_call<BlockUpdate>(at(kBlockUpdateSite));
 		installed = true;
+	}
+
+	void PreflightHooks()
+	{
+		if (SceneWriter::Has(SWF_CAP_TREE_LOD_CALLS))
+			HookSites::RequireCall("tree LOD's block update call", REL::Offset(kBlockUpdateSite).address());
 	}
 }

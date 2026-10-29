@@ -55,6 +55,7 @@ namespace DCLF::Features::Fades
 			std::shared_ptr<const Direct::ViewBatchSet> set;
 			std::uint32_t sceneFrame = 0;
 			bool visibilityReset = false;
+			std::uint64_t publication = 0;  // the installed publication the tables and candidates are (its nodes alive within the horizon)
 			std::shared_ptr<const SceneTables> tables;
 			std::shared_ptr<const EntrySpace> candidates;
 			std::shared_ptr<FadeScene> scene;  // the write-back's ring
@@ -204,6 +205,7 @@ namespace DCLF::Features::Fades
 			input->sceneFrame = arm.sceneFrame;
 			input->visibilityReset = arm.visibilityReset;
 			input->candidates = view.GetSunCandidates();
+			input->publication = view.InstalledSequence();
 			input->scene = SharedSceneOf(*scene);
 			// The frame's inputs as the depth commit samples them for FadeStateCS (SampleFadeInputs), and the camera's culling planes.
 			input->frame = FadeState::SampleFrame(nullptr);
@@ -400,6 +402,7 @@ namespace DCLF::Features::Fades
 			frame->fadeEye = a_input.fadeEye;
 			frame->treeHeight = a_input.treeHeight;
 			frame->tables = a_input.tables;
+			frame->publication = a_input.publication;
 			frame->candidates = a_input.candidates;
 			frame->visibilityReset = a_input.visibilityReset;
 			frame->storage = std::shared_ptr<const void>(a_storage, [](const void* a_owned) { GiveBackStorage(static_cast<FrameStorage*>(const_cast<void*>(a_owned))); });

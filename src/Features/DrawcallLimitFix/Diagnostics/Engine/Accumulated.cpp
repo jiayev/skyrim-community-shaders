@@ -30,8 +30,7 @@ namespace DCLF::Diagnostics::Accumulated
 		std::uint32_t Flags(const void* a_node) { return Engine::FlagsOf(a_node); }
 		bool AccumulatedBit(const void* a_node) { return (Flags(a_node) & kFlagAccumulated) != 0; }
 
-		// AE 1.6.1170 and SE 1.5.97: FUN_1402cff60 (SE FUN_14027cac0) and its three calls (skyrim-engine-notes.md, "who sets kAccumulated").
-		constexpr Engine::Offset kAnimGate{ { 19384 }, { 18972 } };
+		// AE 1.6.1170 and SE 1.5.97: the three calls of FUN_1402cff60 (SE FUN_14027cac0) (skyrim-engine-notes.md, "who sets kAccumulated").
 		constexpr std::array<Engine::Offset, 3> kAnimGateCallSites{ { { { 19204, 0x96 }, { 18714, 0x96 } }, { { 18894, 0x90 }, { 18463, 0x90 } }, { { 18900, 0xa2 }, { 18469, 0xa2 } } } };  // UpdateAnimationJob, FUN_1402b41a0, FUN_1402b52e0
 
 		/** @brief Main::Update's entry's: the stood-in roots and whether DCLF left their kAccumulated set. Immutable once published. */
@@ -116,9 +115,10 @@ namespace DCLF::Diagnostics::Accumulated
 		void InstallAnimRate(const On<EnginePoint::PrimaryCullInstalled>&)
 		{
 			const auto base = REL::Module::get().base();
+			// Chained onto whatever the calls hold; only an inline patch (no CALL) keeps the observer out.
 			for (const auto site : kAnimGateCallSites)
-				if (!Engine::CallsTo(base + site, base + kAnimGate)) {
-					logger::warn("[DCLF] anim rate observer (T7b2): FUN_1402cff60's calls are not where expected; not installed");
+				if (*reinterpret_cast<const std::uint8_t*>(base + site) != 0xE8) {
+					logger::warn("[DCLF] anim rate observer (T7b2): FUN_1402cff60's calls are not calls; not installed");
 					return;
 				}
 			stl::write_thunk_call<AnimGate<0>>(base + kAnimGateCallSites[0]);

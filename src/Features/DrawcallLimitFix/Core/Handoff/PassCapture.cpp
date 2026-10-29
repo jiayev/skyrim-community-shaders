@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 
 #include <span>
@@ -606,6 +607,21 @@ namespace DCLF
 		{
 			stl::write_thunk_call<Hook>(REL::Offset(kMainGroupSites[a_site].first).address());
 		}
+
+		// The registration's (FUN_1414b2a60) group insertions: the volumetric copy's, and the direct hints 11, 7 and 3.
+		// (SE FUN_1412ca9c0, the same code.)
+		constexpr Engine::Offset kVolumetricGroupCall{ { 106576, 0xff }, { 99932, 0xff } };
+		constexpr Engine::Offset kDirectGroupCalls[3] = { { { 106576, 0xc9 }, { 99932, 0xc9 } }, { { 106576, 0xdb }, { 99932, 0xdb } }, { { 106576, 0xed }, { 99932, 0xed } } };
+	}
+
+	void PassCapture::Preflight()
+	{
+		// Not chained: a withheld pass skips what the call or slot holds, another plugin's hook with it. So each needs the engine's own.
+		HookSites::RequireSlot("BSBatchRenderer::RegisterPass", REL::Relocation<std::uintptr_t>{ RE::VTABLE_BSBatchRenderer[0] }.address(), 0x2);
+		const auto group = REL::Offset(kInsertGroup).address();
+		HookSites::RequireCallTo("the shadow registration's volumetric group insertion", REL::Offset(kVolumetricGroupCall).address(), group);
+		for (const auto& site : kDirectGroupCalls)
+			HookSites::RequireCallTo("the shadow registration's direct group insertions", REL::Offset(site).address(), group);
 	}
 
 	std::string PassCapture::SitesMissing()
@@ -622,19 +638,12 @@ namespace DCLF
 	{
 		if (installed)
 			return;
+		// Preflight checked the slot and the shadow registration's insertions before any hook was written.
 		stl::write_vfunc<0x2, Hook>(RE::VTABLE_BSBatchRenderer[0]);
-		// The registration's (FUN_1414b2a60) group insertions: the volumetric copy's, and the direct hints 11, 7 and 3.
-		// (SE FUN_1412ca9c0, the same code.)
-		constexpr Engine::Offset kVolumetricGroupCall{ { 106576, 0xff }, { 99932, 0xff } };
-		constexpr Engine::Offset kDirectGroupCalls[3] = { { { 106576, 0xc9 }, { 99932, 0xc9 } }, { { 106576, 0xdb }, { 99932, 0xdb } }, { { 106576, 0xed }, { 99932, 0xed } } };
-		const auto insertsGroup = [](std::uintptr_t a_site) { return Engine::CallsTo(REL::Offset(a_site).address(), REL::Offset(kInsertGroup).address()); };
-		if (insertsGroup(kVolumetricGroupCall) && insertsGroup(kDirectGroupCalls[0]) && insertsGroup(kDirectGroupCalls[1]) && insertsGroup(kDirectGroupCalls[2])) {
-			stl::write_thunk_call<VolumetricGroupHook>(REL::Offset(kVolumetricGroupCall).address());
-			stl::write_thunk_call<DirectGroupHook<11>>(REL::Offset(kDirectGroupCalls[0]).address());
-			stl::write_thunk_call<DirectGroupHook<7>>(REL::Offset(kDirectGroupCalls[1]).address());
-			stl::write_thunk_call<DirectGroupHook<3>>(REL::Offset(kDirectGroupCalls[2]).address());
-		} else
-			logger::warn("[DCLF] pass capture: the shadow registration's group insertions are not where expected; their passes stay the engine's");
+		stl::write_thunk_call<VolumetricGroupHook>(REL::Offset(kVolumetricGroupCall).address());
+		stl::write_thunk_call<DirectGroupHook<11>>(REL::Offset(kDirectGroupCalls[0]).address());
+		stl::write_thunk_call<DirectGroupHook<7>>(REL::Offset(kDirectGroupCalls[1]).address());
+		stl::write_thunk_call<DirectGroupHook<3>>(REL::Offset(kDirectGroupCalls[2]).address());
 		// The main modes' group insertions (kMainGroupSites, in order), by the group each inserts into, and the hint 1 list insertion.
 		// PostPostLoad checked every site against its callee (SitesMissing) before any hook was written.
 		if (!SitesMissing().empty())

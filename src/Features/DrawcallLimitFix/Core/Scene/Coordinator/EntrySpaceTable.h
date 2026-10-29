@@ -80,12 +80,18 @@ namespace DCLF::Scene
 		// dispatched, the indices they brought up, those the lane found unstarted (and ran) or running (and waited for); the snapshots
 		// the pool grew by.
 		std::uint64_t entriesKept = 0, spareCatchUps = 0, spareEntries = 0, sparesRunByLane = 0, sparesWaited = 0, poolGrowths = 0;
+		std::uint64_t poolTrimmed = 0;  // since the last report: free snapshots let go of past kFreeSpares (TrimPool)
 		std::vector<std::uint8_t> setKept;        // per position, Set's scratch
 		std::vector<std::uint32_t> setPrevious;  // Set's scratch: the entry's geometries before
 		// The geometries Set let go of since the caller last took them (TakeReleased). One another entry lists has no row there when
 		// that entry was written first (a geometry moved between entries in one update: the new entry's Set skipped it, still indexed
 		// by the old): the caller writes that entry again.
 		std::vector<const RE::BSGeometry*> released;
+		// The entry roots the last publication names, by index: the only references a candidate set holds (its snapshots hold none).
+		// An index Publish writes under another root lets its old one go into retiredRoots, which the caller stamps with the publication
+		// (ReleaseRing::Retire): released once no frame of the horizon reads a publication that names it.
+		std::vector<RE::NiPointer<RE::NiAVObject>> owned;
+		std::vector<RE::NiPointer<RE::NiRefObject>> retiredRoots;
 
 		static std::uint64_t NextLogId();
 
@@ -104,8 +110,17 @@ namespace DCLF::Scene
 		 */
 		template <class Geometry>
 		void Set(const RE::NiAVObject* a_root, const std::vector<RE::BSGeometry*>* a_dependents, std::uint32_t& a_versions, Geometry&& a_geometry);
-		/** @brief A snapshot, a new generation (a_generation), brought up to the table at the indices that moved; a_ownedRoot holds each entry. */
-		std::shared_ptr<const EntrySpace> Publish(std::uint32_t& a_generation, const std::function<RE::NiPointer<RE::NiAVObject>(const RE::NiAVObject*)>& a_ownedRoot);
+		/**
+		 * @brief A snapshot, a new generation (a_generation), brought up to the table at the indices that moved, for a_publication (the
+		 * first publication that may carry it); a_ownedRoot gives owned each root newly listed, and the roots let go of are left in
+		 * retiredRoots (TakeRetiredRoots).
+		 */
+		std::shared_ptr<const EntrySpace> Publish(std::uint32_t& a_generation, std::uint64_t a_publication,
+			const std::function<RE::NiPointer<RE::NiAVObject>(const RE::NiAVObject*)>& a_ownedRoot);
+		/** @brief The roots the publications let go of since the last call: the last Publish's a_publication is the first not to name them. */
+		std::vector<RE::NiPointer<RE::NiRefObject>> TakeRetiredRoots() { return std::exchange(retiredRoots, {}); }
+		/** @brief Every owned root let go of (into retiredRoots): nothing names the table's entries any more (a teardown). */
+		void ReleaseOwned();
 		/** @brief Parity: a_snapshot against the table index by index (what a snapshot made whole would hold); the first difference, or empty. */
 		std::string CheckSnapshot(const EntrySpace& a_snapshot) const;
 
@@ -116,8 +131,17 @@ namespace DCLF::Scene
 		~EntrySpaceTable();
 
 	private:
+		// The free pooled snapshots kept past a publication (TrimPool): the next publication's and the next spare's.
+		static constexpr std::size_t kFreeSpares = 2;
+
 		/** @brief After a publication (pool[a_published]): a spare brought up to last on the preparation pool (inline under Policy::SerialFanout). */
 		void DispatchSpare(std::size_t a_published);
+		/**
+		 * @brief After a publication: the free pooled snapshots past kFreeSpares let go of, the nearest the log kept. The pool grows while
+		 * every snapshot is held (publications kept behind the retirement chain); a free one is memory alone (it holds no entry root),
+		 * let go of once the readers that grew the pool are done. In use or catching up: kept.
+		 */
+		void TrimPool();
 		/** @brief a_pooled's catch-up done: run here if its job has not started, else waited for (it is running). */
 		void FinishSpare(Pooled& a_pooled);
 	};

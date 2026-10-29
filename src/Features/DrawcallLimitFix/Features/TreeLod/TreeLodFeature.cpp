@@ -52,6 +52,6 @@ namespace DCLF::Features::TreeLod
 	Api::Feature Feature()
 	{
 		// The channel's source at the early hooks: after Core's scene events, before Core's engine side and observers.
-		return { "tree-lod", &Install, &InstallHooks };
+		return { .name = "tree-lod", .install = &Install, .earlyHooks = &InstallHooks, .preflight = &PreflightHooks };
 	}
 }

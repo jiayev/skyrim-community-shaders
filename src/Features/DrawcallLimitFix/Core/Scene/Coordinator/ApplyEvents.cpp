@@ -294,10 +294,9 @@ namespace DCLF::Scene
 			unpublishedNs = batch->oldestNs;
 			unpublishedFrame = batch->oldestFrame;
 		}
-		// Its events hold engine references (detached subtrees a published table may still name): retire them through the chain. An
-		// empty batch is dropped here, or its return would wake the pump and every pass would keep the next going.
+		// Its events hold engine references (detached subtrees a published table may still name): released through the ReleaseRing.
 		if (batch->head || !batch->switches.empty())
-			retirement.Open().events.push_back(std::move(batch));
+			releases.Open().owners.push_back(std::move(batch));
 		// No reference is made from the pins after the apply. Let go, not cleared: a burst's buckets would be cleared again by every pass.
 		batchPins = {};
 	}

@@ -70,6 +70,12 @@ namespace DCLF::Features::Lod::LodGates
 	 * steal), one each (Install calls it). Idempotent.
 	 */
 	void InstallDetours();
+	/**
+	 * @brief Install's call sites, before any hook is written (HookSites), unless CS_DCLF_LOD_GATES=0 or this runtime lacks their addresses
+	 * (Install skips them then): each a CALL or JMP rel32, as every thunk chains. The detours chain too; one that fails to attach forces
+	 * DCLF off (a stolen LOD handle only they give back).
+	 */
+	void Preflight();
 
 	/**
 	 * @brief The gates' show veto (Api::ShowVeto: open, vetoes), which the hidden-node source's stubs on the engine's LOD show stores

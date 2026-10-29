@@ -9,7 +9,6 @@
 
 #include <ankerl/unordered_dense.h>
 
-#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 
 namespace DCLF
 {
@@ -29,19 +28,14 @@ namespace DCLF
 		EntrySpace() = default;
 		EntrySpace(const EntrySpace&) = delete;
 		EntrySpace& operator=(const EntrySpace&) = delete;
-		// The last owner may be any thread: the entry nodes are released on the render thread.
-		~EntrySpace()
-		{
-			for (auto& node : held)
-				EngineReleases::Push(std::move(node));
-		}
 
 		std::uint32_t generation = 0;
+		// The first publication that may carry it: the entry nodes it names live while EngineReleases::Alive(publication) (their table
+		// owns them, released by the horizon; the snapshot holds none, so a reader keeping it keeps no engine object alive).
+		std::uint64_t publication = 0;
 		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> entries;     // entry node -> entry index
 		std::vector<const RE::NiAVObject*> entryNodes;                                  // entry index -> entry node (null: free)
 		std::vector<std::uint32_t> entryVersion;                                        // entry index -> its version
-		// The entry nodes, held as long as the snapshot: readers keyed by them may dereference one after the engine drops it.
-		std::vector<RE::NiPointer<RE::NiAVObject>> held;
 		std::vector<std::vector<std::uint32_t>> entryGeometries;                        // entry index -> its geometry indices
 		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> geometries;  // every tracked geometry under one -> geometry index
 		std::vector<const RE::BSGeometry*> geometryNodes;                               // geometry index -> geometry (null: free)

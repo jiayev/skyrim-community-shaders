@@ -34,6 +34,7 @@
 #include "Features/DrawcallLimitFix/Core/Scene/Model/SceneIdentity.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/Retirement.h"
+#include "Features/DrawcallLimitFix/Core/Engine/ReleaseRing.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
@@ -355,9 +356,11 @@ namespace DCLF
 			if (!held.empty())
 				heldText += fmt::format(" (oldest at {})", std::get<2>(held.front()));
 			return fmt::format("{} retired, {} recycled in {} batches, {} dropped by a clear; {} object slots retiring; pipeline slots {} of {} alive "
-							   "({} top cuts); {} snapshots held past the pool (publication:holders){}, published {}",
+							   "({} top cuts); {} snapshots held past the pool (publication:holders){}, published {}; engine references {} released, {} "
+							   "waiting (oldest stamp {}, horizon {}, publication {})",
 				s.retired, s.recycled, s.batches, s.dropped, tables.objectsRetiring, tables.pipelineSlots.AliveCount(), tables.pipelines.size(),
-				s.pipelinesTrimmed, held.size(), heldText, publishedTables ? publishedTables->publishedSequence : 0);
+				s.pipelinesTrimmed, held.size(), heldText, publishedTables ? publishedTables->publishedSequence : 0, std::exchange(referencesReleased, 0),
+				releases.Pending(), releases.OldestStamp(), EngineReleases::Releasable(), publicationSequence);
 		}
 		TablesPublication TakeTablesPublication() { return std::exchange(tablesPublication, TablesPublication{ .pool = tablesPool.size() }); }
 		const Stats& GetStats() const { return stats; }
@@ -528,24 +531,32 @@ namespace DCLF
 		private:
 			RE::BSShaderMaterial* material = nullptr;
 		};
-		// Per material slot: its engine reference on the material, so the pointer is not reused while live; retired via
-		// RetiredBatch::materials.
+		// Per material slot: its engine reference on the material, so the pointer is not reused while live; released through the
+		// ReleaseRing (ReleaseMaterial).
 		std::vector<MaterialReference> materialOwners;
 		/**
-		 * @brief What the coordinator let go of that a published table version may still name. Each publication holds the chain node opened
-		 * with it; once none up to it lives, RecycleRetired frees the slots and sends engine references to EngineReleases (released at
-		 * Present).
+		 * @brief The slots and imports the coordinator let go of that a published table version may still name (by index, or on the GPU).
+		 * Each publication holds the chain node opened with it; once none up to it lives, RecycleRetired frees the slots and hands the
+		 * imports to the epochs. Engine references never go here: they go to the ReleaseRing (releases), whose release no reader holds back.
 		 */
 		struct RetiredBatch
 		{
 			std::vector<Tables::RetiredSlot> slots;
 			std::vector<std::shared_ptr<const void>> imports;
-			std::vector<MaterialReference> materials;
-			std::vector<RE::NiPointer<RE::NiRefObject>> references;
-			std::vector<std::shared_ptr<EventBatch>> events;  // tracker events hold detached subtrees
-			bool Empty() const { return slots.empty() && imports.empty() && materials.empty() && references.empty() && events.empty(); }
+			bool Empty() const { return slots.empty() && imports.empty(); }
 		};
 		RetirementChain<RetiredBatch> retirement;
+		// The engine references let go of (nodes, materials, tracker events: detached subtrees), by the first publication that does not
+		// name them; released once no frame of the horizon reads one that does (EngineReleases). The tables publication stamps the open
+		// batch; the candidate tables stamp their entry roots as they publish.
+		ReleaseRing releases;
+		std::size_t referencesReleased = 0;  // since the last report
+		/** @brief A material's engine reference, released through the ReleaseRing (the last reference deletes the engine's material). */
+		void ReleaseMaterial(MaterialReference&& a_material)
+		{
+			if (a_material)
+				releases.Open().owners.push_back(std::make_shared<MaterialReference>(std::move(a_material)));
+		}
 		struct RetirementStats
 		{
 			std::uint64_t retired = 0, recycled = 0, dropped = 0, batches = 0;
@@ -1484,7 +1495,7 @@ namespace DCLF
 		void HandBack(RE::NiPointer<T>&& a_reference)
 		{
 			if (a_reference)
-				retirement.Open().references.emplace_back(std::move(a_reference));
+				releases.Open().references.emplace_back(std::move(a_reference));
 		}
 		template <class T>
 		void HandBack(std::vector<RE::NiPointer<T>>& a_references)

@@ -3,6 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 
 #include <atomic>
@@ -85,12 +86,14 @@ namespace DCLF::WindowWriters
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		bool Expected(const Engine::Offset& a_call, const Engine::Offset& a_target, const char* a_job, const char* a_what)
+		// A writer's call, chained onto whatever it holds (logged when that is not the engine's a_target).
+		template <class T>
+		void Chain(const Engine::Offset& a_call, const Engine::Offset& a_target, const char* a_job)
 		{
-			if (Engine::CallsTo(REL::Offset(a_call).address(), REL::Offset(a_target).address()))
-				return true;
-			logger::warn("[DCLF] the {} job's update is not where expected; it may write {} while the frame values sample them", a_job, a_what);
-			return false;
+			const auto site = REL::Offset(a_call).address();
+			if (!Engine::CallsTo(site, REL::Offset(a_target).address()))
+				logger::info("[DCLF] the {} job's call is hooked by {}; DCLF's thunk chains onto it", a_job, HookSites::BranchTargetModule(site));
+			stl::write_thunk_call<T>(site);
 		}
 
 		void Installed(const char* a_job)
@@ -99,24 +102,25 @@ namespace DCLF::WindowWriters
 		}
 	}
 
+	void Preflight()
+	{
+		HookSites::RequireCall("the cell animations job's update call", REL::Offset(Engine::Address::kCellAnimationsCall).address());
+		HookSites::RequireCall("the animated cell object update's queuing call", REL::Offset(Engine::Address::kAnimatedObjectsCall).address());
+		HookSites::RequireCall("the animated cell object update's wait call", REL::Offset(Engine::Address::kAnimatedObjectsWaitCall).address());
+	}
+
 	void Install()
 	{
 		if (installed)
 			return;
-		if (Expected(Engine::Address::kCellAnimationsCall, Engine::Address::kCellAnimationsUpdate, "cell animations", "animated references")) {
-			stl::write_thunk_call<CellAnimations>(REL::Offset(Engine::Address::kCellAnimationsCall).address());
-			Installed("cell animations");
-			installed = true;
-		}
-		// Both of its calls or neither: a suspension never resumed would refuse every lease after it.
+		Chain<CellAnimations>(Engine::Address::kCellAnimationsCall, Engine::Address::kCellAnimationsUpdate, "cell animations");
+		Installed("cell animations");
+		// Both of its calls (Preflight required both): a suspension never resumed would refuse every lease after it.
 		constexpr const char* kObjects = "animated cell object update";
-		if (Expected(Engine::Address::kAnimatedObjectsCall, Engine::Address::kAnimatedObjectsUpdate, kObjects, "Havok-driven transforms") &&
-			Expected(Engine::Address::kAnimatedObjectsWaitCall, Engine::Address::kAnimatedObjectsWait, kObjects, "Havok-driven transforms")) {
-			stl::write_thunk_call<AnimatedObjects>(REL::Offset(Engine::Address::kAnimatedObjectsCall).address());
-			stl::write_thunk_call<AnimatedObjectsWait>(REL::Offset(Engine::Address::kAnimatedObjectsWaitCall).address());
-			Installed(kObjects);
-			installed = true;
-		}
+		Chain<AnimatedObjects>(Engine::Address::kAnimatedObjectsCall, Engine::Address::kAnimatedObjectsUpdate, kObjects);
+		Chain<AnimatedObjectsWait>(Engine::Address::kAnimatedObjectsWaitCall, Engine::Address::kAnimatedObjectsWait, kObjects);
+		Installed(kObjects);
+		installed = true;
 	}
 
 	Counters Take()

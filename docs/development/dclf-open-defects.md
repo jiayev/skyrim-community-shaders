@@ -91,6 +91,20 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     passes `*(x + 0x70)` (null) to `FUN_1414fcea0`, which reads `[rcx+18h]`. A build's deploy into the MO2 mod folder overlapped the
     run (it finished 90 s after the crash), so the run is suspect. The dump is kept as `vp15.dmp` in the session scratch folder.
     **Next:** watch for a repeat in runs with no deploy during them.
+-   **ORG stops frame production during a cell load: "Previous synchronous admission has not terminated".** It has happened twice
+    on 2026-10-28, both times right after `coc Whiterun` on the VRAM retention tour, with an exterior cell load in progress and
+    on-demand shadow and effect pipelines being built. The first time was run 18 at 15:29, before the scene lifetime changes; the
+    second was run p1on5 at 21:01, with the release ring.
+    1. The scene revision's Z-prepass epoch recording fails with `Previous synchronous admission has not terminated`.
+    2. The colour, shadow and forward epochs then fail with `Frame production has stopped`.
+    3. ORG disables the render graph ("Async epochs failed").
+    4. DCLF ends on its fatal check: "frame N is not covered by the snapshot it adopted ... DCLF does not hand drawing back to the
+       engine once it draws".
+
+    Other runs of the same route and build passed. Logs: `run18_cs.log` and `p1on5_cs.log`, both in the session
+    scratch folder. **Next:** set aside unless it blocks another run. If it does, find which synchronous admission is still open
+    when the scene revision records: the build point's admission, or one an on-demand pipeline build holds across the load. Then
+    check why the next admission is refused rather than queued.
 
 ### Crashes probably unrelated to DCLF
 

@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionView.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionFaces.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 
@@ -135,17 +136,43 @@ namespace DCLF::Features::Reflection::ReflectionFaces
 		};
 	}
 
+	namespace
+	{
+		// Whether this runtime has every address the hooks need (else they stay out, and the faces the engine's).
+		bool Known()
+		{
+			using namespace Address;
+			for (const auto& offset : { kReflectSky, kOrientCall, kOrient, kAccumulatorRenderCall, kAccumulatorRender, kUpdateCall, kUpdate, kAddRootCalls[0],
+					 kAddRootCalls[1], kAddRootCalls[2], kAddRoot })
+				if (!offset.Known())
+					return false;
+			return true;
+		}
+	}
+
+	void Preflight()
+	{
+		using namespace Address;
+		if (!Known())
+			return;
+		const auto base = REL::Module::get().base();
+		HookSites::RequireCall("the water reflection's face orientation call", base + kOrientCall);
+		HookSites::RequireCall("the water reflection's accumulator render call", base + kAccumulatorRenderCall);
+		HookSites::RequireCall("the water reflection's update call", base + kUpdateCall);
+		for (const auto& site : kAddRootCalls)
+			HookSites::RequireCallTo("the water reflection's LOD add-root calls", base + site, base + kAddRoot);
+	}
+
 	void Install()
 	{
 		using namespace Address;
 		const auto base = REL::Module::get().base();
-		const std::array<std::pair<Engine::Offset, Engine::Offset>, 6> calls{ { { kOrientCall, kOrient }, { kAccumulatorRenderCall, kAccumulatorRender },
-			{ kUpdateCall, kUpdate }, { kAddRootCalls[0], kAddRoot }, { kAddRootCalls[1], kAddRoot }, { kAddRootCalls[2], kAddRoot } } };
-		for (const auto& [site, callee] : calls)
-			if (!kReflectSky.Known() || !site.Known() || !callee.Known() || !Engine::CallsTo(base + site, base + callee)) {
-				logger::warn("[DCLF] reflection face hooks not installed: the instruction at {:#x} is not the expected call", 0x140000000 + site.Get());
-				return;
-			}
+		if (!Known()) {
+			logger::warn("[DCLF] reflection face hooks not installed: this runtime lacks their addresses");
+			return;
+		}
+		// Preflight checked every call before any hook was written; the orientation, accumulator render and update chain onto whatever
+		// they call.
 		stl::write_vfunc<0x35, FaceRender>(RE::VTABLE_BSCubeMapCamera[0]);
 		stl::write_thunk_call<Orient>(base + kOrientCall);
 		stl::write_thunk_call<AccumulatorRender>(base + kAccumulatorRenderCall);

@@ -28,6 +28,11 @@ namespace DCLF::Features::Reflection::ReflectionFaces
 	 * (PassCapture::SetViewRenderers, SetViewWithholdActive).
 	 */
 	void Install();
+	/**
+	 * @brief Install's calls, before any hook is written (HookSites), where this runtime has them: the orientation, accumulator render and
+	 * update chain (CALLs); the LOD add-roots do not (an owned root skips the engine's add), so each needs the engine's own.
+	 */
+	void Preflight();
 
 	/** @brief Render thread: whether a face render is running, and its face mask. */
 	bool InFace();

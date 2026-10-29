@@ -32,6 +32,6 @@ namespace DCLF::Features::Grass
 	Api::Feature Feature()
 	{
 		// The capture's sink at the early hooks: registered before any grass loads, whatever the toggle (a live toggle needs the mirror).
-		return { "grass", &Install, &InstallHooks };
+		return { .name = "grass", .install = &Install, .earlyHooks = &InstallHooks, .preflight = &PreflightHooks };
 	}
 }

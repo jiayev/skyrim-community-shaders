@@ -32,4 +32,6 @@ namespace DCLF::Features::Shadows::Engine
 
 	// ShadowCasterPoints.cpp: the engine's shadow-light selection hooked (FrameDriver's shadow casters' points), from the feature's install.
 	void InstallCasterHooks();
+	// ShadowCasterPoints.cpp: the casters' three calls, before any hook is written (HookSites): CALLs, as the thunks chain.
+	void PreflightCasterHooks();
 }

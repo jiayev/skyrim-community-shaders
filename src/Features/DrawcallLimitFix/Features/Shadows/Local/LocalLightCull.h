@@ -36,6 +36,13 @@ namespace DCLF::Features::Shadows::Local
 	{
 		/** @brief Main thread, the Point source's hooks (after the Sun's: its registration hooks must be in). */
 		void Install();
+		/**
+		 * @brief Install's slots, before any hook is written (HookSites): the lights' Accumulate (an empty cull skips the engine's) and
+		 * BSParabolicCullingProcess::Process1 (an excluded entry skips it) do not chain, so each needs the engine's own. NiNode::OnVisible
+		 * (the category filter, which walks the children itself) is optional: Install leaves it out when the slot is not the engine's
+		 * (Grass Optimizations' hook), and the category nodes are walked whole.
+		 */
+		void Preflight();
 		/** @brief Whether the skip went in (the Point source's culls: Api::ShadowSourceHooks::CullsInstalled). */
 		bool Installed();
 		/** @brief Install, CS_DCLF_STRICT_LIGHT_CULLS (unset or 1): the portal-strict point lights take the empty culls too. */

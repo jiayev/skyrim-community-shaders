@@ -30,8 +30,12 @@ namespace DCLF::WindowWriters
 	 * moved-only sampling saw change without being due (its event's key came after the frame's drain). The queuing call waits as the
 	 * cell animations' does and suspends the window; the job's workers run the updates until its wait for the group, after which it
 	 * resumes.
+	 *
+	 * Each thunk chains onto what its call holds (another plugin's hook runs inside the suspension, and through it the engine's).
 	 */
 	void Install();
+	/** @brief Install's three calls, before any hook is written (HookSites): each must be a CALL rel32. */
+	void Preflight();
 
 	/**
 	 * @brief CS_DCLF_PERSISTENT_PARITY: the frame's updates wait, after the sampling, until Release. The render thread holds it before

@@ -44,6 +44,6 @@ namespace DCLF::Features::Forward
 
 	Api::Feature Feature()
 	{
-		return { "forward", &Install };
+		return { .name = "forward", .install = &Install, .preflight = &PreflightHooks };
 	}
 }

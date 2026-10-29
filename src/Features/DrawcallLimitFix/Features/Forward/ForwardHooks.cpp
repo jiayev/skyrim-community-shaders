@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Features/Forward/Forward.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -100,21 +101,20 @@ namespace DCLF::Features::Forward
 		};
 	}
 
+	void PreflightHooks()
+	{
+		HookSites::RequireCall("the main pass's blended draw (under water)", REL::Offset(Address::kBlendedUnderWater).address());
+		HookSites::RequireCall("the main pass's blended draw (after water)", REL::Offset(Address::kBlendedAfterWater).address());
+		HookSites::RequireCall("Main::Draw's refraction point", REL::Offset(Address::kRefractionCheck).address());
+	}
+
 	void InstallHooks(Api::InstallContext& a_context)
 	{
 		blendedDraw = a_context.FindTrigger("blended.draw");
-		// The main pass's blended draw (FUN_1414b39d0), at both its call sites in FUN_1414b3390.
-		if (Engine::CallsTo(REL::Offset(Address::kBlendedUnderWater).address(), REL::Offset(Address::kBlendedDraw).address()) &&
-			Engine::CallsTo(REL::Offset(Address::kBlendedAfterWater).address(), REL::Offset(Address::kBlendedDraw).address())) {
-			stl::write_thunk_call<Accumulator_BlendedDraw<0>>(REL::Offset(Address::kBlendedUnderWater).address());
-			stl::write_thunk_call<Accumulator_BlendedDraw<1>>(REL::Offset(Address::kBlendedAfterWater).address());
-		} else {
-			logger::warn("[DCLF] the main pass's blended draw is not where expected; the forward epoch (T7d) never runs, and CS_DCLF_FORWARD must stay off");
-		}
-		// Main::Draw's refraction point (its group 5 count, FUN_1414b4840).
-		if (Engine::CallsTo(REL::Offset(Address::kRefractionCheck).address(), REL::Offset(Address::kGroupFiveCount).address()))
-			stl::write_thunk_call<Main_Draw_RefractionCheck>(REL::Offset(Address::kRefractionCheck).address());
-		else
-			logger::warn("[DCLF] Main::Draw's refraction point is not where expected; CS_DCLF_REFRACTION must stay off");
+		// Chained onto whatever the calls hold (PreflightHooks required CALLs): the main pass's blended draw (FUN_1414b39d0), at both its
+		// call sites in FUN_1414b3390, and Main::Draw's refraction point (its group 5 count, FUN_1414b4840).
+		stl::write_thunk_call<Accumulator_BlendedDraw<0>>(REL::Offset(Address::kBlendedUnderWater).address());
+		stl::write_thunk_call<Accumulator_BlendedDraw<1>>(REL::Offset(Address::kBlendedAfterWater).address());
+		stl::write_thunk_call<Main_Draw_RefractionCheck>(REL::Offset(Address::kRefractionCheck).address());
 	}
 }

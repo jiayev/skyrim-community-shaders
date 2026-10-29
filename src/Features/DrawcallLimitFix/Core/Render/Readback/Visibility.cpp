@@ -4,6 +4,7 @@
 // The <- ACCUMULATED observer against the engine's bit runs only under CS_DCLF_ACCUMULATED_PARITY.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/EntrySpaceTable.h"
 
@@ -918,6 +919,7 @@ namespace DCLF
 			}
 			a_readback.fullWrites.fetch_add(full ? 1 : 0, std::memory_order_relaxed);
 			list->tables = a_newest.tables;
+			list->publication = a_newest.publication;
 			if (candidates)
 				list->candidates = a_newest.candidates;
 			return list;
@@ -1124,6 +1126,7 @@ namespace DCLF
 				batch->frame = armed.frame;
 				batch->reset = armed.reset || std::exchange(a_readback.carryReset, false);
 				batch->tables = std::move(armed.tables);
+				batch->publication = armed.publication;
 				batch->candidates = std::move(armed.candidates);
 				batch->complete = a_count <= a_capacity;
 				const auto* list = reinterpret_cast<const VisibilityEvent*>(a_words + kVisibilityEventHeaderWords);
@@ -1253,6 +1256,7 @@ namespace DCLF
 		armed.frame = Scene::FrameView::Get().GetFrame();
 		armed.reset = reset;
 		armed.tables = Scene::FrameView::Get().AcceptedTables();
+		armed.publication = Scene::FrameView::Get().InstalledSequence();
 		// For the wide writes' plain entry roots.
 		armed.candidates = Scene::FrameView::Get().GetSunCandidates();
 		// Decode a harvested batch now, so its writes reach the next Main::Update (one frame less latency).
@@ -1331,7 +1335,23 @@ namespace DCLF
 		for (auto* list = ordered; list;) {
 			// A batch older than the last cut applies sets only; the post-cut full write restores the clears.
 			const bool beforeCut = cut && list->frame < cut;
-			for (const auto& write : list->writes) {
+			// Its nodes are its publication's (the one installed when its frame was armed), which holds none of them: alive while no
+			// stamp past it was released. One released past (a decode that outlived the release horizon) writes nothing and asks for a
+			// full write, which follows from the installed publication.
+			const bool alive = EngineReleases::Alive(list->publication);
+			const std::uint32_t age = Scene::FrameView::Get().GetFrame() - list->frame;
+			for (std::uint32_t seen = r.writeAgeMax.load(std::memory_order_relaxed); age > seen && !r.writeAgeMax.compare_exchange_weak(seen, age, std::memory_order_relaxed);) {}
+			if (!alive) {
+				static std::uint32_t expiredLogged = 0;
+				if (expiredLogged++ < 6)
+					logger::info("[DCLF] readback writes past the release horizon: list publication {} (frame {}), released through {}, releasable {}, installed {} (frame {})",
+						list->publication, list->frame, EngineReleases::releasedThrough.load(), EngineReleases::Releasable(), Scene::FrameView::Get().InstalledSequence(),
+						Scene::FrameView::Get().GetFrame());
+				r.writesExpired.fetch_add(list->writes.size(), std::memory_order_relaxed);
+				r.refreshWanted.store(true, std::memory_order_release);
+			}
+			static const std::vector<Readback::Writes::Write> kNoWrites;
+			for (const auto& write : alive ? list->writes : kNoWrites) {
 				const bool held = beforeCut && !write.set;
 				if (held) {
 					r.writesHeldByCut.fetch_add(1, std::memory_order_relaxed);
@@ -1344,14 +1364,15 @@ namespace DCLF
 					SetChain(r, static_cast<RE::NiAVObject*>(write.node), write.root);
 			}
 			r.writeBatches.fetch_add(1, std::memory_order_relaxed);
-			// Keep the newest tables (a cut's writes read them); older ones are released here, on the main thread.
-			r.writtenTables = std::move(list->tables);
-			r.writtenRoots = r.writtenTables ? Extensions::RootListOf(*r.writtenTables) : Api::RootListView{};
-			r.writtenCandidates = std::move(list->candidates);
 			auto* following = list->next;
 			delete list;
 			list = following;
 		}
+		// The installed publication's tables and candidates (the main thread is the render thread): a cut's writes and the kept verdicts
+		// read them, every object they name alive while installed. Replaced every call, so nothing older is kept past a frame.
+		r.writtenTables = Scene::FrameView::Get().AcceptedTables();
+		r.writtenRoots = r.writtenTables ? Extensions::RootListOf(*r.writtenTables) : Api::RootListView{};
+		r.writtenCandidates = Scene::FrameView::Get().GetSunCandidates();
 		// A new camera cut: every listed root, its geometry, and the plain entry roots set visible now.
 		if (cut && r.cutWritten != cut && r.writtenTables) {
 			r.cutWritten = cut;

@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
@@ -793,23 +794,30 @@ namespace DCLF
 		};
 	};
 
+	void PrimaryCull::PreflightSceneLists()
+	{
+		// Not chained: the build's object root call is replaced inline (the thunk makes the virtual call itself), and a kept list skips
+		// ClearList's original (another plugin's detour of it with it). The build's and the cull's detours chain.
+		const auto base = REL::Module::get().base();
+		HookSites::RequireBytes("the scene lists' object root call", base + kObjectRootAsNode, kObjectRootAsNodeBytes);
+		HookSites::RequireKnown("the scene lists' build, clear and cull functions", kBuildSceneLists.Known() && kClearList.Known() && kCullList.Known());
+		if (kClearList.Known())
+			HookSites::RequireEntry("the scene lists' ClearList", base + kClearList);
+	}
+
 	void PrimaryCull::InstallSceneLists()
 	{
+		// PreflightSceneLists checked the object root call's bytes, the functions' addresses and ClearList's entry before any hook was
+		// written. The three detours go in together: a list kept by a ClearList detour whose build is the engine's would grow every frame.
 		const auto base = REL::Module::get().base();
-		if (std::memcmp(reinterpret_cast<const void*>(base + kObjectRootAsNode), kObjectRootAsNodeBytes.data(), kObjectRootAsNodeBytes.size()) != 0) {
-			logger::warn("[DCLF] scene lists: the build's object root call is not where expected; the lists are not kept");
-			listsKeepInstalled = false;
-		} else {
-			SKSE::GetTrampoline().write_call<6>(base + kObjectRootAsNode, ListHooks::ObjectRootAsNode::thunk);
-			listsKeepInstalled = true;
-		}
-		if (!kBuildSceneLists.Known() || !kClearList.Known() || !kCullList.Known()) {
-			logger::warn("[DCLF] scene lists: the build, clear and cull functions are not known for this runtime; the lists stay the engine's");
-			return;
-		}
+		SKSE::GetTrampoline().write_call<6>(base + kObjectRootAsNode, ListHooks::ObjectRootAsNode::thunk);
+		listsKeepInstalled = true;
 		stl::detour_thunk<ListHooks::BuildSceneLists>(base + kBuildSceneLists);
 		stl::detour_thunk<ListHooks::ClearList>(base + kClearList);
 		stl::detour_thunk<ListHooks::CullList>(base + kCullList);
+		HookSites::NoteDetour("the scene lists' BuildSceneLists detour", ListHooks::BuildSceneLists::func.address());
+		HookSites::NoteDetour("the scene lists' ClearList detour", ListHooks::ClearList::func.address());
+		HookSites::NoteDetour("the scene lists' CullList detour", ListHooks::CullList::func.address());
 	}
 
 	PrimaryCull::ListCounters PrimaryCull::TakeListCounters()

@@ -2,6 +2,7 @@
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeList.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeAnimation.h"
 
 namespace DCLF::Features::TreeWind::TreeList
@@ -32,15 +33,16 @@ namespace DCLF::Features::TreeWind::TreeList
 	{
 		if (installed)
 			return;
+		// Chained onto whatever the call holds (Preflight required a CALL).
 		const auto base = REL::Module::get().base();
-		if (!Engine::CallsTo(base + kListLoopCall, base + kListLoop)) {
-			logger::warn("[DCLF] tree manager (T7b5) not installed: the instruction at {:#x} is not a call of FUN_140437e50; stood-in trees keep the stale multibound result", 0x140000000 + kListLoopCall.Get());
-			return;
-		}
+		if (!Engine::CallsTo(base + kListLoopCall, base + kListLoop))
+			logger::info("[DCLF] tree manager: the list loop's call is hooked by {}; DCLF's thunk chains onto it", HookSites::BranchTargetModule(base + kListLoopCall));
 		stl::write_thunk_call<ListLoop>(base + kListLoopCall);
 		installed = true;
 		logger::info("[DCLF] tree manager: the list loop's call detoured (stood-in trees' multibound results from DCLF's verdicts)");
 	}
 
 	bool Installed() { return installed; }
+
+	void Preflight() { HookSites::RequireCall("the tree manager's list loop call", REL::Module::get().base() + kListLoopCall); }
 }

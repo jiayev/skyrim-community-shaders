@@ -41,6 +41,7 @@ namespace DCLF::Diagnostics
 		static auto& captureFrames() { return Frame::Get().captureFrames; }
 		static auto& categoryMirrorCaptures() { return Frame::Get().categoryMirrorCaptures; }
 		static auto& categoryMirrorRecords() { return Frame::Get().categoryMirrorRecords; }
+		static const auto& categoryCapturesHeld() { return Frame::Get().categoryCapturesHeld; }
 		static RE::BSGraphics::BSShaderAccumulator* latchedAccumulator() { return Frame::Get().latchedAccumulator; }
 
 		// The report counters (taken by the reports).
@@ -64,6 +65,8 @@ namespace DCLF::Diagnostics
 		static auto& subtreesPended(Store& s) { return s.subtreesPended; }
 		static auto& subtreesDropped(Store& s) { return s.subtreesDropped; }
 		static auto& categoryChildrenMissing(Store& s) { return s.categoryChildrenMissing; }
+		static const auto& categoryTaken(const Store& s) { return s.categoryTaken; }
+		static const auto& alwaysRenderRoots(const Store& s) { return s.alwaysRenderRoots; }
 		static auto& sunTable(Store& s) { return s.sunTable; }
 		static auto& lightTable(Store& s) { return s.lightTable; }
 		static auto& rootMotion(Store& s) { return s.rootMotion; }

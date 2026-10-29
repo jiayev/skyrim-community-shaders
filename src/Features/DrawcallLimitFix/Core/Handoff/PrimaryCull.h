@@ -59,6 +59,12 @@ namespace DCLF
 	{
 	public:
 		static PrimaryCull& Get();
+		/**
+		 * @brief The sites Install writes (HookSites), before any hook is written: its two calls (chained), the list processes' Process1 and
+		 * AppendVirtual slots (the engine's: the stand-in calls the engine's Process1 itself, and an owned geometry skips the slot), and the
+		 * scene lists' (PreflightSceneLists).
+		 */
+		static void Preflight();
 
 		/** @brief AE: the call sites in CalculateAndDrawShadowCasterLights, verified before patching. */
 		void Install();
@@ -291,6 +297,7 @@ namespace DCLF
 		struct ListHooks;
 		friend struct ListHooks;
 		void InstallSceneLists();
+		static void PreflightSceneLists();
 		enum class ListMode : std::uint8_t
 		{
 			Engine,   // engine-built and ClearLists-cleared; DCLF's roots filtered out after the build

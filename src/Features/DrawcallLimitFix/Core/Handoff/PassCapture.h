@@ -160,6 +160,8 @@ namespace DCLF
 		void Install();
 		/** @brief The patch sites Install requires that another plugin changed, or empty; writes nothing. */
 		static std::string SitesMissing();
+		/** @brief The slot and the shadow registration's insertions Install writes (HookSites): the engine's own, as the hooks do not chain. */
+		static void Preflight();
 		bool Installed() const { return installed; }
 		/** @brief The hook is a plain pass-through while set (DCLF off). */
 		void SetBypassed(bool a_bypassed) { bypassed.store(a_bypassed, std::memory_order_release); }

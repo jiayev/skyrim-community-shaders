@@ -2,6 +2,9 @@
 
 #include <d3d11.h>
 
+#include <array>
+#include <cstdint>
+
 /**
  * Grass instance capture shared by Grass Optimizations and Drawcall Limit Fix.
  *
@@ -105,6 +108,17 @@ namespace GrassShared
 
 	/** @brief Installs the capture hooks once; later calls do nothing. */
 	void InstallCapture();
+
+	/** @brief One CALL rel32 the capture's thunks take; every one chains (calls what the site held). */
+	struct CallSite
+	{
+		const char* name;
+		std::uintptr_t address;
+	};
+	/** @brief The capture's call sites, for a host's check before any hook is written (each must still be a CALL rel32). */
+	std::array<CallSite, 7> CaptureCallSites();
+	/** @brief Whether the capture's detour (the engine's attach queue drain) went in: false before InstallCapture, or when it failed. */
+	bool CaptureDetourAttached();
 
 	/**
 	 * @brief The engine's grass shader, from the first grass render pass seen by

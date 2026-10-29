@@ -46,6 +46,8 @@ namespace DCLF::Features::TreeLod
 
 	// TreeLodHooks.cpp: the channel's source (the feature's early hooks), patched once at PostPostLoad; sets installed (TreeLodMirror.h).
 	void InstallHooks();
+	// TreeLodHooks.cpp: the block update's call, before any hook is written (HookSites): a CALL, as the thunk chains.
+	void PreflightHooks();
 
 	// TreeLodTables.cpp: the tables (scene resources) and the depth commit's uploads (commit hook).
 	void RegisterTables(Api::InstallContext& a_context);

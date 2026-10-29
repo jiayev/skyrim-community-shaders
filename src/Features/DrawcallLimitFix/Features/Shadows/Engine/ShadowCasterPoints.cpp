@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Features/Shadows/Engine/ShadowEngineAddresses.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #include "Features/DrawcallLimitFix/Core/Render/FrameDriver.h"
 
@@ -59,16 +60,27 @@ namespace DCLF::Features::Shadows::Engine
 
 	void InstallCasterHooks()
 	{
+		// Chained onto whatever the calls hold (PreflightCasterHooks required CALLs).
 		const auto base = REL::Module::get().base();
 		const auto keep = base + Address::kKeepLight;
-		if (!DCLF::Engine::CallsTo(base + Address::kCastersCallSite, base + Address::kCalculateAndDrawShadowCasterLights) ||
-			!DCLF::Engine::CallsTo(base + Address::kKeepSunCallSite, keep) || !DCLF::Engine::CallsTo(base + Address::kKeepLightCallSite, keep)) {
-			logger::warn("[DCLF] the shadow lights' selection is not where expected; the shadow views are never listed, and the engine draws every one");
-			return;
-		}
+		const auto chained = [](std::uintptr_t a_site, std::uintptr_t a_engine, const char* a_what) {
+			if (!DCLF::Engine::CallsTo(a_site, a_engine))
+				logger::info("[DCLF] shadow casters: {} is hooked by {}; DCLF's thunk chains onto it", a_what, HookSites::BranchTargetModule(a_site));
+		};
+		chained(base + Address::kCastersCallSite, base + Address::kCalculateAndDrawShadowCasterLights, "Main::Draw's shadow caster lights call");
+		chained(base + Address::kKeepSunCallSite, keep, "the sun's keep call");
+		chained(base + Address::kKeepLightCallSite, keep, "the lights' keep call");
 		stl::write_thunk_call<CalculateAndDrawShadowCasterLights>(base + Address::kCastersCallSite);
 		stl::write_thunk_call<KeepLight<0>>(base + Address::kKeepSunCallSite);
 		stl::write_thunk_call<KeepLight<1>>(base + Address::kKeepLightCallSite);
 		logger::info("[DCLF] shadow casters: the shadow lights' selection hooked (its call, and each light kept)");
+	}
+
+	void PreflightCasterHooks()
+	{
+		const auto base = REL::Module::get().base();
+		HookSites::RequireCall("Main::Draw's shadow caster lights call", base + Address::kCastersCallSite);
+		HookSites::RequireCall("the shadow lights' selection's sun keep call", base + Address::kKeepSunCallSite);
+		HookSites::RequireCall("the shadow lights' selection's light keep call", base + Address::kKeepLightCallSite);
 	}
 }

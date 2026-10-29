@@ -59,6 +59,8 @@ namespace DCLF::Scene
 		WakeScenePass(SceneWake::FrameInput);
 	}
 
+	std::uint64_t FrameView::InstalledSequence() const { return installed ? installed->sequence : 0; }
+
 	void FrameView::HandOverAtFrameStart(std::shared_ptr<const void> a_adopted)
 	{
 		ZoneScopedN("CS.DCLF.Scene.HandOverAtFrameStart");

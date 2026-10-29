@@ -67,4 +67,7 @@ namespace DCLF::Scene
 
 	/** @brief The report (EnginePrimaryCull): the admitted roots the primary cull stands in for (kFadeRootStoodIn). */
 	std::size_t FadeRootsStoodIn();
+
+	/** @brief The coordinator's report (SceneCoordinatorLastPass): the owners, how many only they keep alive, and the roots listed. */
+	void OwnerLines(const Api::CoordinatorComponentContext& a_context, std::string& a_text);
 }

@@ -16,6 +16,8 @@ namespace DCLF::RoomVisibility
 	 */
 	void Install();
 	bool Installed();
+	/** @brief Install's calls, before any hook is written (HookSites): DCLF answers in the engine's place, so each must call the engine's own. */
+	void Preflight();
 	/** @brief The main thread at Main::Update's entry: whether DCLF runs this frame (DCLF answers only then). */
 	void SetLive(bool a_live);
 	/**

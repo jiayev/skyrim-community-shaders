@@ -98,6 +98,6 @@ namespace DCLF::Features::FirstPerson
 
 	Api::Feature Feature()
 	{
-		return { "first person", &Install };
+		return { .name = "first person", .install = &Install, .preflight = &PreflightHooks };
 	}
 }

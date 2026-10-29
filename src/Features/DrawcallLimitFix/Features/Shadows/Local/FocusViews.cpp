@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/FocusViews.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 
@@ -114,6 +115,7 @@ namespace DCLF::Features::Shadows::Local
 			return;
 		}
 		stl::detour_thunk<Hooks::Cameras>(REL::Offset(kFocusCameras.Get()).address());
+		HookSites::NoteDetour("the focus views' BSShadowDirectionalLight camera detour", Hooks::Cameras::func.address());
 		installed = true;
 		logger::info("[DCLF] focus views: BSShadowDirectionalLight::sub detoured (T3c)");
 	}

@@ -2,6 +2,8 @@
 // stubs read lock-free, the render thread's Flip, and the outcomes posted to the coordinator.
 #include "Features/DrawcallLimitFix/Features/Lod/LodGates.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
+#include "Utils/SwitchFile.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/FrameClock.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
@@ -1275,7 +1277,28 @@ namespace DCLF::Features::Lod::LodGates
 			return;
 		stl::detour_thunk<LodDrain>(Base() + kLodDrain);
 		stl::detour_thunk<LodRetire>(Base() + kRetire);
+		HookSites::NoteDetour("the LOD gates' drain detour", LodDrain::func.address());
+		HookSites::NoteDetour("the LOD gates' retirement detour", LodRetire::func.address());
 		detoursInstalled = true;
+	}
+
+	void Preflight()
+	{
+		if (Util::SwitchFile::Value("CS_DCLF_LOD_GATES") == "0")
+			return;
+		for (const auto& function : kFunctions)
+			if (!function.Known())
+				return;
+		for (const auto& site : kCallSites) {
+			if (!site.offset.Known() || !site.target.Known()) {
+				HookSites::RequireKnown("a LOD gate call site", false);
+				continue;
+			}
+			if (site.opcode == 0xE9)
+				HookSites::RequireJump("the LOD release's early return", Base() + site.offset);
+			else
+				HookSites::RequireCall("a LOD swap's call", Base() + site.offset);
+		}
 	}
 
 	void Install(Api::SwitchId a_switch, bool (*a_running)())
@@ -1292,11 +1315,11 @@ namespace DCLF::Features::Lod::LodGates
 				logger::warn("[DCLF] LOD gates (T6b5) not installed: an engine address is unknown on this runtime");
 				return;
 			}
+		// Preflight checked every call site before any hook was written; each thunk chains onto whatever its site branches to.
 		for (const auto& site : kCallSites)
-			if (!site.offset.Known() || !site.target.Known() || !BranchesTo(Base() + site.offset, site.opcode, Base() + site.target)) {
-				logger::warn("[DCLF] LOD gates (T6b5) not installed: the instruction at {:#x} is not the expected one", 0x140000000 + site.offset.Get());
-				return;
-			}
+			if (!BranchesTo(Base() + site.offset, site.opcode, Base() + site.target))
+				logger::info("[DCLF] LOD gates: the {} at {:#x} is hooked by {}; DCLF's thunk chains onto it", site.opcode == 0xE9 ? "jump" : "call", 0x140000000 + site.offset.Get(),
+					HookSites::BranchTargetModule(Base() + site.offset));
 		InstallDetours();
 		stl::write_thunk_call<ObjectUpgradeAttach>(Base() + kObjectUpgradeAttach);
 		stl::write_thunk_call<TerrainUpgradeAttach>(Base() + kTerrainUpgradeAttach);
@@ -1319,6 +1342,12 @@ namespace DCLF::Features::Lod::LodGates
 		stl::detour_thunk<MapExit>(Base() + kMapExit);
 		stl::detour_thunk<TerrainCacheFlush>(Base() + kTerrainCacheFlush);
 		stl::detour_thunk<ObjectCacheFlush>(Base() + kObjectCacheFlush);
+		HookSites::NoteDetour("the LOD gates' deactivation detour", Deactivate::func.address());
+		HookSites::NoteDetour("the LOD gates' map hide detour", MapHideAll::func.address());
+		HookSites::NoteDetour("the LOD gates' map enter detour", MapEnter::func.address());
+		HookSites::NoteDetour("the LOD gates' map exit detour", MapExit::func.address());
+		HookSites::NoteDetour("the LOD gates' terrain cache flush detour", TerrainCacheFlush::func.address());
+		HookSites::NoteDetour("the LOD gates' object cache flush detour", ObjectCacheFlush::func.address());
 		coverageObserver = Diagnostics::Observe().claimsOrScene;
 		installed = true;
 		logger::info("[DCLF] LOD gates (T6b5): {} call sites (the swaps', the initial loads', the early return's, the full rebuild's), the drain, the retirement and 6 forced paths' functions hooked{}", kCallSites.size(),

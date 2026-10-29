@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPersonView.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
@@ -81,17 +82,19 @@ namespace DCLF::Features::FirstPerson
 		};
 	}
 
+	void PreflightHooks()
+	{
+		HookSites::RequireCall("RenderDepth's first-person draw", REL::Offset(Address::kDepthFirstPersonDraw).address());
+		HookSites::RequireCall("Main::RenderFirstPersonView's accumulator render", REL::Offset(Address::kFirstPersonViewDraw).address());
+	}
+
 	void InstallHooks(Api::InstallContext& a_context)
 	{
 		colourRender = a_context.FindTrigger("fp.colour-render");
 		// The first-person view's two points (FUN_1414a90f0, the accumulator render, at RenderDepth's first-person draw and at
-		// FUN_1414cb6d0's), always installed: one compare a frame each while CS_DCLF_FIRST_PERSON is off.
-		if (Engine::CallsTo(REL::Offset(Address::kDepthFirstPersonDraw).address(), REL::Offset(Address::kAccumulatorRender).address()) &&
-			Engine::CallsTo(REL::Offset(Address::kFirstPersonViewDraw).address(), REL::Offset(Address::kAccumulatorRender).address())) {
-			stl::write_thunk_call<RenderDepth_FirstPersonDraw>(REL::Offset(Address::kDepthFirstPersonDraw).address());
-			stl::write_thunk_call<RenderFirstPersonView_Draw>(REL::Offset(Address::kFirstPersonViewDraw).address());
-		} else {
-			logger::warn("[DCLF] the first-person draws are not where expected; the first-person view (T7e) never runs, and CS_DCLF_FIRST_PERSON must stay off");
-		}
+		// FUN_1414cb6d0's), always installed: one compare a frame each while CS_DCLF_FIRST_PERSON is off. Chained onto whatever the calls
+		// hold (PreflightHooks required CALLs).
+		stl::write_thunk_call<RenderDepth_FirstPersonDraw>(REL::Offset(Address::kDepthFirstPersonDraw).address());
+		stl::write_thunk_call<RenderFirstPersonView_Draw>(REL::Offset(Address::kFirstPersonViewDraw).address());
 	}
 }

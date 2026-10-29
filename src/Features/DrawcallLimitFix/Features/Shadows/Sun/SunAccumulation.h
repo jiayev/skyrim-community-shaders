@@ -43,6 +43,12 @@ namespace DCLF::Features::Shadows::Sun
 
 		/** @brief AE: the Accumulate vtable slot and the call sites; verified before patching. */
 		void Install();
+		/**
+		 * @brief Install's sites, before any hook is written (HookSites). The full-frustum cull, the registrations, the cascade and the two
+		 * process slots do not chain (they substitute lists, veto or skip what the engine's would get), so each needs the engine's own;
+		 * the cascade cull and the mask clear chain.
+		 */
+		static void Preflight();
 		bool Installed() const { return installed; }
 		/** @brief Main thread, at the feature's install (before DCLF's threads start): its toggles, the registration skip's and the entry exclusion's. */
 		static void SetToggles(Api::ToggleId a_skip, Api::ToggleId a_exclude);
