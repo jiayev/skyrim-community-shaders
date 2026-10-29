@@ -74,6 +74,6 @@ namespace DCLF::Features::Shadows::Sun
 
 	Api::Feature Feature()
 	{
-		return { .name = "sun shadows", .install = &Install, .sourceHooks = &SourceHooks };
+		return { .name = "sun shadows", .install = &Install, .sourceHooks = &SourceHooks, .preflight = &SunAccumulation::Preflight };
 	}
 }

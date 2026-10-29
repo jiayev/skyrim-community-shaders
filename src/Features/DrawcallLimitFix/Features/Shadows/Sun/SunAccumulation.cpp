@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LocalLightCull.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
@@ -744,16 +745,13 @@ namespace DCLF::Features::Shadows::Sun
 		const auto cascadeCall = base + kCascadeCallSite;
 		const auto cascadeCull = base + kCascadeCullCallSite;
 		const auto maskClear = base + kMaskClearCallSite;
-		REL::Relocation<std::uintptr_t> listVtable{ RE::VTABLE_BSGeometryListCullingProcess[0] };
 		// SE's full-frustum site is a tail JMP: patched as one (the thunk's return goes to the sun part's caller, as the engine's would).
 		const bool fullFrustumJumps = REL::Module::IsSE();
-		const bool fullFrustumFound = fullFrustumJumps ? JumpsTo(fullFrustum, base + kFullFrustumCull) : CallsTo(fullFrustum, base + kFullFrustumCull);
-		if (!fullFrustumFound || !CallsTo(registerA, base + kRegister) || !CallsTo(registerB, base + kRegister) ||
-			!CallsTo(cascadeCall, base + kCascade) || !CallsTo(cascadeCull, base + kCascadeCull) || !CallsTo(maskClear, base + kMaskClear) ||
-			reinterpret_cast<const std::uintptr_t*>(listVtable.address())[0x19] != base + kAppendNonAccum) {
-			logger::warn("[DCLF] sun accumulation: the calls are not where expected; the engine keeps the sun's accumulation");
-			return;
-		}
+		// Preflight checked every site before any hook was written; the cascade cull and the mask clear chain onto whatever they call.
+		if (!CallsTo(cascadeCull, base + kCascadeCull))
+			logger::info("[DCLF] sun accumulation: the cascade cull's call is hooked by {}; DCLF's thunk chains onto it", HookSites::BranchTargetModule(cascadeCull));
+		if (!CallsTo(maskClear, base + kMaskClear))
+			logger::info("[DCLF] sun accumulation: the light mask clear's call is hooked by {}; DCLF's thunk chains onto it", HookSites::BranchTargetModule(maskClear));
 		// The entry exclusion's veto, at the full-frustum processes' only push.
 		stl::write_vfunc<0x19, Hooks::AppendNonAccum>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 		appendNonAccum = reinterpret_cast<decltype(appendNonAccum)>(Hooks::AppendNonAccum::func.address());
@@ -771,6 +769,24 @@ namespace DCLF::Features::Shadows::Sun
 		stl::write_vfunc<0x16, Hooks::CascadeProcess1>(RE::VTABLE_BSCullingProcess[0]);
 		installed = true;
 		logger::info("[DCLF] sun accumulation installed (Accumulate, its cascades and registrations, the full-frustum cull)");
+	}
+
+	void SunAccumulation::Preflight()
+	{
+		const auto base = REL::Module::get().base();
+		// SE's full-frustum site is a tail JMP (patched as one).
+		if (REL::Module::IsSE())
+			HookSites::RequireJumpTo("the sun's full-frustum cull", base + kFullFrustumCallSite, base + kFullFrustumCull);
+		else
+			HookSites::RequireCallTo("the sun's full-frustum cull", base + kFullFrustumCallSite, base + kFullFrustumCull);
+		HookSites::RequireCallTo("the sun registration's first call", base + kRegisterCallSites[0], base + kRegister);
+		HookSites::RequireCallTo("the sun registration's second call", base + kRegisterCallSites[1], base + kRegister);
+		HookSites::RequireCallTo("the sun's per-cascade accumulation", base + kCascadeCallSite, base + kCascade);
+		HookSites::RequireCall("the sun's cascade cull", base + kCascadeCullCallSite);
+		HookSites::RequireCall("Main::Draw's light mask clear", base + kMaskClearCallSite);
+		HookSites::RequireSlot("BSGeometryListCullingProcess::AppendNonAccum", REL::Relocation<std::uintptr_t>{ RE::VTABLE_BSGeometryListCullingProcess[0] }.address(), 0x19,
+			base + kAppendNonAccum);
+		HookSites::RequireSlot("BSCullingProcess::Process1", REL::Relocation<std::uintptr_t>{ RE::VTABLE_BSCullingProcess[0] }.address(), 0x16);
 	}
 
 	SunAccumulation::Stats SunAccumulation::TakeStats()

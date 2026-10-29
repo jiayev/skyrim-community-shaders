@@ -317,6 +317,11 @@ namespace DCLF::Api
 	 *   features in the list's order; Features/LocalLights' light selection at the Spot's): a feature installs the hooks of
 	 *   a_hooks.source (none for a source it does not take), so the hooks' install order (and the install log's) is the sources',
 	 *   whatever the features' places in the list. Registers nothing.
+	 * - preflight (optional): the main thread at PostPostLoad, before any of DCLF's hooks is written (the shell's
+	 *   Extensions::PreflightFeatures): every engine site the feature's hooks (early, source and install's) will write, under the same
+	 *   conditions its installs check, through Core/Engine/HookSites.h. A chained hook requires its site to be a CALL (RequireCall);
+	 *   one that skips or replaces the engine's code requires the engine's own there (RequireCallTo, RequireSlot, RequireEntry,
+	 *   RequireBytes). A conflict leaves DCLF off, with the site named, rather than half installed.
 	 */
 	struct Feature
 	{
@@ -324,5 +329,6 @@ namespace DCLF::Api
 		void (*install)(InstallContext& a_context) = nullptr;
 		void (*earlyHooks)() = nullptr;
 		void (*sourceHooks)(ShadowSourceHooks& a_hooks) = nullptr;
+		void (*preflight)() = nullptr;
 	};
 }

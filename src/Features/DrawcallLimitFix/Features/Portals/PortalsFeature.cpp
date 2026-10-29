@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Features/Portals/RoomVisibility.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
@@ -40,16 +41,22 @@ namespace DCLF::Features::Portals
 		};
 
 		/**
-		 * @brief The walk's thunk, before the primary cull's install, which requires it (Extensions::MainWalkInstalled): its call site
-		 * checked, else nothing is written and the primary cull stays off with its own warning.
+		 * @brief The walk's thunk, before the primary cull's install, which requires it (Extensions::MainWalkInstalled). Chained onto
+		 * whatever the call holds (Preflight required a CALL).
 		 */
 		void EarlyHooks()
 		{
 			const auto base = REL::Module::get().base();
 			if (!Engine::CallsTo(base + kPortalWalkCallSite, base + kPortalWalk))
-				return;
+				logger::info("[DCLF] portals: Main::Update's portal walk call is hooked by {}; DCLF's thunk chains onto it", HookSites::BranchTargetModule(base + kPortalWalkCallSite));
 			stl::write_thunk_call<PortalWalk>(base + kPortalWalkCallSite);
 			Extensions::NoteMainWalkInstalled();
+		}
+
+		void Preflight()
+		{
+			HookSites::RequireCall("Main::Update's portal walk call", REL::Module::get().base() + kPortalWalkCallSite);
+			RoomVisibility::Preflight();
 		}
 
 		bool UnboundVisible()
@@ -104,6 +111,6 @@ namespace DCLF::Features::Portals
 
 	Api::Feature Feature()
 	{
-		return { .name = "portals", .install = &Install, .earlyHooks = &EarlyHooks };
+		return { .name = "portals", .install = &Install, .earlyHooks = &EarlyHooks, .preflight = &Preflight };
 	}
 }

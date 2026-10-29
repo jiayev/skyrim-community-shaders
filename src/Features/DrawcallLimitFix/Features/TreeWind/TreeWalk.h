@@ -28,4 +28,6 @@ namespace DCLF::Features::TreeWind::TreeWalk
 	 */
 	void Install(Api::InstallContext& a_context);
 	bool Installed();
+	/** @brief Install's call, before any hook is written (HookSites): the engine's own bytes, as the thunk replaces the call inline. */
+	void Preflight();
 }

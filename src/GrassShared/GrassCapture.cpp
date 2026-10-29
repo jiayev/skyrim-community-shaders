@@ -401,6 +401,15 @@ namespace GrassShared
 
 			static void Install()
 			{
+				// Every call site must still be a CALL rel32 (another plugin's hook there is chained onto); one patched inline would be
+				// written over with a bogus original. A host that cannot run without them checked them first (CaptureCallSites).
+				const auto sites = CaptureCallSites();
+				for (const auto& site : sites)
+					if (*reinterpret_cast<const std::uint8_t*>(site.address) != 0xE8) {
+						logger::error("[GRASS SHARED] {} is not a call (another plugin patched it inline); the capture hooks are not installed", site.name);
+						return;
+					}
+
 				stl::write_vfunc<0x0, BSMultiStreamInstanceTriShape_dtor>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
 				stl::write_vfunc<0x3A, DoneAddingInstances>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
 				stl::write_vfunc<0x3C, AddGroup>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);
@@ -408,18 +417,18 @@ namespace GrassShared
 				stl::write_vfunc<0x2A, BSGrassShaderProperty_GetRenderPasses>(RE::VTABLE_BSGrassShaderProperty[0]);
 
 				// Queued groups (generated grass, queued cache groups) get their slots when the engine drains its attach queue.
-				stl::write_thunk_call<AddQueuedGroupGIDBuffer>(REL::RelocationID(15205, 15373).address() + Util::VersionedRelocation::Select(0x7FF, 0x756, 0x768));
-				stl::write_thunk_call<AddQueuedGroupGIDFile>(REL::RelocationID(15206, 15374).address() + REL::Relocate(0x394, 0x384));
+				stl::write_thunk_call<AddQueuedGroupGIDBuffer>(sites[0].address);
+				stl::write_thunk_call<AddQueuedGroupGIDFile>(sites[1].address);
 				stl::detour_thunk<AttachQueuedGroups>(REL::RelocationID(74603, 76335));
 
 				// Loaded cache groups.
-				stl::write_thunk_call<AddGroupGIDBuffer>(REL::RelocationID(15205, 15373).address() + Util::VersionedRelocation::Select(0x806, 0x75D, 0x76F));
-				stl::write_thunk_call<AddGroupGIDFile>(REL::RelocationID(15206, 15374).address() + REL::Relocate(0x39B, 0x38B));
+				stl::write_thunk_call<AddGroupGIDBuffer>(sites[2].address);
+				stl::write_thunk_call<AddGroupGIDFile>(sites[3].address);
 
 				// Record each grass type's source .nif path alongside its shape.
-				stl::write_thunk_call<LoadGrassType>(REL::RelocationID(15204, 15372).address() + Util::VersionedRelocation::Select(0x2F5, 0x2F5, 0x305));
-				stl::write_thunk_call<LoadGrassType>(REL::RelocationID(15205, 15373).address() + Util::VersionedRelocation::Select(0x62B, 0x597, 0x590));
-				stl::write_thunk_call<LoadGrassType>(REL::RelocationID(15206, 15374).address() + REL::Relocate(0x25C, 0x25C));
+				stl::write_thunk_call<LoadGrassType>(sites[4].address);
+				stl::write_thunk_call<LoadGrassType>(sites[5].address);
+				stl::write_thunk_call<LoadGrassType>(sites[6].address);
 
 				logger::info("[GRASS SHARED] Installed capture hooks");
 			}
@@ -442,6 +451,21 @@ namespace GrassShared
 		static std::once_flag once;
 		std::call_once(once, [] { Hooks::Install(); });
 	}
+
+	std::array<CallSite, 7> CaptureCallSites()
+	{
+		return { {
+			{ "the grass cache's queued GID buffer add", REL::RelocationID(15205, 15373).address() + Util::VersionedRelocation::Select(0x7FF, 0x756, 0x768) },
+			{ "the grass cache's queued GID file add", REL::RelocationID(15206, 15374).address() + REL::Relocate(0x394, 0x384) },
+			{ "the grass cache's GID buffer add", REL::RelocationID(15205, 15373).address() + Util::VersionedRelocation::Select(0x806, 0x75D, 0x76F) },
+			{ "the grass cache's GID file add", REL::RelocationID(15206, 15374).address() + REL::Relocate(0x39B, 0x38B) },
+			{ "the grass type load (generated)", REL::RelocationID(15204, 15372).address() + Util::VersionedRelocation::Select(0x2F5, 0x2F5, 0x305) },
+			{ "the grass type load (GID buffer)", REL::RelocationID(15205, 15373).address() + Util::VersionedRelocation::Select(0x62B, 0x597, 0x590) },
+			{ "the grass type load (GID file)", REL::RelocationID(15206, 15374).address() + REL::Relocate(0x25C, 0x25C) },
+		} };
+	}
+
+	bool CaptureDetourAttached() { return Hooks::AttachQueuedGroups::func.address() != 0; }
 
 	RE::BSShader* GrassShader()
 	{

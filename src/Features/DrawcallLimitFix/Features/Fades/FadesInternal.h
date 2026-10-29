@@ -18,6 +18,9 @@ namespace DCLF::Features::Fades
 	// FadeWriters.cpp: the stand-in observer (the writer tables and stores; the animated batch at listJobsDone), and the AnimatedFade and
 	// FadeOnVisible hooks. Last: Main::Update's entry keeps its order.
 	void RegisterWriters(Api::InstallContext& a_context);
+	// FadeWriters.cpp: the writer hooks' sites, before any hook is written (HookSites). They do not chain (a DCLF-written root skips the
+	// engine's fade update and OnVisibles, and with them any hook another plugin put there), so each needs the engine's own code.
+	void PreflightWriters();
 	// FadeEvents.cpp: the feature's early hook (FadeSnap).
 	void InstallEarlyHooks();
 	// Diagnostics/: the report lines, the parity and the port check.

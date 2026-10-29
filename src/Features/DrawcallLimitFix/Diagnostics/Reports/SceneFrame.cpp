@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Reports.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneState.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/SoleHolds.h"
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/Diagnostics/WetnessParity.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Internal.h"
 
@@ -65,6 +66,20 @@ namespace DCLF::Reports
 				categoryMirrorRecords, unscoped, unscoped ? " <- CAPTURE" : " <- OK");
 			captureNs = categoryCaptureNs = categoryCapturesMade = captureFrames = 0;
 			categoryMirrorCaptures = categoryMirrorRecords = 0;
+			// What the held captures alone keep alive (the render thread's, which holds them).
+			Diagnostics::SoleHolds pins, nodes, roots;
+			for (const auto& capture : V::categoryCapturesHeld()) {
+				for (const auto& pin : capture->pins)
+					pins.Add(pin.get());
+				for (const auto& node : capture->held)
+					nodes.Add(node.get());
+				for (const auto& [key, root] : capture->roots)
+					roots.Add(root.root.get());
+			}
+			text += fmt::format("[DCLF] category captures held: {} (generations {}..{}); {}; {}; {}\n", V::categoryCapturesHeld().size(),
+				V::categoryCapturesHeld().empty() ? 0 : V::categoryCapturesHeld().front()->generation,
+				V::categoryCapturesHeld().empty() ? 0 : V::categoryCapturesHeld().back()->generation, pins.Text("pins"), nodes.Text("category nodes"),
+				roots.Text("roots"));
 		}
 		return text;
 	}

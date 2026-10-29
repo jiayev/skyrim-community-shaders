@@ -58,6 +58,11 @@ namespace DCLF::Features::Faces
 
 		/** @brief Installs the two thunks in the engine's face morphing. Main thread, at the feature's install. */
 		void Install();
+		/**
+		 * @brief Install's two calls, before any hook is written (HookSites): CALLs, as both thunks chain. Both or neither: the stage join is
+		 * what frees the retired snapshots' engine references.
+		 */
+		static void Preflight();
 
 		/** @brief A face shape's positions in the snapshot the walk holds: float4 per vertex. */
 		struct ShapeView

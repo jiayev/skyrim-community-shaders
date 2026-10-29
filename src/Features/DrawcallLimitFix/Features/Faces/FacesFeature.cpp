@@ -26,6 +26,6 @@ namespace DCLF::Features::Faces
 
 	Api::Feature Feature()
 	{
-		return { "faces", &Install };
+		return { .name = "faces", .install = &Install, .preflight = &FaceSnapshots::Preflight };
 	}
 }

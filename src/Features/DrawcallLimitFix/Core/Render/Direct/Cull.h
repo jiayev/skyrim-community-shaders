@@ -148,6 +148,7 @@ namespace DCLF::Direct
 		std::array<float, 4> fadeEye{};
 		std::array<float, 2> treeHeight{};
 		// The tables and plain entries the frame's visibility batch is judged against (Readback::Batch::tables, candidates).
+		std::uint64_t publication = 0;  // the installed publication they are (Readback::Batch::publication)
 		std::shared_ptr<const SceneTables> tables;
 		std::shared_ptr<const EntrySpace> candidates;
 		bool visibilityReset = false;  // CpuFrameArm::visibilityReset

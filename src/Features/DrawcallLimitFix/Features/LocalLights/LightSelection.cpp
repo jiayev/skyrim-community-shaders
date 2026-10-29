@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Features/Portals/PortalContextAtlas.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
@@ -376,6 +377,7 @@ namespace DCLF
 			return;
 		}
 		stl::detour_thunk<Hooks::CalculateActive>(REL::Offset(kCalculateActive.Get()).address());
+		HookSites::NoteDetour("the light selection's CalculateActiveShadowCasterLights detour", Hooks::CalculateActive::func.address());
 		installed = true;
 		logger::info("[DCLF] light selection: CalculateActiveShadowCasterLights detoured (T3b)");
 	}

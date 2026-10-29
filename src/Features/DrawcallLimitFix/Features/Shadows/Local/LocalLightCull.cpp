@@ -1,9 +1,11 @@
 // LocalLightCull: the point lights' shadow culls without DCLF's entries (LocalLightCull.h describes it): the frame's exclusion and
 // category filter (render thread), the Process1 skip and NiNode::OnVisible filter inside the lights' culls, and the lights' bits.
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LocalLightCull.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Engine/FrameAddressSet.h"
@@ -777,6 +779,15 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		};
 	}
 
+	void Preflight()
+	{
+		const auto base = REL::Module::get().base();
+		HookSites::RequireSlot("BSShadowParabolicLight::Accumulate", REL::Relocation<std::uintptr_t>{ RE::VTABLE_BSShadowParabolicLight[0] }.address(), 0x9);
+		HookSites::RequireSlot("BSShadowFrustumLight::Accumulate", REL::Relocation<std::uintptr_t>{ RE::VTABLE_BSShadowFrustumLight[0] }.address(), 0x9);
+		HookSites::RequireSlot("BSParabolicCullingProcess::Process1", REL::Relocation<std::uintptr_t>{ RE::VTABLE_BSParabolicCullingProcess[0] }.address(), 0x16,
+			base + kParabolicProcess1);
+	}
+
 	void Install()
 	{
 		static bool timed = false;
@@ -789,22 +800,21 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		if (installed)
 			return;
 		// A cut entry's geometries take the lights' bits from the Sun source's registration and mask-clear hooks (Features/Shadows/Sun).
+		// Their sites passed the preflight, so their absence is an install that failed: DCLF is forced off at the end of PostPostLoad.
 		if (!Extensions::SourceCullsInstalled(Api::ShadowSource::Sun)) {
-			logger::warn("[DCLF] point lights' shadow culls: the sun's accumulation hooks are not installed; they keep culling everything");
+			HookSites::NoteFailed("the point lights' shadow culls", "the sun's accumulation hooks are not installed");
 			return;
 		}
+		// Preflight checked Process1's slot before any hook was written.
 		const auto base = REL::Module::get().base();
-		REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE_BSParabolicCullingProcess[0] };
-		if (reinterpret_cast<const std::uintptr_t*>(vtable.address())[0x16] != base + kParabolicProcess1) {
-			logger::warn("[DCLF] point lights' shadow culls: BSParabolicCullingProcess::Process1 is not the engine's; they keep culling everything");
-			return;
-		}
 		stl::write_vfunc<0x16, Process1>(RE::VTABLE_BSParabolicCullingProcess[0]);
 		installed = true;
+		// The category filter, optional: it walks the children itself, so another hook in NiNode::OnVisible's slot (Grass Optimizations')
+		// would be skipped; it stays out then.
 		{
 			REL::Relocation<std::uintptr_t> nodeVtable{ RE::VTABLE_NiNode[0] };
-			if (reinterpret_cast<const std::uintptr_t*>(nodeVtable.address())[0x34] != base + kNodeOnVisible) {
-				logger::warn("[DCLF] point lights' shadow culls: NiNode::OnVisible is not the engine's; the category nodes are walked whole");
+			if (const auto held = reinterpret_cast<const std::uintptr_t*>(nodeVtable.address())[0x34]; held != base + kNodeOnVisible) {
+				logger::warn("[DCLF] point lights' shadow culls: NiNode::OnVisible is hooked by {}; the category nodes are walked whole", HookSites::ModuleOf(held));
 			} else {
 				stl::write_vfunc<0x34, NodeOnVisible>(RE::VTABLE_NiNode[0]);
 				filterInstalled = true;
@@ -845,7 +855,10 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			else if (filterInstalled && filterBuilt)
 				for (const std::uint32_t e : changed)
 					for (const auto* snapshot : { next->candidates.get(), candidates.get() }) {
-						// The parent as a key only (the entry is held by its snapshot; its parent may be detached meanwhile).
+						// The parent as a key only (its parent may be detached meanwhile). A snapshot past the release horizon may name
+						// roots already released: a released root left its parent, which NoteStructure dirtied as it did.
+						if (!EngineReleases::Alive(snapshot->publication))
+							continue;
 						const auto* root = e < snapshot->Capacity() ? snapshot->entryNodes[e] : nullptr;
 						if (const auto node = root ? filterBuilt->nodes.find(root->parent) : filterBuilt->nodes.end();
 							node != filterBuilt->nodes.end() && !node->second->dirty.exchange(true, std::memory_order_acq_rel))

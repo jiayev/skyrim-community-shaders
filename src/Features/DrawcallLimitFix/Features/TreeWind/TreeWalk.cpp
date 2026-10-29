@@ -4,6 +4,7 @@
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 
 #include <array>
@@ -35,13 +36,8 @@ namespace DCLF::Features::TreeWind::TreeWalk
 	{
 		if (installed || !kWalkUpdateCall.Known())
 			return;
+		// Preflight checked the call's bytes before any hook was written.
 		const auto site = REL::Module::get().base() + kWalkUpdateCall;
-		if (std::memcmp(reinterpret_cast<const void*>(site), kWalkUpdateBytes.data(), kWalkUpdateBytes.size()) != 0) {
-			logger::warn("[DCLF] tree manager walk not installed: the instruction at {:#x} is not its trees' update pass call; a walked tree's sun entry "
-						 "keeps the bound it was listed with",
-				0x140000000 + kWalkUpdateCall.Get());
-			return;
-		}
 		// The report's "tree animation" (the slot after Features/Particles'), before the call goes in.
 		moveWriter = a_context.ReserveMoveWriter("tree animation");
 		SKSE::GetTrampoline().write_call<5>(site, reinterpret_cast<std::uintptr_t>(&Walked));
@@ -52,4 +48,10 @@ namespace DCLF::Features::TreeWind::TreeWalk
 	}
 
 	bool Installed() { return installed; }
+
+	void Preflight()
+	{
+		if (kWalkUpdateCall.Known())
+			HookSites::RequireBytes("the tree manager walk's update pass call", REL::Module::get().base() + kWalkUpdateCall, kWalkUpdateBytes);
+	}
 }

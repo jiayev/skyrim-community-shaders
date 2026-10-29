@@ -53,9 +53,9 @@ namespace DCLF
 		// The writes (the normal path).
 		std::string text = fmt::format(
 			"[DCLF] accumulated writes (T7b2): {} write lists made at Main::Update's entry ({} full), {} set, {} cleared, {} already so, "
-			"{} clears held by a camera cut ({} cuts, {} roots set by them); {:.1f} us on the main thread\n",
+			"{} clears held by a camera cut ({} cuts, {} roots set by them), {} past the release horizon (oldest list {} frames); {:.1f} us on the main thread\n",
 			take(r.writeBatches), take(r.fullWrites), take(r.writesSet), take(r.writesCleared), take(r.writesUnchanged), take(r.writesHeldByCut),
-			take(r.cuts), take(r.cutWrites), double(take(r.writeNs)) / 1000.0);
+			take(r.cuts), take(r.cutWrites), take(r.writesExpired), r.writeAgeMax.exchange(0, std::memory_order_relaxed), double(take(r.writeNs)) / 1000.0);
 		// Every listed root.
 		{
 			text += fmt::format(

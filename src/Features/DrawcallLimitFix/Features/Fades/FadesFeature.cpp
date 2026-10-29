@@ -108,7 +108,7 @@ namespace DCLF::Features::Fades
 
 	Api::Feature Feature()
 	{
-		return { .name = "fades", .install = &Install, .earlyHooks = &InstallEarlyHooks };
+		return { .name = "fades", .install = &Install, .earlyHooks = &InstallEarlyHooks, .preflight = &PreflightWriters };
 	}
 
 	bool FadeParity()

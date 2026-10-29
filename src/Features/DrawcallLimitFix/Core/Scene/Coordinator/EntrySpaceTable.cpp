@@ -3,7 +3,6 @@
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/EntrySpaceTable.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
-#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 
 #include <algorithm>
@@ -33,14 +32,12 @@ namespace DCLF::Scene
 		};
 
 		/**
-		 * @brief a_s brought up to a_rows at the indices a_moved names (each once; every index whose version differs among them),
-		 * a_held(index, root) holding a root it newly lists. Each index lets go first (a geometry index can pass from one entry to
-		 * another among them), then is written as a_rows has it. An index still under the same root keeps its map entry and its held
-		 * root (counted in a_kept), and a geometry still the same entry's at the same index keeps its map entry: a rewrite writes rows,
-		 * not maps.
+		 * @brief a_s brought up to a_rows at the indices a_moved names (each once; every index whose version differs among them). Each
+		 * index lets go first (a geometry index can pass from one entry to another among them), then is written as a_rows has it. An
+		 * index still under the same root keeps its map entry (counted in a_kept), and a geometry still the same entry's at the same index
+		 * keeps its map entry: a rewrite writes rows, not maps.
 		 */
-		template <class Held>
-		void BringUp(EntrySpace& a_s, const CandidateRows& a_rows, const std::vector<std::uint32_t>& a_moved, Held&& a_held, std::uint64_t& a_kept)
+		void BringUp(EntrySpace& a_s, const CandidateRows& a_rows, const std::vector<std::uint32_t>& a_moved, std::uint64_t& a_kept)
 		{
 			auto& s = a_s;
 			const std::uint32_t capacity = static_cast<std::uint32_t>(a_rows.nodes.size());
@@ -48,7 +45,6 @@ namespace DCLF::Scene
 			const std::uint32_t span = std::max(capacity, s.Capacity());
 			s.entryNodes.resize(span, nullptr);
 			s.entryVersion.resize(span, 0);
-			s.held.resize(span);
 			s.entryGeometries.resize(span);
 			s.geometryNodes.resize(std::max(geometryCapacity, s.GeometryCapacity()), nullptr);
 			s.geometryEntry.resize(s.geometryNodes.size(), EntrySpace::kNone);
@@ -75,8 +71,6 @@ namespace DCLF::Scene
 					continue;
 				}
 				s.entryNodes[e] = nullptr;
-				if (s.held[e])
-					EngineReleases::Push(std::move(s.held[e]));
 			}
 			for (const std::uint32_t e : a_moved) {
 				s.entryVersion[e] = e < capacity ? a_rows.version[e] : 0u;
@@ -88,7 +82,6 @@ namespace DCLF::Scene
 				if (s.entryNodes[e] != root) {
 					s.entryNodes[e] = root;
 					s.entries.insert_or_assign(root, e);
-					s.held[e] = a_held(e, root);
 				}
 				s.entryGeometries[e] = a_rows.geometries[e];
 				for (const std::uint32_t g : a_rows.geometries[e]) {
@@ -103,7 +96,6 @@ namespace DCLF::Scene
 			}
 			s.entryNodes.resize(capacity);
 			s.entryVersion.resize(capacity);
-			s.held.resize(capacity);
 			s.entryGeometries.resize(capacity);
 			s.geometryNodes.resize(geometryCapacity);
 			s.geometryEntry.resize(geometryCapacity);
@@ -141,7 +133,7 @@ namespace DCLF::Scene
 			BringUp(a_spare,
 				CandidateRows{ a_source.entryNodes, a_source.entryVersion, a_source.entryGeometries, a_source.geometryNodes, a_source.geometryEntry, a_source.geometrySlot,
 					a_source.primaryGeometry },
-				moved, [&](std::uint32_t a_index, const RE::NiAVObject*) { return a_source.held[a_index]; }, kept);
+				moved, kept);
 			a_state.log = a_source.changes ? a_source.changes->log : 0;
 			a_state.generation = a_source.generation;
 			a_state.caughtUp = static_cast<std::uint32_t>(moved.size());
@@ -176,7 +168,8 @@ namespace DCLF::Scene
 		changed = true;
 	}
 
-	std::shared_ptr<const EntrySpace> EntrySpaceTable::Publish(std::uint32_t& a_generation, const std::function<RE::NiPointer<RE::NiAVObject>(const RE::NiAVObject*)>& a_ownedRoot)
+	std::shared_ptr<const EntrySpace> EntrySpaceTable::Publish(std::uint32_t& a_generation, std::uint64_t a_publication,
+		const std::function<RE::NiPointer<RE::NiAVObject>(const RE::NiAVObject*)>& a_ownedRoot)
 	{
 		ZoneScopedN("CS.DCLF.Scene.SunCandidates.Snapshot");
 		// A pooled snapshot no reader holds (the pool's own reference only), the one with the least of the log to read: the spare,
@@ -227,9 +220,27 @@ namespace DCLF::Scene
 			++wholeCatchUps;
 		}
 		entriesCaughtUp += moved.size();
-		BringUp(s, CandidateRows{ nodes, version, geometries, geometryNodes, geometryEntry, geometrySlot, primaryGeometry }, moved,
-			[&](std::uint32_t, const RE::NiAVObject* a_root) { return a_ownedRoot(a_root); }, entriesKept);
+		BringUp(s, CandidateRows{ nodes, version, geometries, geometryNodes, geometryEntry, geometrySlot, primaryGeometry }, moved, entriesKept);
+		// The roots this publication names, owned by the table: an index under another root lets the old one go (moved holds every
+		// index written since the last publication, which this snapshot was at or behind).
+		if (owned.size() < capacity)
+			owned.resize(capacity);
+		for (const std::uint32_t e : moved) {
+			if (e >= owned.size())
+				continue;
+			const auto* root = e < capacity ? nodes[e] : nullptr;
+			if (owned[e].get() == root)
+				continue;
+			if (owned[e])
+				retiredRoots.emplace_back(std::move(owned[e]));
+			owned[e] = root ? a_ownedRoot(root) : nullptr;
+		}
+		for (std::size_t e = capacity; e < owned.size(); ++e)
+			if (owned[e])
+				retiredRoots.emplace_back(std::move(owned[e]));
+		owned.resize(capacity);
 		s.generation = ++a_generation;
+		s.publication = a_publication;
 		cursor.Restart(0);
 		cursor.Advance(log);
 
@@ -284,7 +295,40 @@ namespace DCLF::Scene
 		changed = false;
 		++snapshots;
 		DispatchSpare(at);
+		TrimPool();
 		return snapshot;
+	}
+
+	void EntrySpaceTable::TrimPool()
+	{
+		std::vector<std::size_t> idle;
+		for (std::size_t i = 0; i < pool.size(); ++i)
+			if (pool[i].snapshot.use_count() == 1 && !pool[i].state->busy.load(std::memory_order_acquire))
+				idle.push_back(i);
+		if (idle.size() <= kFreeSpares)
+			return;
+		// The nearest the log first (the least to read when brought up), as Publish and DispatchSpare choose.
+		std::sort(idle.begin(), idle.end(), [&](std::size_t a_left, std::size_t a_right) {
+			const auto& l = pool[a_left].cursor;
+			const auto& r = pool[a_right].cursor;
+			const bool lc = l.Continues(log, 0), rc = r.Continues(log, 0);
+			return lc != rc ? lc : (lc && l.position > r.position);
+		});
+		std::vector<std::uint8_t> drop(pool.size(), 0);
+		for (std::size_t k = kFreeSpares; k < idle.size(); ++k)
+			drop[idle[k]] = 1;
+		// A busy spare's job reads its objects by address, which a move of its Pooled leaves in place.
+		std::size_t i = 0;
+		std::erase_if(pool, [&](const Pooled&) { return drop[i++] != 0; });
+		poolTrimmed += idle.size() - kFreeSpares;
+	}
+
+	void EntrySpaceTable::ReleaseOwned()
+	{
+		for (auto& root : owned)
+			if (root)
+				retiredRoots.emplace_back(std::move(root));
+		owned.clear();
 	}
 
 	EntrySpaceTable::~EntrySpaceTable()

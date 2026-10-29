@@ -24,6 +24,9 @@ namespace DCLF::Features::Forward
 	// ForwardHooks.cpp: the main pass's blended draw (both its call sites; the forward epoch's trigger, blended.draw) and Main::Draw's
 	// refraction point, from the feature's install.
 	void InstallHooks(Api::InstallContext& a_context);
+	// Its three calls, before any hook is written (HookSites): CALLs, as the thunks chain. All or none: the refraction point clears what
+	// the blended draw's marks.
+	void PreflightHooks();
 
 	// ForwardPasses.cpp: the forward epoch's passes (forward.draw, forward.refraction), from the feature's install.
 	void RegisterPasses(Api::InstallContext& a_context);

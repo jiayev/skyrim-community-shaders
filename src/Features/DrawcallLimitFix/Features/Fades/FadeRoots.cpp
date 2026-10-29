@@ -13,6 +13,7 @@
 #include "Features/DrawcallLimitFix/Core/Scene/Model/SceneMirror.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/SoleHolds.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -462,6 +463,17 @@ namespace DCLF::Scene
 			.events = { .keys = &ApplyFadeKeys, .switched = &RefreshFadeRootSwitch, .admitted = &ApplyAdmitted } };
 	}
 
+	void OwnerLines(const Api::CoordinatorComponentContext& a_context, std::string& a_text)
+	{
+		// What the owners alone keep alive (the coordinator's thread, which holds them), against the roots listed.
+		Diagnostics::SoleHolds owners;
+		for (const auto& owner : a_context.State<FadeRootState>().owners)
+			owners.Add(owner.get());
+		const auto& roots = LiveRootsOf(a_context).roots;
+		a_text += fmt::format("[DCLF] fade roots: {}; {} listed by node, {} rows ({} free)", owners.Text("owners"), roots.fadeRootIndex.size(), roots.fadeRoots.size(),
+			roots.fadeRootFree.size());
+	}
+
 	std::size_t FadeRootsStoodIn()
 	{
 		if (!liveState)
@@ -491,5 +503,7 @@ namespace DCLF::Features::Fades
 			.rows = &Scene::FadeRootRows });
 		// The component, last of the components: every shared point (ResetSlotTables' resets, then the owners' hand-back) keeps its order.
 		Scene::fadeRootComponent = a_context.RegisterCoordinatorComponent(Scene::FadeRootComponent());
+		a_context.RegisterReportLines({ .name = "fade root owners", .point = Api::ReportPoint::SceneCoordinatorLastPass, .component = Scene::fadeRootComponent,
+			.componentText = &Scene::OwnerLines });
 	}
 }

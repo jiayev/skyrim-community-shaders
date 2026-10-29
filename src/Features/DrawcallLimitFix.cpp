@@ -28,6 +28,7 @@
 #	include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #	include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #	include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#	include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #	include "DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #	include "Features/Skylighting.h"
 #	include "ShaderCache.h"
@@ -137,6 +138,17 @@ void DrawcallLimitFix::PostPostLoad()
 			logger::warn("[DCLF] {}; the game renders natively", unavailableReason);
 			return;
 		}
+	// Every other site DCLF's hooks write (Core's, then the features'): a chained hook needs a CALL there, whatever it calls; one that skips
+	// or replaces the engine's code needs the engine's own. A conflict leaves the game native rather than half hooked (a producer whose
+	// consumer never went in).
+	Hooks::Preflight();
+	DCLF::Extensions::PreflightFeatures(DCLF::Features::List());
+	if (const auto conflicts = DCLF::HookSites::Conflicts(); !conflicts.empty()) {
+		unavailableReason = fmt::format("its hooks conflict with another plugin's ({})", conflicts);
+		logger::error("[DCLF] {}; DCLF stays off and the game renders natively", unavailableReason);
+		return;
+	}
+	logger::info("[DCLF] hook preflight: {} sites checked, no conflicts", DCLF::HookSites::Checked());
 	DCLF::SceneTracker::Get().Install();
 	DCLF::Scene::InstallSceneEvents();
 	// Capture at registration: where the set's members' passes are withheld from the views DCLF draws.
@@ -194,6 +206,12 @@ void DrawcallLimitFix::PostPostLoad()
 		logger::info("[DCLF] featureset: full (every feature on; the menu can still turn some off live)");
 	else
 		logger::warn("[DCLF] featureset: REDUCED by {}; this run does not exercise DCLF's full featureset", reduced);
+	// A hook whose site passed the preflight but did not go in (a detour's attach): the others are written, so DCLF is forced off.
+	if (const auto failed = DCLF::HookSites::Conflicts(); !failed.empty()) {
+		unavailableReason = fmt::format("its hooks did not all install ({})", failed);
+		logger::error("[DCLF] {}", unavailableReason);
+		ForceOff();
+	}
 }
 
 void DrawcallLimitFix::SetupResources()
@@ -217,6 +235,11 @@ void DrawcallLimitFix::SetupResources()
 		unavailableReason = "the GPU or driver lacks the indirect pipelines DCLF draws with (see the [DCLF] Indirect pipelines line)";
 	else
 		return;
+	ForceOff();
+}
+
+void DrawcallLimitFix::ForceOff()
+{
 	installed = false;
 	DCLF::SceneTracker::Get().Stop();
 	// The scene passes apply what the hooks still push (the scene queues: kept bounded), and nothing else.
@@ -559,26 +582,47 @@ void DrawcallLimitFix::Hooks::BSShaderAccumulator_FinishAccumulating::thunk(RE::
 		DCLF::IndirectDraws::Get().CaptureShadowView(view, mode);
 }
 
+namespace
+{
+	// Hooks::Install's sites (Preflight checks the same ones).
+	std::uintptr_t DepthPassSite() { return REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x395, 0x395, 0x3B3); }
+	std::uintptr_t WorldDrawnSite() { return REL::RelocationID(100421, 107139).address() + REL::Relocate(0x18E, 0x1AA); }
+	std::uintptr_t ScenePhaseSite() { return REL::RelocationID(35560, 36559).address() + 0xD3; }
+	std::uintptr_t PrecipitationMaskSite() { return REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x3A1, 0x3A1, 0x3BF); }
+}
+
+void DrawcallLimitFix::Hooks::Preflight()
+{
+	// Chained: the call's target (Terrain Blending's at the depth pass, ShadowBoost's at Main::Update's entry) runs before or around
+	// DCLF's thunk. Each is one DCLF cannot run without: the depth pass and its commit point (the withheld objects' depth), the frame's
+	// start, and Main::Update's entry (the only consumer of the visibility decoder's write lists, whose tables the retirement chain waits on).
+	DCLF::HookSites::RequireCall("Main::Draw's depth pass call", DepthPassSite());
+	DCLF::HookSites::RequireCall("Main::RenderDepth's world-drawn call", WorldDrawnSite());
+	DCLF::HookSites::RequireCall("Main::Draw's first call", ScenePhaseSite());
+	DCLF::HookSites::RequireCall("Main::Update's first call", REL::Offset(DCLF::Engine::Address::kUpdateEntryCall).address());
+	// Not chained: on the frames DCLF drew the mask the engine's call is skipped, and with it any hook another plugin put there.
+	// Skylighting (which drives the mask itself) takes the call instead.
+	if (!globals::features::skylighting.loaded)
+		DCLF::HookSites::RequireCallTo("Main::Draw's precipitation mask call", PrecipitationMaskSite());
+	DCLF::WindowWriters::Preflight();
+	DCLF::PassCapture::Preflight();
+	DCLF::PrimaryCull::Preflight();
+}
+
 void DrawcallLimitFix::Hooks::Install()
 {
 	// Always installed: the shadow views are a live toggle (Toggles.h), and the thunk costs one compare per
 	// accumulator finish when they are off.
 	stl::write_vfunc<0x2A, BSShaderAccumulator_FinishAccumulating>(RE::VTABLE_BSShaderAccumulator[0]);
 	logger::info("[DCLF] shadow view hook installed on BSShaderAccumulator::FinishAccumulatingPreResolveDepth");
-	// The sites below are calls another plugin may already have redirected (Terrain Blending shares the first), so only the instruction
-	// form is checked: a CALL rel32, as write_thunk_call needs.
+	// The diagnostics' sites below are calls another plugin may already have redirected, so only the instruction form is checked: a CALL
+	// rel32, as write_thunk_call needs. The required ones passed Preflight.
 	const auto isCall = [](std::uintptr_t a_site) { return *reinterpret_cast<const std::uint8_t*>(a_site) == 0xE8; };
 	// The main camera's depth pass, hooked where Terrain Blending hooks it.
-	if (const auto site = REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x395, 0x395, 0x3B3); isCall(site))
-		stl::write_thunk_call<Main_RenderDepth>(site);
-	else
-		logger::warn("[DCLF] Main::Draw's depth pass call is not where expected; the depth pass is not marked");
+	stl::write_thunk_call<Main_RenderDepth>(DepthPassSite());
 	// Main::RenderDepth's call of BSShaderAccumulator::RenderFirstPersonView_End (SE +0x18E, AE +0x1AA).
-	if (const auto site = REL::RelocationID(100421, 107139).address() + REL::Relocate(0x18E, 0x1AA); isCall(site)) {
-		stl::write_thunk_call<Main_RenderDepth_WorldDrawn>(site);
-		logger::info("[DCLF] Z-prepass hook installed inside Main::RenderDepth, after the world's depth draws");
-	} else
-		logger::warn("[DCLF] Main::RenderDepth's world-drawn call is not where expected; the depth commit point is not installed");
+	stl::write_thunk_call<Main_RenderDepth_WorldDrawn>(WorldDrawnSite());
+	logger::info("[DCLF] Z-prepass hook installed inside Main::RenderDepth, after the world's depth draws");
 	// Light Limit Fix's RenderPass3 site: the plain pass list loop (SE FUN_1413090c0, AE FUN_1414f4f20).
 	if (const auto site = REL::RelocationID(100871, 107667).address() + REL::Relocate(0xEE, 0xED); isCall(site))
 		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<1>>(site);
@@ -587,29 +631,25 @@ void DrawcallLimitFix::Hooks::Install()
 	// A geometry group's pass list (AE FUN_1414f19d0): the main pass's groups 9, 8, 1, 0 and 13 when they hold a plain list, which is where
 	// terrain LOD's colour passes are drawn (dclf-architecture.md, "Terrain LOD"). AE inlines the plain-list loop there; SE's
 	// RenderPersistentPassList calls FUN_1413090c0 for it, whose call RenderPassImmediately<1> already hooks (no SE address here).
+	// A diagnostics' observer (the geometry groups' passes), chained onto whatever the call holds.
 	if (DCLF::Engine::Address::kGeometryGroupDraw.Known()) {
-		if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kGeometryGroupDraw).address(), REL::Offset(DCLF::Engine::Address::kRenderPassImmediately).address()))
-			stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<3>>(REL::Offset(DCLF::Engine::Address::kGeometryGroupDraw).address());
+		if (const auto site = REL::Offset(DCLF::Engine::Address::kGeometryGroupDraw).address(); isCall(site))
+			stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<3>>(site);
 		else
-			logger::warn("[DCLF] the geometry groups' pass draw is not where expected; their passes stay native (terrain LOD among them)");
+			logger::warn("[DCLF] the geometry groups' pass draw is not a call; the diagnostics do not see their passes");
 	}
-	if (const auto site = REL::RelocationID(35560, 36559).address() + 0xD3; isCall(site)) {
-		stl::write_thunk_call<Main_Draw_Early>(site);
-		logger::info("[DCLF] scene phase hook installed on Main::Draw");
-	} else
-		logger::warn("[DCLF] Main::Draw's first call is not where expected; the scene phase hook is not installed");
-	// The stood-in roots' kAccumulated, written at Main::Update's entry.
-	if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kUpdateEntryCall).address(), REL::Offset(DCLF::Engine::Address::kStagesReset).address()))
-		stl::write_thunk_call<Main_Update_Entry>(REL::Offset(DCLF::Engine::Address::kUpdateEntryCall).address());
-	else
-		logger::warn("[DCLF] Main::Update's first call is not where expected; the stood-in roots' kAccumulated is not written (T7b2)");
+	stl::write_thunk_call<Main_Draw_Early>(ScenePhaseSite());
+	logger::info("[DCLF] scene phase hook installed on Main::Draw");
+	// The stood-in roots' kAccumulated, written at Main::Update's entry. Chained onto whatever the call holds: another plugin's hook there
+	// (ShadowBoost's) runs, and through it the engine's, before DCLF's. Without this hook nothing takes the decoder's write lists, whose
+	// tables then stall the retirement chain (every engine reference DCLF lets go of is kept).
+	if (const auto site = REL::Offset(DCLF::Engine::Address::kUpdateEntryCall).address(); !DCLF::Engine::CallsTo(site, REL::Offset(DCLF::Engine::Address::kStagesReset).address()))
+		logger::info("[DCLF] Main::Update's first call is hooked by {}; DCLF's entry hook chains onto it", DCLF::HookSites::BranchTargetModule(site));
+	stl::write_thunk_call<Main_Update_Entry>(REL::Offset(DCLF::Engine::Address::kUpdateEntryCall).address());
 	// The engine's precipitation mask, without Skylighting (which hooks the same call, and drives the mask itself).
 	if (!globals::features::skylighting.loaded) {
-		if (const auto site = REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x3A1, 0x3A1, 0x3BF); isCall(site)) {
-			stl::write_thunk_call<Main_Precipitation_RenderOcclusion>(site);
-			logger::info("[DCLF] precipitation mask hook installed on Main::Draw (without Skylighting)");
-		} else
-			logger::warn("[DCLF] Main::Draw's precipitation mask call is not where expected; the engine renders the mask");
+		stl::write_thunk_call<Main_Precipitation_RenderOcclusion>(PrecipitationMaskSite());
+		logger::info("[DCLF] precipitation mask hook installed on Main::Draw (without Skylighting)");
 	}
 	// The engine's writers inside the engine-read window, kept out of DCLF's reads there.
 	DCLF::WindowWriters::Install();

@@ -1328,18 +1328,12 @@ namespace DCLF::Scene
 					break;
 				}
 			}
-			// Imports go to the epochs (held until their executions retire); engine references are released at Present on the render
-			// thread.
+			// Imports go to the epochs (held until their executions retire).
 			for (auto& owner : a_batch.imports)
 				retiredImports.push_back(std::move(owner));
-			for (auto& material : a_batch.materials)
-				if (material)
-					EngineReleases::PushOwner(std::make_shared<MaterialReference>(std::move(material)));
-			for (auto& reference : a_batch.references)
-				EngineReleases::Push(std::move(reference));
-			for (auto& events : a_batch.events)
-				EngineReleases::PushOwner(std::move(events));
 		});
+		// The engine references the horizon passed, released at Present on the render thread.
+		referencesReleased += releases.Drain();
 		// The pipeline table's top follows the slots in use (lowest-first reuse): past the last one alive or retiring nothing names
 		// a slot, so the columns are cut there, and with them every per-pipeline GPU table sized from them (the payload's pipeline
 		// rows, the main layout's ranges), which then shrink (PooledBackings::Shrink). The publication takes the cut family whole.
@@ -2070,6 +2064,8 @@ namespace DCLF::Scene
 			ZoneScopedN("CS.DCLF.Scene.PublishTables.Retirement");
 			snapshot.retirementHold = retirement.Publish();
 			snapshot.publishedSequence = publicationSequence;
+			// The engine references let go of so far: this publication (made next) is the first not to name them.
+			releases.Close(publicationSequence + 1);
 		}
 		publishedTables = target;
 		++publication.published;

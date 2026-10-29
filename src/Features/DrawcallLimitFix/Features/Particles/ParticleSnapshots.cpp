@@ -6,6 +6,7 @@
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -248,12 +249,13 @@ namespace DCLF::Features::Particles
 	{
 		if (installed)
 			return;
+		// Both thunks call what the slots held first, so another plugin's hook there is chained onto (logged).
 		REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE_NiParticleSystem[0] };
 		const auto* slots = reinterpret_cast<const std::uintptr_t*>(vtable.address());
-		if (slots[kUpdateDownwardSlot] != REL::Offset(kUpdateDownward).address() || slots[kUpdateSelectedSlot] != REL::Offset(kUpdateSelected).address()) {
-			logger::warn("[DCLF] particle snapshots: NiParticleSystem's update slots are not the expected functions; particle systems stay the engine's");
-			return;
-		}
+		if (slots[kUpdateDownwardSlot] != REL::Offset(kUpdateDownward).address())
+			logger::info("[DCLF] particle snapshots: NiParticleSystem::UpdateDownwardPass is hooked by {}; DCLF's thunk chains onto it", HookSites::ModuleOf(slots[kUpdateDownwardSlot]));
+		if (slots[kUpdateSelectedSlot] != REL::Offset(kUpdateSelected).address())
+			logger::info("[DCLF] particle snapshots: NiParticleSystem::UpdateSelectedDownwardPass is hooked by {}; DCLF's thunk chains onto it", HookSites::ModuleOf(slots[kUpdateSelectedSlot]));
 		// Its move writer, the report's "particle update" (the slot after Features/Actors' three, as Core's table had it).
 		moveWriter = a_context.ReserveMoveWriter("particle update");
 		stl::write_vfunc<kUpdateDownwardSlot, UpdateHook>(RE::VTABLE_NiParticleSystem[0]);

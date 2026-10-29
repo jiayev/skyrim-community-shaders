@@ -1112,6 +1112,7 @@ namespace DCLF::Direct
 			batch->frame = a_frame.sceneFrame;
 			batch->reset = a_frame.visibilityReset || diff.pendingReset.exchange(false, std::memory_order_acq_rel);
 			batch->tables = a_frame.tables;
+			batch->publication = a_frame.publication;
 			batch->candidates = a_frame.candidates;
 			// A reset starts the reported words again: every verdict is reported, as a new backing's zeroed words make the GPU's.
 			if (batch->reset) {

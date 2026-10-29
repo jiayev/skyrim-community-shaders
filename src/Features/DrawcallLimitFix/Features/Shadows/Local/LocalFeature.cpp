@@ -105,6 +105,6 @@ namespace DCLF::Features::Shadows::Local
 
 	Api::Feature Feature()
 	{
-		return { .name = "local shadows", .install = &Install, .sourceHooks = &SourceHooks };
+		return { .name = "local shadows", .install = &Install, .sourceHooks = &SourceHooks, .preflight = &LocalLightCull::Preflight };
 	}
 }

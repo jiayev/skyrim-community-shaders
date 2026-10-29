@@ -7,7 +7,9 @@
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
@@ -616,7 +618,7 @@ namespace DCLF
 				SplicePlan(e, planned);
 				++cutStats.plansSpliced;
 			}
-			// The batch's snapshot (and the roots it holds) is let go of here, on the render thread.
+			// The batch's snapshot is let go of here, on the render thread.
 		});
 	}
 
@@ -641,13 +643,14 @@ namespace DCLF
 		cutStats.plansKicked += batch->entries.size();
 		plansOutstanding += batch->entries.size();
 		// The subtree walks read engine memory: a lease per entry, so the window's Close waits on one entry at most. A refused one is
-		// sent back unplanned and kicked again. The batch goes back whole to the render thread, which drops its snapshot.
+		// sent back unplanned and kicked again, as is every entry of a batch the release horizon passed (its roots may be released: its
+		// snapshot holds none). The batch goes back whole to the render thread, which drops its snapshot.
 		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "CS.DCLF.CutPlans",
 				[this, batch = batch.release()](const auto&) {
 					ZoneScopedN("CS.DCLF.CutPlans");
 					for (auto& planned : batch->entries) {
 						const EngineReadWindow::Lease lease;
-						if (!lease)
+						if (!lease || !EngineReleases::Alive(batch->candidates->publication))
 							continue;
 						planned.plan = PlanEntry(*batch->candidates, planned.root, planned);
 						planned.planned = true;
@@ -1249,6 +1252,17 @@ namespace DCLF
 		};
 	};
 
+	void PrimaryCull::Preflight()
+	{
+		const auto base = REL::Module::get().base();
+		HookSites::RequireCall("the primary cull's call after the full-frustum cull", base + kAfterFullFrustumCallSite);
+		HookSites::RequireCall("the primary cull's scene list jobs' Finish call", base + kListJobsFinishCallSite);
+		const auto vtable = REL::Relocation<std::uintptr_t>{ RE::VTABLE_BSGeometryListCullingProcess[0] }.address();
+		HookSites::RequireSlot("BSGeometryListCullingProcess::Process1", vtable, 0x16, base + kProcess1);
+		HookSites::RequireSlot("BSGeometryListCullingProcess::AppendVirtual", vtable, 0x18);
+		PreflightSceneLists();
+	}
+
 	void PrimaryCull::Install()
 	{
 		if (installed)
@@ -1258,17 +1272,18 @@ namespace DCLF
 		const auto finish = base + kListJobsFinishCallSite;
 		// The main walk's hook (Api::MainCullInputContribution: Features/Portals' early hooks) is in, or nothing would build its programs;
 		// and the root states' (Api::RootStatesContribution: Features/Fades' early hooks), or nothing would list the roots it stands in for.
-		if (!CallsTo(afterFullFrustum, base + kAfterFullFrustum) || !CallsTo(finish, base + Engine::Address::kListJobsFinish) || !Extensions::MainWalkInstalled() ||
-			!Extensions::RootStatesInstalled()) {
-			logger::warn("[DCLF] primary cull: the calls are not where expected; the engine keeps the primary's cull");
+		// Their sites passed the preflight, so one missing is an install that failed: DCLF is forced off at the end of PostPostLoad (without
+		// the primary cull, nothing would take the visibility decoder's write lists, whose tables the retirement chain waits on).
+		if (!Extensions::MainWalkInstalled() || !Extensions::RootStatesInstalled()) {
+			HookSites::NoteFailed("the primary cull", !Extensions::MainWalkInstalled() ? "the main walk's hook (Features/Portals) is not installed" :
+																						   "the root states' hooks (Features/Fades) are not installed");
 			return;
 		}
-		// The list processes' Process1 slot must still be the engine's (no other hook in the way).
-		REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE_BSGeometryListCullingProcess[0] };
-		if (reinterpret_cast<const std::uintptr_t*>(vtable.address())[0x16] != base + kProcess1) {
-			logger::warn("[DCLF] primary cull: BSGeometryListCullingProcess::Process1 is not the engine's; the engine keeps the primary's cull");
-			return;
-		}
+		// Chained onto whatever the calls hold (Preflight required CALLs); Process1's slot is the engine's (Preflight).
+		if (!CallsTo(afterFullFrustum, base + kAfterFullFrustum))
+			logger::info("[DCLF] primary cull: the call after the full-frustum cull is hooked by {}; DCLF's thunk chains onto it", HookSites::BranchTargetModule(afterFullFrustum));
+		if (!CallsTo(finish, base + Engine::Address::kListJobsFinish))
+			logger::info("[DCLF] primary cull: the list jobs' Finish call is hooked by {}; DCLF's thunk chains onto it", HookSites::BranchTargetModule(finish));
 		stl::write_thunk_call<Hooks::AfterFullFrustum>(afterFullFrustum);
 		stl::write_thunk_call<Hooks::ListJobsFinish>(finish);
 		stl::write_vfunc<0x16, Hooks::Process1>(RE::VTABLE_BSGeometryListCullingProcess[0]);

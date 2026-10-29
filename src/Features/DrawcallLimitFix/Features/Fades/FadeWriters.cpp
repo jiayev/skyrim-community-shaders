@@ -4,6 +4,7 @@
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"  // the write-back's WriteFadeStores
 #include "Features/DrawcallLimitFix/Features/Fades/FadeWriters.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadesInternal.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadesAddresses.h"
@@ -219,23 +220,34 @@ namespace DCLF::Features::Fades
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		/** @brief The animation job's fade update and the fade OnVisibles, with the primary cull's stand-in (its install answered). */
+		/**
+		 * @brief The animation job's fade update and the fade OnVisibles, with the primary cull's stand-in (its install answered). All or
+		 * none (PreflightWriters checked their sites): a root DCLF writes whose engine writer still ran would have two writers.
+		 */
 		void InstallWriterHooks()
 		{
 			const auto base = REL::Module::get().base();
-			if (CallsTo(base + kAnimatedFadeCallSite, base + Engine::Address::kFadeUpdate))
-				stl::write_thunk_call<AnimatedFade>(base + kAnimatedFadeCallSite);
-			else
-				logger::warn("[DCLF] primary cull: the animation job's fade update is not where expected");
+			stl::write_thunk_call<AnimatedFade>(base + kAnimatedFadeCallSite);
 			// Fade OnVisibles leave DCLF-written roots alone (detours, not vtable slots, so subclass tables and FadeState::PlanOf keep
 			// the engine's addresses).
-			if (!Address::kFadeOnVisible.Known() || !Address::kLeafOnVisible.Known() || !Engine::Address::kTreeOnVisible.Known()) {
-				logger::warn("[DCLF] primary cull: the fade OnVisibles are not known for this runtime; they keep their own fade stores");
-				return;
-			}
 			stl::detour_thunk<FadeOnVisible>(base + Address::kFadeOnVisible);
 			stl::detour_thunk<LeafOnVisible>(base + Address::kLeafOnVisible);
 			stl::detour_thunk<TreeOnVisible>(base + Engine::Address::kTreeOnVisible);
+			HookSites::NoteDetour("BSFadeNode::OnVisible's detour", FadeOnVisible::func.address());
+			HookSites::NoteDetour("BSLeafAnimNode::OnVisible's detour", LeafOnVisible::func.address());
+			HookSites::NoteDetour("BSTreeNode::OnVisible's detour", TreeOnVisible::func.address());
+		}
+	}
+
+	void PreflightWriters()
+	{
+		const auto base = REL::Module::get().base();
+		HookSites::RequireCallTo("the animation job's fade update", base + kAnimatedFadeCallSite, base + Engine::Address::kFadeUpdate);
+		HookSites::RequireKnown("the fade OnVisibles", Address::kFadeOnVisible.Known() && Address::kLeafOnVisible.Known() && Engine::Address::kTreeOnVisible.Known());
+		if (Address::kFadeOnVisible.Known() && Address::kLeafOnVisible.Known() && Engine::Address::kTreeOnVisible.Known()) {
+			HookSites::RequireEntry("BSFadeNode::OnVisible", base + Address::kFadeOnVisible);
+			HookSites::RequireEntry("BSLeafAnimNode::OnVisible", base + Address::kLeafOnVisible);
+			HookSites::RequireEntry("BSTreeNode::OnVisible", base + Engine::Address::kTreeOnVisible);
 		}
 	}
 

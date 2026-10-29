@@ -64,6 +64,8 @@ namespace DCLF::Features::FirstPerson
 	// FirstPersonHooks.cpp: the two engine hooks, from the feature's install: RenderDepth's first-person draw (the frame's culled bits and
 	// depth range) and Main::RenderFirstPersonView's accumulator render (the colour epoch, under its trigger fp.colour-render).
 	void InstallHooks(Api::InstallContext& a_context);
+	// Its two calls, before any hook is written (HookSites): CALLs, as the thunks chain.
+	void PreflightHooks();
 
 	// Diagnostics/SkeletonParity.cpp: CS_DCLF_SET_PARITY's log of the skeleton's slots and claimed phases, when they change.
 	void SubscribeSkeletonParity();

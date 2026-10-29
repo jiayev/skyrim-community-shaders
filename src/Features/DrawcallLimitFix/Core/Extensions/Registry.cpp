@@ -1236,6 +1236,13 @@ namespace DCLF::Extensions
 		};
 	}
 
+	void PreflightFeatures(std::span<const Api::Feature> a_features)
+	{
+		for (const auto& feature : a_features)
+			if (feature.preflight)
+				feature.preflight();
+	}
+
 	void InstallEarlyHooks(std::span<const Api::Feature> a_features)
 	{
 		static bool installed = false;

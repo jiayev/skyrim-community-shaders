@@ -75,11 +75,10 @@ namespace DCLF::Scene
 		materialDependents.clear();
 		// The scene work's record upkeep named the cleared slots.
 		ResetMaterialRecords();
-		// Released at Present through the retirement chain, as ClearMaterialSlot's (the last reference deletes the engine's
-		// material: never on the pump, which runs this on a loading pass).
+		// Released at Present through the ReleaseRing, as ClearMaterialSlot's (the last reference deletes the engine's material: never
+		// on the pump, which runs this on a loading pass).
 		for (auto& owner : materialOwners)
-			if (owner)
-				retirement.Open().materials.push_back(std::move(owner));
+			ReleaseMaterial(std::move(owner));
 		materialOwners.clear();
 		bindQueue.clear();
 		membershipWitness = ~0u;
@@ -169,7 +168,7 @@ namespace DCLF::Scene
 		materialIndex.erase(key);
 		UnlistMaterialDependent(key.first, a_slot);
 		// Released at Present (the last reference deletes the engine's material), once no publication names the slot.
-		retirement.Open().materials.push_back(std::move(materialOwners[a_slot]));
+		ReleaseMaterial(std::move(materialOwners[a_slot]));
 		tables.materialSlotKey[a_slot] = { nullptr, 0u };
 		// Logged: what follows the material log (the texture-transform list) drops the slot's entries.
 		tables.NoteMaterial(a_slot);

@@ -3,6 +3,8 @@
 // the pass in the depth epoch's next-frame state, the tree manager's engine side, the report line and the parity.
 
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
+#include "Features/DrawcallLimitFix/Features/TreeWind/TreeList.h"
+#include "Features/DrawcallLimitFix/Features/TreeWind/TreeWalk.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
@@ -40,11 +42,18 @@ namespace DCLF::Features::TreeWind
 			if (Diagnostics::Observe().scene)
 				SubscribeParity();
 		}
+
+		// The tree manager's list loop and walk (RegisterAnimation installs both, whatever the toggle).
+		void Preflight()
+		{
+			TreeList::Preflight();
+			TreeWalk::Preflight();
+		}
 	}
 
 	Api::Feature Feature()
 	{
-		return { "tree-wind", &Install };
+		return { .name = "tree-wind", .install = &Install, .preflight = &Preflight };
 	}
 
 	bool ListAll()

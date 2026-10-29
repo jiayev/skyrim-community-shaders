@@ -38,6 +38,8 @@ namespace DCLF::Scene
 		static FrameView& Get();
 		/** @brief The render thread's frame number (BeginFrame). */
 		std::uint32_t GetFrame() const { return frame; }
+		/** @brief Render thread: the installed publication's sequence (0: none yet); the release horizon's (EngineReleases::NoteInstalled). */
+		std::uint64_t InstalledSequence() const;
 
 		/**
 		 * @brief The four textures a ProjectedUV draw binds (pixel slots 3, 8, 10, 11: diffuse, normal, detail, noise). Engine

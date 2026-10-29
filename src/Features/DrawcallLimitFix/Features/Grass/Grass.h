@@ -48,6 +48,8 @@ namespace DCLF::Features::Grass
 	// GrassHooks.cpp: the sink on GrassShared's capture (the feature's early hooks), registered and installed once at PostPostLoad;
 	// sets installed (GrassMirror.h).
 	void InstallHooks();
+	// GrassHooks.cpp: the capture's call sites, before any hook is written (HookSites): CALLs, as its thunks chain.
+	void PreflightHooks();
 
 	// GrassTables.cpp: the tables (scene resources) and the depth commit's uploads (commit hook).
 	void RegisterTables(Api::InstallContext& a_context);

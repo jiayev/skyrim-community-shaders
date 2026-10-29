@@ -5,6 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Features/Lod/Lod.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
+#include "Features/DrawcallLimitFix/Features/Lod/LodGates.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodSegmentEvents.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodSegments.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
@@ -121,6 +122,6 @@ namespace DCLF::Features::Lod
 	{
 		// The early hooks: the segment writers, the channel's source (where Core's scene events installed them: after the billboards'
 		// early hooks, before tree LOD's and the hidden nodes').
-		return { "lod", &Install, &InstallSegmentHooks };
+		return { .name = "lod", .install = &Install, .earlyHooks = &InstallSegmentHooks, .preflight = &LodGates::Preflight };
 	}
 }

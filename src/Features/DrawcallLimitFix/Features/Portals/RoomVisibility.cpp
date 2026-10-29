@@ -2,6 +2,7 @@
 #include "Features/DrawcallLimitFix/Features/Portals/RoomVisibility.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
 
 #include <array>
@@ -44,12 +45,8 @@ namespace DCLF::RoomVisibility
 	{
 		if (installed)
 			return;
+		// Preflight checked the calls before any hook was written.
 		const auto base = REL::Module::get().base();
-		for (const auto site : kCallSites)
-			if (!Engine::CallsTo(base + site, base + kIsRoomVisible)) {
-				logger::warn("[DCLF] room visibility (T7b3) not installed: the instruction at {:#x} is not a call of Main::IsRoomVisible", 0x140000000 + site.Get());
-				return;
-			}
 		PortalViews::Get().PublishVisibleSets();
 		for (const auto site : kCallSites)
 			stl::write_thunk_call<IsRoomVisible>(base + site);
@@ -60,6 +57,13 @@ namespace DCLF::RoomVisibility
 	bool Installed()
 	{
 		return installed;
+	}
+
+	void Preflight()
+	{
+		const auto base = REL::Module::get().base();
+		for (const auto site : kCallSites)
+			HookSites::RequireCallTo("a Main::IsRoomVisible call", base + site, base + kIsRoomVisible);
 	}
 
 	void SetLive(bool a_live)

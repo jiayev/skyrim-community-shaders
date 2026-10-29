@@ -18,6 +18,6 @@ namespace DCLF::Features::Shadows::Engine
 
 	Api::Feature Feature()
 	{
-		return { "shadow-epochs", &Install };
+		return { .name = "shadow-epochs", .install = &Install, .preflight = &PreflightCasterHooks };
 	}
 }

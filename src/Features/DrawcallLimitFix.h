@@ -238,6 +238,8 @@ private:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		/** @brief The sites Install writes, checked before any hook is written (HookSites; PostPostLoad's preflight). */
+		static void Preflight();
 		static void Install();
 	};
 
@@ -259,8 +261,13 @@ private:
 	bool faulted = false;
 	bool pumpLagging = false;
 	std::chrono::steady_clock::time_point pumpLagSince;
-	// Why DCLF is off for the session (not AE, or the render graph could not come up); shown in the menu.
+	// Why DCLF is off for the session (not AE, a hook conflict, or the render graph could not come up); shown in the menu.
 	std::string unavailableReason;
+	/**
+	 * @brief Off for the session after its hooks went in (unavailableReason set): the hooks pass straight through, the scene tracking stops
+	 * and the passes are no longer withheld.
+	 */
+	void ForceOff();
 	// The settings LoadSettings read, applied to the requested toggles once they are seeded (PostPostLoad), and again at each load after.
 	json savedSettings;
 	void ApplySavedSettings();
