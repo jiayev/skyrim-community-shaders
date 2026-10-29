@@ -46,6 +46,7 @@
 #include "Utils/SettingsCatalog.h"
 #include "Utils/SphericalHarmonics.h"
 #include "VanillaBinding.h"
+#include "Vram/DxvkMemory.h"
 
 #ifdef TRACY_ENABLE
 static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
@@ -367,7 +368,12 @@ void State::Reset()
 
 void State::Setup()
 {
-	globals::features::truePBR.SetupResources();
+	// VRAM attribution: what DXVK creates here is CS's core memory, unless a narrower scope (a feature's callbacks) says otherwise.
+	Vram::OwnerScope vramScope("CS/Core");
+	{
+		Vram::OwnerScope truePbrScope("CS/TruePBR");
+		globals::features::truePBR.SetupResources();
+	}
 	SetupResources();
 
 	// Probe typed UAV load support before features set up their resources, so any
@@ -379,7 +385,10 @@ void State::Setup()
 	RenderGraphRuntime::Get().Initialize();
 
 	Feature::ForEachLoadedFeature("SetupResources", [](Feature* feature) { feature->SetupResources(); });
-	globals::deferred->SetupResources();
+	{
+		Vram::OwnerScope deferredScope("CS/Deferred");
+		globals::deferred->SetupResources();
+	}
 	Feature::ForEachLoadedFeature("PostSetupResources", [](Feature* feature) { feature->PostSetupResources(); });
 	PostProcessingMode::ApplyPending();
 	tonemapOwner.reset();

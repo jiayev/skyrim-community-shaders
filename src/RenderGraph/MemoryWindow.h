@@ -6,11 +6,11 @@
 #	include <string>
 
 /**
- * @brief The render graph's tracked GPU memory: the menu's "Render graph memory" window (ORG's DebugUI/MemoryIntrospectionWidget.h)
- * and its report line.
+ * @brief The VRAM attribution window (ORG's DebugUI/MemoryIntrospectionWidget.h over Vram/VramLedger.h: DXVK's resources and the
+ * render graph's, by owner, reconciled against the driver's heap usage), and the render graph's own report line.
  *
- * Both read the graph's memory snapshot provider (ORG's tracking world: every ORG buffer and texture, with the size of its allocation and
- * its name; PersistentGraphHost installs it). Memory DXVK allocates for the game is not ORG's and not in it.
+ * The report line reads only the graph's memory snapshot provider (ORG's tracking world: every ORG buffer and texture, with the size
+ * of its allocation and its name; PersistentGraphHost installs it).
  */
 namespace RenderGraphMemory
 {

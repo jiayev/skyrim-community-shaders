@@ -17,6 +17,7 @@
 #include "GpuIdleTrace.h"
 #include "State.h"
 #include "Utils/FileRename.h"
+#	include "Vram/Debug.h"
 
 #include <OpenRenderGraph/PersistentGraphHost.h>
 #if defined(CS_HAS_ORG_MODULE_SERVICES)
@@ -1282,7 +1283,8 @@ bool RenderGraphRuntime::Initialize()
 	logger::info("[ORG] Binding model: descriptor buffer (VK_EXT_descriptor_buffer + VK_EXT_mutable_descriptor_type)");
 
 	rhi::vulkan::AdoptedVulkanDeviceInfo adopt{};
-	adopt.getInstanceProcAddr = info.getInstanceProcAddr;
+	// Under CS_VRAM_DEBUG, the graph's vkAllocateMemory/vkFreeMemory go through VRAM attribution's ledger.
+	adopt.getInstanceProcAddr = Vram::Debug::OrgProcAddr(info.getInstanceProcAddr, info.instance, info.physicalDevice);
 	adopt.instance = info.instance;
 	adopt.instanceApiVersion = info.instanceApiVersion;
 	adopt.physicalDevice = info.physicalDevice;

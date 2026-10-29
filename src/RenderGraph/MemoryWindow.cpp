@@ -6,6 +6,7 @@
 #	include "RenderGraph/MemoryWindow.h"
 
 #	include "RenderGraph/RenderGraphRuntime.h"
+#	include "Vram/VramLedger.h"
 
 #	include <DebugUI/MemoryIntrospectionWidget.h>
 #	include <OpenRenderGraph/PersistentGraphHost.h>
@@ -76,28 +77,56 @@ namespace RenderGraphMemory
 			return records;
 		}
 
-		// The widget's snapshot: a category per major type and usage hint (the family where a resource has none), a row per resource.
-		org::ui::MemorySnapshot Snapshot(const std::vector<org::memory::ResourceMemoryRecord>& a_records)
+		// The widget's snapshot of VRAM attribution's: a row per resource (Vram::RowFlags are the widget's MemoryRowFlags), a
+		// category per source and type, the heaps and the reconciliation.
+		org::ui::MemorySnapshot Snapshot(const Vram::Snapshot& a_snapshot)
 		{
+			constexpr auto same = [](std::uint32_t a, std::uint32_t b) { return a == b; };
+			static_assert(same(Vram::kRowAliased, org::ui::MemoryRowFlag_Aliased) && same(Vram::kRowNotCounted, org::ui::MemoryRowFlag_NotCounted) &&
+						  same(Vram::kRowImported, org::ui::MemoryRowFlag_Imported) && same(Vram::kRowUnattributed, org::ui::MemoryRowFlag_Unattributed) &&
+						  same(Vram::kRowInternal, org::ui::MemoryRowFlag_Internal));
+
 			org::ui::MemorySnapshot out;
 			std::unordered_map<std::string, std::uint64_t> categories;
-			out.resources.reserve(a_records.size());
-			for (const auto& record : a_records) {
-				out.totalBytes += record.bytes;
-				const std::string category = std::string(MajorCategory(record.resourceType)) + (InHostMemory(record) ? " (host)/" : "/") +
-				                             (record.usage.empty() ? Family(record.resourceName) : record.usage);
-				categories[category] += record.bytes;
-				out.resources.push_back({ .name = record.resourceName.empty() ? "Resource " + std::to_string(record.resourceID) : record.resourceName,
-					.type = category,
-					.bytes = record.bytes,
-					.uid = record.resourceID });
+			out.resources.reserve(a_snapshot.rows.size());
+			for (const auto& row : a_snapshot.rows) {
+				if (!(row.flags & Vram::kRowNotCounted)) {
+					out.totalBytes += row.bytes;
+					categories[row.category + (row.deviceLocal ? "" : " (host)")] += row.bytes;
+				}
+				out.resources.push_back({ .name = row.name,
+					.type = row.detail.empty() ? row.type : row.type + " " + row.detail,
+					.bytes = row.bytes,
+					.uid = row.uid,
+					.owner = row.owner,
+					.source = row.source,
+					.heap = row.deviceLocal ? "Device" : "Host",
+					.callsite = row.callsite,
+					.flags = row.flags });
 			}
 			for (auto& [label, bytes] : categories)
 				if (bytes)
 					out.categories.push_back({ label, bytes });
 			std::ranges::sort(out.categories, [](const auto& a, const auto& b) { return a.bytes > b.bytes; });
+
+			for (const auto& heap : a_snapshot.heaps)
+				out.heaps.push_back({ .label = fmt::format("Heap {} ({:.1f} GiB)", heap.index, double(heap.size) / (1024.0 * 1024.0 * 1024.0)),
+					.usageBytes = heap.usage,
+					.budgetBytes = heap.budget,
+					.attributedBytes = heap.attributed,
+					.deviceLocal = heap.deviceLocal });
+			for (const auto& line : a_snapshot.reconciliation)
+				out.reconciliation.push_back({ .label = line.label,
+					.bytes = line.bytes,
+					.kind = static_cast<org::ui::MemoryReconciliationKind>(line.kind),
+					.depth = line.depth,
+					.note = line.note });
 			return out;
 		}
+
+		// Rebuilt at most twice a second: the rows are thousands of strings.
+		org::ui::MemorySnapshot g_snapshot;  // UI thread
+		std::chrono::steady_clock::time_point g_snapshotTime{};
 
 		double MiB(std::uint64_t a_bytes) { return double(a_bytes) / (1024.0 * 1024.0); }
 
@@ -130,19 +159,15 @@ namespace RenderGraphMemory
 			return;
 		if (!ImPlot::GetCurrentContext())
 			ImPlot::CreateContext();
-		auto* graph = Graph();
-		if (!graph) {
-			ImGui::SetNextWindowSize(ImVec2(500.0f, 120.0f), ImGuiCond_FirstUseEver);
-			if (ImGui::Begin("Memory Introspection", &g_windowOpen))
-				ImGui::TextWrapped("The render graph is not running: %s", RenderGraphRuntime::Get().GetDisabledReason().c_str());
-			ImGui::End();
-			return;
+		const auto now = std::chrono::steady_clock::now();
+		if (std::chrono::duration<double>(now - g_snapshotTime).count() >= 0.5) {
+			g_snapshot = Snapshot(Vram::Current());
+			g_snapshotTime = now;
 		}
-		const auto snapshot = Snapshot(Records(*graph));
-		g_widget.PushFrameSample(std::chrono::duration<double>(std::chrono::steady_clock::now() - g_start).count(), snapshot.totalBytes);
-		ImGui::SetNextWindowSize(ImVec2(900.0f, 600.0f), ImGuiCond_FirstUseEver);
+		g_widget.PushFrameSample(std::chrono::duration<double>(now - g_start).count(), g_snapshot.totalBytes);
+		ImGui::SetNextWindowSize(ImVec2(1100.0f, 650.0f), ImGuiCond_FirstUseEver);
 		// No frame-graph batches: the persistent graph's are its build's, not readable while it runs (the widget says so).
-		g_widget.Draw(&g_windowOpen, &snapshot, nullptr);
+		g_widget.Draw(&g_windowOpen, &g_snapshot, nullptr);
 	}
 
 	std::string ReportLine(std::size_t a_families, std::size_t a_names)
@@ -155,6 +180,9 @@ namespace RenderGraphMemory
 		std::uint32_t deviceCount = 0;
 		std::unordered_map<std::string, Sum> families, names;
 		for (const auto& record : records) {
+			// A placement in an aliasing pool is the pool's memory, which the pool's own record counts.
+			if (!record.CountsTowardTotal())
+				continue;
 			if (InHostMemory(record)) {
 				host += record.bytes;
 				continue;
