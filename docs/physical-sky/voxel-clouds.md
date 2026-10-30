@@ -5,14 +5,6 @@ An instance folder under `Textures/PhysicalSky/VoxelClouds/<ID>/` contains
 `Instance.json`, `Modeling.dds`, and `Distance.dds`. All instances share
 `Data/Textures/PhysicalSky/NoiseVoxel.dds`, loaded once by the voxel-cloud manager
 and bound as a single 3D texture. The noise remains a shared Physical Sky resource.
-The local `PSkyTest` mod supplies the reference instances. Its `HFW_92368` example uses the exported
-`Texture_92368_0` / `Texture_92368_3` pair. The shared noise retains the original
-Noise3dC channels; the NDF procedural shape noise is not interchangeable with it.
-
-The local test assets live under `D:/lyj/soft/tesv/1.6/mods/PSkyTest/`, outside
-the project and Physical Sky package. The voxel datasets are `HFW_92368`,
-`HFW_97931`, and `HFW_111905`; each retains its matching modeling/SDF pair and
-exported noise-frequency settings.
 
 Use **Add voxel cloud** to place an instance at the camera, then set its centre,
 rotation and uniform scale. Coordinates are metres; Z is relative to Physical
@@ -25,23 +17,23 @@ Manager's transition duration controls the fade. Different transforms retain
 their own endpoints and crossfade extinction; identical placements merge their
 weights. Thus rotating or moving between scenes does not shear the authored
 cloud or sweep it through the intervening world. An instance's **Height reveal**
-separately applies HFW's local-cloud height mask in local Z.
+separately applies the local-cloud height mask in local Z.
 
-`Instance.json` retains the exported HFW field names. Texture references are
+`Instance.json` retains the exported reference field names. Texture references are
 relative filenames within the instance folder, rather than Odradek object IDs:
 
-| HFW field                                         | Instance behavior                                                                                    |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `SignedDistanceFieldTexture`                      | Packed RGB SDF, `Distance.dds`                                                                       |
-| `ModelingDataTexture`                             | RGB modeling volume, `Modeling.dds`                                                                  |
-| `BoxCenter`                                       | Default placement centre, `{ "X": ..., "Y": ..., "Z": ... }`; scene placement overrides it           |
-| `BoxSize`                                         | Longest box axis in metres; all three extents are derived from the SDF texture dimensions, as in HFW |
-| `HighQualityModeNoiseFrequencyScale`              | World-space noise frequency multiplier; default 1.2, shader frequency is `0.01 * value`              |
-| `HighQualityModeNoiseFrequencyAdjustmentDistance` | Original 256 m value is retained; the exported voxel shader does not read its constant (`c53.z`)     |
+| Asset field                                       | Instance behavior                                                                                |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `SignedDistanceFieldTexture`                      | Packed RGB SDF, `Distance.dds`                                                                   |
+| `ModelingDataTexture`                             | RGB modeling volume, `Modeling.dds`                                                              |
+| `BoxCenter`                                       | Default placement centre, `{ "X": ..., "Y": ..., "Z": ... }`; scene placement overrides it       |
+| `BoxSize`                                         | Longest box axis in metres; all three extents are derived from the SDF texture dimensions        |
+| `HighQualityModeNoiseFrequencyScale`              | World-space noise frequency multiplier; default 1.2, shader frequency is `0.01 * value`          |
+| `HighQualityModeNoiseFrequencyAdjustmentDistance` | Original 256 m value is retained; the exported voxel shader does not read its constant (`c53.z`) |
 
-The example retains HFW's source centre `(1000, -5600, 512)` for reference.
+The example retains the source centre `(1000, -5600, 512)` for reference.
 **Add voxel cloud** deliberately places it at the Skyrim camera; it does not
-interpret HFW world coordinates as Skyrim game units. `placement.center` in
+interpret exported world coordinates as Skyrim game units. `placement.center` in
 the asset, when supplied, overrides `BoxCenter` as its placement default.
 Legacy `modeling`, `distance`, `size` and `noiseFrequency` fields remain readable.
 An explicit `BoxSize` takes precedence over legacy `size`.
@@ -61,13 +53,13 @@ Up to eight distinct asset sets can be bound together, including both sides of
 a scene transition; repeated placements share their textures.
 
 With `noiseMipsEnabled: true`, the noise mip is `log2(1 + distance / 1500)`.
-The HFW example now disables that distance mip, as HFW's high-quality branch
+The reference example disables that distance mip, as the inspected high-quality branch
 does (`FUN_1404ce000` → `c52.y = 0`). Existing assets retain the enabled default. The exported 256 m `HighQualityModeNoiseFrequencyAdjustmentDistance`
 is a separate setting; it is not the denominator of this mip expression.
 
 ### Source cross-check
 
-Odradek on HFW PC 1.5.80.0 resolves `VoxelCloudSettings 92368:2` to modeling
+Odradek on the inspected reference build (PC 1.5.80.0) resolves `VoxelCloudSettings 92368:2` to modeling
 `92368:0` and SDF `92368:3`. `CloudRendererSystemAssets 2:11052` resolves
 Noise3dC to `2:2782`, the view shader to `2:4554`, and the lighting shader to
 `2:5831`. Fresh DDS exports match the three local reference DDS files byte for byte;
@@ -81,7 +73,7 @@ settings. Box extents are `textureDimensions * BoxSize / max(textureDimensions)`
 `1/1500` to `c52.z`. The original voxel shader samples Noise3dC using `c53.y`,
 optionally computes its mip using `c52.z`, and never consumes `c53.z`. This
 establishes the setting mapping, not equivalence of our lighting or temporal
-reconstruction to HFW's complete renderer.
+reconstruction to the reference renderer.
 
 The upload mapping was checked against Odradek's actual `2:4554` shader data,
 not inferred from the translated HLSL. Its binding-table record 2 copies 708
@@ -99,7 +91,7 @@ unobserved frequency-adjustment formula.
 
 ## Rendering
 
-HFW's packed RGB distance decode, Noise3dC reconstruction, near detail and
+The packed RGB distance decode, Noise3dC reconstruction, near detail and
 distance-dependent step rule are retained. The SDF is tested before jittering:
 only instances with negative SDF evaluate their modeling and detail at that step.
 Positive distances skip empty space;
@@ -118,10 +110,9 @@ opacity-weighted cloud distance plus scene-ray distance, matching
 those outputs. The voxel pass uses the native SDF gate before jitter, independent
 voxel steps, 0.1 transmittance termination and the native opacity remap. Aerial
 perspective is integrated at occupied steps. Two-by-two scene depth alternates
-minimum/maximum; the composite uses HFW's scene-depth-weighted bilinear rule.
+minimum/maximum; the composite uses a scene-depth-weighted bilinear rule.
 
-The current Skyrim implementation uses one half-resolution range (HFW also has
-a non-split branch), restricted to visible instance screen bounds. HFW's optional
+The current Skyrim implementation uses one half-resolution range, restricted to visible instance screen bounds. The reference renderer's optional
 100/200 m near/far split with a 30 m overlap is not implemented here. The local NVDF foreground integral is composited over distant NDF:
 `L = L_voxel + T_voxel * L_ndf`, `T = T_voxel * T_ndf`. Mean cloud depths
 only update the visible-depth metadata; crossing mean depths never switches
@@ -131,12 +122,12 @@ submit neither voxel view nor composite work.
 
 Direct lighting, multiple scattering, shadow volume and ambient illumination
 remain shared with NDF as requested. The coarse sun-occlusion cache is generated
-at 256 × 256 × 32 per placement, with three near-detail probes as in HFW. The
+at 256 × 256 × 32 per placement, with three near-detail probes. The
 coarse estimator starts 16 m towards the sun, takes up to 256 samples with
 `max(1, SDF)` advancement, and accumulates native SDF-weighted modeling density.
-Fine probes use HFW's spatial jitter and 16/3 m spacing. Cubemaps retain the
+Fine probes use spatial jitter and 16/3 m spacing. Cubemaps retain the
 coarse combined integration; scene endpoint crossfading and multiple transformed
-instances are Skyrim adaptations, rather than original HFW instance behavior.
+instances are Skyrim adaptations, rather than reference instance behavior.
 
 The noise equations follow `VoxelCloudComputeShader/compute.spv` and its raw
 decompilation. Nubis Cubed pages 94–109 explain the four-channel construction,
@@ -144,6 +135,6 @@ but its published billow expression differs from this shipped shader: the game
 uses `pow(profile, 0.0625)` and an alpha-channel bias, rather than the slide's
 `pow(profile, 0.25)`. The supplied instance follows the game version.
 
-HFW's inspected hide/transform events are switches, not a generic scene-fade
+The inspected reference hide/transform events are switches, not a generic scene-fade
 system. Endpoint extinction crossfading is our Scene Manager adaptation; the
 height-reveal and density formulas come from its voxel shader.

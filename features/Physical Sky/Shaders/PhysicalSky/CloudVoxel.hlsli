@@ -1,7 +1,7 @@
 #ifndef PHYSICAL_SKY_CLOUD_VOXEL_HLSLI
 #define PHYSICAL_SKY_CLOUD_VOXEL_HLSLI
 
-// A single placement uses HFW's fixed-volume traversal. The generic path
+// A single placement uses fixed-volume traversal. The generic path
 // retains scene-transition overlap and multiple independently placed assets.
 #ifdef CLOUD_VOXEL_SINGLE
 #	define CLOUD_VOXEL_INSTANCE_LOOP [unroll]
@@ -45,7 +45,7 @@ Texture3D<float4> NoiseVoxel : register(t76);
 StructuredBuffer<VoxelCloudData> VoxelClouds : register(t77);
 
 // D3D11 supports BC volumes as 2D slice arrays. Interpolate Z explicitly to
-// retain HFW's compressed fields rather than expanding them 8x in GPU memory.
+// retain compressed fields rather than expanding them 8x in GPU memory.
 float3 SampleVoxelField(Texture2DArray<float3> field, float3 uv, float mip)
 {
 	uint width, height, slices;
@@ -114,7 +114,7 @@ float3 VoxelCoordinates(float3 metres, VoxelCloudData cloud)
 float VoxelSignedDistance(float3 uv, VoxelCloudData cloud)
 {
 	const float3 packed = VoxelDistanceChannels(VoxelAssetSlot(cloud), uv);
-	// HFW's NVDF RGB encoding is linear, so filtered packed samples remain valid.
+	// The NVDF RGB encoding is linear, so filtered packed samples remain valid.
 	return ((packed.y * .035294145 + packed.x + packed.z * .0006920431) * 4352.0 - 256.0) * cloud.parameters.x;
 }
 
@@ -140,7 +140,7 @@ float VoxelHeightReveal(float height, float strength)
 		return 1.0;
 	if (strength <= 0.0)
 		return 0.0;
-	// Generalize HFW's local-region height reveal to the instance's local Z.
+	// Apply the height reveal along the instance's local Z axis.
 	const float threshold = saturate(1.0 - strength) * 1.2;
 	const float lower = max(0.0, threshold - .2);
 	return saturate((height - lower) / max(min(1.0, threshold) - lower, 1e-6));
@@ -226,7 +226,7 @@ float sampleCloudDensity(float3 pos, CloudLayer layer, float mipBias, float view
 	return AddVoxelDensity(pos, mipBias, viewDistance, minimumMip, uint2(0xffffffffu, 0xffffffffu), ndfDensity, context);
 }
 
-// HFW resolves three near-detail probes and stores the longer coarse integral.
+// Resolve three near-detail probes and store the longer coarse integral.
 // The response to this optical depth remains the shared NDF lighting model.
 Texture2DArray<float> TexVoxelLighting : register(t85);
 RWTexture2DArray<float> RWVoxelLighting : register(u0);

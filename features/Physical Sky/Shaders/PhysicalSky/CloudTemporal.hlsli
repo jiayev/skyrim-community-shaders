@@ -387,7 +387,7 @@ cbuffer CloudDispatch : register(b3) { uint4 StormScreenRect; };
 			previousUv * info.previousFrameDim - 0.5, int2(info.previousFrameDim) - 1, false);
 		const float3 historyPosition = RebaseCloudHistoryDepth(result, ray, previousPosition, cameraDelta);
 		const bool traced = all((pixel & 3u) == CloudPhaseOffset());
-		// The traced phase supplies its own current surface sample. HFW's
+		// The traced phase supplies its own current surface sample. The
 		// background-depth rejection only governs the other checkerboard phases.
 		useHistory = traced || abs(sceneDepth - result.metadata.y) <= 0.064;
 		// Sparse phase neighbours are not a visibility change in a static medium.
@@ -414,7 +414,7 @@ cbuffer CloudDispatch : register(b3) { uint4 StormScreenRect; };
 		if (currentValid)
 			result = current;
 		else
-			// As in HFW, rejected history still reconstructs the current cloud.
+			// Rejected history still reconstructs the current cloud.
 			// A different background depth does not imply an empty foreground volume.
 			result = ReconstructCloud(TexVolLowTr, TexVolLowLum, TexVolLowAux, TexLightningTrace, currentPosition, int2(info.lowFrameDim) - 1, true);
 	}

@@ -140,7 +140,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PhysicalSky::Settings::LightningSettings,
 	rate, distanceRange, radius, cloudLuminance, channelLuminance, channelRadius,
 	strokeCount, strokeDuration, strokeInterval, strokeDecay,
-	groundChance, cloudBaseChance, useWeatherColor, color)
+	groundChance, cloudBaseChance, color)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PhysicalSky::Settings,
@@ -1040,9 +1040,9 @@ void PhysicalSky::SettingsWeatherEffects()
 		ImGui::TextWrapped("%s", T(TKEY("lightning_cloud_requirement"), "Lightning requires volumetric clouds. Enable them in Clouds to see the effect."));
 	if (ImGui::CollapsingHeader(T(TKEY("lightning_section"), "Lightning"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat(T(TKEY("lightning_intensity"), "Lightning Intensity"), &settings.lightningIntensity, 0.f, 4.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		Util::AddTooltip(T(TKEY("lightning_intensity_desc"), "Controls storm lightning, its illumination and thunder. Zero restores the original weather lightning. Active Physical Sky lightning replaces the original flashes and thunder sounds."));
+		Util::AddTooltip(T(TKEY("lightning_intensity_desc"), "Controls lightning, its illumination and thunder using Physical Sky weather settings, independently of vanilla weather. A nonzero value replaces vanilla flashes and thunder; zero restores them."));
 		ImGui::DragFloat(T(TKEY("lightning_rate"), "Discharge Rate"), &settings.lightning.rate, 0.1f, 0.f, 600.f, "%.1f / min", ImGuiSliderFlags_AlwaysClamp);
-		Util::AddTooltip(T(TKEY("lightning_rate_desc"), "Requested average discharge rate in fully active storm weather. Discharges do not overlap, and preparing a new cloud source limits the actual frequency. Weather transitions reduce activity. Zero stops automatic discharges; replay remains available."));
+		Util::AddTooltip(T(TKEY("lightning_rate_desc"), "Requested average discharge rate from Physical Sky weather settings. Discharges do not overlap, and preparing a new cloud source limits the actual frequency. Zero stops automatic discharges but keeps vanilla lightning suppressed while Lightning Intensity is nonzero."));
 		ImGui::DragFloat2(T(TKEY("lightning_distance"), "Discharge Distance Range"), &settings.lightning.distanceRange.x, 0.05f, 0.05f, 50.f, "%.2f km", ImGuiSliderFlags_AlwaysClamp);
 		Util::AddTooltip(T(TKEY("lightning_distance_desc"), "Minimum and maximum horizontal distance from the camera. A local storm uses its own footprint within this range."));
 		ImGui::DragFloat(T(TKEY("lightning_radius"), "Luminous Cloud Radius"), &settings.lightning.radius, 10.f, 10.f, 5000.f, "%.0f m", ImGuiSliderFlags_AlwaysClamp);
@@ -1064,13 +1064,11 @@ void PhysicalSky::SettingsWeatherEffects()
 		Util::AddTooltip(T(TKEY("lightning_ground_chance_desc"), "Attempts a ground strike against loaded terrain. If no surface is found, the discharge stays near the cloud base."));
 		ImGui::SliderFloat(T(TKEY("lightning_base_chance"), "Cloud Base Discharge Chance"), &settings.lightning.cloudBaseChance, 0.f, 100.f, "%.0f %%", ImGuiSliderFlags_AlwaysClamp);
 		Util::AddTooltip(T(TKEY("lightning_base_chance_desc"), "Cloud-base discharges in addition to ground strikes. The remaining percentage is embedded cloud lightning. Both chances together cannot exceed 100%."));
-		ImGui::Checkbox(T(TKEY("lightning_weather_color"), "Use Weather Lightning Color"), &settings.lightning.useWeatherColor);
-		if (!settings.lightning.useWeatherColor)
-			ImGui::ColorEdit3(T(TKEY("lightning_color"), "Lightning Color"), &settings.lightning.color.x, ImGuiColorEditFlags_Float);
+		ImGui::ColorEdit3(T(TKEY("lightning_color"), "Lightning Color"), &settings.lightning.color.x, ImGuiColorEditFlags_Float);
 		settings.SanitizeLightning();
 		ImGui::Text(T(TKEY("lightning_duration"), "Discharge Duration: %.2f s"), ((settings.lightning.strokeCount - 1) * settings.lightning.strokeInterval + settings.lightning.strokeDuration) * 0.001f);
 		if (settings.enableVolumetricClouds && settings.lightningIntensity > 0.f && (!csLightningQuery || !csLightningComposite || !csLightningCubeComposite))
-			Util::Text::Error("%s", T(TKEY("lightning_unavailable"), "Lightning is unavailable. Original weather lightning remains active. See the log for details."));
+			Util::Text::Error("%s", T(TKEY("lightning_unavailable"), "Lightning rendering is unavailable. Nonzero Lightning Intensity still suppresses vanilla flashes and thunder. See the log for details."));
 		if (ImGui::Button(T(TKEY("lightning_trigger"), "New Lightning")))
 			lightning.Trigger();
 		Util::AddTooltip(T(TKEY("lightning_trigger_desc"), "Creates a new source using the current distance, radius and event chances. Requires active Physical Sky lightning and a suitable cloud."));

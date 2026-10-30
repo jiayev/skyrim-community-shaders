@@ -150,7 +150,7 @@ void CloudStormManager::Update(TextureManager& textures, ID3D11ShaderResourceVie
 			if (!NdfManager::IsTexturePair(coreMaps))
 				continue;
 		}
-		// HFW's pattern 2 is Perlin-Worley. Weather noise slots are editable and
+		// The reference core pattern is Perlin-Worley. Weather noise slots are editable and
 		// our default slot 2 is Perlin, so an authored storm must carry its own
 		// core pattern rather than inherit that slot's different morphology.
 		auto* corePattern = pattern;
@@ -167,7 +167,8 @@ void CloudStormManager::Update(TextureManager& textures, ID3D11ShaderResourceVie
 		gpu.centerRadiusStrength = { instance.center.x, instance.center.y, std::clamp(instance.radius, 1.f, 16000.f), std::clamp(instance.strength, 0.f, 1.f) };
 		gpu.altitudeMotion = { std::clamp(instance.altitude, -24000.f, 48000.f), std::clamp(instance.height, 1.f, 24000.f),
 			std::clamp(instance.rotation, -4.f, 4.f), std::clamp(instance.updraft, -80.f, 80.f) };
-		gpu.driftDensity = { std::clamp(instance.topOffset.x, -16000.f, 16000.f), std::clamp(instance.topOffset.y, -16000.f, 16000.f),
+		gpu.driftDensity = { instance.mode == "Volcanic" ? std::clamp(instance.topOffset.x, -16000.f, 16000.f) : 0.f,
+			instance.mode == "Volcanic" ? std::clamp(instance.topOffset.y, -16000.f, 16000.f) : 0.f,
 			std::clamp(instance.density, 0.f, 4.f), std::clamp(instance.albedo, 0.f, 0.9999f) };
 		gpu.emission = { std::max(instance.emission.x, 0.f), std::max(instance.emission.y, 0.f), std::max(instance.emission.z, 0.f), std::clamp(instance.emissionHeight, 0.001f, 1.f) };
 		const float backSize = std::clamp(instance.backHalfSize, 1.f, 16000.f);
@@ -439,7 +440,7 @@ bool CloudStormManager::Replaces(const RE::BSGeometry* geometry) const
 	return false;
 }
 
-std::array<uint32_t, 4> CloudStormManager::ScreenRect(float bottomZ, uint32_t width, uint32_t viewHeight) const
+std::array<uint32_t, 4> CloudStormManager::ScreenRect(float bottomZ, uint32_t width, uint32_t viewHeight, float2 weatherAltitude, float curvatureRadius) const
 {
 	if (REL::Module::IsVR())
 		return active.empty() ? std::array<uint32_t, 4>{} : std::array<uint32_t, 4>{ 0, 0, width, viewHeight };
@@ -457,6 +458,14 @@ std::array<uint32_t, 4> CloudStormManager::ScreenRect(float bottomZ, uint32_t wi
 		if ((static_cast<uint32_t>(storm.generation.w) & 4u) != 0u) {
 			lower = { storm.plumeLower.x - 270.f, storm.plumeLower.y - 270.f, storm.plumeLower.z - 270.f };
 			upper = { storm.plumeUpper.x + 270.f, storm.plumeUpper.y + 270.f, storm.plumeUpper.z + 270.f };
+		} else {
+			// Match SupercellInfluenceBounds: NDF replacement includes the old
+			// weather layer, not just the new storm's visible height range.
+			const float farX = std::abs(storm.centerRadiusStrength.x - camera.x * 0.01428f) + extent;
+			const float farY = std::abs(storm.centerRadiusStrength.y - camera.y * 0.01428f) + extent;
+			const float curvature = (farX * farX + farY * farY) / (curvatureRadius * 0.01428f);
+			lower.z = std::min(lower.z, weatherAltitude.x * 0.01428f - curvature - 270.f);
+			upper.z = std::max(upper.z, weatherAltitude.y * 0.01428f + 270.f);
 		}
 		uint32_t outside = 31u;
 		bool crossesEye = false;
@@ -533,7 +542,7 @@ void CloudStormManager::DrawSettings()
 {
 	if (!ImGui::CollapsingHeader(T(TKEY("storm_section"), "Storm Instances"), ImGuiTreeNodeFlags_SpanAvailWidth))
 		return;
-	ImGui::TextWrapped("%s", T(TKEY("storm_description"), "World-placed storm instances use the HFW supercell back template, mesocyclone NDF and rotating noise bands. Each instance has its own placement and replacement reference."));
+	ImGui::TextWrapped("%s", T(TKEY("storm_description"), "World-placed storm instances combine a supercell back template, mesocyclone NDF and rotating noise bands. Each instance has its own placement and replacement reference."));
 	ImGui::TextUnformatted(kStormsDirectory);
 	ImGui::BeginDisabled(SceneWidgetInterceptor::IsArmed());
 	if (ImGui::Button(T(TKEY("storm_reload"), "Reload instances")))
@@ -605,9 +614,10 @@ void CloudStormManager::DrawSettings()
 		changed |= ImGui::DragFloat(T(TKEY("storm_altitude"), "NDF height zero (m)"), &storm.altitude, 10.f, -24000.f, 48000.f);
 		changed |= ImGui::DragFloat(T(TKEY("storm_height"), "NDF height span (m)"), &storm.height, 10.f, 1.f, 24000.f);
 		changed |= ImGui::SliderFloat(T(TKEY("storm_strength"), "Storm strength"), &storm.strength, 0.f, 1.f);
-		changed |= ImGui::DragFloat2(T(TKEY("storm_top_offset"), "Plume top offset X / Y (m)"), &storm.topOffset.x, 10.f, -16000.f, 16000.f);
-		if (storm.mode == "Volcanic")
+		if (storm.mode == "Volcanic") {
+			changed |= ImGui::DragFloat2(T(TKEY("storm_top_offset"), "Plume top offset X / Y (m)"), &storm.topOffset.x, 10.f, -16000.f, 16000.f);
 			changed |= ImGui::SliderFloat(T(TKEY("storm_wind_influence"), "Wind bending strength"), &storm.windInfluence, 0.f, 2.f);
+		}
 		changed |= ImGui::SliderFloat(T(TKEY("storm_rotation"), "Storm rotation speed"), &storm.rotation, -4.f, 4.f);
 		changed |= ImGui::SliderFloat(T(TKEY("storm_updraft"), "Storm updraft (m/s)"), &storm.updraft, -80.f, 80.f);
 		changed |= ImGui::SliderFloat(T(TKEY("storm_density"), "Storm density"), &storm.density, 0.f, 4.f);

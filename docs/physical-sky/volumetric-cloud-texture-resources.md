@@ -92,7 +92,7 @@ mip selection, and parameter defaults are specified in the
 in a future orographic layer. `NoiseVoxel.dds` (128³, eight mips) retains
 the voxel detail volume unchanged. It lives in `Textures/PhysicalSky/` and is
 loaded once for all voxel clouds, independently of instance modeling and distance
-fields. The shared voxel noise remains in Physical Sky; the HFW reference instances
+fields. The shared voxel noise remains in Physical Sky; the reference instances
 are supplied by the local `PSkyTest` mod outside the project and package. Neither detail volume is loaded by the regular NDF path; replacing them
 does not change regular cloud rendering. See [voxel clouds](voxel-clouds.md).
 

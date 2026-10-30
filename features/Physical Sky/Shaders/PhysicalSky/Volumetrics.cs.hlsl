@@ -805,18 +805,17 @@ float sampleCloudDensityFromContext(
 		const float lobe = ndf.plumeEnvelope.y * (sqrt(noise.g) - .35);
 		profile *= saturate((lobe - ndf.plumeEnvelope.x) / 90.0 + .5);
 		density_context.ndf.dimension_profile = profile;
-		density_context.ndf.replacement *= smoothstep(0.0, .1, profile);
 	}
 #endif
 	const float eroded = ReconstructCloudNoiseDensity(noise, profile, ndf.top_type, ndf.height_fraction, density_context.eye_distance, ndf.storm, risingBillows);
 #ifdef NO_CLOUD_STORMS
 	const float densityScale = info.lowDensityScale;
 #else
-	const float densityScale = ndf.stormVolume ? CloudStorms[ndf.stormIndex].driftDensity.z * ndf.plumeDensity : info.lowDensityScale;
+	const float densityScale = ndf.stormVolume ? lerp(info.lowDensityScale, CloudStorms[ndf.stormIndex].driftDensity.z * ndf.plumeDensity, ndf.stormBlend) : info.lowDensityScale;
 #endif
 	float lightDensity;
 	const float density = ShapeCloudBaseDensity(eroded, ndf.height_fraction, info.bottomDensityWidth, info.bottomDensityPower, ndf.shaping_start, ndf.rawStorm, lightDensity, risingBillows) * densityScale;
-	// The HFW supercell's enhanced shadow density belongs to its anvil model.
+	// The supercell's enhanced shadow density belongs to its anvil model.
 	// An opaque eruption shades the same eroded surface that the view ray sees.
 #ifdef NO_CLOUD_STORMS
 	density_context.light_density = density;

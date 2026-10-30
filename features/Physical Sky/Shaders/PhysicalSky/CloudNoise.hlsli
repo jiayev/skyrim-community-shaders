@@ -14,7 +14,7 @@ float ReconstructCloudNoiseDensity(float4 noise, float profile, float topType, f
 	                                                  (1.0 - pow(saturate((saturate((topType - 0.2) * 9.999999) * 5.0 + 5.0) * height), 3.0));
 	const float rounded = saturate((pow(noise.r, 0.45) - erosion) / (1.0 - erosion));
 	const float billow = sqrt(saturate((saturate(lerp(heightNoise, rounded, saturate((profile - 0.1) * 4.9999995))) - 0.4) * 1.6666666));
-	// An eruption keeps HFW's rounded cumulus component along the whole column.
+	// An eruption keeps the rounded cumulus component along the whole column.
 	// The storm anvil's high-altitude wisps otherwise fill the gaps between lobes.
 	if (risingBillows) {
 		// Keep the packed high-frequency Alligator field as subtractive surface
@@ -46,7 +46,7 @@ float ShapeCloudBaseDensity(float eroded, float height, float bottomWidth, float
 	const float baseProfile = pow(profileHeight, 0.3) * pow(saturate(profileHeight * stormWidth), stormPower);
 	const float density = lerp(bottomBoost, 1.0, saturate(height * 5.0)) * eroded * baseProfile;
 	const float shapedDensity = pow(density, saturate((height - 0.25) * 4.0) * 0.29999998 + 0.35);
-	// HFW shades with the density before the storm ceiling fade, enhanced by
+	// Lighting uses the density before the storm ceiling fade, enhanced by
 	// height and the unsheared storm mask. View extinction uses the fade below.
 	lightDensity = shapedDensity * (1.0 + 3.0 * pow(height, 4.0)) * (1.0 + 3.0 * pow(storm, 5.0));
 	const float topFade = 1.0 - saturate((height - 0.8) * 5.0);

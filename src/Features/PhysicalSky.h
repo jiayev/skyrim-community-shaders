@@ -161,7 +161,7 @@ struct PhysicalSky final : public Feature
 		float lightningIntensity = 0.f;  // zero restores vanilla weather lightning
 		struct LightningSettings
 		{
-			float rate = 3.f;                       // discharges per minute in fully active storm weather
+			float rate = 3.f;                       // requested discharges per minute
 			float2 distanceRange = { 0.35f, 7.f };  // horizontal kilometres
 			float radius = 600.f;                   // equivalent luminous cloud radius, metres
 			float cloudLuminance = 1000.f;          // peak cd/m^2
@@ -171,9 +171,8 @@ struct PhysicalSky final : public Feature
 			float strokeDuration = 20.f;  // milliseconds, full optical pulse duration
 			float strokeInterval = 90.f;  // milliseconds between stroke starts
 			float strokeDecay = 0.65f;
-			float groundChance = 35.f;     // percent
-			float cloudBaseChance = 35.f;  // percent; the remainder is embedded cloud lightning
-			bool useWeatherColor = true;
+			float groundChance = 35.f;            // percent
+			float cloudBaseChance = 35.f;         // percent; the remainder is embedded cloud lightning
 			float3 color = { 0.86f, 0.9f, 1.f };  // linear sRGB chromaticity
 		};
 		LightningSettings lightning;

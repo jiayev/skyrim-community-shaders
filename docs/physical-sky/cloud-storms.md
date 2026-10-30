@@ -8,17 +8,22 @@ use **Save instance**. **New instance** creates a disabled instance;
 Physical Sky and do not occupy the preset browser. Each instance belongs to a
 worldspace. Several instances can be active in the same worldspace.
 
-## HFW generation and sampling
+## Supercell generation and sampling
 
-`StormNdf.cs.hlsl` follows the HFW `ApplySupercell` and
+`StormNdf.cs.hlsl` follows the reference `ApplySupercell` and
 `SampleMesocycloneNdf` sequence. A rotated/mirrored back template first blends
 height, coverage and top/bottom type. The mesocyclone then supplies its own
 height, coverage, types and storm mask, with the original separate influence
-weights. HFW blends into the existing weather layer; an independent instance
-instead starts with an empty layer spanning `coreHeight` to 1. Its height bounds
-remain valid as coverage fades, avoiding collapsed sheets at filtered edges.
-The result is a generated Height/Modeling pair per instance. The back
-template's alpha and the final storm mask are different signals.
+weights. The generated Height/Modeling pair caches the weather-independent
+terms of these operations. At sampling time the live weather NDF supplies the
+remaining terms; height clipping, vertical profile and erosion run once on the
+combined NDF. Height, top and bottom use the original 7/3/10 influence ramps.
+Coverage retains the back-template max/lerp expression, rather than taking a
+maximum of two evaluated densities. The back-template alpha and final storm
+mask remain separate signals. Height auxiliary survives replacement.
+Instance height limits are applied after composition, retaining the original
+weather range while it still contributes. No additional map or generation pass
+is needed.
 
 The density path retains the five radial noise bands, their bend/speed/frequency
 ratios, radius jitter, outer weather transition, and the rising anvil's separate
@@ -26,13 +31,13 @@ noise and exponent. The final storm mask controls the mirrored profile, crown
 coverage/type transition, reconstruction and base/top density response.
 
 Adaptations to this renderer are world-anchored placement, metre-based height
-zero/span, height-dependent top displacement, pause-aware time and motion,
-independent density/emission, and masked replacement of ordinary weather density.
+zero/span, volcanic wind bending, pause-aware time and motion, independent
+density/emission, and three-dimensional volcanic weather replacement.
 View, shadow, ambient-density and cubemap queries use the same density function.
 Generated NDFs are cached until instance parameters, resources or noise inputs
 change; ordinary wind motion does not regenerate them.
 
-`mode` selects `Supercell` (the default, HFW's five rings and anvil) or
+`mode` selects `Supercell` (the default, five radial bands and an anvil) or
 `Volcanic` (a rising, rotating eruption). Volcanic mode uses the same NDF/profile
 and erosion foundation, with isotropic, metre-space cellular billows throughout
 the plume. A dense Modeling interior keeps the eruption connected while erosion
@@ -78,21 +83,21 @@ meaning. DDS validation remains unchanged.
 
 An optional linear, single-channel `Pattern.dds` beside `Instance.json` supplies
 the analytic mesocyclone's 2D turbulence input. The Supercell reference includes
-HFW's original Perlin-Worley pattern. Without this file, instances retain the
+the reference Perlin-Worley pattern. Without this file, instances retain the
 shared weather noise slot 2 fallback; that editable slot is not guaranteed to be
-HFW's Perlin-Worley input (the current default is Perlin). Authored `coreAsset`
+that Perlin-Worley input (the current default is Perlin). Authored `coreAsset`
 maps bypass the analytic mesocyclone and do not use this pattern.
 
-| Instance field         | Height RG                                                | Modeling RGB                           | Modeling A         |
-| ---------------------- | -------------------------------------------------------- | -------------------------------------- | ------------------ |
-| `asset` (back)         | HFW template heights, decoded as `RG - 0.5 + coreHeight` | Coverage / top type / bottom type      | Template influence |
-| `coreAsset` (optional) | Normalized core bottom / top                             | Core coverage / top type / bottom type | Core storm mask    |
+| Instance field         | Height RG                                            | Modeling RGB                           | Modeling A         |
+| ---------------------- | ---------------------------------------------------- | -------------------------------------- | ------------------ |
+| `asset` (back)         | Template heights, decoded as `RG - 0.5 + coreHeight` | Coverage / top type / bottom type      | Template influence |
+| `coreAsset` (optional) | Normalized core bottom / top                         | Core coverage / top type / bottom type | Core storm mask    |
 
-An empty `asset` omits the back. An empty `coreAsset` uses HFW's analytic
+An empty `asset` omits the back. An empty `coreAsset` uses the analytic
 mesocyclone. A core asset provides the final NDF channels in its valid height
 footprint, replacing the analytic core and any back beneath it. In Supercell mode, authored core profiles taper at their finite height bounds.
 Volcanic maps instead use a broad height support, with the Modeling coverage and
-profile types defining the cloud surface before erosion, as in HFW's back maps. Missing or invalid
+profile types defining the cloud surface before erosion, as in the back maps. Missing or invalid
 configured resources disable that instance.
 
 `center`, `radius`, `backHalfSize`, `altitude`, `height`, and `topOffset` use
@@ -103,21 +108,32 @@ and the back template. `backRotation` is in degrees. `rotation` multiplies the
 original noise-band speeds; `updraft` is the anvil lift speed (Supercell), or the
 vent speed that scales the rise and crown outflow (Volcanic), in metres/second.
 
+`topOffset` and `windInfluence` apply only to Volcanic instances. Supercell
+samples its Height and Modeling at the same undeformed instance coordinates;
+the weather-driven height shear and upstream shape blending do not apply.
+Its rotating noise bands, anvil updraft and horizontal noise advection remain active.
+
 ### Replacement of ordinary tropo clouds
 
-Storm generation stores the union of the HFW back-template and core coverage
-replacement weights in the previously unused Height B channel. Sampling fades
-that weight at the finite three-dimensional profile boundary, before noise
-erosion. Within the replacement region, erosion holes therefore do not refill
-with ordinary clouds; clouds in front of or behind the storm stay independent.
+Supercell modifies the weather NDF before vertical clipping and erosion. Full
+replacement removes the old weather profile even above or below the new cloud;
+partial influence blends its height, coverage and profile types. Supercell
+instances are applied in reverse name order so earlier names have priority.
+The CPU screen rectangle, GPU tile classification and ray interval include both
+the storm and curved weather height ranges, so excluded ordinary clouds cannot
+reappear through the storm-free dispatch.
 
-Instances blend extinction and shadow density in instance-name order, followed
-by the remaining weather contribution. Full replacement skips weather sampling.
-Albedo, ambient transport and temporal ownership follow the resulting extinction
-fractions. If multiple storms overlap, their motions blend by contribution; the
-dominant storm supplies the instance scattering calibration and emission. This
-is a runtime adaptation of HFW's NDF replacement, preserving the separately
-authored eruption profile instead of rebuilding weather maps as it moves.
+Volcanic instances instead replace weather within their swept three-dimensional
+carrier. This follows the bent column and outflow rather than clearing the whole
+vertical footprint underneath the canopy. Erosion and dilution do not restore
+weather inside the carrier. Protruding lobes extend replacement outside it;
+the replacement mask does not clip or flatten those lobes.
+
+Volcanic instances blend extinction and shadow density in name order over the
+combined Supercell/weather field. Full volcanic replacement skips that field.
+Albedo, ambient transport and temporal ownership follow extinction contributions;
+the dominant storm supplies scattering calibration and emission. Volcanic-only
+shaders compile out Supercell NDF composition.
 
 ### Wind bending and downwind outflow (Volcanic)
 
@@ -147,7 +163,7 @@ Pausing stops both trajectory response and noise transport.
 
 The downwind sections widen horizontally and flatten vertically. Their
 concentration falls with radius cubed and age, and their profile becomes
-progressively more eroded. Dilution also reduces their weather replacement weight. The dense
+progressively more eroded. Dilution changes plume density without restoring ordinary clouds inside it. The dense
 rising column retains its density. Authored Modeling travels with the local
 section, so the old fixed Height footprint cannot slice off displaced billows.
 The continuous swept support supplies the eruption's height boundaries;
@@ -189,15 +205,3 @@ top-type brushes are calibrated through `NubisVerticalProfile.dds`, rather than
 treating type as a linear height. Coverage and bottom-type fields have independent
 variation; the Height support extends outside their footprint to remain stable
 under bilinear filtering.
-
-The local `PSkyTest` mod supplies `Textures/PhysicalSky/Storms/Supercell/Instance.json`,
-a disabled comparison instance with the original HFW back Height/Modeling textures
-and Perlin-Worley core pattern. These reference files live outside the project and
-Physical Sky package, under `D:/lyj/soft/tesv/1.6/mods/PSkyTest/`. The instance has
-no replacement rules. Enable it explicitly
-for comparison and adjust its centre/radius for the scene. These reference textures
-are separate from the locally generated Red Mountain maps.
-This is not a capture-equivalent HFW weather preset: the instance uses an empty
-NDF baseline rather than the original surrounding weather, while profile controls
-and the 3D erosion noise still come from Physical Sky's current settings. Matching
-the source back maps alone does not match those other shaping inputs.

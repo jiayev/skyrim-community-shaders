@@ -72,7 +72,7 @@ private:
 	uint32_t randomState = 0x82a1f37bu, eventSeed = 0, generation = 0, preparedFrames = 0;
 	double time = 0, previousTime = 0, nextEvent = 0, flashStart = 0, queryStart = 0;
 	double eventHazard = 0, targetHazard = 1;
-	float weatherWeight = 0, sourceHeight = 0;
+	float sourceHeight = 0;
 	float3 source = {}, ground = {}, color = { 0.78f, 0.82f, 1.f };
 	float radius = 0;
 	float channelRadius = 0.12f;
@@ -92,5 +92,5 @@ private:
 	void ReadSource(PhysicalSky& sky);
 	void PromoteSource(PhysicalSky& sky);
 	void BuildChannel(float bottomZ);
-	void StartFlash(RE::Sky* sky, const PhysicalSky& physicalSky);
+	void StartFlash(const PhysicalSky& physicalSky);
 };

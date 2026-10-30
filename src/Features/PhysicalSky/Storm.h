@@ -64,7 +64,7 @@ struct CloudStormData
 };
 static_assert(sizeof(CloudStormData) == 1824);
 
-/// World-placed storm instances and HFW supercell NDF generation.
+/// World-placed storm instances and supercell NDF generation.
 struct CloudStormManager
 {
 	void LoadInstances();
@@ -78,7 +78,7 @@ struct CloudStormManager
 	void DrawSettings();
 	bool Replaces(const RE::BSGeometry* geometry) const;
 	/// Conservative low-resolution pixel rectangle, including local light probes.
-	std::array<uint32_t, 4> ScreenRect(float bottomZ, uint32_t width, uint32_t height) const;
+	std::array<uint32_t, 4> ScreenRect(float bottomZ, uint32_t width, uint32_t height, float2 weatherAltitude, float curvatureRadius) const;
 	bool VolcanicOnly() const
 	{
 		return !active.empty() && std::ranges::all_of(active, [](const auto& storm) { return (static_cast<uint32_t>(storm.generation.w) & 4u) != 0u; });
