@@ -449,7 +449,7 @@ An equivalent finite emitter of luminance `L`, radius `R` and distance `d`
 supplies perpendicular illuminance `E = pi * L * R² / (d² + R²)`. This tends
 to `L * projectedArea / d²` in the far field and remains finite nearby.
 The cloud radius is an equivalent emitting-area parameter; the visible cloud
-still follows the normalized HFW cloud-base or embedded-cloud profile. The
+still follows the normalized cloud-base or embedded-cloud profile. The
 channel emitter uses the main channel's area-weighted centroid and broadside
 projected area `sum(2 * channelRadius * segmentLength)`; branches are visual
 detail. These are finite-emitter approximations, not electrical discharge or

@@ -28,9 +28,9 @@ struct VoxelCloudAsset
 	std::string modeling = "Modeling.dds";
 	std::string distance = "Distance.dds";
 	float3 size = { 4096.f, 4096.f, 512.f };
-	float boxSize = 0.f;  // HFW: longest box axis; zero keeps the legacy explicit size
+	float boxSize = 0.f;  // Longest box axis; zero keeps the legacy explicit size
 	float noiseFrequency = 1.2f;
-	float noiseFrequencyAdjustmentDistance = 256.f;  // HFW high-quality frequency adjustment distance
+	float noiseFrequencyAdjustmentDistance = 256.f;  // Reference high-quality frequency adjustment distance
 	float noiseMipDistance = 1500.f;
 	bool noiseMipsEnabled = true;
 	VoxelCloudPlacement placement;

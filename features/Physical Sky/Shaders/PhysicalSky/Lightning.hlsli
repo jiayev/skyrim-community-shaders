@@ -39,7 +39,7 @@ namespace Lightning
 		       (SharedData::physSkyData.lightningPhotometry.x * SharedData::physSkyData.lightningColorIntensity.w);
 	}
 
-	// HFW's two spatial bases are independent of the animated flash intensity.
+	// The two spatial bases are independent of the animated flash intensity.
 	// The local profile supplies cloud height, rather than a fixed world altitude.
 	float SourceMask(float4 source, bool baseMode, float3 worldPosition, float height, float potential)
 	{
@@ -52,7 +52,7 @@ namespace Lightning
 		const float elevated = 4000.0 * pow(vertical, 4.0) * pow(1.0 - saturate(distance), 6.0);
 		const float cloud = saturate(potential * 9.0);
 		// Normalize each authored shape to a peak of one: the UI value is cd/m^2,
-		// not a multiplier on HFW's empirical 100/4000 emission constants.
+		// not a multiplier on the empirical 100/4000 emission constants.
 		const float baseMask = bottom * (1.0 - (1.0 - bottom * 0.015625) * cloud) / 156.25;
 		const float embeddedMask = 0.3 * elevated * (1.0 - (1.0 - elevated * 0.009375) * cloud) / 45000.0;
 		return saturate(baseMode ? baseMask : embeddedMask);

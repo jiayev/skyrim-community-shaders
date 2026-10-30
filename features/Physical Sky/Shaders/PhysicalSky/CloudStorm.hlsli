@@ -22,13 +22,6 @@ float StormHeight(float z, CloudStormData storm)
 	return saturate((z - storm.altitudeMotion.x) / max(storm.altitudeMotion.y, 1.0));
 }
 
-float2 StormRelativePosition(float3 positionMeters, CloudStormData storm)
-{
-	const float height = StormHeight(positionMeters.z, storm);
-	const float drift = IsVolcanic(storm) ? smoothstep(0.45, 0.95, height) : smoothstep(0.0, 1.0, height);
-	return positionMeters.xy - storm.centerRadiusStrength.xy - storm.driftDensity.xy * drift;
-}
-
 float3 PlumeRotate(float3 p, float4 q)
 {
 	return p + 2.0 * cross(q.xyz, cross(q.xyz, p) + q.w * p);
@@ -92,7 +85,7 @@ float3 PlumeDisplacement(float3 position, uint index, uint parcelIndex)
 	return position - (PlumeRotate(field + parcel.previousNoiseOffset.xyz, inversePrevious) + parcel.previousSphere.xyz);
 }
 
-// HFW mesocyclone bands: faster, tighter noise toward the vortex centre.
+// Mesocyclone bands: faster, tighter noise toward the vortex centre.
 void StormRingParameters(float radius, uint band, out float bend, out float speed, out float2 frequency)
 {
 	if (band <= 1u) {
@@ -178,7 +171,7 @@ float4 SampleCloudStormNoise(float3 positionMeters, float height, float mip, uin
 		return noise;
 	}
 #endif
-	// HFW rotates world XY. The instance's height-dependent NDF displacement must
+	// Rotate noise in world XY. The instance's height-dependent NDF displacement must
 	// not bend the noise field and stretch its billows along the plume.
 	const float2 relative = positionMeters.xy - storm.centerRadiusStrength.xy;
 	const float radius = length(relative) / (storm.centerRadiusStrength.z * storm.centerRadiusStrength.w);
@@ -241,7 +234,7 @@ void FinalizeStormNdf(inout NDFInfo ndf, CloudStormData storm)
 	ndf.dimension_profile = CloudNdfProfile(ndf);
 }
 
-NDFInfo SampleStormNdf(float3 positionMeters, uint index)
+NDFInfo SampleVolcanicNdf(float3 positionMeters, uint index)
 {
 	const CloudStormData storm = CloudStorms[index];
 	NDFInfo ndf;
@@ -276,50 +269,109 @@ NDFInfo SampleStormNdf(float3 positionMeters, uint index)
 		ndf.dimension_profile = profile * lerp(1.0, .55, age);
 		ndf.dimension_profile *= smoothstep(0.0, .025, ndf.height_fraction);
 		ndf.in_layer = ndf.dimension_profile > 0.0;
-		// Diluted outflow gradually gives the weather cloud field back its weight.
-		ndf.replacement = storm.centerRadiusStrength.w * smoothstep(0.0, .1, ndf.dimension_profile) * sqrt(ndf.plumeDensity);
+		// Ownership follows the un-eroded three-dimensional carrier, not sampled
+		// density. Blend across its surface without clearing the whole XY column.
+		ndf.replacement = storm.centerRadiusStrength.w * (1.0 - smoothstep(-90.0, 90.0, ndf.plumeEnvelope.x)) * smoothstep(0.0, .025, ndf.height_fraction);
 		return ndf;
 	}
 #endif
-	if (positionMeters.z <= storm.altitudeMotion.x || positionMeters.z >= storm.altitudeMotion.x + storm.altitudeMotion.y)
-		return ndf;
-	const float2 relative = StormRelativePosition(positionMeters, storm);
-	if (any(abs(relative) >= storm.animation.z))
-		return ndf;
-	const float3 uv = float3(relative / (2.0 * storm.animation.z) + 0.5, index);
-	const float4 bounds = TexStormHeight.SampleLevel(TransmittanceSampler, uv, 0);
-	const float2 altitude = storm.altitudeMotion.x + bounds.xy * storm.altitudeMotion.y;
-	if (altitude.y <= altitude.x || positionMeters.z <= altitude.x || positionMeters.z >= altitude.y)
-		return ndf;
-	const float4 rawModel = saturate(TexStormModeling.SampleLevel(TransmittanceSampler, uv, 0));
-	ndf.altitude = altitude * GAME_UNITS_PER_METER;
-	ndf.height_fraction = saturate((positionMeters.z - altitude.x) / (altitude.y - altitude.x));
-	ndf.rawStorm = rawModel.a;
-	{
-		const float2 shear = VolumetricCloudBuffer[0].cloudShapeShear * GAME_UNIT_TO_M;
-		const float2 modelPosition = relative - shear * smoothstep(0.0, 1.0, ndf.height_fraction);
-		const float3 modelUv = float3(modelPosition / (2.0 * storm.animation.z) + 0.5, index);
-		const float4 model = saturate(TexStormModeling.SampleLevel(TransmittanceSampler, modelUv, 0));
-		const float3 upstreamUv = float3((modelPosition - shear * 60.0) / (2.0 * storm.animation.z) + 0.5, index);
-		const float3 upstream = any(shear != 0.0) ? saturate(TexStormModeling.SampleLevel(TransmittanceSampler, upstreamUv, 0).rgb) : model.rgb;
-		const float blend = smoothstep(0.0, 1.0, saturate((ndf.height_fraction - 0.1) * 1.5384616));
-		ndf.coverage = lerp(model.r, max(model.r, upstream.r), blend);
-		ndf.storm = model.a;
-		ndf.top_type = lerp(model.g, upstream.g, blend);
-		ndf.bottom_type = lerp(model.b, upstream.b, blend);
-	}
-	ndf.stormIndex = index;
-	ndf.stormBlend = 1.0;
-	FinalizeStormNdf(ndf, storm);
-	if (((uint)storm.generation.w & 2u) != 0u && !IsVolcanic(storm)) {
-		// Authored heights are a finite support volume. Unlike HFW's broad, flat
-		// storm slab, clipping a shaped support directly leaves an uneroded shell.
-		// Bring its profile to zero BEFORE the shared noise reconstruction.
-		const float edge = min(ndf.height_fraction, 1.0 - ndf.height_fraction);
-		ndf.dimension_profile *= smoothstep(0.0, 0.3, edge);
-	}
-	ndf.replacement = bounds.z * smoothstep(0.0, 0.1, ndf.dimension_profile);
 	return ndf;
+}
+
+// Supercell replaces the weather NDF before height clipping, profile evaluation
+// and erosion. A clear part of the resulting profile must stay clear.
+float sampleSupercellWeatherDensity(float3 pos, CloudLayer cloud, float mipBias, float viewDistance, float minimumMip,
+	out CloudDensityContext context)
+{
+#if defined(NO_CLOUD_STORMS) || defined(VOLCANIC_STORMS_ONLY)
+	return sampleWeatherCloudDensity(pos, cloud, mipBias, viewDistance, minimumMip, context);
+#else
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	NDFInfo ndf;
+	initNDFInfo(ndf);
+	bool applied = false;
+	float influence = 0.0;
+	// Match instance priority: earlier names overlay later names.
+	[loop] for (uint remaining = CloudStormCount(); remaining > 0u; --remaining)
+	{
+		const uint index = remaining - 1u;
+		const CloudStormData storm = CloudStorms[index];
+		if (IsVolcanic(storm))
+			continue;
+		const float2 relative = pos.xy * GAME_UNIT_TO_M - storm.centerRadiusStrength.xy;
+		if (any(abs(relative) >= storm.animation.z))
+			continue;
+		const float3 uv = float3(relative / (2.0 * storm.animation.z) + .5, index);
+		const float4 bounds = TexStormHeight.SampleLevel(TransmittanceSampler, uv, 0);
+		const float4 model = TexStormModeling.SampleLevel(TransmittanceSampler, uv, 0);
+		const bool authored = ((uint)storm.generation.w & 2u) != 0u;
+		const float strength = storm.centerRadiusStrength.w;
+		const float backResidual = 1.0 - strength * bounds.z;
+		// Height, top and bottom retain distinct 7/3/10 influence ramps.
+		const float3 coreWeights = strength * saturate(model.a * float3(7.0, 3.0, 10.0));
+		const float3 residual = authored ? 1.0 - bounds.z : backResidual * (1.0 - coreWeights);
+		const float coverageResidual = authored ? residual.x : backResidual * lerp(1.0 - coreWeights.z, 1.0, bounds.z);
+		const float weight = 1.0 - min(coverageResidual, min(residual.x, min(residual.y, residual.z)));
+		if (weight <= 0.0)
+			continue;
+		if (!applied) {
+			const float2 field = CloudFieldPosition((pos.xy - info.noiseWindOffset) * GAME_UNIT_TO_M, info.cloudEvolution.xy) * GAME_UNITS_PER_METER;
+			const float3 heights = SampleCloudHeights(field, pos.xy);
+			// Weather heights use the curved layer; instance heights are local Z.
+			ndf.altitude = heights.xy - CloudCurvatureOffset(pos.xy - FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
+			ndf.shaping_start = heights.z;
+			// Height auxiliary is authored before supercell composition and survives
+			// full replacement. The weather Modeling fetch can still be skipped.
+			if (coverageResidual > 0.0 || residual.y > 0.0 || residual.z > 0.0) {
+				const float3 weather = ApplyLocalNdfModel(saturate(TexCloudModeling.SampleLevel(TileableSampler, LowNdfUV(field, info), 0)), SampleLocalNdfModel(pos.xy, info));
+				ndf.coverage = weather.r;
+				ndf.top_type = weather.g;
+				ndf.bottom_type = weather.b;
+			}
+		}
+		const float2 weatherHeight = (ndf.altitude * GAME_UNIT_TO_M - storm.altitudeMotion.x) / storm.altitudeMotion.y;
+		// Clamp the final normalized height map. With independent instance
+		// slabs, retain the old layer's range only while its height has weight.
+		const float lower = residual.x > 0.0 ? min(weatherHeight.x, 0.0) : 0.0;
+		const float upper = residual.x > 0.0 ? max(weatherHeight.y, 1.0) : 1.0;
+		const float2 height = clamp(bounds.xy + weatherHeight * residual.x, lower, upper);
+		ndf.altitude = (storm.altitudeMotion.x + height * storm.altitudeMotion.y) * GAME_UNITS_PER_METER;
+		ndf.top_type = model.g + ndf.top_type * residual.y;
+		ndf.bottom_type = model.b + ndf.bottom_type * residual.z;
+		if (authored)
+			ndf.coverage = model.r + ndf.coverage * coverageResidual;
+		else {
+			const float backCoverage = ndf.coverage * backResidual + bounds.w;
+			ndf.coverage = lerp(backCoverage * (1.0 - coreWeights.z) + model.r, max(backCoverage, model.r), bounds.z);
+		}
+		ndf.rawStorm = max(ndf.rawStorm, model.a);
+		ndf.storm = ndf.rawStorm;
+		ndf.stormIndex = index;
+		influence = lerp(influence, 1.0, weight);
+		applied = true;
+	}
+	if (!applied)
+		return sampleWeatherCloudDensity(pos, cloud, mipBias, viewDistance, minimumMip, context);
+	ndf.stormVolume = true;
+	ndf.stormBlend = influence;
+	context = (CloudDensityContext)0;
+	context.ndf = ndf;
+	// Clip only AFTER replacement: never fall back to weather outside these heights.
+	if (ndf.altitude.y <= ndf.altitude.x || pos.z <= ndf.altitude.x || pos.z >= ndf.altitude.y)
+		return 0.0;
+	ndf.height_fraction = saturate((pos.z - ndf.altitude.x) / (ndf.altitude.y - ndf.altitude.x));
+	ndf.coverage = saturate(ndf.coverage);
+	ndf.top_type = saturate(ndf.top_type);
+	ndf.bottom_type = saturate(ndf.bottom_type);
+	FinalizeStormNdf(ndf, CloudStorms[ndf.stormIndex]);
+	if (((uint)CloudStorms[ndf.stormIndex].generation.w & 2u) != 0u)
+		ndf.dimension_profile *= smoothstep(0.0, 0.3, min(ndf.height_fraction, 1.0 - ndf.height_fraction));
+	context.ndf = ndf;
+	context.noise_coordinates = pos * GAME_UNIT_TO_M;
+	context.eye_distance = viewDistance;
+	context.weather_height_fraction = ndf.height_fraction;
+	return sampleCloudDensityFromContext(context, mipBias, minimumMip);
+#endif
 }
 
 float3 CloudStormDisplacement(float3 worldPositionMeters, NDFInfo ndf);
@@ -340,14 +392,21 @@ float sampleCloudDensity(float3 pos, CloudLayer cloud, float mipBias, float view
 	// background at all; partial replacement blends extinction, not its maximum.
 	[loop] for (uint index = 0u; index < CloudStormCount(); ++index)
 	{
+		if (!IsVolcanic(CloudStorms[index]))
+			continue;
 		CloudDensityContext stormContext = (CloudDensityContext)0;
 		stormContext.noise_coordinates = pos * GAME_UNIT_TO_M;
-		stormContext.ndf = SampleStormNdf(stormContext.noise_coordinates, index);
-		if (remaining * stormContext.ndf.replacement <= 0.0)
+		stormContext.ndf = SampleVolcanicNdf(stormContext.noise_coordinates, index);
+		if (!stormContext.ndf.in_layer)
 			continue;
 		stormContext.eye_distance = viewDistance;
 		const float sampledDensity = sampleCloudDensityFromContext(stormContext, mipBias, minimumMip);
-		const float weight = remaining * stormContext.ndf.replacement;
+		const float strength = CloudStorms[index].centerRadiusStrength.w;
+		// Rounded lobes can extend beyond the carrier. They also own weather,
+		// but erosion cannot take ownership away from the carrier interior.
+		stormContext.ndf.replacement = max(stormContext.ndf.replacement,
+			strength * smoothstep(0.0, .1, stormContext.ndf.dimension_profile));
+		const float weight = remaining * strength;
 		const float contribution = weight * sampledDensity;
 		result += contribution;
 		if (contribution > 0.0)
@@ -363,14 +422,19 @@ float sampleCloudDensity(float3 pos, CloudLayer cloud, float mipBias, float view
 		if (remaining == 0.0)
 			break;
 	}
-	const float stormDensity = result;
+	float stormDensity = result;
 	[branch] if (remaining > 0.0)
 	{
 		CloudDensityContext weatherContext;
-		result += remaining * sampleWeatherCloudDensity(pos, cloud, mipBias, viewDistance, minimumMip, weatherContext);
+		const float weatherDensity = remaining * sampleSupercellWeatherDensity(pos, cloud, mipBias, viewDistance, minimumMip, weatherContext);
+		result += weatherDensity;
 		lightDensity += remaining * weatherContext.light_density;
-		if (stormDensity <= 0.0)
+		const float supercellDensity = weatherDensity * weatherContext.ndf.stormBlend;
+		if (supercellDensity > 0.0)
+			stormMotion += supercellDensity * CloudStormDisplacement(pos * GAME_UNIT_TO_M, weatherContext.ndf);
+		if (stormDensity <= 0.0 || supercellDensity > dominantDensity)
 			context = weatherContext;
+		stormDensity += supercellDensity;
 		context.weather_height_fraction = weatherContext.weather_height_fraction;
 	}
 	context.ndf.stormBlend = result > 0.0 ? stormDensity / result : 0.0;
@@ -409,14 +473,25 @@ float2 PlumeRayInterval(float3 eye, float3 direction, uint index, float start, b
 	return result * GAME_UNITS_PER_METER;
 }
 
+// Replacement acts on the weather column even outside the storm's own slab.
+// Include curved weather bounds for dispatch classification and ray intervals.
+void SupercellInfluenceBounds(CloudStormData storm, out float3 lower, out float3 upper)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float extent = storm.animation.z;
+	const float2 farXY = abs(storm.centerRadiusStrength.xy - FrameBuffer::CameraPosAdjust.xy * GAME_UNIT_TO_M) + extent;
+	const float curvature = dot(farXY, farXY) / (info.cloudCurvatureRadius * GAME_UNIT_TO_M);
+	lower = float3(storm.centerRadiusStrength.xy - extent, min(storm.altitudeMotion.x, info.lowCloudTraceBottomAltitude * GAME_UNIT_TO_M - curvature));
+	upper = float3(storm.centerRadiusStrength.xy + extent, max(storm.altitudeMotion.x + storm.altitudeMotion.y, info.lowCloudTraceTopAltitude * GAME_UNIT_TO_M));
+}
+
 float2 CloudStormInstanceInterval(float3 eye, float3 direction, uint index)
 {
 	const CloudStormData storm = CloudStorms[index];
 	if (IsVolcanic(storm))
 		return PlumeRayInterval(eye, direction, index, 0.0, false);
-	const float extent = storm.animation.z;
-	const float3 lower = float3(storm.centerRadiusStrength.xy + min(storm.driftDensity.xy, 0.0) - extent, storm.altitudeMotion.x);
-	const float3 upper = float3(storm.centerRadiusStrength.xy + max(storm.driftDensity.xy, 0.0) + extent, storm.altitudeMotion.x + storm.altitudeMotion.y);
+	float3 lower, upper;
+	SupercellInfluenceBounds(storm, lower, upper);
 	float2 interval = float2(0.0, VolumetricCloudBuffer[0].rayMarchRange * GAME_UNIT_TO_M);
 	const float3 origin = eye * GAME_UNIT_TO_M;
 	[unroll] for (uint axis = 0u; axis < 3u; ++axis)

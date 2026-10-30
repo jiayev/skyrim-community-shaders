@@ -33,7 +33,7 @@ namespace
 		winrt::com_ptr<ID3D11ShaderResourceView> view;
 		if (slices) {
 			// Keep native BC6H/BC1 compression. The shader supplies Z interpolation;
-			// HFW's modeling and SDF evaluations both use base-level field data.
+			// Modeling and SDF evaluations both use base-level field data.
 			const auto& metadata = source.GetMetadata();
 			D3D11_TEXTURE2D_DESC desc{};
 			desc.Width = static_cast<UINT>(metadata.width);
@@ -122,7 +122,7 @@ void VoxelCloudManager::LoadInstances()
 				DX::ThrowIfFailed(DirectX::GetMetadataFromDDSFile(AssetPath(it->path().filename().string(), asset.distance).c_str(), DirectX::DDS_FLAGS_NONE, metadata));
 				if (metadata.dimension != DirectX::TEX_DIMENSION_TEXTURE3D)
 					throw std::runtime_error("SignedDistanceFieldTexture must be a 3D DDS volume");
-				// HFW FUN_1404c9c30 derives all three extents from the SDF dimensions.
+				// Derive all three extents from the SDF dimensions.
 				const float voxelSize = asset.boxSize / static_cast<float>(std::max({ metadata.width, metadata.height, metadata.depth }));
 				asset.size = float3{ static_cast<float>(metadata.width), static_cast<float>(metadata.height), static_cast<float>(metadata.depth) } * voxelSize;
 			}

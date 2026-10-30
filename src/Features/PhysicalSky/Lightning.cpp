@@ -32,33 +32,6 @@ namespace
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
-
-	// CommonLib's const list iterator is ill-formed; traversal below remains read-only.
-	bool HasThunder(RE::TESWeather* weather)
-	{
-		if (weather)
-			for (const auto* sound : weather->sounds)
-				if (sound && sound->type.all(RE::TESWeather::SoundType::kThunder))
-					return true;
-		return false;
-	}
-
-	float WeatherWeight(const RE::Sky* sky)
-	{
-		if (!sky)
-			return 0.f;
-		const float blend = std::clamp(sky->currentWeatherPct, 0.f, 1.f);
-		float current = 0.f, previous = 0.f;
-		if (HasThunder(sky->currentWeather)) {
-			const float begin = sky->currentWeather->data.thunderLightningBeginFadeIn * (0.999f / 255.f);
-			current = std::max(0.f, (blend - begin) / (1.f - begin));
-		}
-		if (HasThunder(sky->lastWeather)) {
-			const float end = sky->lastWeather->data.thunderLightningEndFadeOut * (0.999f / 255.f) + 0.001f;
-			previous = std::max(0.f, 1.f - blend / end);
-		}
-		return std::max(current, previous);
-	}
 }
 
 void PhysicalSky::Settings::SanitizeLightning()
@@ -322,7 +295,7 @@ void SkyLightning::BuildChannel(float bottomZ)
 	channelEmitter = { center.x, center.y, center.z, std::sqrt(projectedArea / std::numbers::pi_v<float>) * units };
 }
 
-void SkyLightning::StartFlash(RE::Sky* sky, const PhysicalSky& physicalSky)
+void SkyLightning::StartFlash(const PhysicalSky& physicalSky)
 {
 	const auto& settings = physicalSky.settings;
 	pulseParameters = { static_cast<unsigned>(settings.lightning.strokeCount), settings.lightning.strokeDuration * 0.001,
@@ -332,20 +305,15 @@ void SkyLightning::StartFlash(RE::Sky* sky, const PhysicalSky& physicalSky)
 	replay = false;
 	eventHazard = 0;
 	targetHazard = -std::log(std::max(1.0 - Random(), 1.0e-7));
-	RE::TESWeather* weather = sky && HasThunder(sky->currentWeather) ? sky->currentWeather : (sky ? sky->lastWeather : nullptr);
-	std::vector<RE::FormID> sounds;
-	if (weather)
-		for (const auto* sound : weather->sounds)
-			if (sound && sound->type.all(RE::TESWeather::SoundType::kThunder))
-				sounds.push_back(sound->soundFormID);
 	Thunder sound;
-	sound.descriptor = sounds.empty() ? 0xE7522u : sounds[std::min(static_cast<size_t>(Random() * sounds.size()), sounds.size() - 1u)];
+	// Reuse the generic thunder descriptor without consulting vanilla weather.
+	sound.descriptor = 0xE7522u;
 	const float3 point = grounded ? ground : source;
 	sound.position = { point.x, point.y, point.z };
 	const auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 	const float distance = (point - float3(eye.x, eye.y, eye.z)).Length() * Util::Units::GAME_UNIT_TO_M;
 	sound.time = time + distance / 343.0;
-	sound.volume = std::clamp(std::sqrt(settings.lightningIntensity) * std::max(weatherWeight, 0.25f), 0.f, 1.f);
+	sound.volume = std::clamp(std::sqrt(settings.lightningIntensity), 0.f, 1.f);
 	thunder.push_back(sound);
 }
 
@@ -362,7 +330,10 @@ void SkyLightning::Update(PhysicalSky& physicalSky, const std::string& currentWo
 	physicalSky.settings.SanitizeLightning();
 	const auto& settings = physicalSky.settings;
 	const float intensity = settings.lightningIntensity;
-	available &= intensity > 0.f && physicalSky.settings.enableVolumetricClouds && candidates && segments && readback && PlayWeatherSound::func.address() != 0;
+	// Ownership follows the configured override, not source/shader readiness.
+	// A zero rate or a missing cloud must not bring vanilla lightning back.
+	const bool overrideWeather = physicalSky.loaded && settings.enabled && intensity > 0.f;
+	available &= overrideWeather && physicalSky.settings.enableVolumetricClouds && candidates && segments && readback && PlayWeatherSound::func.address() != 0;
 	if (!available || worldspace != currentWorldspace) {
 		Cancel();
 		channel.clear();
@@ -370,7 +341,7 @@ void SkyLightning::Update(PhysicalSky& physicalSky, const std::string& currentWo
 		radius = 0.f;
 		worldspace = currentWorldspace;
 	}
-	ownsWeather.store(available, std::memory_order_relaxed);
+	ownsWeather.store(overrideWeather, std::memory_order_relaxed);
 	auto& data = physicalSky.cbData;
 	data.lightningPositionRadius = {};
 	data.lightningEndPosition = {};
@@ -380,7 +351,7 @@ void SkyLightning::Update(PhysicalSky& physicalSky, const std::string& currentWo
 	data.lightningPreparationControl = { 0.f, 0.f, static_cast<float>(activeLane), 0.f };
 	data.lightningPhotometry = { settings.lightning.cloudLuminance, settings.lightning.channelLuminance, channelRadius, cloudBase ? 1.f : 0.f };
 	data.lightningPlacement = { pendingDistanceRange.x, pendingDistanceRange.y, static_cast<float>(generation), pendingCloudBase ? 1.f : 0.f };
-	data.lightningControl = { static_cast<float>(generation), 0.f, 0.f, available ? 1.f : 0.f };
+	data.lightningControl = { static_cast<float>(generation), 0.f, 0.f, overrideWeather ? 1.f : 0.f };
 	if (!available)
 		return;
 	previousTime = time;
@@ -389,19 +360,7 @@ void SkyLightning::Update(PhysicalSky& physicalSky, const std::string& currentWo
 		if (std::isfinite(elapsed))
 			time += std::clamp(elapsed, 0.0, 0.25);
 	}
-	auto* sky = globals::game::sky;
-	weatherWeight = WeatherWeight(sky);
-	if (physicalSky.cloudStormManager.Count() && !physicalSky.cloudStormManager.VolcanicOnly())
-		weatherWeight = std::max(weatherWeight, 0.8f);
 	color = settings.lightning.color;
-	if (settings.lightning.useWeatherColor && sky && sky->currentWeather) {
-		const auto c = sky->currentWeather->data.lightningColor;
-		color = { c.red / 255.f, c.green / 255.f, c.blue / 255.f };
-		if (color.LengthSquared() < 0.01f)
-			color = { 0.86f, 0.86f, 0.93f };
-		const auto linear = [](float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); };
-		color = { linear(color.x), linear(color.y), linear(color.z) };
-	}
 	if (pendingPhase == Phase::Readback) {
 		ReadSource(physicalSky);
 		if (pendingPhase == Phase::Readback && time - queryStart > 2.0) {
@@ -411,13 +370,13 @@ void SkyLightning::Update(PhysicalSky& physicalSky, const std::string& currentWo
 	}
 	// Count storm activity during a discharge too, so high rates can run back to back.
 	if (time >= nextEvent)
-		eventHazard += (time - previousTime) * settings.lightning.rate * weatherWeight / 60.0;
+		eventHazard += (time - previousTime) * settings.lightning.rate / 60.0;
 	// Estimate the mask lead time from the current frame interval. Preparing only
 	// near the end of a long burst avoids holding a source while its cloud moves away.
 	const double leadTime = std::clamp((time - previousTime) * 22.0, 0.1, 5.5);
 	const double remaining = phase == Phase::Flashing ? std::max(0.0, LightningPulse::Duration(pulseParameters) - (time - flashStart)) : 0.0;
-	const double rate = settings.lightning.rate * weatherWeight / 60.0;
-	const bool automatic = settings.lightning.rate > 0.f && weatherWeight > 0.01f;
+	const double rate = settings.lightning.rate / 60.0;
+	const bool automatic = settings.lightning.rate > 0.f;
 	if (!automatic && !replay) {
 		pendingPhase = Phase::Idle;
 		pendingPositionRadius = {};
@@ -441,7 +400,7 @@ void SkyLightning::Update(PhysicalSky& physicalSky, const std::string& currentWo
 		(replay || (automatic && eventHazard >= targetHazard)))
 		PromoteSource(physicalSky);
 	if (time > previousTime && phase == Phase::Preparing && preparedFrames >= 20u)
-		StartFlash(sky, physicalSky);
+		StartFlash(physicalSky);
 	float pulse = 0.f;
 	if (phase == Phase::Flashing) {
 		if (time > previousTime)

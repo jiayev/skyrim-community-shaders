@@ -1,4 +1,4 @@
-// Community Shaders. Supercell NDF generation following HFW CloudMapGeneratorShaderA.
+// Community Shaders. Supercell NDF generation from a back template and mesocyclone core.
 #include "PhysicalSky/StormData.hlsli"
 
 cbuffer StormGeneration : register(b1) { CloudStormData Storm; };
@@ -25,11 +25,12 @@ float2 Rotate(float2 p, float angle)
 		return;
 	const float2 p = ((pixel + 0.5) / float2(width, height) - 0.5) * (2.0 * Storm.animation.z);
 	const float level = Storm.generation.z;
-	// HFW blends into an existing weather layer. The independent instance has no
-	// weather underneath it, so retain a valid empty layer as the blend baseline.
-	// Multiplying both bounds by coverage makes the filtered edge sag to zero.
+	// Cache the weather-independent terms of ApplySupercell. The density pass
+	// supplies the live weather NDF before evaluating its vertical profile.
 	float2 bounds = float2(level, 1.0);
 	float3 model = 0.0;
+	float coreCoverageContribution = 0.0;
+	float authoredResidual = 1.0;
 	float stormMask = 0.0;
 	float4 back = 0.0;
 	const float strength = Storm.centerRadiusStrength.w;
@@ -43,6 +44,7 @@ float2 Rotate(float2 p, float angle)
 			uv += 0.5;
 			back = saturate(BackModeling.SampleLevel(WrapSampler, uv, 0));
 			const float weight = strength * back.a;
+			authoredResidual *= 1.0 - weight;
 			bounds = lerp(bounds, BackHeight.SampleLevel(WrapSampler, uv, 0) - 0.5 + level, weight);
 			model = back.rgb * weight;
 		}
@@ -55,8 +57,14 @@ float2 Rotate(float2 p, float angle)
 			const float2 heights = saturate(CoreHeight.SampleLevel(WrapSampler, uv, 0));
 			if (heights.y > heights.x) {
 				const float4 core = saturate(CoreModeling.SampleLevel(WrapSampler, uv, 0));
-				bounds = heights;
-				model = core.rgb * strength;
+				if (((uint)Storm.generation.w & 4u) != 0u) {
+					bounds = heights;
+					model = core.rgb * strength;
+				} else {
+					bounds = lerp(bounds, heights, strength);
+					model = lerp(model, core.rgb, strength);
+					authoredResidual *= 1.0 - strength;
+				}
 				stormMask = core.a * strength;
 			}
 		}
@@ -80,6 +88,7 @@ float2 Rotate(float2 p, float angle)
 			const float coreCeiling = 1.0;
 
 			const float coverageWeight = saturate(stormMask * 10.0);
+			coreCoverageContribution = strength * coreCoverage * coverageWeight;
 			bounds = lerp(bounds, float2(bottom, coreCeiling), strength * saturate(stormMask * 7.0));
 			model.g = lerp(model.g, coreTop, strength * saturate(stormMask * 3.0));
 			model.b = lerp(model.b, coreBottom, strength * coverageWeight);
@@ -87,9 +96,18 @@ float2 Rotate(float2 p, float angle)
 			model.r = lerp(blended, max(model.r, strength * coreCoverage * coverageWeight), back.a);
 		}
 	}
-	// Union of the HFW back-template and core replacement weights. Reuse the
-	// unused height channel; this needs neither another map nor another fetch.
-	const float replacement = 1.0 - (1.0 - strength * back.a) * (1.0 - strength * saturate(stormMask * 10.0));
-	Height[uint3(pixel, 0)] = float4(saturate(bounds), replacement, 0);
-	Modeling[uint3(pixel, 0)] = saturate(float4(model, stormMask));
+	if (((uint)Storm.generation.w & 4u) != 0u) {
+		Height[uint3(pixel, 0)] = float4(saturate(bounds), 0, 0);
+		Modeling[uint3(pixel, 0)] = saturate(float4(model, stormMask));
+	} else if (authoredCore) {
+		Height[uint3(pixel, 0)] = float4(bounds - float2(level, 1.0) * authoredResidual, 1.0 - authoredResidual, 0);
+		Modeling[uint3(pixel, 0)] = float4(model, stormMask);
+	} else {
+		const float heightResidual = (1.0 - strength * back.a) * (1.0 - strength * saturate(stormMask * 7.0));
+		// RG: height intercept; B: back alpha; A: back coverage contribution.
+		// Modeling R holds the core contribution so the max/lerp coverage
+		// expression can be evaluated against live weather, not an empty baseline.
+		Height[uint3(pixel, 0)] = float4(bounds - float2(level, 1.0) * heightResidual, back.a, strength * back.a * back.r);
+		Modeling[uint3(pixel, 0)] = float4(coreCoverageContribution, model.gb, stormMask);
+	}
 }

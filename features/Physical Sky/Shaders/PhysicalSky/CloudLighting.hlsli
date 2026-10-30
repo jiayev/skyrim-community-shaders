@@ -124,7 +124,7 @@ float TraceNdfLighting(float3 pos, float3 viewDir, NDFInfo ndf, float extinction
 		                                        (fraction * extentMeters + jitter * spacingMeters) * angularScale;
 		const float3 samplePos = pos + info.dirlightDir * (distanceMeters * GAME_UNITS_PER_METER);
 		CloudDensityContext context;
-		// HFW filters the light probes separately from the detailed view density.
+		// Filter the light probes separately from the detailed view density.
 		const float mipBias = 2.0;
 #ifdef CLOUD_VOXELS
 		sampleNdfCloudDensity(samplePos, GetCloudLayer(info), mipBias, viewDistance, minimumMip, context);

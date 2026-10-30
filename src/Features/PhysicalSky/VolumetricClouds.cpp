@@ -1551,7 +1551,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			context->CSSetUnorderedAccessViews(3, 1, &lightningOutput, nullptr);
 			auto* stormMotionOutput = texVolStormMotion->uav.get();
 			context->CSSetUnorderedAccessViews(6, 1, &stormMotionOutput, nullptr);
-			auto stormRect = cloudStormManager.ScreenRect(cloudData.bottomZ, lowW, lowH);
+			auto stormRect = cloudStormManager.ScreenRect(cloudData.bottomZ, lowW, lowH,
+				{ cloudData.lowCloudTraceBottomAltitude, cloudData.lowCloudTraceTopAltitude }, cloudData.cloudCurvatureRadius);
 			const bool stormVisible = stormRect[2] > stormRect[0] && stormRect[3] > stormRect[1];
 			cloudDispatchCb->Update(stormRect);
 			auto* dispatchConstants = cloudDispatchCb->CB();

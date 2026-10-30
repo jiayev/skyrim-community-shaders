@@ -52,9 +52,8 @@ RWTexture2D<uint> RWStormTiles : register(u7);
 				}
 			}
 		} else {
-			const float extent = storm.animation.z;
-			const float3 lower = float3(storm.centerRadiusStrength.xy + min(storm.driftDensity.xy, 0.0) - extent, storm.altitudeMotion.x);
-			const float3 upper = float3(storm.centerRadiusStrength.xy + max(storm.driftDensity.xy, 0.0) + extent, storm.altitudeMotion.x + storm.altitudeMotion.y);
+			float3 lower, upper;
+			SupercellInfluenceBounds(storm, lower, upper);
 			const float3 center = (lower + upper) * 0.5 - eye;
 			const float3 radius = (upper - lower) * 0.5;
 			bool intersects = true;

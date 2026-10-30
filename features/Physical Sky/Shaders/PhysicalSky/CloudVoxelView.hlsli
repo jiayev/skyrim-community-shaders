@@ -87,7 +87,7 @@ RWTexture2D<float2> RWVoxelViewDepth : register(u1);
 		EncodeCloudDepth(sceneDistance));
 }
 
-	// HFW's composite reconstructs NVDF with scene-depth-weighted bilinear taps.
+	// The composite reconstructs NVDF with scene-depth-weighted bilinear taps.
 	// Keep the premultiplied distance until after reconstruction, just like color.
 	[numthreads(8, 8, 1)] void compositeVoxelView(uint2 pixel : SV_DispatchThreadID)
 {
