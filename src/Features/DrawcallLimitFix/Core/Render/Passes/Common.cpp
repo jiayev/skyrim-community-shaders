@@ -147,13 +147,8 @@ namespace DCLF::Draws
 				return bindings;
 			}
 
-			void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-			{
-				const auto latched = source(a_preparation);
-				a_out.push_back(latched.generation);
-				for (const auto& hosted : latched.hosted)
-					a_out.push_back(hosted.generation);
-			}
+			// The source's (and its hosted views') shapes are the revision's (the ticket's host data).
+			void Revision(std::vector<std::uint64_t>&) const {}
 
 			LatchedSource Prepare(const LatchedCopiesBindings&, const org::PassPrepareContext& a_preparation) const
 			{

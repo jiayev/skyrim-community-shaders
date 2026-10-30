@@ -31,7 +31,6 @@ namespace DCLF
 				rhi::CommandSignatureHandle signature{};
 				BuildDrawsConstants constants{};
 				std::uint32_t faces = 0;
-				std::array<std::uint32_t, kMaxViewFaces> bucketCountsIndex{};
 			};
 
 			/**
@@ -60,14 +59,10 @@ namespace DCLF
 					return bindings;
 				}
 
-				void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-				{
-					const auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
-					a_out.push_back(frame ? frame->generation : 0);
-					a_out.push_back(NamedSerial(a_preparation, resources->main->scene->pool->firsts));
-				}
+				// The view's shape and the pool's version are the revision's (the ticket's host data).
+				void Revision(std::vector<std::uint64_t>&) const {}
 
-				BuildPrepared Prepare(const BuildBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+				BuildPrepared Prepare(const BuildBindings&, const org::PassPrepareContext& a_preparation) const
 				{
 					BuildPrepared prepared{};
 					const auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
@@ -79,29 +74,28 @@ namespace DCLF
 					prepared.faces = resources->traits->faces;
 					auto& constants = prepared.constants;
 					constants.latchIndex = frame->latch->SrvIndex();
-					constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
-					constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
-					constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
-					constants.poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
 					SetRowStrides(constants);
 					constants.phaseBits = 0;  // the single phase: frustum only (the latch's mode), nothing published
 					// The bucket path's draws are bounded by their buckets (the latch's tables); this bounds the other, which none takes.
 					constants.phaseTwoBase = prepared.faces * frame->sequenceDraws;
-					for (std::uint32_t f = 0; f < prepared.faces; ++f)
-						prepared.bucketCountsIndex[f] = CaptureViewIndex(a_preparation, a_bindings.bucketCounts[f]);
 					return prepared;
 				}
 
-				static void Record(const BuildBindings&, const BuildPrepared& a_prepared, org::PassRecordContext& a_recording)
+				static void Record(const BuildBindings& a_bindings, const BuildPrepared& a_prepared, org::PassRecordContext& a_recording)
 				{
 					if (!a_prepared.program || !a_prepared.latch)
 						return;
+					auto viewed = a_prepared.constants;
+					viewed.sequencesIndex = a_recording.Index(a_bindings.sequences);
+					viewed.countIndex = a_recording.Index(a_bindings.count);
+					viewed.visibilityIndex = a_recording.Index(a_bindings.visibility);
+					viewed.poolFirstsIndex = a_recording.Index(a_bindings.poolFirsts);
 					auto& commands = a_recording.Commands();
 					commands.BindLayout(a_prepared.program->layout->GetHandle());
 					commands.BindPipeline(a_prepared.program->Pipeline());
 					for (std::uint32_t f = 0; f < a_prepared.faces; ++f) {
-						auto constants = a_prepared.constants;
-						constants.bucketCountsIndex = a_prepared.bucketCountsIndex[f];
+						auto constants = viewed;
+						constants.bucketCountsIndex = a_recording.Index(a_bindings.bucketCounts[f]);
 						RecordLatchedDispatch(constants, *a_prepared.latch, a_prepared.signature, f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), a_recording);
 					}
 				}
@@ -132,8 +126,6 @@ namespace DCLF
 				std::shared_ptr<const ViewFrame> frame;
 				DrawMode mode = DrawMode::Faces;
 				std::uint32_t faces = 0;
-				std::array<org::PreparedDescriptorReference, kMaxViewFaces> colours{};
-				org::PreparedDescriptorReference depth{};
 				std::array<std::array<std::uint64_t, kMaxViewFaces>, Extensions::kDrawFamilies> faceRows{};  // by draw family
 			};
 
@@ -200,30 +192,20 @@ namespace DCLF
 					return bindings;
 				}
 
-				void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-				{
-					const auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
-					a_out.push_back(frame ? frame->generation : 0);
-					a_out.push_back(NamedSerial(a_preparation, resources->main->scene->pool->indices));
-					a_out.push_back(NamedSerial(a_preparation, resources->sequences));
-					a_out.push_back(static_cast<std::uint64_t>(mode));
-				}
+				// The view's shape and the versions it draws are the revision's (the ticket's host data).
+				void Revision(std::vector<std::uint64_t>& a_out) const { a_out.push_back(static_cast<std::uint64_t>(mode)); }
 
-				DrawPrepared Prepare(const DrawBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+				DrawPrepared Prepare(const DrawBindings&, const org::PassPrepareContext& a_preparation) const
 				{
 					DrawPrepared prepared{};
 					auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
 					if (!frame || !frame->indirect.valid || !frame->width || !frame->height || (mode != DrawMode::Faces && frame->buckets.empty()))
 						return prepared;
 					prepared.faces = resources->traits->faces;
-					const std::uint32_t colours = mode == DrawMode::Faces ? prepared.faces : mode == DrawMode::Colour ? 2u : 0u;
-					for (std::uint32_t i = 0; i < colours; ++i)
-						prepared.colours[i] = a_preparation.Capture(a_bindings.colours[i]);
 					for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
 						if (Extensions::DrawFamilyHasFaces(static_cast<Api::DrawFamily>(d)))
 							for (std::uint32_t f = 0; f < prepared.faces; ++f)
 								prepared.faceRows[d][f] = resources->faceRowsAddress[d][f];
-					prepared.depth = a_preparation.Capture(a_bindings.depth);
 					prepared.frame = std::move(frame);
 					prepared.mode = mode;
 					return prepared;
@@ -247,13 +229,13 @@ namespace DCLF
 						std::array<rhi::ColorAttachment, 2> colours{};
 						rhi::PassBeginInfo begin{};
 						if (mode == DrawMode::Faces) {
-							colours[0].rtv = a_recording.Resolve(a_prepared.colours[f]);
+							colours[0].rtv = a_recording.View(a_bindings.colours[f]);
 							colours[0].loadOp = rhi::LoadOp::Load;
 							colours[0].storeOp = rhi::StoreOp::Store;
 							begin.colors = { colours.data(), 1 };
 						} else if (mode == DrawMode::Colour) {
 							for (std::uint32_t i = 0; i < 2; ++i) {
-								colours[i].rtv = a_recording.Resolve(a_prepared.colours[i]);
+								colours[i].rtv = a_recording.View(a_bindings.colours[i]);
 								colours[i].loadOp = rhi::LoadOp::Load;
 								colours[i].storeOp = rhi::StoreOp::Store;
 								colours[i].resource = a_recording.Resolve(a_bindings.colours[i].Resource()).GetHandle();
@@ -261,7 +243,7 @@ namespace DCLF
 							begin.colors = { colours.data(), 2 };
 						}
 						rhi::DepthAttachment depth{};
-						depth.dsv = a_recording.Resolve(a_prepared.depth);
+						depth.dsv = a_recording.View(a_bindings.depth);
 						depth.depthLoad = mode == DrawMode::Faces ? rhi::LoadOp::Clear : rhi::LoadOp::Load;
 						depth.depthStore = rhi::StoreOp::Store;
 						if (mode == DrawMode::Faces) {
@@ -322,8 +304,6 @@ namespace DCLF
 				std::shared_ptr<const ViewFrame> frame;
 				PreprocessStates* preprocess = nullptr;
 				std::uint32_t targetCount = 0;
-				std::array<org::PreparedDescriptorReference, kColorTargets> targets{};
-				org::PreparedDescriptorReference depth{};
 			};
 
 			/**
@@ -359,13 +339,10 @@ namespace DCLF
 					return bindings;
 				}
 
-				void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-				{
-					const auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
-					a_out.push_back(frame ? frame->generation : 0);
-				}
+				// The view's shape is the revision's (the ticket's host data).
+				void Revision(std::vector<std::uint64_t>&) const {}
 
-				ForwardPrepared Prepare(const ForwardBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+				ForwardPrepared Prepare(const ForwardBindings&, const org::PassPrepareContext& a_preparation) const
 				{
 					ForwardPrepared prepared{};
 					auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
@@ -374,9 +351,6 @@ namespace DCLF
 						return prepared;
 					prepared.preprocess = resources->preprocessForward.get();
 					prepared.targetCount = resources->main->targetCount;
-					for (std::uint32_t i = 0; i < prepared.targetCount; ++i)
-						prepared.targets[i] = a_preparation.Capture(a_bindings.targets[i]);
-					prepared.depth = a_preparation.Capture(a_bindings.depth);
 					prepared.frame = std::move(frame);
 					return prepared;
 				}
@@ -386,8 +360,8 @@ namespace DCLF
 					if (!a_prepared.frame || !a_prepared.preprocess)
 						return;
 					const auto& frame = *a_prepared.frame;
-					auto colours = LoadedColours(a_recording, a_prepared.targets, a_bindings.targets, a_prepared.targetCount);
-					auto depth = LoadedDepth(a_recording, a_prepared.depth);
+					auto colours = LoadedColours(a_recording, a_bindings.targets, a_prepared.targetCount);
+					auto depth = LoadedDepth(a_recording, a_bindings.depth);
 					rhi::PassBeginInfo begin{};
 					begin.colors = { colours.data(), a_prepared.targetCount };
 					begin.depth = &depth;
@@ -464,7 +438,7 @@ namespace DCLF
 				const auto& resources = a_context.View();
 				return MakeLatchedCopiesPass([resources] { return ViewLatchedTargets(*resources); }, [kind = resources->traits->kind](const org::PassPrepareContext& a_preparation) {
 					const auto frame = CurrentViewFrame(a_preparation, kind);
-					return frame ? LatchedSource{ frame->generation, frame, frame->latched } : LatchedSource{};
+					return frame ? LatchedSource{ frame, frame->latched } : LatchedSource{};
 				});
 			}
 
@@ -498,9 +472,9 @@ namespace DCLF
 				return MakeForwardSortPass(resources->sequences, { nullptr, resources->bucketCounts[0] }, [view = resources](const org::PassPrepareContext& a_preparation) {
 					const auto frame = CurrentViewFrame(a_preparation, view->traits->kind);
 					if (!frame || !frame->latch)
-						return ForwardSortSource{ frame ? frame->generation : 0 };
+						return ForwardSortSource{};
 					// Each state class's forward pair, its count its entry's bucket count word, after the buckets'.
-					ForwardSortSource source{ frame->generation, view->main->forwardSort };
+					ForwardSortSource source{ view->main->forwardSort };
 					for (std::uint32_t c = 0; c < frame->forwardRanges.size(); ++c)
 						if (const auto& range = frame->forwardRanges[c]; range.capacity)
 							source.ranges.push_back({ range.first, range.capacity, (frame->forwardEntry + c) * static_cast<std::uint32_t>(sizeof(std::uint32_t)) });

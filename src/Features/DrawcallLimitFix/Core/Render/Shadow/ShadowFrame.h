@@ -107,7 +107,6 @@ namespace DCLF::Draws
 	 */
 	struct ShadowFrame
 	{
-		std::uint64_t generation = 0;
 		rhi::DescriptorHeapHandle resourceHeap{};
 		rhi::DescriptorHeapHandle samplerHeap{};
 		ShadowIndirectState indirect{};

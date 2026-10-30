@@ -118,7 +118,7 @@ namespace DCLF::Extensions
 	Api::CullBindingSelect SelectCullBinding(Api::CullBindingSlot a_slot, const Draws::SceneBuffers& a_scene, std::uint32_t a_frame = 0,
 		const org::services::NamedVersions* a_adopted = nullptr);
 	/**
-	 * @brief SelectCullBinding's versioned answer for a pass's declaration and revision (Declare: bound when non-null; NamedSerial): the
+	 * @brief SelectCullBinding's versioned answer for a pass's declaration and preparation (Declare: bound when non-null): the
 	 * scene resources' handle, or a null one held by Core (no binding, or a binding answering otherwise). Stable while a_scene lives.
 	 */
 	const std::shared_ptr<org::VersionedBuffer>& CullBindingBuffer(Api::CullBindingSlot a_slot, const Draws::SceneBuffers& a_scene, std::uint32_t a_frame = 0);

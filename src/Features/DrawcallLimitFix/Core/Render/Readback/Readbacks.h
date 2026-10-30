@@ -387,7 +387,6 @@ namespace DCLF::Draws
 	/** @brief What a counter readback copies in an execution: per drawn source (its count buffer), its culling latch's offset in the slot's region. */
 	struct CounterSource
 	{
-		std::uint64_t generation = 0;  // the shape's (the pass's invocation revision)
 		std::shared_ptr<const org::LatchBlock> latch;
 		struct Copy
 		{

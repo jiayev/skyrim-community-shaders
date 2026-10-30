@@ -45,20 +45,11 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		// The buffers' versions and the depth shape; frame, counts and camera are in the uploaded fade frame row.
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
-			const auto& main = *resources;
-			const auto& scene = *main.scene;
-			for (const auto* buffer : { &Extensions::CullBindingBuffer(Api::CullBindingSlot::RootRows, scene),
-					 &Extensions::CullBindingBuffer(Api::CullBindingSlot::RootStepStates, scene), &main.frustum, &scene.visibilityRootReported,
-					 &scene.visibilityObjectReported, &scene.visibilityEvents })
-				a_out.push_back(NamedSerial(a_preparation, *buffer));
-			a_out.push_back(frame ? frame->generation : 0);
-		}
+		// The buffers' versions and the depth shape are the revision's (the ticket's host data); frame, counts and camera are in the
+		// uploaded fade frame row.
+		void Revision(std::vector<std::uint64_t>&) const {}
 
-		VisibilityEventsPrepared Prepare(const VisibilityEventsBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		VisibilityEventsPrepared Prepare(const VisibilityEventsBindings&, const org::PassPrepareContext& a_preparation) const
 		{
 			VisibilityEventsPrepared prepared{};
 			const auto& scene = *resources->scene;
@@ -68,13 +59,6 @@ namespace DCLF::Draws
 				return prepared;
 			prepared.program = scene.visibilityEventsProgram;
 			auto& constants = prepared.constants;
-			constants.rootsIndex = CaptureViewIndex(a_preparation, a_bindings.roots);
-			constants.statesIndex = CaptureViewIndex(a_preparation, a_bindings.states);
-			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
-			constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);
-			constants.rootReportedIndex = CaptureViewIndex(a_preparation, a_bindings.rootReported);
-			constants.objectReportedIndex = CaptureViewIndex(a_preparation, a_bindings.objectReported);
-			constants.eventsIndex = CaptureViewIndex(a_preparation, a_bindings.events);
 			constants.eventCapacity = events;
 			// Every root slot, then every object slot while the segment builds (without depth phase 1 no stamp is this frame's): what the
 			// revision's versions of the buffers read and written by slot hold.
@@ -87,14 +71,22 @@ namespace DCLF::Draws
 			return prepared;
 		}
 
-		static void Record(const VisibilityEventsBindings&, const VisibilityEventsPrepared& a_frame, org::PassRecordContext& a_recording)
+		static void Record(const VisibilityEventsBindings& a_bindings, const VisibilityEventsPrepared& a_frame, org::PassRecordContext& a_recording)
 		{
 			if (!a_frame.program || !a_frame.groups)
 				return;
+			auto constants = a_frame.constants;
+			constants.rootsIndex = a_recording.Index(a_bindings.roots);
+			constants.statesIndex = a_recording.Index(a_bindings.states);
+			constants.frameIndex = a_recording.Index(a_bindings.frame);
+			constants.frustumIndex = a_recording.Index(a_bindings.frustum);
+			constants.rootReportedIndex = a_recording.Index(a_bindings.rootReported);
+			constants.objectReportedIndex = a_recording.Index(a_bindings.objectReported);
+			constants.eventsIndex = a_recording.Index(a_bindings.events);
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->Pipeline());
-			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kVisibilityEventsConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kVisibilityEventsConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 			commands.Dispatch(a_frame.groups, 1, 1);
 		}
 

@@ -57,8 +57,9 @@ namespace PrefixSum
 		// Whether an execution scans, when not every one does (null: every one). Called while the pass prepares, which can be
 		// on a worker, so it must read state published for that (the preparation's, as a pass's Prepare would).
 		std::function<bool(const org::PassPrepareContext&)> active;
-		// Appended to the pass's invocation revision: what `active` depends on, when that is not simply its answer.
-		std::function<void(const org::PassPrepareContext&, std::vector<std::uint64_t>&)> revision;
+		// Appended to the pass's revision (what its kept recordings depend on): whatever `active` depends on besides the
+		// preparation's host data, which a revision does not see.
+		std::function<void(std::vector<std::uint64_t>&)> revision;
 	};
 
 	std::shared_ptr<org::RenderPass> CreatePass(Desc a_desc);

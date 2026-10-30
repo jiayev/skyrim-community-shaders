@@ -28,7 +28,6 @@ namespace DCLF::Features::Portals
 			std::shared_ptr<const Portals::Batch> batch;
 			std::shared_ptr<const org::LatchBlock> latch;
 			Constants constants{};
-			org::PreparedResourceReference indirect;
 			bool evaluate = false;
 		};
 
@@ -64,17 +63,10 @@ namespace DCLF::Features::Portals
 				return bindings;
 			}
 
-			void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-			{
-				const auto frame = Draws::CurrentFrame(a_preparation, segment);
-				a_out.push_back(frame ? frame->generation : 0);
-				a_out.push_back(evaluate);
-				const auto& b = *batch;
-				for (const auto* buffer : { &b.queries, &b.results, &b.counts, &b.offsets, &b.ranks, &b.indices, &b.tasks })
-					a_out.push_back(Draws::NamedSerial(a_preparation, *buffer));
-			}
+			// The depth shape and the batch's versions are the revision's (the ticket's host data).
+			void Revision(std::vector<std::uint64_t>& a_out) const { a_out.push_back(evaluate); }
 
-			Prepared Prepare(const Bindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+			Prepared Prepare(const Bindings&, const org::PassPrepareContext& a_preparation) const
 			{
 				Prepared prepared{};
 				const auto frame = Draws::CurrentFrame(a_preparation, segment);
@@ -85,30 +77,29 @@ namespace DCLF::Features::Portals
 				prepared.evaluate = evaluate;
 				const auto& b = *prepared.batch;
 				auto& c = prepared.constants;
-				const auto index = [&](const org::DeclaredViewToken& token) { return token.layout ? Draws::CaptureViewIndex(a_preparation, token) : 0u; };
-				c.queries = index(a_bindings.queries);
-				c.results = index(a_bindings.results);
 				c.latchIndex = frame->latch->SrvIndex();
-				c.counts = index(a_bindings.counts);
-				c.offsets = index(a_bindings.offsets);
-				c.ranks = index(a_bindings.ranks);
-				c.indices = index(a_bindings.indices);
-				c.tasks = index(a_bindings.tasks);
-				c.dispatch = index(a_bindings.dispatch);
 				c.queryCount = static_cast<std::uint32_t>(Draws::NamedUnitsOf(a_preparation, b.queries));
 				c.bucketCount = static_cast<std::uint32_t>(std::min(Draws::NamedUnitsOf(a_preparation, b.counts), Draws::NamedUnitsOf(a_preparation, b.offsets)) / 2);
-				if (evaluate && !b.inlineEvaluation)
-					prepared.indirect = a_preparation.CaptureResource(a_bindings.indirect);
 				return prepared;
 			}
 
-			static void Record(const Bindings&, const Prepared& a_prepared, org::PassRecordContext& a_recording)
+			static void Record(const Bindings& a_bindings, const Prepared& a_prepared, org::PassRecordContext& a_recording)
 			{
 				if (!a_prepared.batch)
 					return;
 				const auto& batch = *a_prepared.batch;
 				auto& commands = a_recording.Commands();
 				auto c = a_prepared.constants;
+				// The stage's declared views (none declared: 0).
+				const auto index = [&](const org::DeclaredViewToken& token) { return token.layout ? a_recording.Index(token) : 0u; };
+				c.queries = index(a_bindings.queries);
+				c.results = index(a_bindings.results);
+				c.counts = index(a_bindings.counts);
+				c.offsets = index(a_bindings.offsets);
+				c.ranks = index(a_bindings.ranks);
+				c.indices = index(a_bindings.indices);
+				c.tasks = index(a_bindings.tasks);
+				c.dispatch = index(a_bindings.dispatch);
 				c.latchOffset = static_cast<std::uint32_t>(a_prepared.latch->Offset(a_recording.FrameSlot()));
 				const auto bind = [&](std::size_t stage) {
 					const auto& program = *batch.programs[stage];
@@ -126,7 +117,7 @@ namespace DCLF::Features::Portals
 				}
 				if (a_prepared.evaluate) {
 					bind(7);
-					commands.ExecuteIndirect(batch.signature->GetHandle(), a_recording.Resolve(a_prepared.indirect).GetHandle(), 0, {}, 0, 1);
+					commands.ExecuteIndirect(batch.signature->GetHandle(), a_recording.Resolve(a_bindings.indirect).GetHandle(), 0, {}, 0, 1);
 					return;
 				}
 				const auto dispatch = [&](std::size_t stage, std::uint32_t elements, std::uint32_t width = 64u) {

@@ -1,6 +1,6 @@
 #pragma once
 
-// Small helpers every part of IndirectDraws uses: view indices, formats, handles, buffers, registers.
+// Small helpers every part of IndirectDraws uses: formats, handles, buffers, registers.
 // Self-contained (features include it); Internal.h includes it in its order.
 
 // volk must precede every Vulkan header in this translation unit (DrawPipelinesRhi.h is included after it).
@@ -35,12 +35,6 @@ namespace DCLF::Draws
 	{
 		const int forced = asyncComputeOverride.load(std::memory_order_relaxed);
 		return (forced < 0 ? SwitchOnUnlessZero(Switch::AsyncCompute) : forced != 0) ? org::QueueKind::Compute : org::QueueKind::Graphics;
-	}
-
-	inline std::uint32_t CaptureViewIndex(const org::PassPrepareContext& a_preparation, const org::DeclaredViewToken& a_token)
-	{
-		(void)a_preparation.Capture(a_token);
-		return a_preparation.Resolve(a_token).index;
 	}
 
 	// The format that reads a depth resource's depth aspect in a shader, as DXGI names it.

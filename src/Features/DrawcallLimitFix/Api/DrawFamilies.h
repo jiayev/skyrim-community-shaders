@@ -115,7 +115,7 @@ namespace DCLF::Api
 	 * - frame.programSource: render thread, from DrawFamilyFrame::Pipelines: the engine shader its slot's pipelines are built from (null:
 	 *   none yet), posted to the pipeline lane.
 	 * - main.declare, main.revision, main.record: the main pass's executions (z.depth, depth-phase2, main-opaque), in the graph's build
-	 *   (declare: its arguments and its draw row's address, fixed with its tables), each preparation (revision: what moves the recording
+	 *   (declare: its arguments and its draw row's address, fixed with its tables), the pass's revision (revision: what moves the recording
 	 *   besides the slot's pipelines' words Core hands it; Core prepares the slot's pipelines and the row while the family is set up),
 	 *   and each recording (record, only once the slot's pipelines are published: after the depth draws in the depth passes; in the
 	 *   colour pass after the main draws, under the Z-prepass layout and colourRange).

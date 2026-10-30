@@ -33,7 +33,6 @@ namespace DCLF::Features::GpuOcclusion
 
 namespace DCLF::Draws
 {
-	// In DCLF::Draws, where they were defined before the feature moved: ORG's recipe telemetry names a pass by its type (typeid).
 	struct HzbBindings
 	{
 		org::DeclaredViewToken depth;
@@ -48,7 +47,8 @@ namespace DCLF::Draws
 		// last level. Up to 4096 texels a side takes one.
 		struct Dispatch
 		{
-			Features::GpuOcclusion::HzbConstants constants{};
+			Features::GpuOcclusion::HzbConstants constants{};  // its view indices the recording's (level and mips name them)
+			std::uint32_t level = 0;                            // its first target level: the source is the depth at 0, else the level before
 			std::uint32_t groupsX = 0, groupsY = 0;
 		};
 		std::vector<Dispatch> dispatches;
@@ -77,15 +77,10 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto now = segment;
-			const auto frame = CurrentFrame(a_preparation, now);
-			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(static_cast<std::uint64_t>(now));
-		}
+		// The depth shape is the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>& a_out) const { a_out.push_back(static_cast<std::uint64_t>(segment)); }
 
-		HzbFrame Prepare(const HzbBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		HzbFrame Prepare(const HzbBindings&, const org::PassPrepareContext& a_preparation) const
 		{
 			using namespace Features::GpuOcclusion;
 			HzbFrame prepared{};
@@ -101,29 +96,22 @@ namespace DCLF::Draws
 			const std::uint32_t renderWidth = frame->width ? frame->width : resources->width;
 			const std::uint32_t renderHeight = frame->height ? frame->height : resources->height;
 			prepared.program = state->program;
-			const std::uint32_t depthIndex = CaptureViewIndex(a_preparation, a_bindings.depth);
-			const std::uint32_t counterIndex = CaptureViewIndex(a_preparation, a_bindings.counter);
-			std::vector<std::uint32_t> levelIndices(resources->hzbMips);
-			for (std::uint32_t mip = 0; mip < resources->hzbMips; ++mip)
-				levelIndices[mip] = CaptureViewIndex(a_preparation, a_bindings.hzbMips[mip]);
 			const auto levelSize = [&](std::uint32_t a_mip, std::uint32_t a_axis) {
 				return std::max(1u, (a_axis == 0 ? resources->hzbWidth : resources->hzbHeight) >> a_mip);
 			};
 			for (std::uint32_t level = 0; level < resources->hzbMips;) {
 				HzbFrame::Dispatch dispatch{};
+				dispatch.level = level;
 				auto& constants = dispatch.constants;
-				constants.counterIndex = counterIndex;
 				if (level == 0) {
 					// Mip 0 is half the padded domain; only the rendered area holds depth (the image can exceed the viewport).
 					constants.fromDepth = 1;
-					constants.sourceIndex = depthIndex;
 					constants.domainSize[0] = resources->hzbWidth * 2;
 					constants.domainSize[1] = resources->hzbHeight * 2;
 					constants.validSize[0] = std::min(renderWidth, constants.domainSize[0]);
 					constants.validSize[1] = std::min(renderHeight, constants.domainSize[1]);
 				} else {
 					constants.fromDepth = 0;
-					constants.sourceIndex = levelIndices[level - 1];
 					constants.domainSize[0] = constants.validSize[0] = levelSize(level - 1, 0);
 					constants.domainSize[1] = constants.validSize[1] = levelSize(level - 1, 1);
 				}
@@ -134,8 +122,6 @@ namespace DCLF::Draws
 				const std::uint32_t domain = std::max(constants.domainSize[0], constants.domainSize[1]);
 				const std::uint32_t reach = domain / kHzbTile <= kHzbTile ? kHzbDispatchMips : 6u;
 				constants.mips = std::min(resources->hzbMips - level, reach);
-				for (std::uint32_t i = 0; i < constants.mips; ++i)
-					constants.targetIndices[i] = levelIndices[level + i];
 				dispatch.groupsX = (constants.domainSize[0] + kHzbTile - 1) / kHzbTile;
 				dispatch.groupsY = (constants.domainSize[1] + kHzbTile - 1) / kHzbTile;
 				constants.workGroups = dispatch.groupsX * dispatch.groupsY;
@@ -145,10 +131,11 @@ namespace DCLF::Draws
 			return prepared;
 		}
 
-		static void Record(const HzbBindings&, const HzbFrame& a_frame, org::PassRecordContext& a_recording)
+		static void Record(const HzbBindings& a_bindings, const HzbFrame& a_frame, org::PassRecordContext& a_recording)
 		{
 			if (!a_frame.program || a_frame.dispatches.empty())
 				return;
+			const std::uint32_t counterIndex = a_recording.Index(a_bindings.counter);
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->Pipeline());
@@ -160,8 +147,12 @@ namespace DCLF::Draws
 					const rhi::BarrierBatch batch{ {}, {}, { &global, 1 } };
 					commands.Barriers(batch);
 				}
-				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::GpuOcclusion::kHzbConstantWords,
-					reinterpret_cast<const std::uint32_t*>(&dispatch.constants));
+				auto constants = dispatch.constants;
+				constants.counterIndex = counterIndex;
+				constants.sourceIndex = dispatch.level == 0 ? a_recording.Index(a_bindings.depth) : a_recording.Index(a_bindings.hzbMips[dispatch.level - 1]);
+				for (std::uint32_t m = 0; m < constants.mips; ++m)
+					constants.targetIndices[m] = a_recording.Index(a_bindings.hzbMips[dispatch.level + m]);
+				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::GpuOcclusion::kHzbConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 				commands.Dispatch(dispatch.groupsX, dispatch.groupsY, 1);
 			}
 		}

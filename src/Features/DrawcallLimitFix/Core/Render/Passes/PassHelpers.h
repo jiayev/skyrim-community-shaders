@@ -94,7 +94,6 @@ namespace DCLF::Draws
 			std::uint32_t stagingBase = 0, capacity = 0, countOffset = 0;
 			std::uint32_t options = 0;  // added to the range's kCountOffset (ForwardSortConstants::kRankInstance)
 		};
-		std::uint64_t generation = 0;
 		std::shared_ptr<const ComputeProgram> program;
 		std::vector<Range> ranges;
 	};

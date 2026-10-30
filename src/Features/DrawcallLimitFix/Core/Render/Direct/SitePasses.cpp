@@ -45,7 +45,7 @@ namespace DCLF::Direct
 				return { site };
 			}
 
-			void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+			void Revision(std::vector<std::uint64_t>& a_out) const
 			{
 				a_out.push_back(static_cast<std::uint64_t>(site));
 			}

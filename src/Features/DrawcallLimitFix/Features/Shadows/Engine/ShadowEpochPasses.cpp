@@ -39,7 +39,6 @@
 
 namespace DCLF::Draws
 {
-	// In DCLF::Draws, where they were defined before the feature moved: ORG's recipe telemetry names a pass by its type (typeid).
 
 	struct ShadowBuildBindings
 	{
@@ -59,6 +58,7 @@ namespace DCLF::Draws
 		BuildDrawsConstants constants{};
 		std::uint32_t dispatchOffset = 0;  // the epoch's groups in the frame slot's region (ShadowLatchLayout::BuildDispatchOffset)
 		std::uint32_t views = 0;           // the table's rows; 0: nothing to cull
+		bool fadeRoots = false;            // the fade roots' rows are bound (their view's index)
 	};
 
 	/**
@@ -95,15 +95,8 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto frame = CurrentShadowFrame(a_preparation);
-			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(frame ? frame->activeViews : 0);
-			a_out.push_back(FadeRows() ? 1u : 0u);
-			a_out.push_back(NamedSerial(a_preparation, resources->pool->firsts));
-			a_out.push_back(NamedSerial(a_preparation, Extensions::CullBindingBuffer(Api::CullBindingSlot::ObjectGates, *resources->scene)));
-		}
+		// The shadow shape and the versions it binds are the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>& a_out) const { a_out.push_back(FadeRows() ? 1u : 0u); }
 
 		ShadowBuildPrepared Prepare(const ShadowBuildBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
@@ -122,9 +115,10 @@ namespace DCLF::Draws
 					continue;
 				ShadowBuildView row{};
 				row.latchAt = view.slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
-				row.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences[view.slot]);
-				row.countIndex = CaptureViewIndex(a_preparation, a_bindings.count[view.slot]);
-				row.bucketCountsIndex = CaptureViewIndex(a_preparation, a_bindings.bucketCounts[view.slot]);
+				// The table is host data the shader reads: its rows name the slot's views by index (the frame's bindings keep them).
+				row.sequencesIndex = a_preparation.Resolve(a_bindings.sequences[view.slot]).index;
+				row.countIndex = a_preparation.Resolve(a_bindings.count[view.slot]).index;
+				row.bucketCountsIndex = a_preparation.Resolve(a_bindings.bucketCounts[view.slot]).index;
 				// Bucketed draws are bounded by their buckets; this bounds the rest.
 				row.sequenceDraws = view.sequenceDraws;
 				rows.push_back(row);
@@ -141,19 +135,15 @@ namespace DCLF::Draws
 			// Published again only when its bytes change (another view set, or a slot's descriptors); the packet keeps the one it names.
 			constants.sequencesIndex = viewTable.Publish(a_preparation, std::span<const ShadowBuildView>(rows));
 			constants.countIndex = prepared.views;
-			constants.poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
 			// ShadowMaterialRow's stride, one constant block (ShadowPayload.h asserts it); no pipeline rows: their stride stays 0.
 			constants.materialRowStride = static_cast<std::uint32_t>(kConstantAlignment);
 			// The single phase: frustum only, no engine-visibility gate.
 			constants.phaseBits = 0;
-			// Every view writes the visibility words; nothing reads them here.
-			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
-			constants.fadeRootsIndex = FadeRows() ? CaptureViewIndex(a_preparation, a_bindings.fadeRoots) : 0u;
-			constants.objectGatesIndex = a_bindings.objectGates.layout ? CaptureViewIndex(a_preparation, a_bindings.objectGates) : 0u;
+			prepared.fadeRoots = FadeRows();
 			return prepared;
 		}
 
-		static void Record(const ShadowBuildBindings&, const ShadowBuildPrepared& a_prepared, org::PassRecordContext& a_recording)
+		static void Record(const ShadowBuildBindings& a_bindings, const ShadowBuildPrepared& a_prepared, org::PassRecordContext& a_recording)
 		{
 			if (!a_prepared.program || !a_prepared.latch || !a_prepared.views)
 				return;
@@ -165,6 +155,11 @@ namespace DCLF::Draws
 			const std::uint64_t region = a_prepared.latch->Offset(a_recording.FrameSlot());
 			auto constants = a_prepared.constants;
 			constants.latchOffset = static_cast<std::uint32_t>(region);
+			constants.poolFirstsIndex = a_recording.Index(a_bindings.poolFirsts);
+			// Every view writes the visibility words; nothing reads them here.
+			constants.visibilityIndex = a_recording.Index(a_bindings.visibility);
+			constants.fadeRootsIndex = a_prepared.fadeRoots ? a_recording.Index(a_bindings.fadeRoots) : 0u;
+			constants.objectGatesIndex = a_bindings.objectGates.layout ? a_recording.Index(a_bindings.objectGates) : 0u;
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kBuildDrawsConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 			commands.ExecuteIndirect(a_prepared.signature, a_prepared.latch->Resource()->GetAPIResource().GetHandle(), region + a_prepared.dispatchOffset, {}, 0, 1);
 		}
@@ -191,8 +186,7 @@ namespace DCLF::Draws
 		std::shared_ptr<const ShadowFrame> frame;
 		struct View
 		{
-			std::uint32_t index = 0;  // into frame->views
-			org::PreparedDescriptorReference depthView{};
+			std::uint32_t index = 0;  // into frame->views (its target's slice: the bindings' depth view)
 		};
 		std::vector<View> views;
 	};
@@ -234,13 +228,8 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto frame = CurrentShadowFrame(a_preparation);
-			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(frame ? frame->activeViews : 0);
-			a_out.push_back(NamedSerial(a_preparation, resources->pool->indices));
-		}
+		// The shadow shape and the pool's version are the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>&) const {}
 
 		ShadowPrepared Prepare(const ShadowPassBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
@@ -258,7 +247,7 @@ namespace DCLF::Draws
 				// The declared slices, not the live target's: a target grown since has slices these bindings cannot name.
 				if (view.slice >= resources->depthLayers[view.target] || view.slice >= a_bindings.depthViews[view.target].size())
 					continue;
-				prepared.views.push_back({ i, a_preparation.Capture(a_bindings.depthViews[view.target][view.slice]) });
+				prepared.views.push_back({ i });
 			}
 			if (!prepared.views.empty())
 				prepared.frame = std::move(frame);
@@ -286,7 +275,7 @@ namespace DCLF::Draws
 				begin.maxDepth = view.maxDepth;
 				// The engine's casters are already in the slice: loaded, added to, stored.
 				auto& depth = depths[i];
-				depth.dsv = a_recording.Resolve(prepared.depthView);
+				depth.dsv = a_recording.View(a_bindings.depthViews[view.target][view.slice]);
 				depth.depthLoad = rhi::LoadOp::Load;
 				depth.depthStore = rhi::StoreOp::Store;
 				depth.stencilLoad = rhi::LoadOp::Load;
@@ -373,7 +362,7 @@ namespace DCLF::Features::Shadows::Engine
 		{
 			return Draws::MakeLatchedCopiesPass([shadow = a_context.Shadow()] { return LatchedTargets(*shadow); }, [](const org::PassPrepareContext& a_preparation) {
 				const auto frame = Draws::CurrentShadowFrame(a_preparation);
-				return frame ? Draws::LatchedSource{ frame->generation, frame, frame->latched } : Draws::LatchedSource{};
+				return frame ? Draws::LatchedSource{ frame, frame->latched } : Draws::LatchedSource{};
 			});
 		}
 

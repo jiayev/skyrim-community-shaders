@@ -16,13 +16,6 @@ namespace DCLF
 		// Render thread: the submissions of each epoch outside its trigger (SubmitRevisionRecording), the first logged.
 		std::array<std::uint64_t, kMaxEpochs> outsideTrigger{};
 
-		// Revision shapes' generations (their passes' invocation revisions): apart from the live shapes'.
-		std::uint64_t NextRevisionGeneration()
-		{
-			static std::uint64_t generation = 1ull << 48;
-			return ++generation;
-		}
-
 		/** @brief a_made, unless a_old is the same shape (then a_old: its fragment, and its recording, stand). */
 		template <class Frame>
 		std::shared_ptr<const Frame> Kept(const std::shared_ptr<const Frame>& a_old, const std::shared_ptr<const Frame>& a_made, bool& a_changed)
@@ -30,9 +23,8 @@ namespace DCLF
 			if (a_old && a_made && a_old->SameShape(*a_made))
 				return a_old;
 			a_changed = true;
-			auto copy = std::make_shared<Frame>(*a_made);
-			copy->generation = NextRevisionGeneration();
-			return copy;
+			// A copy: the revision's shape is never the live one, whose identity the live recordings are prepared for.
+			return std::make_shared<const Frame>(*a_made);
 		}
 
 		/** @brief The recordings of one epoch's request, completed on ORG's host thread: the fragment resolves once all are recorded. */

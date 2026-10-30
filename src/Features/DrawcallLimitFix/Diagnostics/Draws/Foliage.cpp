@@ -243,13 +243,10 @@ namespace DCLF::Diagnostics
 			return bindings;
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::MainOpaque);
-			a_out.push_back(frame ? frame->generation : 0);
-		}
+		// The colour shape is the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>&) const {}
 
-		FoliageParityPrepared Prepare(const FoliageParityBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		FoliageParityPrepared Prepare(const FoliageParityBindings&, const org::PassPrepareContext&) const
 		{
 			FoliageParityPrepared prepared{};
 			const auto& foliage = *resources->foliage;
@@ -259,9 +256,6 @@ namespace DCLF::Diagnostics
 				constants.colours[h] = foliage.coloursAddress[h];
 			}
 			constants.frameBlock = resources->frameConstantsAddress + std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame);
-			constants.resultsIndex = CaptureViewIndex(a_preparation, a_bindings.results);
-			constants.ownersIndex = CaptureViewIndex(a_preparation, a_bindings.owners);
-			constants.depthIndex = CaptureViewIndex(a_preparation, a_bindings.depth);
 			constants.width = foliage.width;
 			constants.height = foliage.height;
 			prepared.program = foliage.program;
@@ -270,14 +264,18 @@ namespace DCLF::Diagnostics
 			return prepared;
 		}
 
-		static void Record(const FoliageParityBindings&, const FoliageParityPrepared& a_frame, org::PassRecordContext& a_recording)
+		static void Record(const FoliageParityBindings& a_bindings, const FoliageParityPrepared& a_frame, org::PassRecordContext& a_recording)
 		{
 			if (!a_frame.program)
 				return;
+			auto constants = a_frame.constants;
+			constants.resultsIndex = a_recording.Index(a_bindings.results);
+			constants.ownersIndex = a_recording.Index(a_bindings.owners);
+			constants.depthIndex = a_recording.Index(a_bindings.depth);
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->Pipeline());
-			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kFoliageParityConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kFoliageParityConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 			commands.Dispatch(a_frame.groupsX, a_frame.groupsY, 1);
 		}
 
@@ -312,11 +310,8 @@ namespace DCLF::Diagnostics
 			return bindings;
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::MainOpaque);
-			a_out.push_back(frame ? frame->generation : 0);
-		}
+		// The colour shape is the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>&) const {}
 
 		FoliageReadbackPrepared Prepare(const FoliageReadbackBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
