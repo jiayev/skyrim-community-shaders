@@ -24,15 +24,10 @@ namespace DCLF::Diagnostics
 
 		std::string TypeOf(const org::RenderGraph::ExternalPassDesc& a_desc)
 		{
-			if (a_desc.unifiedPass)
-				return typeid(*a_desc.unifiedPass).name();
-			return std::visit([](const auto& a_pass) -> std::string {
-				if constexpr (std::is_same_v<std::decay_t<decltype(a_pass)>, std::monostate>)
-					return "-";
-				else
-					return a_pass ? typeid(*a_pass).name() : "null";
-			},
-				a_desc.pass);
+			if (!a_desc.pass)
+				return "-";
+			const auto& pass = *a_desc.pass;
+			return typeid(pass).name();
 		}
 
 		struct Dumped final : org::RenderGraph::IRenderGraphExtension
