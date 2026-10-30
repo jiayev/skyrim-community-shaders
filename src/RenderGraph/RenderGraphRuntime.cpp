@@ -20,6 +20,7 @@
 #	include "Vram/Debug.h"
 
 #include <OpenRenderGraph/GraphHost.h>
+#include <OpenRenderGraph/Runtime.h>
 // This module exports the contributor ABI's table (ORG_GetRenderGraphAPI, below).
 #define ORG_RENDER_GRAPH_HOST_EXPORTS
 #include <OpenRenderGraph/ContributorHost.h>
@@ -412,6 +413,8 @@ struct RenderGraphRuntime::Impl
 	uint32_t frameLatency = 2;    // CS_FRAME_LATENCY
 	bool framePaceSignalled = false;  // this frame enqueued one
 	std::shared_ptr<rhi::DevicePtr> device = std::make_shared<rhi::DevicePtr>();
+	// ORG's runtime on the adopted device: outlives the host and the contributors, goes before the device.
+	std::shared_ptr<org::Runtime> orgRuntime;
 	std::unique_ptr<org::GraphHost> host;
 	// The contributor ABI's host (OpenRenderGraph/ContributorAPI.h): other modules' passes, in the epochs named after the segments.
 	std::unique_ptr<org::contributor::ContributorHost> contributors;
@@ -1455,8 +1458,6 @@ bool RenderGraphRuntime::Initialize()
 
 	try {
 		org::GraphHost::Desc desc{};
-		desc.device = state->device->Get();
-		desc.backend = rhi::Backend::Vulkan;
 		// Everything DXVK submitted before an epoch and everything it submits after
 		// is ordered against the graph by these barriers (same queue, submission order).
 		desc.queueBoundary = { .entry = true, .exit = true };
@@ -1487,6 +1488,10 @@ bool RenderGraphRuntime::Initialize()
 		if (!desc.epochOrder.empty())
 			logger::info("[ORG] epoch order: {}", fmt::join(desc.epochOrder, ","));
 		const bool closed = desc.closedExecutions;
+		// The runtime's slots: the host's frame slots (frames in flight times epochs), which its upload pages and statistics follow.
+		state->orgRuntime = org::Runtime::Create({ .device = state->device->Get(), .backend = rhi::Backend::Vulkan,
+			.slots = desc.framesInFlight * (std::max)(static_cast<uint32_t>(desc.epochOrder.size()), 1u) });
+		desc.runtime = state->orgRuntime;
 		state->host = std::make_unique<org::GraphHost>(std::move(desc));
 		// The frame-wait timeline, before anything builds the graph (its packets bind it when prepared): only with a queue of the
 		// uploader's own to signal it from.
@@ -1648,6 +1653,11 @@ void RenderGraphRuntime::Shutdown()
 		wait.pValues = &state->framePaceValue;
 		if (state->waitSemaphores(state->vkDevice, &wait, 1'000'000'000ull) == VK_SUCCESS)
 			state->destroySemaphore(state->vkDevice, state->framePace, nullptr);
+	}
+	try {
+		state->orgRuntime.reset();
+	} catch (const std::exception& e) {
+		logger::error("[ORG] Runtime shutdown failed: {}", e.what());
 	}
 	// Non-owning: BasicRHI never destroys the adopted VkDevice.
 	state->device.reset();

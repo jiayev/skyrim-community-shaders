@@ -113,7 +113,7 @@ namespace DCLF::Draws
 				commands.BindLayout(frame.indirect.zLayout);
 				commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
 				commands.SetIndexBuffer(rhi::IndexBufferView{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt });
-				auto device = RenderGraphRuntime::Get().Host()->GetDesc().device;
+				auto device = RenderGraphRuntime::Get().Host()->Device();
 				const std::uint64_t sequencesAddress = device.GetBufferDeviceAddress({ sequences, 0 });
 				for (std::size_t b = 0; b < plan.forward.size(); ++b) {
 					const auto& bucket = plan.forward[b];
@@ -241,7 +241,7 @@ namespace DCLF::Draws
 			begin.depth = &depth;
 			begin.colors = { &colour, 1 };
 			begin.debugName = "DCLF refraction normals";
-			auto device = RenderGraphRuntime::Get().Host()->GetDesc().device;
+			auto device = RenderGraphRuntime::Get().Host()->Device();
 			auto split = [](std::uint32_t* a_words, std::uint64_t a_value) {
 				a_words[0] = static_cast<std::uint32_t>(a_value);
 				a_words[1] = static_cast<std::uint32_t>(a_value >> 32);

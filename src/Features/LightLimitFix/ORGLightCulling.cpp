@@ -411,7 +411,7 @@ bool ORGLightCulling::Setup(uint32_t a_clusterCount, uint32_t a_maxLights, uint3
 		state->maxLights = a_maxLights;
 		state->lightStride = a_lightStride;
 		auto resources = std::make_shared<Resources>();
-		auto device = host->GetDesc().device;
+		auto device = host->Device();
 		// The descriptor-heap build of the D3D11 shaders (LLF_ORG_BINDLESS).
 		const auto load = [&](const char* a_source) {
 			return ComputeProgram::Load(device, { .source = a_source, .constantWords = kConstantWords, .defines = { { L"LLF_ORG_BINDLESS", L"1" } } });

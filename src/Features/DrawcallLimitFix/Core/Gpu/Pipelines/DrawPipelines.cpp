@@ -127,7 +127,7 @@ namespace DCLF
 		if (attempted || !RenderGraphRuntime::Get().IsActive() || !RenderGraphRuntime::Get().Host())
 			return false;
 		attempted = true;
-		device = RenderGraphRuntime::Get().Host()->GetDesc().device;
+		device = RenderGraphRuntime::Get().Host()->Device();
 
 		// No vertex buffer arguments: the vertex stages pull their attributes through the buffers' views in the draw's push data
 		// (kDrawPushWords).

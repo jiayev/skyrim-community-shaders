@@ -351,7 +351,7 @@ namespace DCLF
 			a_context.service = host->Graph()->RetainDescriptorService();
 			auto* active = org::runtime::GetActiveDescriptorService();
 			a_context.cleanup = active ? active->GetResourceCleanupQueue() : host->ResourceCleanup();
-			a_context.device = host->GetDesc().device;
+			a_context.device = host->Device();
 			a_context.deviceOwner = RenderGraphRuntime::Get().DeviceOwner();
 			return a_context.service && a_context.cleanup && a_context.deviceOwner;
 		}
