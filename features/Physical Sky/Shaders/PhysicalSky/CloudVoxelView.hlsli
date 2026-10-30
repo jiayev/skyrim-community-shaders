@@ -63,6 +63,7 @@ RWTexture2D<float2> RWVoxelViewDepth : register(u1);
 					const float stepTransmission = exp(-opticalDepth);
 					const float opacity = CloudOpacity(opticalDepth);
 					float3 source = CloudLighting(position, direction, context.ndf, density, opticalDepth, opacity, metres, 0.0, phase);
+					source += opacity * Lightning::ActiveMask(Lightning::CloudMask(position + float3(0, 0, info.bottomZ), context.ndf.height_fraction, context.ndf.dimension_profile)) * Lightning::Color();
 					if (info.ambientStrength > 0.0) {
 						const float2 material = CloudMaterialAmbient(context.ndf);
 						source += opacity * material.y * info.ambientStrength * info.cloudLightingScale * CloudAmbientTransport::ViewSource(position);

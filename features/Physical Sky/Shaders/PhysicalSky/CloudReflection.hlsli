@@ -7,6 +7,7 @@ groupshared float4 ReflectionDirect[CloudReflectionSegments];
 groupshared float4 ReflectionAmbient[CloudReflectionSegments];
 groupshared float4 ReflectionWeights[CloudReflectionSegments];
 groupshared float4 ReflectionMotion[CloudReflectionSegments];
+groupshared float2 ReflectionLightning[CloudReflectionSegments];
 
 // One group integrates one reflection ray. Strata are composed front to back;
 // direct and forward transport retain their own transmission coefficients.
@@ -29,6 +30,7 @@ groupshared float4 ReflectionMotion[CloudReflectionSegments];
 	ReflectionAmbient[lane] = float4(value.transportLum, value.rawTransmission.y);
 	ReflectionWeights[lane] = value.integralWeights;
 	ReflectionMotion[lane] = value.stormMotion;
+	ReflectionLightning[lane] = value.lightning;
 	GroupMemoryBarrierWithGroupSync();
 
 	[unroll] for (uint stride = 1u; stride < CloudReflectionSegments; stride *= 2u)
@@ -40,6 +42,7 @@ groupshared float4 ReflectionMotion[CloudReflectionSegments];
 			ReflectionAmbient[lane] = float4(frontAmbient.rgb + frontAmbient.a * backAmbient.rgb, frontAmbient.a * backAmbient.a);
 			ReflectionWeights[lane] += front.a * ReflectionWeights[lane + stride];
 			ReflectionMotion[lane] += front.a * ReflectionMotion[lane + stride];
+			ReflectionLightning[lane] += front.a * ReflectionLightning[lane + stride];
 		}
 		GroupMemoryBarrierWithGroupSync();
 	}
@@ -51,13 +54,16 @@ groupshared float4 ReflectionMotion[CloudReflectionSegments];
 	const float transmission = saturate((rawTransmission - 0.1) / 0.9);
 	const float opacity = 1.0 - transmission;
 	float3 radiance = (ReflectionDirect[0].rgb + ReflectionAmbient[0].rgb) / (1.0 - min(rawTransmission, 0.1));
+	float2 lightning = ReflectionLightning[0] / (1.0 - min(rawTransmission, 0.1));
 	const float depth = weights.y > 0.0 ? weights.x / weights.y : info.rayMarchRange;
 	if (weights.y > 0.0) {
 		const float4 air = SampleCloudAerialPerspective(direction, depth, 0.0);
 		radiance = radiance * air.a + air.rgb * opacity;
+		lightning *= air.a;
 	}
 	RWTexCubeTr[pixel] = transmission;
 	RWTexCubeLum[pixel] = float4(min(radiance, 65504.0), opacity);
+	RWLightningCubeMask[pixel] = min(lightning, 65504.0);
 	RWCubeStormMotion[pixel] = weights.y > 0.0 ? ReflectionMotion[0] * (opacity / weights.y) : 0.0;
 	RWTexCubeAux[pixel] = float4(EncodeCloudDepth(depth), 0.0, weights.y > 0.0 ? saturate(weights.zw / weights.y) * opacity : 0.0);
 }

@@ -557,6 +557,15 @@ namespace SharedData
 		// SETTINGS
 		uint lightSkyStatics;
 		float skyStaticsBrightness;  //
+		float4 lightningPositionRadius;
+		float4 lightningEndPosition;
+		float4 lightningColorIntensity;
+		float4 lightningControl;
+		float4 lightningPhotometry;
+		float4 lightningPlacement;
+		float4 lightningChannelEmitter;
+		float4 lightningPreparationPositionRadius;
+		float4 lightningPreparationControl;  // base mode, history valid, active mask lane, preparing
 	};
 
 	struct RainRefractionSettings

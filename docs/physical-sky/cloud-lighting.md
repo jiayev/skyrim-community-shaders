@@ -437,6 +437,57 @@ The old weather/cell/warp/wisp volume and its view-step budget are absent.
 Old `cloudLayer.high` saved settings are ignored; `cloudLayer.cirrus` loads its
 own defaults. See [cirrus inputs](volumetric-cloud-texture-resources.md#cirrus-inputs).
 
+## Lightning photometry
+
+Lightning uses the solar control's existing calibration: linear working-gamut
+Y is illuminance in lux. Cloud and channel peak luminances are in cd/m²; their
+shared color is normalized to working-gamut Y = 1 after color conversion. The
+Intensity control multiplies both peaks. Changing solar illuminance does not
+rescale lightning; both use the same fixed unit convention, including at night.
+
+An equivalent finite emitter of luminance `L`, radius `R` and distance `d`
+supplies perpendicular illuminance `E = pi * L * R² / (d² + R²)`. This tends
+to `L * projectedArea / d²` in the far field and remains finite nearby.
+The cloud radius is an equivalent emitting-area parameter; the visible cloud
+still follows the normalized HFW cloud-base or embedded-cloud profile. The
+channel emitter uses the main channel's area-weighted centroid and broadside
+projected area `sum(2 * channelRadius * segmentLength)`; branches are visual
+detail. These are finite-emitter approximations, not electrical discharge or
+full local cloud light-transport simulations.
+
+Clustered scene lights, rain and the shared atmosphere use the same illuminance
+expression. They no longer use independent lightning brightness constants.
+Surface BRDFs, visibility, user lighting multipliers and exposure apply afterward.
+Calibration matches the sun under Linear Lighting and PBR; radiance stored in
+half-float cloud buffers retains the existing HDR range limit.
+
+Rate is in discharges per minute, distances in km/m, and return-stroke duration
+and start-to-start interval in ms. The rate range is 0–600 per minute; each
+discharge supports 1–1024 strokes, with duration and interval up to 60000 ms.
+The interval cannot be shorter than the stroke duration. A decay of 1 keeps
+successive strokes equally bright for sustained bursts. The UI shows the total
+discharge duration. Storm activity accumulates during a discharge and there is
+no fixed wait afterward. One active source and one pending source share RG16F
+mask textures: each channel keeps its own history, and promotion changes the
+active channel without discarding the pending source's 20 prepared cloud updates.
+Both masks are evaluated within the existing cloud march, not a second march.
+Only the active source contributes channel radiance, scene lighting and thunder.
+Preparation starts near the requested event time and near the end of a long
+active discharge. New-source frequency remains limited by cloud updates and
+the active discharge duration; discharges do not overlap.
+
+The optical envelope rises linearly over 5% of the duration, then follows a
+truncated exponential over the remaining 95%, reaching zero continuously after
+six decay time constants. These proportions are an artistic approximation,
+not measured current-waveform parameters. Its peak remains one, so the peak
+luminance controls retain their units; its time integral is smaller than the
+previous triangle. An analytic integral over each display interval preserves
+short strokes at low frame rates. The rapid return-stroke motivation follows
+[NWS's negative-flash description](https://www.weather.gov/safety/lightning-science-negative-charged-flash).
+Ground and cloud-base percentages leave the remainder for embedded discharges.
+Replay retains source geometry and placement but uses current luminance and
+stroke timing; radius, distance and event-type changes apply to new sources.
+
 ## Validation
 
 Static/CPU checks cover host/shader fields and resources, the non-storm response

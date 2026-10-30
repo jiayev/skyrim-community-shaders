@@ -25,6 +25,7 @@ Texture3D<float> TexShadowVolume : register(t14);
 #include "PhysicalSky/CloudMotion.hlsli"
 #include "PhysicalSky/CloudNoise.hlsli"
 #include "PhysicalSky/Common.hlsli"
+#include "PhysicalSky/Lightning.hlsli"
 #ifdef CLOUD_AP_SHADOW
 #	include "PhysicalSky/ApShadow.hlsli"
 #endif
@@ -159,6 +160,12 @@ Texture2D<float4> TexCloudBoundary : register(t15);
 Texture2D<float2> TexCloudHeightBounds : register(t16);
 Texture2D<float4> TexCloudHeightBoundsTiles : register(t54);
 Texture2D<float2> TexCloudWeatherBounds : register(t89);
+Texture2D<float2> TexLightningTrace : register(t90);
+Texture2D<float2> TexLightningHistory : register(t91);
+TextureCube<float2> TexLightningCubeTrace : register(t92);
+TextureCube<float2> TexLightningCubeHistory : register(t93);
+RWTexture2D<float2> RWLightningMask : register(u3);
+RWTexture2DArray<float2> RWLightningCubeMask : register(u3);
 
 CloudLayer GetCloudLayer(VolumetricCloudData info)
 {
@@ -878,6 +885,7 @@ float3 sampleExternalSunTransmittance(float3 pos, float3 sun_dir)
 
 struct VolumetricCloudResult
 {
+	float2 lightning;
 	float3 transmittance;
 	float3 lum;
 	float cloud_depth;
@@ -1053,6 +1061,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	VolumetricCloudResult result;
+	result.lightning = 0.0;
 	result.transmittance = 1.0;
 	result.lum = 0.0;
 #ifdef CLOUD_REFLECTION
@@ -1339,6 +1348,9 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 			const float viewDepth = extinction * info.viewExtinction * step * GAME_UNIT_TO_M;
 			const float stepTransmittance = exp(-viewDepth);
 			const float opacity = viewDepth < 0.001 ? CloudOpacity(viewDepth) : 1.0 - stepTransmittance;
+			if (Lightning::HasAnySource())
+				result.lightning += transmittance * opacity * stepTransmittance *
+				                    Lightning::CloudMask(pos + float3(0, 0, info.bottomZ), densityContext.ndf.height_fraction, densityContext.ndf.dimension_profile);
 			if (transmittance > stopTransmission) {
 #if defined(CLOUD_MAIN_DISPATCH) && !defined(CLOUD_VOXELS)
 				// The light cone spans 120--240 m. Share its integral over nearby
@@ -1424,6 +1436,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 	result.transmittance = saturate((transmittance - 0.1) / 0.9);
 	// Keep radiance premultiplied by the remapped opacity.
 	result.lum /= 1.0 - min(transmittance, 0.1);
+	result.lightning /= 1.0 - min(transmittance, 0.1);
 	if (weightSum > 0.0) {
 		result.cloud_depth = depthSum / weightSum;
 		result.stormMotion *= (1.0 - result.transmittance.x) / weightSum;
@@ -1436,6 +1449,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 #	endif
 			const float4 ap = SampleCloudAerialPerspective(direction, result.cloud_depth, apShadow);
 			result.lum = result.lum * ap.a + ap.rgb * (1.0 - result.transmittance);
+			result.lightning *= ap.a;
 #	ifdef CLOUD_AP_SHADOW
 		}
 #	endif
@@ -1448,6 +1462,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 #include "PhysicalSky/CloudBounds.hlsli"
 #include "PhysicalSky/CloudTemporal.hlsli"
 #include "PhysicalSky/CloudVoxelView.hlsli"
+#include "PhysicalSky/LightningView.hlsli"
 
 // Match the largest shadow-volume dimension (kShadowVolW/H in PhysicalSky.h).
 #define NTHREADS 256

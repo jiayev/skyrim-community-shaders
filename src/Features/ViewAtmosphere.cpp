@@ -468,6 +468,8 @@ void ViewAtmosphere::CompositeAfterWater()
 		sky.texShadowVolume ? sky.texShadowVolume->srv.get() : nullptr
 	};
 	context->CSSetShaderResources(110, 3, clouds.data());
+	auto* lightningChannels = sky.texLightningChannels ? sky.texLightningChannels->srv.get() : nullptr;
+	context->CSSetShaderResources(113, 1, &lightningChannels);
 	std::array<ID3D11ShaderResourceView*, 2> depths = {
 		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV,
 		sky.texVolFilteredAux ? sky.texVolFilteredAux->srv.get() : nullptr

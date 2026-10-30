@@ -2630,6 +2630,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float lightShadow = 1.0;
 		float3 normalizedLightDirection = normalize(lightDirection);
 
+#			if defined(SKYLIGHTING)
+		if (light.lightFlags & LightLimitFix::LightFlags::Lightning)
+			lightColor *= Skylighting::EvaluateDiffuse(skylightingSH, normalizedLightDirection, Skylighting::GetFadeOutFactor(positionMSSkylight));
+#			endif
+
 		float shadowComponent = 1.0;
 		[branch] if (light.lightFlags & LightLimitFix::LightFlags::LocalShadow)
 		{
