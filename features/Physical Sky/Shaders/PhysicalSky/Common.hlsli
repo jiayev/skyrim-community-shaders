@@ -548,6 +548,8 @@ Texture2D<float4> TexSkyTail : register(t66);
 	}
 
 #	ifndef PS_PREPASS_RSRCS
+	Texture2D<float4> TexLightningChannels : register(t113);
+	TextureCube<float4> TexLightningReflection : register(t109);
 	// Volumetric cloud main-view result and shadow volume. Pixel shaders use t110-t112 to avoid feature texture conflicts.
 #		if defined(PS_DEFERRED_RSRCS)
 	Texture2D<float> TexVolTr : register(t16);
@@ -564,13 +566,15 @@ Texture2D<float4> TexSkyTail : register(t66);
 	float3 CompositeVolumetricClouds(float3 color, uint2 pxCoord)
 	{
 		const float4 cloud = TexVolLum[pxCoord];
-		return ColorManagement::SceneColor::ScaleAndAddLinear(color, TexVolTr[pxCoord], cloud.rgb);
+		const float3 channel = !ViewAtmosphere::Enabled() && SharedData::physSkyData.lightningColorIntensity.w > 0.0 ? TexLightningChannels[pxCoord].rgb : 0.0;
+		return ColorManagement::SceneColor::ScaleAndAddLinear(color, TexVolTr[pxCoord], cloud.rgb + channel);
 	}
 
 	float3 CompositeVolumetricCloudsUvDr(float3 color, float2 screenUvDr, SamplerState samp)
 	{
 		const float4 cloud = TexVolLum.SampleLevel(samp, screenUvDr, 0);
-		return ColorManagement::SceneColor::ScaleAndAddLinear(color, TexVolTr.SampleLevel(samp, screenUvDr, 0), cloud.rgb);
+		const float3 channel = !ViewAtmosphere::Enabled() && SharedData::physSkyData.lightningColorIntensity.w > 0.0 ? TexLightningChannels.SampleLevel(samp, screenUvDr, 0).rgb : 0.0;
+		return ColorManagement::SceneColor::ScaleAndAddLinear(color, TexVolTr.SampleLevel(samp, screenUvDr, 0), cloud.rgb + channel);
 	}
 
 	float3 CompositeVolumetricCloudsUv(float3 color, float2 screenUv, SamplerState samp)
@@ -588,7 +592,10 @@ Texture2D<float4> TexSkyTail : register(t66);
 	float3 CompositeVolumetricCloudsCube(float3 color, float3 viewDir, SamplerState samp)
 	{
 		const float4 cloud = TexVolCubeLum.SampleLevel(samp, viewDir, 0);
-		return ColorManagement::SceneColor::ScaleAndAddLinear(color, TexVolCubeTr.SampleLevel(samp, viewDir, 0), cloud.rgb);
+		const float3 flash = SharedData::physSkyData.lightningColorIntensity.w > 0.0 ?
+		                         TexLightningReflection.SampleLevel(samp, viewDir, 0).rgb * SharedData::physSkyData.lightningColorIntensity.w :
+		                         0.0;
+		return ColorManagement::SceneColor::ScaleAndAddLinear(color, TexVolCubeTr.SampleLevel(samp, viewDir, 0), cloud.rgb + flash);
 	}
 #		endif
 

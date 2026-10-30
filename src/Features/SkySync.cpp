@@ -342,6 +342,8 @@ void SkySync::ApplyMoonlightColors(RE::Sky* sky)
 
 float SkySync::GetDirectionalFlash(const RE::Sky* sky)
 {
+	if (globals::features::physicalSky.lightning.OwnsWeather())
+		return 0.f;
 	// Sky::SetColor caps the added flash at 1
 	return !sky->lastWeather && gWeatherFlashDirectional ? std::min(gWeatherFlashDirectional->GetFloat() * sky->flash, 1.0f) : 0.0f;
 }
@@ -396,7 +398,10 @@ RE::BSVolumetricLightingRenderData SkySync::BlendNightVolumetricLighting(const R
 
 void SkySync::Sky_Update::thunk(RE::Sky* sky, float deltaTime)
 {
+	auto& lightning = globals::features::physicalSky.lightning;
+	lightning.SuppressVanilla(sky);
 	func(sky, deltaTime);
+	lightning.SuppressVanilla(sky);
 	auto& skySync = globals::features::skySync;
 	if (sky && sky->sun)
 		globals::features::linearLighting.ClearSunlightColor(sky->sun->light.get());

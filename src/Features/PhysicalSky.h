@@ -4,6 +4,7 @@
 
 #include "PhysicalSky/Aerosol.h"
 #include "PhysicalSky/CloudNoiseGenerator.h"
+#include "PhysicalSky/Lightning.h"
 #include "PhysicalSky/LocalNdf.h"
 #include "PhysicalSky/Ndf.h"
 #include "PhysicalSky/Storm.h"
@@ -48,6 +49,7 @@ struct PhysicalSky final : public Feature
 	void SettingsAtmosphere();
 	void SettingsClouds();
 	void SettingsVolumetricClouds();
+	void SettingsWeatherEffects();
 	void DrawCloudStatus();
 	void DrawCloudLayerProfile();
 	void DrawWeatherMapSection();
@@ -156,6 +158,25 @@ struct PhysicalSky final : public Feature
 
 		// VOLUMETRIC CLOUDS
 		bool enableVolumetricClouds = false;
+		float lightningIntensity = 0.f;  // zero restores vanilla weather lightning
+		struct LightningSettings
+		{
+			float rate = 3.f;                       // discharges per minute in fully active storm weather
+			float2 distanceRange = { 0.35f, 7.f };  // horizontal kilometres
+			float radius = 600.f;                   // equivalent luminous cloud radius, metres
+			float cloudLuminance = 1000.f;          // peak cd/m^2
+			float channelLuminance = 1.0e7f;        // peak cd/m^2
+			float channelRadius = 0.12f;            // metres
+			int strokeCount = 3;
+			float strokeDuration = 20.f;  // milliseconds, full optical pulse duration
+			float strokeInterval = 90.f;  // milliseconds between stroke starts
+			float strokeDecay = 0.65f;
+			float groundChance = 35.f;     // percent
+			float cloudBaseChance = 35.f;  // percent; the remainder is embedded cloud lightning
+			bool useWeatherColor = true;
+			float3 color = { 0.86f, 0.9f, 1.f };  // linear sRGB chromaticity
+		};
+		LightningSettings lightning;
 		float rayMarchRange = 32.f;
 		float shadowVolumeRange = 8.f;  // km
 		float marchStepScale = 0.5f;
@@ -166,6 +187,8 @@ struct PhysicalSky final : public Feature
 
 		Aerosol::Optics GetAerosolOptics() const;
 		void ApplyAerosolOptics();
+		/// Validates the lightning controls after loading or scene interpolation.
+		void SanitizeLightning();
 	} settings;
 
 	struct CbData
@@ -236,6 +259,15 @@ struct PhysicalSky final : public Feature
 		// SETTINGS
 		uint lightSkyStatics;
 		float skyStaticsBrightness;  //
+		float4 lightningPositionRadius;
+		float4 lightningEndPosition;
+		float4 lightningColorIntensity;
+		float4 lightningControl;         // generation, mask history valid, segment count, ownership
+		float4 lightningPhotometry;      // cloud and channel cd/m^2, channel radius in m, cloud-base mode
+		float4 lightningPlacement;       // pending query: distance bounds in game units, seed, base mode
+		float4 lightningChannelEmitter;  // centroid and equivalent projected-area radius, game units
+		float4 lightningPreparationPositionRadius;
+		float4 lightningPreparationControl;  // base mode, history valid, active mask lane, preparing
 	} cbData;
 	STATIC_ASSERT_ALIGNAS_16(CbData);
 
@@ -301,6 +333,11 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texVolCubeTraceTr = nullptr;
 	eastl::unique_ptr<Texture2D> texVolCubeTraceLum = nullptr;
 	eastl::unique_ptr<Texture2D> texVolCubeTraceAux = nullptr;
+	SkyLightning lightning;
+	eastl::unique_ptr<Texture2D> texLightningTrace, texLightningMask, texLightningHistory;
+	eastl::unique_ptr<Texture2D> texLightningCubeTrace, texLightningCubeMask, texLightningCubeHistory;
+	eastl::unique_ptr<Texture2D> texLightningChannels, texLightningCubeLum;
+	winrt::com_ptr<ID3D11ComputeShader> csLightningQuery, csLightningComposite, csLightningCubeComposite;
 	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
 	eastl::unique_ptr<Texture3D> texShadowVolumeRaw = nullptr;
 
@@ -620,6 +657,7 @@ struct PhysicalSky final : public Feature
 
 		static void Install()
 		{
+			SkyLightning::InstallHooks();
 			stl::write_vfunc<0x18, BSCullingProcess_AppendVirtual>(RE::VTABLE_BSCullingProcess[0]);
 			stl::write_vfunc<0x2A, BSEffectShaderProperty_GetRenderPasses>(RE::VTABLE_BSEffectShaderProperty[0]);
 			stl::write_vfunc<0x6, BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);

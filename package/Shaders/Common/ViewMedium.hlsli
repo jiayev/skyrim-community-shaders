@@ -71,7 +71,16 @@ namespace ViewMedium
 	float3 CompositeViewMedium(float3 color, float3 position, float2 screenUV, SamplerState samplerState, bool fullCloudRay)
 	{
 		const ViewAtmosphere::Medium medium = SampleViewMedium(position, screenUV, samplerState, fullCloudRay);
-		return ColorManagement::SceneColor::ScaleAndAddLinear(color, medium.transmittance, medium.luminance);
+		float3 luminance = medium.luminance;
+#if defined(PHYSICAL_SKY) && defined(MEDIUM_COMPOSITE)
+		if (SharedData::physSkyData.lightningColorIntensity.w > 0.0) {
+			const float4 channel = PhysSky::TexLightningChannels.SampleLevel(samplerState, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(screenUV), 0);
+			const float distance = channel.a * 1000.0 / GAME_UNIT_TO_M;
+			if (distance > 0.0 && (fullCloudRay || distance < length(position)))
+				luminance += channel.rgb * SampleHeightMedium(normalize(position) * distance, screenUV, samplerState).transmittance;
+		}
+#endif
+		return ColorManagement::SceneColor::ScaleAndAddLinear(color, medium.transmittance, luminance);
 	}
 }
 

@@ -615,6 +615,10 @@ void PhysicalSky::SetupVolumetricResources()
 	texVolLowTr = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16_FLOAT, "PhysicalSky::CloudTraceTr");
 	texVolLowLum = createCloudTexture(lowW, lowH, historyRadianceFormat, "PhysicalSky::CloudTraceLum");
 	texVolLowAux = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::CloudTraceAux");
+	texLightningTrace = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16_FLOAT, "PhysicalSky::LightningTrace");
+	texLightningMask = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16_FLOAT, "PhysicalSky::LightningMask");
+	texLightningHistory = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16_FLOAT, "PhysicalSky::LightningHistory");
+	texLightningChannels = createCloudTexture(mainDesc.Width, mainDesc.Height, historyRadianceFormat, "PhysicalSky::LightningChannels");
 	texVolStormMotion = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::CloudStormMotion");
 	texStormTiles = createCloudTexture((lowW + 7u) / 8u, (lowH + 7u) / 8u, DXGI_FORMAT_R32_UINT, "PhysicalSky::StormTiles");
 	{
@@ -725,9 +729,16 @@ void PhysicalSky::SetupVolumetricResources()
 	texVolCubeTraceTr = createCube(kVolCubeSize / 4u, DXGI_FORMAT_R16_FLOAT, "PhysicalSky::VolCubeTraceTr");
 	texVolCubeTraceLum = createCube(kVolCubeSize / 4u, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolCubeTraceLum");
 	texVolCubeTraceAux = createCube(kVolCubeSize / 4u, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolCubeTraceAux");
+	texLightningCubeTrace = createCube(kVolCubeSize / 4u, DXGI_FORMAT_R16G16_FLOAT, "PhysicalSky::LightningCubeTrace");
+	texLightningCubeMask = createCube(kVolCubeSize, DXGI_FORMAT_R16G16_FLOAT, "PhysicalSky::LightningCubeMask");
+	texLightningCubeHistory = createCube(kVolCubeSize, DXGI_FORMAT_R16G16_FLOAT, "PhysicalSky::LightningCubeHistory");
+	texLightningCubeLum = createCube(kVolCubeSize, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::LightningCubeRadiance");
 	texVolCubeStormMotion = createCube(kVolCubeSize / 4u, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolCubeStormMotion");
 	const float clearTr[4] = { 1.f, 1.f, 1.f, 1.f };
 	const float clearLum[4] = {};
+	for (auto* texture : { texLightningTrace.get(), texLightningMask.get(), texLightningHistory.get(), texLightningChannels.get(), texLightningCubeTrace.get(), texLightningCubeMask.get(), texLightningCubeHistory.get(), texLightningCubeLum.get() })
+		context->ClearUnorderedAccessViewFloat(texture->uav.get(), clearLum);
+	lightning.SetupResources();
 	context->ClearUnorderedAccessViewFloat(texVolCubeTr->uav.get(), clearTr);
 	context->ClearUnorderedAccessViewFloat(texVolCubeLum->uav.get(), clearLum);
 	context->ClearUnorderedAccessViewFloat(texVolCubeAux->uav.get(), clearLum);
@@ -829,7 +840,10 @@ void PhysicalSky::CompileVolumetricShaders()
 		ShaderInfo{ &csVolShadowVolume, "Volumetrics.cs.hlsl", {}, "renderShadowVolume" },
 		ShaderInfo{ &csVolShadowResample, "Volumetrics.cs.hlsl", {}, "resampleShadowVolume" },
 		ShaderInfo{ &csVolCubemap, "Volumetrics.cs.hlsl", { { "CLOUD_REFLECTION", "" } }, "renderCubemap" },
-		ShaderInfo{ &csCloudCrossSection, "CloudCrossSection.cs.hlsl", {} }
+		ShaderInfo{ &csCloudCrossSection, "CloudCrossSection.cs.hlsl", {} },
+		ShaderInfo{ &csLightningQuery, "Volumetrics.cs.hlsl", { { "CLOUD_VOXELS", "" } }, "findLightningSource" },
+		ShaderInfo{ &csLightningComposite, "Volumetrics.cs.hlsl", { { "CLOUD_VOXELS", "" } }, "compositeLightning" },
+		ShaderInfo{ &csLightningCubeComposite, "Volumetrics.cs.hlsl", { { "CLOUD_VOXELS", "" } }, "compositeLightningCube" }
 	};
 
 	for (auto& info : shaderInfos) {
@@ -837,6 +851,8 @@ void PhysicalSky::CompileVolumetricShaders()
 		auto path = std::filesystem::path("Data\\Shaders\\PhysicalSky") / info.filename;
 		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.data())))
 			info.csPtr->attach(rawPtr);
+		else
+			logger::warn("PhysicalSky shader unavailable: {}::{}", info.filename, info.entry);
 	}
 	ndfManager.CompileShaders();
 	localNdfManager.CompileShaders();
@@ -1462,13 +1478,17 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		context->PSSetShaderResources(110, 2, nullOutputs);
 		context->PSSetShaderResources(114, 2, nullOutputs);
 		context->PSSetShaderResources(116, 1, nullOutputs);
+		context->PSSetShaderResources(113, 1, nullOutputs);
+		context->PSSetShaderResources(109, 1, nullOutputs);
 		texVolCubeTr.swap(texVolCubeHistoryTr);
 		const auto voxelRect = voxelCloudManager.ScreenRect(cloudData.bottomZ, (renderW + 1u) / 2u, (renderH + 1u) / 2u);
 		const bool voxelVisible = voxelRect[2] > voxelRect[0] && voxelRect[3] > voxelRect[1] && !state->isMapMenuOpen;
 		texVolCubeLum.swap(texVolCubeHistoryLum);
 		texVolCubeAux.swap(texVolCubeHistoryAux);
+		texLightningCubeMask.swap(texLightningCubeHistory);
 		context->CSSetShaderResources(1, (uint)srvs.size(), srvs.data());
 		context->CSSetShaderResources(13, 1, &ambientShSrv);
+		lightning.QuerySource(csLightningQuery.get());
 		std::array<ID3D11UnorderedAccessView*, 3> uavs = {};
 		if (!state->isMapMenuOpen) {
 			const CloudBoundaryCB boundaryData = {
@@ -1505,8 +1525,11 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			texVolTr.swap(texVolHistoryTr);
 			texVolLum.swap(texVolHistoryLum);
 			texVolAux.swap(texVolHistoryAux);
+			texLightningMask.swap(texLightningHistory);
 			uavs = { texVolLowTr->uav.get(), texVolLowLum->uav.get(), texVolLowAux->uav.get() };
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			auto* lightningOutput = texLightningTrace->uav.get();
+			context->CSSetUnorderedAccessViews(3, 1, &lightningOutput, nullptr);
 			auto* stormMotionOutput = texVolStormMotion->uav.get();
 			context->CSSetUnorderedAccessViews(6, 1, &stormMotionOutput, nullptr);
 			auto stormRect = cloudStormManager.ScreenRect(cloudData.bottomZ, lowW, lowH);
@@ -1578,6 +1601,12 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 				texVolLowTr->srv.get(), texVolLowLum->srv.get(), texVolLowAux->srv.get()
 			};
 			context->CSSetShaderResources(17, (uint)historySrvs.size(), historySrvs.data());
+			ID3D11UnorderedAccessView* nullLightning = nullptr;
+			context->CSSetUnorderedAccessViews(3, 1, &nullLightning, nullptr);
+			ID3D11ShaderResourceView* lightningInputs[] = { texLightningTrace->srv.get(), texLightningHistory->srv.get() };
+			context->CSSetShaderResources(90, 2, lightningInputs);
+			lightningOutput = texLightningMask->uav.get();
+			context->CSSetUnorderedAccessViews(3, 1, &lightningOutput, nullptr);
 			context->CSSetShaderResources(20, (uint)traceSrvs.size(), traceSrvs.data());
 			uavs = { texVolTr->uav.get(), texVolLum->uav.get(), texVolAux->uav.get() };
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
@@ -1618,6 +1647,18 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		}
 		outputSrvs[0] = texVolFilteredTr->srv.get();
 		outputSrvs[1] = texVolFilteredLum->srv.get();
+		if (!state->isMapMenuOpen && cbData.lightningColorIntensity.w > 0.f) {
+			ID3D11ShaderResourceView* inputs[] = { lightning.Segments(), texLightningMask->srv.get() };
+			context->CSSetShaderResources(94, 2, inputs);
+			ID3D11UnorderedAccessView* outputs[] = { texLightningChannels->uav.get(), texVolFilteredLum->uav.get() };
+			context->CSSetUnorderedAccessViews(4, 2, outputs, nullptr);
+			context->CSSetShader(csLightningComposite.get(), nullptr, 0);
+			globals::profiler->BeginPass("PhysicalSky::LightningChannels");
+			context->Dispatch((renderW + 7u) / 8u, (renderH + 7u) / 8u, 1);
+			globals::profiler->EndPass();
+			context->CSSetUnorderedAccessViews(4, 2, nullUavs, nullptr);
+			context->CSSetShaderResources(94, 2, nullTemporalSrvs);
+		}
 		if (voxelVisible) {
 			cloudDispatchCb->Update(voxelRect);
 			auto* constants = cloudDispatchCb->CB();
@@ -1647,6 +1688,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		}
 
 		uavs = { texVolCubeTraceTr->uav.get(), texVolCubeTraceLum->uav.get(), texVolCubeTraceAux->uav.get() };
+		auto* cubeLightningOutput = texLightningCubeTrace->uav.get();
+		context->CSSetUnorderedAccessViews(3, 1, &cubeLightningOutput, nullptr);
 		auto* reflectionBounds = texCloudHeightBoundsTiles->srv.get();
 		context->CSSetShaderResources(54, 1, &reflectionBounds);
 		auto* stormMotionOutput = texVolCubeStormMotion->uav.get();
@@ -1670,12 +1713,33 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		auto* stormMotionInput = texVolCubeStormMotion->srv.get();
 		context->CSSetShaderResources(59, 1, &stormMotionInput);
 		context->CSSetShader(csVolCubeReproject.get(), nullptr, 0);
+		ID3D11UnorderedAccessView* nullLightning = nullptr;
+		context->CSSetUnorderedAccessViews(3, 1, &nullLightning, nullptr);
+		ID3D11ShaderResourceView* lightningCubeInputs[] = { texLightningCubeTrace->srv.get(), texLightningCubeHistory->srv.get() };
+		context->CSSetShaderResources(92, 2, lightningCubeInputs);
+		cubeLightningOutput = texLightningCubeMask->uav.get();
+		context->CSSetUnorderedAccessViews(3, 1, &cubeLightningOutput, nullptr);
 		globals::profiler->BeginPass("PhysicalSky::VolumetricCubeReproject");
 		context->Dispatch((kVolCubeSize + 7u) >> 3, (kVolCubeSize + 7u) >> 3, 6);
 		globals::profiler->EndPass();
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 		context->CSSetShaderResources(23, (uint)cubeSrvs.size(), nullTemporalSrvs);
 		context->CSSetShaderResources(59, 1, nullTemporalSrvs);
+		context->CSSetUnorderedAccessViews(3, 1, &nullLightning, nullptr);
+		if (lightning.HasSource()) {
+			auto* mask = texLightningCubeMask->srv.get();
+			auto* channel = lightning.Segments();
+			context->CSSetShaderResources(94, 1, &channel);
+			context->CSSetShaderResources(95, 1, &mask);
+			auto* output = texLightningCubeLum->uav.get();
+			context->CSSetUnorderedAccessViews(5, 1, &output, nullptr);
+			context->CSSetShader(csLightningCubeComposite.get(), nullptr, 0);
+			globals::profiler->BeginPass("PhysicalSky::LightningReflections");
+			context->Dispatch((kVolCubeSize + 7u) / 8u, (kVolCubeSize + 7u) / 8u, 6);
+			globals::profiler->EndPass();
+			context->CSSetUnorderedAccessViews(5, 1, &nullLightning, nullptr);
+		}
+		lightning.CloudFrameComplete(volMainHistoryValid && !state->isMapMenuOpen);
 		volMainHistoryValid = true;
 		volHistoryWind = volWind;
 		cloudStormManager.CommitMotion();
@@ -1694,6 +1758,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		ID3D11SamplerState* nullSamplers[3] = {};
 		context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
 		context->CSSetShaderResources(89, 1, nullSrvs);
+		context->CSSetShaderResources(90, 7, nullSrvs);
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 		context->CSSetUnorderedAccessViews(3, 3, nullUavs, nullptr);
 		context->CSSetConstantBuffers(1, 1, nullCb);
@@ -1703,6 +1768,10 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 		// Make results available to any later pixel-shader passes that sample PhysicalSky/Common.hlsli.
 		context->PSSetShaderResources(110, (uint)outputSrvs.size(), outputSrvs.data());
+		auto* channels = texLightningChannels->srv.get();
+		auto* reflection = texLightningCubeLum->srv.get();
+		context->PSSetShaderResources(113, 1, &channels);
+		context->PSSetShaderResources(109, 1, &reflection);
 	}
 }
 

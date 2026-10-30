@@ -197,7 +197,8 @@ float3 AccumulateLocalLightScattering(
 		uint clusteredLightIndex = LightLimitFix::lightList[grid.offset + lightIndex];
 		LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
 
-		if (light.lightFlags & LightLimitFix::LightFlags::Disabled)
+		// Lightning is integrated after the shared medium's history filter.
+		if (light.lightFlags & (LightLimitFix::LightFlags::Disabled | LightLimitFix::LightFlags::Lightning))
 			continue;
 
 		float3 toLight = light.positionWS.xyz - positionWS;

@@ -1,6 +1,9 @@
 #define COMPUTESHADER
 #include "Common/ViewAtmosphere.hlsli"
 #include "PhysicalSky/Common.hlsli"
+#include "PhysicalSky/Lightning.hlsli"
+#define SKYLIGHTING_PROBE_REGISTER t50
+#include "Skylighting/Skylighting.hlsli"
 
 Texture3D<float4> MediumSource : register(t0);
 RWTexture3D<float4> IntegratedLuminance : register(u0);
@@ -33,7 +36,24 @@ cbuffer MediumDispatch : register(b0)
 			tau.x < 1e-3 ? step * (1.0 - 0.5 * tau.x) : (1.0 - stepTr.x) / extinction.x,
 			tau.y < 1e-3 ? step * (1.0 - 0.5 * tau.y) : (1.0 - stepTr.y) / extinction.y,
 			tau.z < 1e-3 ? step * (1.0 - 0.5 * tau.z) : (1.0 - stepTr.z) / extinction.z);
-		light += tr * source.rgb * factor;
+		float3 transient = 0.0;
+		if (SharedData::physSkyData.lightningColorIntensity.w > 0.0) {
+			const float3 worldPosition = position + FrameBuffer::CameraPosAdjust.xyz;
+			sh2 visibilitySH = Skylighting::UNIT_SH;
+			if (ViewAtmosphere::Data[0].flags.z & 8u)
+				visibilitySH = Skylighting::Sample(position, 0.0);
+			[unroll] for (uint emitter = 0u; emitter < 2u; ++emitter)
+			{
+				const float3 direction = normalize(Lightning::Emitter(emitter).xyz - worldPosition);
+				const float cosine = dot(normalize(position), direction);
+				float visibility = SharedData::InInterior ? 0.0 : 1.0;
+				if (ViewAtmosphere::Data[0].flags.z & 8u)
+					visibility *= Skylighting::EvaluateDiffuse(visibilitySH, direction, Skylighting::GetFadeOutFactor(position));
+				transient += Lightning::IncidentFrom(emitter, worldPosition) * visibility *
+				             (rayleigh * PhysSky::Phase::Rayleigh(cosine) + mie * PhysSky::Phase::CornetteShanks(cosine, SharedData::physSkyData.aerosolPhaseG) + source.a * (1.0 / (4.0 * 3.14159265)));
+			}
+		}
+		light += tr * (source.rgb + transient) * factor;
 		tr *= stepTr;
 		IntegratedLuminance[uint3(coord, layer + 1u) + grid.offset.xyz] = float4(min(light, 65504.0), 0);
 		IntegratedTransmittance[uint3(coord, layer + 1u) + grid.offset.xyz] = float4(tr, 1);
