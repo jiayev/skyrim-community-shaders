@@ -219,7 +219,7 @@ namespace DCLF
 					const auto mode = a_prepared.mode;
 					auto& commands = a_recording.Commands();
 					commands.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
-					auto device = RenderGraphRuntime::Get().Host()->GetDesc().device;
+					auto device = RenderGraphRuntime::Get().Host()->Device();
 					const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
 					const std::uint64_t sequencesAddress = device.GetBufferDeviceAddress({ sequences, 0 });
 					const rhi::IndexBufferView pool{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt };

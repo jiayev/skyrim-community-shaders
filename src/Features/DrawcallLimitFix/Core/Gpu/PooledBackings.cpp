@@ -22,7 +22,7 @@ namespace DCLF::PooledBackings
 		auto* host = RenderGraphRuntime::Get().Host();
 		if (!host)
 			return 0;
-		auto device = host->GetDesc().device;
+		auto device = host->Device();
 		return device.GetBufferDeviceAddress({ const_cast<org::Buffer&>(a_buffer).GetAPIResource().GetHandle(), 0 });
 	}
 
