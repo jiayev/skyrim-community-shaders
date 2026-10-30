@@ -491,14 +491,23 @@ PS_OUTPUT main(PS_INPUT input)
 		float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
 		float3 physSkyColor = inReflection ? PhysSky::SampleSky(skyViewDir, skyShadow, PhysSky::SampSv) : PhysSky::SampleViewSky(skyViewDir, skyShadow, PhysSky::SampSv);
 		float3 skyColor = physSkyColor;
-		if (SharedData::physSkyData.enableVolumetricClouds && (inReflection || !SharedData::PostWaterComposite))
+		if (inReflection && ViewAtmosphere::ReflectionEnabled()) {
+			uint tailWidth, tailHeight;
+			PhysSky::TexSkyTail.GetDimensions(tailWidth, tailHeight);
+			const float3 tail = PhysSky::TexSkyTail.SampleLevel(PhysSky::SampSv, PhysSky::SkyViewLutUv(skyViewDir, tailHeight), 0).rgb;
+			skyColor = PhysSky::CompositeReflectionMedium(tail, skyViewDir, PhysSky::AP_MAX_DIST, PhysSky::SampSv, true);
+		} else if (SharedData::physSkyData.enableVolumetricClouds && (inReflection || !SharedData::PostWaterComposite))
 			skyColor = inReflection ? PhysSky::CompositeVolumetricCloudsCube(physSkyColor, skyViewDir, PhysSky::SampSv) : PhysSky::CompositeVolumetricCloudsUv(physSkyColor, physSkyScreenUV, PhysSky::SampSv);
 		psout.Color = lerp(float4(skyColor, 1.0f), psout.Color, SharedData::physSkyData.vanillaMix);
 
 #		elif defined(PS_CLOUDS)
 		float apShadow = GetPhysSkyCloudShadow(viewDir, input.Position.xy);
 		float4 apColor = PhysSky::SampleAp(viewDir, psCloudDist, apShadow, PhysSky::SampSv);
-		psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
+		if (inReflection && ViewAtmosphere::ReflectionEnabled()) {
+			const ViewAtmosphere::Medium medium = ViewAtmosphere::SampleReflection(PhysSky::SkyViewLutUv(viewDir, 32u), psCloudDist, PhysSky::SampSv);
+			psout.Color.xyz = ColorManagement::SceneColor::ScaleAndAddLinear(psout.Color.xyz, medium.transmittance, medium.luminance);
+		} else
+			psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
 #		elif defined(TEX) && defined(DEFERRED)
 		float3 sunDir = normalize(SharedData::physSkyData.sunDir);
 		float cosTheta = saturate(dot(normalize(input.WorldPosition.xyz), sunDir));
@@ -526,7 +535,7 @@ PS_OUTPUT main(PS_INPUT input)
 		}
 		if (SharedData::physSkyData.enableVolumetricClouds && (inReflection || !SharedData::PostWaterComposite)) {
 			float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
-			psout.Color.xyz = PhysSky::ApplyVolumetricCloudTransmittanceUv(psout.Color.xyz, physSkyScreenUV, PhysSky::SampSv);
+			psout.Color.xyz = inReflection ? ColorManagement::SceneColor::ScaleByLinear(psout.Color.xyz, PhysSky::TexVolCubeTr.SampleLevel(PhysSky::SampSv, normalize(input.WorldPosition.xyz), 0)) : PhysSky::ApplyVolumetricCloudTransmittanceUv(psout.Color.xyz, physSkyScreenUV, PhysSky::SampSv);
 		}
 #		else
 #			if defined(HORIZFADE) || (defined(TEX) && !defined(MOONMASK))

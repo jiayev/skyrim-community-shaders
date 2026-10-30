@@ -56,11 +56,8 @@ groupshared float2 ReflectionLightning[CloudReflectionSegments];
 	float3 radiance = (ReflectionDirect[0].rgb + ReflectionAmbient[0].rgb) / (1.0 - min(rawTransmission, 0.1));
 	float2 lightning = ReflectionLightning[0] / (1.0 - min(rawTransmission, 0.1));
 	const float depth = weights.y > 0.0 ? weights.x / weights.y : info.rayMarchRange;
-	if (weights.y > 0.0) {
-		const float4 air = SampleCloudAerialPerspective(direction, depth, 0.0);
-		radiance = radiance * air.a + air.rgb * opacity;
-		lightning *= air.a;
-	}
+	// Keep the cloud source independent of foreground air. Reflection composition
+	// applies either the shared reflection medium or the legacy AP at this depth.
 	RWTexCubeTr[pixel] = transmission;
 	RWTexCubeLum[pixel] = float4(min(radiance, 65504.0), opacity);
 	RWLightningCubeMask[pixel] = min(lightning, 65504.0);

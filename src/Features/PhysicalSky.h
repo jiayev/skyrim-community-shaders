@@ -282,6 +282,7 @@ struct PhysicalSky final : public Feature
 	constexpr static uint16_t kShadowVolW = 256;
 	constexpr static uint16_t kShadowVolH = 256;
 	constexpr static uint16_t kShadowVolD = 64;
+	constexpr static uint16_t kShadowMeanHeights = 64;
 	constexpr static uint16_t kVolCubeSize = 64;
 	constexpr static uint32_t kCloudBoundaryCells = 256;
 	eastl::unique_ptr<Texture2D> texCloudBoundary = nullptr;
@@ -340,6 +341,7 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csLightningQuery, csLightningComposite, csLightningCubeComposite;
 	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
 	eastl::unique_ptr<Texture3D> texShadowVolumeRaw = nullptr;
+	eastl::unique_ptr<Texture2D> texCloudShadowMean = nullptr;
 
 	// ImGui::Image cannot sample a cubemap or a volume texture, so those are shown
 	// through a 2D view built from the resource itself.
@@ -543,6 +545,7 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubeReproject = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowResample = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudShadowMean, csCloudShadowMeanVolcanic, csCloudShadowMeanVoxel;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolAmbientSH = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csCloudAmbientReduce;

@@ -699,6 +699,8 @@ void ExponentialHeightFog::Prepass()
 	context->CSSetShaderResources(61, 4, physicalSkySrvs);
 	context->CSSetShaderResources(76, 2, iblSrvs);
 	context->CSSetShaderResources(112, 1, &physicalSkyShadowVolumeSrv);
+	ID3D11ShaderResourceView* physicalSkyShadowMeanSrv = physicalSky.loaded && physicalSky.texCloudShadowMean ? physicalSky.texCloudShadowMean->srv.get() : nullptr;
+	context->CSSetShaderResources(69, 1, &physicalSkyShadowMeanSrv);
 	ID3D11ShaderResourceView* localShadowSrvs[2]{
 		hasLocalShadowData ? lightLimitFix.localShadowBuffer->srv.get() : nullptr,
 		hasLocalShadowData ? lightLimitFix.localShadowCache->srv.get() : nullptr
@@ -837,6 +839,7 @@ void ExponentialHeightFog::Prepass()
 	context->CSSetShaderResources(98, 1, nullSrvs);
 	context->CSSetShaderResources(102, 2, nullSrvs);
 	context->CSSetShaderResources(112, 1, nullSrvs);
+	context->CSSetShaderResources(69, 1, nullSrvs);
 	context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
 	context->CSSetSamplers(0, 2, nullSamplers);
 	context->CSSetConstantBuffers(0, 1, nullCb);

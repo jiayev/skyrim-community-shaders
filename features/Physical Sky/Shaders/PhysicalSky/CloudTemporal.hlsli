@@ -254,15 +254,23 @@ float3 RebaseCloudHistoryDepth(inout CloudTemporalSample history, float3 directi
 }
 
 void ResolveCloudHistoryVisibility(inout CloudTemporalSample history, CloudTemporalSample current,
-	float2 depthRange, float4 sampleMinimum, float4 sampleMaximum)
+	float2 depthRange, float4 sampleMinimum, float4 sampleMaximum, float3 historyPosition, float2 currentUv, float evolutionBlend)
 {
+	const float4 clip = mul(FrameBuffer::CameraViewProj, float4(historyPosition, 1));
+	float confidence = 1.0;
+	if (clip.w > 0.0) {
+		const float2 historyUv = clip.xy / clip.w * float2(0.5, -0.5) + 0.5;
+		const float cycleDisplacement = length((historyUv - currentUv) * VolumetricCloudBuffer[0].activeFrameDim) * 16.0;
+		confidence = max(smoothstep(0.0, 0.5, cycleDisplacement), evolutionBlend * 2.0);
+	}
 	const float depthTolerance = EncodeCloudDepth(CloudViewStep(DecodeCloudDepth(depthRange.y), 0.0));
 	const bool depthValid = history.metadata.x >= depthRange.x - depthTolerance && history.metadata.x <= depthRange.y + depthTolerance;
 	const float4 currentValue = float4(current.color.rgb, current.transmittance);
 	const float4 difference = float4(history.color.rgb, history.transmittance) - currentValue;
 	const float4 extent = max(lerp(currentValue - sampleMinimum, sampleMaximum - currentValue, step(0.0, difference)), 0.0);
 	const float4 ratio = abs(difference) > 1e-6 ? extent / max(abs(difference), 1e-6) : 1.0;
-	const float historyWeight = depthValid ? saturate(min(min(ratio.x, ratio.y), min(ratio.z, ratio.w))) : 0.0;
+	const float clippedWeight = depthValid ? saturate(min(min(ratio.x, ratio.y), min(ratio.z, ratio.w))) : 0.0;
+	const float historyWeight = lerp(1.0, clippedWeight, confidence);
 	// Clip along the current-to-history segment: premultiplied radiance and
 	// transmission retain the same mixture. Equal opacity does not make an old
 	// foreground cloud valid behind its newly exposed background.
@@ -377,13 +385,15 @@ cbuffer CloudDispatch : register(b3) { uint4 StormScreenRect; };
 	if (useHistory) {
 		result = ReconstructCloud(TexVolHistoryTr, TexVolHistoryLum, TexVolHistoryAux, TexLightningHistory,
 			previousUv * info.previousFrameDim - 0.5, int2(info.previousFrameDim) - 1, false);
-		RebaseCloudHistoryDepth(result, ray, previousPosition, cameraDelta);
+		const float3 historyPosition = RebaseCloudHistoryDepth(result, ray, previousPosition, cameraDelta);
 		const bool traced = all((pixel & 3u) == CloudPhaseOffset());
 		// The traced phase supplies its own current surface sample. HFW's
 		// background-depth rejection only governs the other checkerboard phases.
 		useHistory = traced || abs(sceneDepth - result.metadata.y) <= 0.064;
-		if (useHistory && currentValid)
-			ResolveCloudHistoryVisibility(result, current, currentDepthRange, currentMinimum, currentMaximum);
+		// Sparse phase neighbours are not a visibility change in a static medium.
+		// Keep their changing bounds from overwriting the other 15 history phases.
+		if (useHistory && currentValid && (any(cameraDelta != 0.0) || evolutionBlend > 0.0))
+			ResolveCloudHistoryVisibility(result, current, currentDepthRange, currentMinimum, currentMaximum, historyPosition, uv, evolutionBlend);
 		if (useHistory && traced) {
 			const float weight = max(CloudHistoryBlend(previousUv - uv), evolutionBlend * 2.0);
 			result.transmittance = BlendCloudTransmittance(result.transmittance, TexVolLowTr[pixel / 4u], weight);

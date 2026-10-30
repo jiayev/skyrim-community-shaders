@@ -185,6 +185,29 @@ namespace ImageBasedLighting
 		return ApplyIBLReflectionFallback(iblColor, GetSkyIBLColorOccluded(rayDir, visibility), positionMS);
 	}
 
+	// Integrate radiance against the normalized HG phase, rather than a surface cosine lobe.
+	// DiffuseIBLCS projects Sample(-rayDir), so its SH direction is opposite the cubemap direction.
+	float3 GetPhaseIBLColorOccluded(float3 viewDirection, float phaseG, float visibility, float3 positionMS)
+	{
+		const sh2 phase = SphericalHarmonics::EvaluatePhaseHG(-viewDirection, phaseG);
+		float3 envColor = max(0.0, float3(
+									   dot(EnvIBLTexture.Load(int3(0, 0, 0)), phase),
+									   dot(EnvIBLTexture.Load(int3(1, 0, 0)), phase),
+									   dot(EnvIBLTexture.Load(int3(2, 0, 0)), phase)));
+		envColor = Color::Saturation(envColor, SharedData::iblSettings.EnvIBLSaturation) * SharedData::iblSettings.EnvIBLScale * GetIBLRatio();
+		if (!SharedData::InInterior && SharedData::iblSettings.SkylightingAffectsEnv != 0)
+			envColor *= visibility;
+		float3 skyColor = 0.0;
+		if (!SharedData::InInterior) {
+			skyColor = max(0.0, float3(
+									dot(SkyIBLTexture.Load(int3(0, 0, 0)), phase),
+									dot(SkyIBLTexture.Load(int3(1, 0, 0)), phase),
+									dot(SkyIBLTexture.Load(int3(2, 0, 0)), phase)));
+			skyColor = Color::Saturation(skyColor, SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale * visibility;
+		}
+		return ApplyIBLReflectionFallback(envColor + skyColor, skyColor, positionMS);
+	}
+
 #if defined(LIGHTING)
 	float3 GetStaticDiffuseIBL(float3 N, SamplerState samp)
 	{

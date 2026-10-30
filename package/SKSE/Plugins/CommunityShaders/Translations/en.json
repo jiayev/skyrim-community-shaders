@@ -3788,7 +3788,7 @@
     "feature.view_atmosphere.sampling": "Sampling",
     "feature.view_atmosphere.sampling_hint": "More history reduces noise but reacts more slowly. Sample jitter moves lighting samples inside each cell. Excessive shadow bias can cause light leaks.",
     "feature.view_atmosphere.shadow_bias": "Directional Shadow Bias",
-    "feature.view_atmosphere.shared_hint": "The shared volume requires active Physical Sky. Otherwise AP uses its LUT and volumetric fog uses separate volumes. Quality settings below also apply to standalone volumetric fog. Reflections retain their separate path.",
+    "feature.view_atmosphere.shared_hint": "The shared volume requires active Physical Sky. Otherwise AP uses its LUT and volumetric fog uses separate volumes. Quality settings below also apply to standalone volumetric fog. Reflections use a separate low-resolution atmosphere and fog cache when the shared volume is enabled.",
     "feature.view_atmosphere.shared_volume": "Use Shared Atmosphere and Fog Volume",
     "feature.view_atmosphere.standalone_hint": "These controls only affect the separate volumetric fog path.",
     "feature.view_atmosphere.standalone_sampling": "Standalone Fog Sampling",

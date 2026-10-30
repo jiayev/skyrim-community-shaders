@@ -88,7 +88,7 @@ void ViewAtmosphere::DrawSettings()
 		settings.enabled = enabled;
 		lastFrame = UINT32_MAX;
 	}
-	ImGui::TextWrapped("%s", T(TKEY("shared_hint"), "The shared volume requires active Physical Sky. Otherwise AP uses its LUT and volumetric fog uses separate volumes. Quality settings below also apply to standalone volumetric fog. Reflections retain their separate path."));
+	ImGui::TextWrapped("%s", T(TKEY("shared_hint"), "The shared volume requires active Physical Sky. Otherwise AP uses its LUT and volumetric fog uses separate volumes. Quality settings below also apply to standalone volumetric fog. Reflections use a separate low-resolution atmosphere and fog cache when the shared volume is enabled."));
 	ImGui::TextUnformatted(IsReady() ? T(TKEY("status_shared"), "Active: shared atmosphere and fog volume") : T(TKEY("status_separate"), "Active: separate rendering paths"));
 
 	const uint32_t minPixels = 4, maxPixels = 64, minSlices = 16, maxSlices = 160;
@@ -326,6 +326,8 @@ void ViewAtmosphere::Render()
 	bind(102, localShadows ? lights.localShadowBuffer->srv.get() : nullptr);
 	bind(103, localShadows ? lights.localShadowCache->srv.get() : nullptr);
 	bind(112, sky.texShadowVolume ? sky.texShadowVolume->srv.get() : nullptr);
+	bind(69, sky.texCloudShadowMean ? sky.texCloudShadowMean->srv.get() : nullptr);
+	bind(70, CloudDiffuseTransport());
 	ID3D11UnorderedAccessView* nullUavs[2]{};
 	globals::profiler->BeginPass("ViewAtmosphere::LightScattering");
 	for (uint32_t level = 0; level < 3; ++level) {
@@ -350,7 +352,7 @@ void ViewAtmosphere::Render()
 		context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
 	}
 	globals::profiler->EndPass();
-	for (UINT slot : { 0u, 1u, 2u, 5u, 25u, 31u, 35u, 36u, 37u, 50u, 60u, 61u, 67u, 68u, 76u, 77u, 98u, 102u, 103u, 112u, 127u })
+	for (UINT slot : { 0u, 1u, 2u, 5u, 25u, 31u, 35u, 36u, 37u, 50u, 60u, 61u, 67u, 68u, 69u, 70u, 76u, 77u, 98u, 102u, 103u, 112u, 127u })
 		bind(slot, nullptr);
 	ID3D11Buffer* nullBuffers[2]{};
 	ID3D11SamplerState* nullSamplers[2]{};
@@ -375,6 +377,150 @@ void ViewAtmosphere::Bind(bool compute)
 		globals::d3d::context->PSSetShaderResources(125, 3, srvs);
 }
 
+void ViewAtmosphere::RenderReflection()
+{
+	Unbind();
+	auto& sky = globals::features::physicalSky;
+	auto& fog = globals::features::exponentialHeightFog;
+	if (!loaded || !settings.enabled || !ready || !sky.loaded || !sky.cbData.enabled || globals::state->isMapMenuOpen ||
+		!sky.texTrLut || !sky.texMsLut || !sky.texSvLut || !sky.texApLut || !sky.texSkyTail || !sky.csSkyTailGen || !CompositeEnabled())
+		return;
+	if (!reflectionShadersRequested) {
+		reflectionShadersRequested = true;
+		std::vector<std::pair<const char*, const char*>> defines{ { "PHYSICAL_SKY", "" } };
+		if (fog.loaded)
+			defines.emplace_back("EXP_HEIGHT_FOG", "");
+		if (globals::features::terrainShadows.loaded)
+			defines.emplace_back("TERRAIN_SHADOWS", "");
+		if (globals::features::cloudShadows.loaded)
+			defines.emplace_back("CLOUD_SHADOWS", "");
+		reflectionCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ViewAtmosphere\\Reflection.cs.hlsl", defines, "cs_5_0")));
+		defines.emplace_back("REFLECTION_SKY_SH", "");
+		reflectionSkyCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ViewAtmosphere\\Reflection.cs.hlsl", defines, "cs_5_0")));
+	}
+	if (!reflectionCS || !reflectionSkyCS)
+		return;
+	auto* context = globals::d3d::context;
+	if (!reflectionParameters) {
+		reflectionParameters = std::make_unique<StructuredBuffer>(StructuredBufferDesc<Parameters>(uint64_t(1), false, true), 1u, "ViewAtmosphere::ReflectionParameters");
+		reflectionParameters->CreateSRV();
+		auto makeVolume = [](const char* name) {
+			D3D11_TEXTURE3D_DESC desc{};
+			desc.Width = desc.Height = desc.Depth = 32;
+			desc.MipLevels = 1;
+			desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			auto texture = std::make_unique<Texture3D>(desc, name);
+			D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+			srv.Format = desc.Format;
+			srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
+			srv.Texture3D.MipLevels = 1;
+			texture->CreateSRV(srv);
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uav{};
+			uav.Format = desc.Format;
+			uav.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D;
+			uav.Texture3D.WSize = desc.Depth;
+			texture->CreateUAV(uav);
+			return texture;
+		};
+		reflectionLum = makeVolume("ViewAtmosphere::ReflectionLuminance");
+		reflectionTr = makeVolume("ViewAtmosphere::ReflectionTransmittance");
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = 3;
+		desc.Height = 2;  // Sky SH plus the cloud/clear-sky diffuse transport ratio.
+		desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+		desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		reflectionSkySH = std::make_unique<Texture2D>(desc, "ViewAtmosphere::ReflectionSkySH");
+		D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+		srv.Format = desc.Format;
+		srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srv.Texture2D.MipLevels = 1;
+		reflectionSkySH->CreateSRV(srv);
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uav{};
+		uav.Format = desc.Format;
+		uav.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+		reflectionSkySH->CreateUAV(uav);
+		D3D11_SAMPLER_DESC sampler{};
+		sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+		sampler.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+		sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+		sampler.MaxLOD = D3D11_FLOAT32_MAX;
+		DX::ThrowIfFailed(globals::d3d::device->CreateSamplerState(&sampler, reflectionSampler.put()));
+		Util::SetResourceName(reflectionSampler.get(), "ViewAtmosphere::ReflectionSampler");
+	}
+	// One update before all six faces; reuse the completed sky/cloud LUTs, including
+	// SkyTail. Rebuilding its 200x150x30 ray march here would dominate this small cache.
+	auto& terrain = globals::features::terrainShadows;
+	auto& clouds = globals::features::cloudShadows;
+	auto& skylighting = globals::features::skylighting;
+	auto& ibl = globals::features::ibl;
+	const bool useFog = fog.IsActive();
+	const bool useIBL = useFog && ibl.loaded && ibl.settings.EnableIBL && !ibl.IsDisabledForCurrentScene() && ibl.envIBLTexture;
+	const bool terrainReady = terrain.IsShadowMapReady();
+	auto* cloudLayer = clouds.loaded ? clouds.texCloudShadowLayers[CloudShadows::kMaxCloudLayers - 1] : nullptr;
+	Parameters reflection{};
+	reflection.grids[0].size = { 32, 32, 32, 0 };
+	const float offset = 10.0f / Util::Units::GAME_UNIT_TO_M;
+	const float distance = 40000.0f / Util::Units::GAME_UNIT_TO_M;
+	reflection.grids[0].depth = { 0, distance, offset, std::log2(1.0f + distance / offset) };
+	reflection.atlas = { 32, 32, 32, 0 };
+	reflection.flags = { 1u, uint32_t(useFog), (useIBL ? 4u : 0u) | (skylighting.loaded && skylighting.texProbeArray ? 8u : 0u) | (terrainReady ? 256u : 0u) | (cloudLayer ? 512u : 0u), 1u };
+	reflectionParameters->Update(&reflection, sizeof(reflection));
+	auto bind = [&](UINT slot, ID3D11ShaderResourceView* srv) { context->CSSetShaderResources(slot, 1, &srv); };
+	ID3D11Buffer* shared[] = { globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
+	context->CSSetConstantBuffers(5, 2, shared);
+	auto* frame = *globals::game::perFrame;
+	context->CSSetConstantBuffers(12, 1, &frame);
+	auto* sampler = reflectionSampler.get();
+	context->CSSetSamplers(0, 1, &sampler);
+	bind(2, sky.texMsLut->srv.get());
+	bind(25, cloudLayer ? cloudLayer->srv.get() : nullptr);
+	bind(50, skylighting.loaded && skylighting.texProbeArray ? skylighting.texProbeArray->srv.get() : nullptr);
+	bind(60, terrainReady ? terrain.texShadowHeight->srv.get() : nullptr);
+	bind(61, sky.texTrLut->srv.get());
+	bind(62, sky.texSvLut->srv.get());
+	bind(63, sky.texApLut->srv.get());
+	bind(67, sky.texVolCubeAux ? sky.texVolCubeAux->srv.get() : nullptr);
+	bind(76, useIBL ? ibl.envIBLTexture->srv.get() : nullptr);
+	bind(77, nullptr);
+	bind(112, sky.texShadowVolume ? sky.texShadowVolume->srv.get() : nullptr);
+	bind(69, sky.texCloudShadowMean ? sky.texCloudShadowMean->srv.get() : nullptr);
+	bind(114, sky.texVolCubeTr ? sky.texVolCubeTr->srv.get() : nullptr);
+	bind(115, sky.texVolCubeLum ? sky.texVolCubeLum->srv.get() : nullptr);
+	bind(127, reflectionParameters->SRV());
+	ID3D11UnorderedAccessView* outputs[] = { reflectionSkySH->uav.get(), nullptr };
+	ID3D11UnorderedAccessView* nullOutputs[2]{};
+	bind(70, nullptr);
+	globals::profiler->BeginPass("ViewAtmosphere::ReflectionSkySH");
+	context->CSSetUnorderedAccessViews(0, 2, outputs, nullptr);
+	context->CSSetShader(reflectionSkyCS.get(), nullptr, 0);
+	context->Dispatch(1, 1, 1);
+	context->CSSetUnorderedAccessViews(0, 2, nullOutputs, nullptr);
+	globals::profiler->EndPass();
+	bind(77, reflectionSkySH->srv.get());
+	bind(70, CloudDiffuseTransport());
+	outputs[0] = reflectionLum->uav.get();
+	outputs[1] = reflectionTr->uav.get();
+	globals::profiler->BeginPass("ViewAtmosphere::ReflectionMedium");
+	context->CSSetUnorderedAccessViews(0, 2, outputs, nullptr);
+	context->CSSetShader(reflectionCS.get(), nullptr, 0);
+	context->Dispatch(16, 32, 1);
+	context->CSSetUnorderedAccessViews(0, 2, nullOutputs, nullptr);
+	globals::profiler->EndPass();
+	for (UINT slot : { 2u, 25u, 50u, 60u, 61u, 62u, 63u, 67u, 69u, 70u, 76u, 77u, 112u, 114u, 115u, 127u })
+		bind(slot, nullptr);
+	sampler = nullptr;
+	context->CSSetSamplers(0, 1, &sampler);
+	context->CSSetShader(nullptr, nullptr, 0);
+	ID3D11ShaderResourceView* result[] = { reflectionLum->srv.get(), reflectionTr->srv.get(), reflectionParameters->SRV() };
+	context->PSSetShaderResources(125, 3, result);
+	auto* tail = sky.texSkyTail->srv.get();
+	context->PSSetShaderResources(66, 1, &tail);
+}
+
 void ViewAtmosphere::Unbind()
 {
 	ID3D11ShaderResourceView* nullSrvs[3]{};
@@ -387,6 +533,9 @@ void ViewAtmosphere::ClearShaderCache()
 	preview.ClearShaderCache();
 	mediumCompositeCS = nullptr;
 	mediumShaderRequested = false;
+	reflectionCS = nullptr;
+	reflectionSkyCS = nullptr;
+	reflectionShadersRequested = false;
 	injectCS = nullptr;
 	integrateCS = nullptr;
 	prepared = ready = false;

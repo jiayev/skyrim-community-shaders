@@ -55,6 +55,8 @@ public:
 	std::pair<ID3D11ShaderResourceView*, ID3D11Buffer*> PrepareLocalShadows(bool enabled);
 	/** @brief Injects and integrates the prepared volume after feature prepasses. */
 	void Render();
+	/** @brief Builds and binds a small omnidirectional medium before the six reflection faces. */
+	void RenderReflection();
 	/** @brief Binds the integrated medium to a shader stage. */
 	void Bind(bool compute = false);
 	/** @brief Removes shared medium bindings from both shader stages. */
@@ -66,6 +68,8 @@ public:
 	ID3D11ShaderResourceView* Luminance() const { return integratedLum ? integratedLum->srv.get() : nullptr; }
 	ID3D11ShaderResourceView* Transmittance() const { return integratedTr ? integratedTr->srv.get() : nullptr; }
 	ID3D11ShaderResourceView* Source() const { return ready && history ? history->srv.get() : nullptr; }
+	/** @brief Cloud/clear diffuse transport from the last completed reflection sky update. */
+	ID3D11ShaderResourceView* CloudDiffuseTransport() const { return ready && settings.enabled && reflectionSkySH ? reflectionSkySH->srv.get() : nullptr; }
 
 private:
 	struct Grid
@@ -93,6 +97,12 @@ private:
 	winrt::com_ptr<ID3D11ComputeShader> injectCS, integrateCS;
 	winrt::com_ptr<ID3D11SamplerState> linearSampler, shadowSampler;
 	winrt::com_ptr<ID3D11ComputeShader> mediumCompositeCS;
+	std::unique_ptr<StructuredBuffer> reflectionParameters;
+	std::unique_ptr<Texture3D> reflectionLum, reflectionTr;
+	std::unique_ptr<Texture2D> reflectionSkySH;
+	winrt::com_ptr<ID3D11ComputeShader> reflectionCS, reflectionSkyCS;
+	winrt::com_ptr<ID3D11SamplerState> reflectionSampler;
+	bool reflectionShadersRequested = false;
 	uint32_t mediumCompositeFrame = UINT32_MAX;
 	bool mediumShaderRequested = false;
 	bool prepared = false;

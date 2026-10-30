@@ -3786,7 +3786,7 @@
     "feature.view_atmosphere.sampling": "采样",
     "feature.view_atmosphere.sampling_hint": "更高的历史权重可减少噪点，但响应更慢。采样抖动会在网格单元内移动光照采样点。过大的阴影偏移可能造成漏光。",
     "feature.view_atmosphere.shadow_bias": "方向光阴影偏移",
-    "feature.view_atmosphere.shared_hint": "共享体积需要启用物理天空。否则 AP 使用 LUT，体积雾使用独立网格。下方质量设置同样用于独立体积雾。反射仍使用独立路径。",
+    "feature.view_atmosphere.shared_hint": "共享体积需要启用物理天空。否则 AP 使用 LUT，体积雾使用独立网格。下方质量设置同样用于独立体积雾。启用共享体积时，反射使用独立的低分辨率大气与雾缓存。",
     "feature.view_atmosphere.shared_volume": "使用大气与雾共享体积",
     "feature.view_atmosphere.standalone_hint": "这些设置只影响独立体积雾路径。",
     "feature.view_atmosphere.standalone_sampling": "独立体积雾采样",

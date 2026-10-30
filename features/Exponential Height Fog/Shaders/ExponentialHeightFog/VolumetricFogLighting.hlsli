@@ -80,7 +80,7 @@ float SampleDirectionalWorldShadow(float3 positionWS)
 #endif
 #if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
-		worldShadow *= dot(PhysSky::GetDirlightTransmittance(positionWS + FrameBuffer::CameraPosAdjust.xyz, LinearSampler), 1.0f.xxx / 3.0f);
+		worldShadow *= dot(PhysSky::GetDirlightTransmittance(positionWS + FrameBuffer::CameraPosAdjust.xyz, LinearSampler, true), 1.0f.xxx / 3.0f);
 #endif
 	return worldShadow;
 }
@@ -88,13 +88,13 @@ float SampleDirectionalWorldShadow(float3 positionWS)
 float3 ComputeSkyLightScattering(float3 positionWS, float3 viewDirection)
 {
 	float phaseG = SharedData::exponentialHeightFogSettings.volumetricFogScatteringDistribution;
-	float3 skyDirection = abs(phaseG) > 0.001f ? normalize(-viewDirection * phaseG) : 0.0f.xxx;
-	float3 skyVisibilityDirection = abs(phaseG) > 0.001f ? skyDirection : float3(0.0f, 0.0f, 1.0f);
 	float skyVisibility = 1.0f;
 	if (VolumetricFogHasSkylighting && !SharedData::InInterior) {
-		float3 skylightingPosition = positionWS;
-		sh2 skylightingSH = Skylighting::SampleNoBias(skylightingPosition);
-		skyVisibility = Skylighting::EvaluateDiffuse(skylightingSH, skyVisibilityDirection, Skylighting::GetFadeOutFactor(skylightingPosition));
+		// Visibility SH uses directions toward the source, unlike the IBL cubemap projection.
+		const sh2 phase = SphericalHarmonics::EvaluatePhaseHG(viewDirection, phaseG);
+		const sh2 skylightingSH = Skylighting::SampleNoBias(positionWS);
+		const float visibility = SphericalHarmonics::FuncProductIntegral(skylightingSH, phase);
+		skyVisibility = Skylighting::MixDiffuse(lerp(1.0f, saturate(visibility), Skylighting::GetFadeOutFactor(positionWS)));
 	}
 
 	float3 skyLighting =
@@ -102,7 +102,7 @@ float3 ComputeSkyLightScattering(float3 positionWS, float3 viewDirection)
 		SharedData::exponentialHeightFogSettings.fogInscatteringColor.a *
 		skyVisibility;
 	[branch] if (VolumetricFogHasIBL)
-		skyLighting = ImageBasedLighting::GetIBLColorOccluded(skyDirection, skyVisibility, positionWS);
+		skyLighting = ImageBasedLighting::GetPhaseIBLColorOccluded(viewDirection, phaseG, skyVisibility, positionWS);
 
 	return skyLighting *
 	       SharedData::exponentialHeightFogSettings.volumetricSkyLightingIntensity;
@@ -214,7 +214,8 @@ float3 AccumulateLocalLightScattering(
 		attenuation *= SampleLocalLightShadow(light, positionWS, L, shadowNoise);
 		if (attenuation < 1e-5f)
 			continue;
-		float phase = ExponentialHeightFog::HenyeyGreenstein(dot(L, -viewDirection), phaseG);
+		// Both L and viewDirection point toward a light ahead of the camera for forward scattering.
+		float phase = ExponentialHeightFog::HenyeyGreenstein(dot(L, viewDirection), phaseG);
 
 		float3 lightColor = Color::PointLight(light.color.xyz) * attenuation * light.fade;
 		localScattering += lightColor * phase;

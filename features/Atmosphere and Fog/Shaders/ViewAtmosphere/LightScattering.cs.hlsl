@@ -28,7 +28,7 @@ StructuredBuffer<DirectionalShadowLightData> DirectionalShadowLights : register(
 #	include "TerrainShadows/TerrainShadows.hlsli"
 #endif
 
-float MediumVisibility(float3 position, out float atmosphereVisibility)
+float MediumVisibility(float3 position, out float atmosphereVisibility, out float3 diffuseVisibility)
 {
 	float visibility = 1.0;
 	if (ViewAtmosphere::Data[0].flags.z & 1u) {
@@ -53,8 +53,11 @@ float MediumVisibility(float3 position, out float atmosphereVisibility)
 	if ((ViewAtmosphere::Data[0].flags.z & 512u) && CloudShadows::IntersectCloudDist(position, SharedData::DirLightDirection.xyz) >= 0.0)
 		layerShadow = CloudShadows::GetCloudShadowMult(position, LinearSampler);
 #endif
-	const float volumeShadow = dot(PhysSky::GetDirlightTransmittance(position + FrameBuffer::CameraPosAdjust.xyz, LinearSampler), 1.0 / 3.0);
+	const float volumeShadow = PhysSky::GetDirlightTransmittance(position + FrameBuffer::CameraPosAdjust.xyz, LinearSampler, true).x;
 	const float2 remap = SharedData::physSkyData.cloudShadowRemapRange;
+	// MS LUTs assume clear-sky illumination. Keep cloud transport on that source
+	// beyond the direct-shadow box, including light scattered by the clouds.
+	diffuseVisibility = atmosphereVisibility * PhysSky::Remap(layerShadow, remap.x, remap.y, 0, 1) * PhysSky::GetCloudDiffuseTransmittance(position + FrameBuffer::CameraPosAdjust.xyz);
 	atmosphereVisibility *= PhysSky::Remap(layerShadow, remap.x, remap.y, 0, 1) * PhysSky::Remap(volumeShadow, remap.x, remap.y, 0, 1);
 	visibility *= layerShadow * volumeShadow;
 	return saturate(visibility);
@@ -134,7 +137,7 @@ float4 AnalyticalFogSource(float3 position, float3 materialPosition, float visib
 }
 #endif
 
-float3 AtmosphereLight(float3 position, float3 direction, float3 lightDir, float3 color, float3 rayleigh, float3 mie)
+float3 AtmosphereLight(float3 position, float3 direction, float3 lightDir, float3 color, float3 rayleigh, float3 mie, float directVisibility, float3 diffuseVisibility)
 {
 	if (!any(color > 0.0) || dot(lightDir, lightDir) < 0.5 || !any(rayleigh + mie > 0.0))
 		return 0.0;
@@ -148,7 +151,7 @@ float3 AtmosphereLight(float3 position, float3 direction, float3 lightDir, float
 	if (ViewAtmosphere::Data[0].flags.y != 0u)
 		fogTransmittance = ExponentialHeightFog::EvaluateHeightFogLightTransmittance(position, FrameBuffer::CameraPosAdjust.xyz, lightDir);
 #endif
-	return color * (fogTransmittance * tr * (rayleigh * PhysSky::Phase::Rayleigh(cosine) + mie * PhysSky::Phase::CornetteShanks(cosine, SharedData::physSkyData.aerosolPhaseG)) + (rayleigh + mie) * ms);
+	return color * (directVisibility * fogTransmittance * tr * (rayleigh * PhysSky::Phase::Rayleigh(cosine) + mie * PhysSky::Phase::CornetteShanks(cosine, SharedData::physSkyData.aerosolPhaseG)) + diffuseVisibility * (rayleigh + mie) * ms);
 }
 
 [numthreads(8, 8, 4)] void main(uint3 coord : SV_DispatchThreadID) {
@@ -164,14 +167,15 @@ float3 AtmosphereLight(float3 position, float3 direction, float3 lightDir, float
 	const float3 center = ViewAtmosphere::Position(grid, coord, 0.5);
 	const float3 direction = normalize(position);
 	float atmosphereVisibility;
-	const float visibility = MediumVisibility(position, atmosphereVisibility);
+	float3 diffuseVisibility;
+	const float visibility = MediumVisibility(position, atmosphereVisibility, diffuseVisibility);
 	const SharedData::PhysSkyData sky = SharedData::physSkyData;
 	float3 rayleigh, mie, extinction;
 	PhysSky::GetMediumCoefficients(position, rayleigh, mie, extinction);
-	float3 light = AtmosphereLight(position, direction, sky.sunDir, sky.sunlightColor, rayleigh, mie);
-	light += AtmosphereLight(position, direction, sky.masserDir, sky.masserColor, rayleigh, mie);
-	light += AtmosphereLight(position, direction, sky.secundaDir, sky.secundaColor, rayleigh, mie);
-	light *= atmosphereVisibility * sky.apLumMix;
+	float3 light = AtmosphereLight(position, direction, sky.sunDir, sky.sunlightColor, rayleigh, mie, atmosphereVisibility, diffuseVisibility);
+	light += AtmosphereLight(position, direction, sky.masserDir, sky.masserColor, rayleigh, mie, atmosphereVisibility, diffuseVisibility);
+	light += AtmosphereLight(position, direction, sky.secundaDir, sky.secundaColor, rayleigh, mie, atmosphereVisibility, diffuseVisibility);
+	light *= sky.apLumMix;
 	float fogExtinction = 0.0;
 #ifdef EXP_HEIGHT_FOG
 	if (info.flags.y != 0u) {

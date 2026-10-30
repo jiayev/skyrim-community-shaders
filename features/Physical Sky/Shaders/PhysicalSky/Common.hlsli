@@ -146,7 +146,10 @@ Texture2D<float4> TexSkyTail : register(t66);
 		float2 uv = float2(
 			saturate((cosSunZenith - cosHorZenith) / (1 - cosHorZenith)),
 			saturate((r - data.rPlanet) / (data.rAtmosphere - data.rPlanet)));
-		uv = clamp(uv, float2(0.5 / 256.0, 0.5 / 64.0), float2(1.0 - 0.5 / 256.0, 1.0 - 0.5 / 64.0));
+		// Match PhysicalSky::kMsLutW/H (32x32), not the transmittance LUT.
+		// The reflection sampler wraps azimuth: keep its linear filter footprint
+		// inside this non-periodic LUT so night never blends with the midday edge.
+		uv = clamp(uv, 0.5 / 32.0, 1.0 - 0.5 / 32.0);
 		return uv;
 	}
 
@@ -418,6 +421,11 @@ Texture2D<float4> TexSkyTail : register(t66);
 
 	float3 SampleViewCelestialTr(float3 direction, SamplerState samp)
 	{
+		if (ViewAtmosphere::ReflectionEnabled()) {
+			const ViewAtmosphere::Medium medium = ViewAtmosphere::SampleReflection(SkyViewLutUv(direction, 32u), AP_MAX_DIST, samp);
+			const float3 origin = float3(0, 0, max(SharedData::physSkyData.zCameraPlanet, SharedData::physSkyData.rPlanet));
+			return medium.transmittance * lerp(1.0, SampleAtmosphereLightTr(TexTrLut, samp, origin + direction * AP_MAX_DIST, direction), SharedData::physSkyData.trMix);
+		}
 		if (!ViewAtmosphere::Enabled())
 			return SampleTr(direction, samp);
 		const SharedData::PhysSkyData data = SharedData::physSkyData;
@@ -561,6 +569,7 @@ Texture2D<float4> TexSkyTail : register(t66);
 	Texture3D<float> TexShadowVolume : register(t112);
 	TextureCube<float> TexVolCubeTr : register(t114);
 	TextureCube<float4> TexVolCubeLum : register(t115);
+	TextureCube<float4> TexVolCubeDepth : register(t67);
 #		endif
 
 	float3 CompositeVolumetricClouds(float3 color, uint2 pxCoord)
@@ -591,11 +600,43 @@ Texture2D<float4> TexSkyTail : register(t66);
 #		ifndef PS_DEFERRED_RSRCS
 	float3 CompositeVolumetricCloudsCube(float3 color, float3 viewDir, SamplerState samp)
 	{
+		// Celestial layers are drawn over the already-composited sky. Only occlude
+		// their emission; adding the cloud source again would duplicate its energy.
+		if (ViewAtmosphere::ReflectionEnabled())
+			return ColorManagement::SceneColor::ScaleByLinear(color, TexVolCubeTr.SampleLevel(samp, viewDir, 0));
 		const float4 cloud = TexVolCubeLum.SampleLevel(samp, viewDir, 0);
 		const float3 flash = SharedData::physSkyData.lightningColorIntensity.w > 0.0 ?
 		                         TexLightningReflection.SampleLevel(samp, viewDir, 0).rgb * SharedData::physSkyData.lightningColorIntensity.w :
 		                         0.0;
-		return ColorManagement::SceneColor::ScaleAndAddLinear(color, TexVolCubeTr.SampleLevel(samp, viewDir, 0), cloud.rgb + flash);
+		const float cloudT = TexVolCubeTr.SampleLevel(samp, viewDir, 0);
+		const float depth = TexVolCubeDepth.SampleLevel(samp, viewDir, 0).x * 1000.0 / GAME_UNIT_TO_M;
+		const float4 air = SampleAp(viewDir, depth, 0.0, samp);
+		return ColorManagement::SceneColor::ScaleAndAddLinear(color, cloudT, (cloud.rgb + flash) * air.a + air.rgb * (1.0 - cloudT));
+	}
+
+	ViewAtmosphere::Medium SampleReflectionMedium(float3 viewDir, float distance, SamplerState samp, bool skyRay)
+	{
+		const float2 uv = SkyViewLutUv(viewDir, 32u);
+		ViewAtmosphere::Medium medium = ViewAtmosphere::SampleReflection(uv, distance, samp);
+		if (SharedData::physSkyData.enableVolumetricClouds) {
+			const float depth = TexVolCubeDepth.SampleLevel(samp, viewDir, 0).x * 1000.0 / GAME_UNIT_TO_M;
+			const float visibility = skyRay ? 1.0 : saturate((distance - depth) * GAME_UNIT_TO_M * 0.025);
+			const float cloudT = lerp(1.0, TexVolCubeTr.SampleLevel(samp, viewDir, 0), visibility);
+			const ViewAtmosphere::Medium front = ViewAtmosphere::SampleReflection(uv, min(depth, distance), samp);
+			const float3 flash = SharedData::physSkyData.lightningColorIntensity.w > 0.0 ?
+			                         TexLightningReflection.SampleLevel(samp, viewDir, 0).rgb * SharedData::physSkyData.lightningColorIntensity.w :
+			                         0.0;
+			const float3 cloudL = (TexVolCubeLum.SampleLevel(samp, viewDir, 0).rgb + flash) * visibility;
+			medium.luminance = lerp(front.luminance, medium.luminance, cloudT) + front.transmittance * cloudL;
+			medium.transmittance *= cloudT;
+		}
+		return medium;
+	}
+
+	float3 CompositeReflectionMedium(float3 color, float3 viewDir, float distance, SamplerState samp, bool skyRay)
+	{
+		const ViewAtmosphere::Medium medium = SampleReflectionMedium(viewDir, distance, samp, skyRay);
+		return ColorManagement::SceneColor::ScaleAndAddLinear(color, medium.transmittance, medium.luminance);
 	}
 #		endif
 
@@ -628,6 +669,8 @@ Texture2D<float4> TexSkyTail : register(t66);
 #		ifndef PS_DEFERRED_RSRCS
 	float3 CompositeAerialPerspectiveReflection(float3 color, float3 viewDir, float dist, SamplerState sampSv)
 	{
+		if (ViewAtmosphere::ReflectionEnabled())
+			return CompositeReflectionMedium(color, viewDir, dist, sampSv, false);
 		const float4 apSample = SampleAp(viewDir, dist, 0.0, sampSv);
 		color = color * apSample.w + apSample.xyz;
 
@@ -651,6 +694,22 @@ Texture2D<float4> TexSkyTail : register(t66);
 		return lengthSq > 1e-6 ? direction * rsqrt(lengthSq) : SharedData::physSkyData.sunDir;
 	}
 
+	// Clouded / clear incident radiance, computed before reflection fog. This
+	// diffuse transport estimate is independent of the finite direct-shadow box.
+	Texture2D<float4> TexCloudDiffuseTransport : register(t70);
+	float3 GetCloudDiffuseTransmittance(float3 worldPosAbs)
+	{
+		const SharedData::PhysSkyData data = SharedData::physSkyData;
+		if (!data.enableVolumetricClouds || data.volCloudLowThickness <= 0.0)
+			return 1.0;
+		const float4 transport = TexCloudDiffuseTransport.Load(int3(0, 1, 0));
+		if (transport.w == 0.0)
+			return 1.0;
+		const float altitude = worldPosAbs.z - data.zBottom;
+		const float aboveCloud = smoothstep(data.volCloudLowBottom, data.volCloudLowBottom + data.volCloudLowThickness, altitude);
+		return lerp(saturate(transport.rgb), 1.0, aboveCloud);
+	}
+
 #if !defined(PS_DEFERRED_RSRCS) && (!defined(PS_PREPASS_RSRCS) || defined(PS_ENABLE_DIRLIGHT_TRANSMITTANCE))
 	float4 GetShadowVolumeSample(float3 posRelative, float3 sunDir)
 	{
@@ -666,7 +725,7 @@ Texture2D<float4> TexSkyTail : register(t66);
 		return CloudShadowVolume::GetSample(posRelative, sunDir, boundsMin, boundsMax, dimensions.xy);
 	}
 
-	float3 GetDirlightTransmittance(float3 worldPosAbs, SamplerState samp)
+	float3 GetDirlightTransmittance(float3 worldPosAbs, SamplerState samp, bool useFarField = false)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 		float3 transmittance = 1.0;
@@ -678,13 +737,18 @@ Texture2D<float4> TexSkyTail : register(t66);
 		posRelative.z -= data.zBottom;
 
 		float4 shadowSample = GetShadowVolumeSample(posRelative, GetCloudShadowLightDirection());
-		// The shadow volume has finite support. A ray outside it has no known cloud
-		// occluder; treating the missing path as an average-density cloud shell
-		// creates false full extinction for long, low-angle light paths.
+		float meanTransmittance = 1.0;
+		float localWeight = 1.0;
+		if (useFarField) {
+			uint3 dimensions;
+			TexShadowVolume.GetDimensions(dimensions.x, dimensions.y, dimensions.z);
+			meanTransmittance = CloudShadowVolume::FarTransmittance(posRelative, GetCloudShadowLightDirection(), shadowSample, dimensions.xy, localWeight);
+			shadowSample.w *= localWeight;
+		}
 #	ifdef PS_LINEAR_SHADOW_SAMPLER
-		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, samp, shadowSample);
+		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, samp, shadowSample, meanTransmittance);
 #	else
-		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, shadowSample);
+		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, shadowSample, meanTransmittance);
 #	endif
 
 		return cloudTransmittance.xxx;
