@@ -318,9 +318,9 @@ namespace DCLF
 		 * @brief Render thread (the build point, and a frame's wait for a current snapshot): the revision code's requests served, the
 		 * graph built when an extension was added or removed (explicit builds), and the revision inputs posted when they moved.
 		 */
-		void BuildIfAsked(org::PersistentGraphHost& a_host);
+		void BuildIfAsked(org::GraphHost& a_host);
 		/** @brief Render thread: while recordings are outstanding, every epoch's ready ticket outside a_submitted (segment bits) given back. */
-		void ReleaseTicketsForRecordings(org::PersistentGraphHost& a_host, std::uint32_t a_submitted);
+		void ReleaseTicketsForRecordings(org::GraphHost& a_host, std::uint32_t a_submitted);
 		/** @brief Render thread: posts the revision inputs when anything moved. Called where each value is captured (and ShadowHost's). */
 		void PostRevisionInputs() override;
 		/**
@@ -354,8 +354,8 @@ namespace DCLF
 		 * feature's covered callback over Api::ViewCoverage).
 		 */
 		void CoverFailedGraph();
-		void DecideEpochCoverage(org::PersistentGraphHost* a_host);
-		void DecideViewCoverage(ViewKind a_kind, org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame);
+		void DecideEpochCoverage(org::GraphHost* a_host);
+		void DecideViewCoverage(ViewKind a_kind, org::GraphHost* a_host, bool a_main, std::uint32_t a_frame);
 		void SubmitRevisionRecording(std::uint32_t a_epoch, const RevisionRecordings& a_recordings, std::size_t a_index);
 		std::string RevisionReport();
 		// By draw family, its pipelines as the request's catalog has them (null: none).
@@ -407,7 +407,7 @@ namespace DCLF
 
 		bool Setup(const Capture& a_capture, bool a_depthOnly = false);
 		// Setup's stages: the main segment's buffers and programs, and the main pass's imported targets and depth.
-		bool CreateMainBuffers(Resources& a_state, org::PersistentGraphHost& a_host, rhi::Device a_device);
+		bool CreateMainBuffers(Resources& a_state, org::GraphHost& a_host, rhi::Device a_device);
 		bool ImportMainTargets(Resources& a_state, const Capture& a_capture, rhi::Device a_device, const D3D11_TEXTURE2D_DESC& a_target,
 			const TargetFormats& a_targets);
 	};

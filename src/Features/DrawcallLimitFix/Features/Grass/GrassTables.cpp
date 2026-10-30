@@ -23,7 +23,7 @@
 
 #include "RenderGraph/ComputeProgram.h"
 #include "RenderGraph/RenderGraphRuntime.h"
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <Resources/Buffers/Buffer.h>
 #include <rhi.h>
 

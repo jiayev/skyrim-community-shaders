@@ -39,7 +39,7 @@ namespace DCLF
 
 		/**
 		 * @brief BackingPoolHooks::retire: a buffer the pool released (already retired on the GPU) is destroyed on the graph host's
-		 * resource cleanup lane (PersistentGraphHost::ResourceCleanup), never on the thread that released it (the render thread
+		 * resource cleanup lane (GraphHost::ResourceCleanup), never on the thread that released it (the render thread
 		 * acquires FrameValues' pools). Lock-free. Without a graph host (process exit) the reference drops here.
 		 */
 		void Retire(std::shared_ptr<org::Buffer> a_buffer);

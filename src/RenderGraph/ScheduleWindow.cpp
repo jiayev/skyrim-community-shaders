@@ -8,7 +8,7 @@
 #	include "RenderGraph/RenderGraphRuntime.h"
 
 #	include <DebugUI/ScheduleInspector.h>
-#	include <OpenRenderGraph/PersistentGraphHost.h>
+#	include <OpenRenderGraph/GraphHost.h>
 #	include <Render/RenderGraph/RenderGraph.h>
 
 #	include <atomic>

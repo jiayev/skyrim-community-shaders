@@ -13,7 +13,7 @@ struct DxvkOrgInteropDeviceInfo;
 
 namespace org
 {
-	class PersistentGraphHost;
+	class GraphHost;
 }
 
 /**
@@ -162,7 +162,7 @@ namespace NvPerf
 	 * ranges and frame slots). Installs the callbacks, which only test a flag until a capture arms; the library loads at
 	 * Probe.
 	 */
-	void RegisterVulkanDevice(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::PersistentGraphHost& a_host);
+	void RegisterVulkanDevice(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::GraphHost& a_host);
 	/// Whether CS_NVPERF_RANGES (a capture) or CS_NVPERF_TEMPLATE (a trace, NvPerfTrace.h) requests a headless run: read at
 	/// startup, so the engine's perf events are turned on before it (most engine passes are only hooked with Frame
 	/// Annotations on at startup).

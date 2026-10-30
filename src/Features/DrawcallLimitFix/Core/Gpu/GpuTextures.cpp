@@ -11,7 +11,7 @@
 #include "RenderGraph/DxvkOrgInterop.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <Render/BindingTable.h>
 #include <Render/Runtime/DescriptorServiceAccess.h>
 #include <Render/Runtime/IDescriptorService.h>

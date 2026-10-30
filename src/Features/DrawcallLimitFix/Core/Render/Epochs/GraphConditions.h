@@ -8,7 +8,7 @@
 
 namespace org
 {
-	class PersistentGraphHost;
+	class GraphHost;
 }
 
 namespace DCLF
@@ -27,7 +27,7 @@ namespace DCLF::Draws
 		bool twoPassOcclusion = true;  // the cull mode tests occlusion (cullMode 2): the HZB and the depth epoch's phase 2 block
 		// The CPU-driven pipeline (CpuPipelineFor the cell: Toggles.h; Core/Render/Direct): a DCLF epoch keeps only its passes in the CPU
 		// pipeline (Api::PassDef::cpuPipeline: the latched and index pool copies, texture transforms, the object rows, tree LOD's and
-		// grass's single-phase culls and arguments, tree wind), as external epochs (org::PersistentGraphHost::SetExternalEpochs:
+		// grass's single-phase culls and arguments, tree wind), as external epochs (org::GraphHost::SetExternalEpochs:
 		// CpuPipelineEpochs), which the revisions record and the sites execute in DXVK's command buffer before their draws
 		// (Direct::ExecuteEpoch). The draws (main depth and colour, shadow and occlusion maps, forward, the reflection's faces, first
 		// person's depth and colour) are the direct sites'; the builds, the HZB and phase 2, the visibility and fade-event readbacks and
@@ -48,7 +48,7 @@ namespace DCLF::Draws
 	 * @brief Render thread, at the frame's build point before it builds (IndirectDraws::BuildPoint): this frame's conditions. A change
 	 * from the ones the graph was built for requests its rebuild, which that build point makes, so a frame's passes are its conditions'.
 	 */
-	void RefreshGraphConditions(org::PersistentGraphHost& a_host);
+	void RefreshGraphConditions(org::GraphHost& a_host);
 
 	/** @brief Any thread (diagnostics, dclf:cut=): the pass key prefixes the next build point leaves out; empty: none. */
 	void SetPassCuts(std::string a_cuts);

@@ -36,7 +36,7 @@
 
 #include <Tracy/Tracy.hpp>
 
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <ORGModuleServices/PipelineRegistry.h>
 #include <ORGModuleServices/PipelineService.h>
 #include <rhi_helpers.h>

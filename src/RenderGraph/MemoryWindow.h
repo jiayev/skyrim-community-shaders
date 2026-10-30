@@ -10,7 +10,7 @@
  * render graph's, by owner, reconciled against the driver's heap usage), and the render graph's own report line.
  *
  * The report line reads only the graph's memory snapshot provider (ORG's tracking world: every ORG buffer and texture, with the size
- * of its allocation and its name; PersistentGraphHost installs it).
+ * of its allocation and its name; GraphHost installs it).
  */
 namespace RenderGraphMemory
 {

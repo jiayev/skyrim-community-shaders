@@ -187,7 +187,7 @@ namespace DCLF::Draws
 		}
 
 		/** @brief The pipeline statistics query pool and its per-slot readbacks (PassStats::Enabled); none without the pool. */
-		void CreatePassStats(Resources& a_state, org::PersistentGraphHost& a_host, rhi::Device a_device)
+		void CreatePassStats(Resources& a_state, org::GraphHost& a_host, rhi::Device a_device)
 		{
 			auto passStats = std::make_shared<PassStats>();
 			const std::uint32_t slots = a_host.FrameSlots();
@@ -211,7 +211,7 @@ namespace DCLF::Draws
 		}
 
 		/** @brief The foliage pixel record at the target's size (Policy::RecordFoliagePixels). */
-		void CreateFoliageRecord(Resources& a_state, org::PersistentGraphHost& a_host, rhi::Device a_device, const D3D11_TEXTURE2D_DESC& a_target)
+		void CreateFoliageRecord(Resources& a_state, org::GraphHost& a_host, rhi::Device a_device, const D3D11_TEXTURE2D_DESC& a_target)
 		{
 			auto foliage = std::make_shared<Resources::FoliageRecord>();
 			foliage->width = a_target.Width;
@@ -392,7 +392,7 @@ namespace DCLF
 		return true;
 	}
 
-	bool IndirectDraws::Impl::CreateMainBuffers(Resources& a_state, org::PersistentGraphHost& a_host, rhi::Device a_device)
+	bool IndirectDraws::Impl::CreateMainBuffers(Resources& a_state, org::GraphHost& a_host, rhi::Device a_device)
 	{
 		// The sequence ranges (SequenceSlots) at the first layout's sizes, required to every draw the scene can produce (RequireMain);
 		// sized to the layout exactly (its ranges grow by doubling).

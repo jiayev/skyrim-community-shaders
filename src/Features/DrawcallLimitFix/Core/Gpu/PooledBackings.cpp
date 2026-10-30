@@ -6,7 +6,7 @@
 
 #include <ORGModuleServices/BackingPool.h>
 #include <ORGModuleServices/ElasticCapacity.h>
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <Render/Runtime/ResourceCleanupQueue.h>
 #include <Resources/Buffers/Buffer.h>
 #include <rhi.h>

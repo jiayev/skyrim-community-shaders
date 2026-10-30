@@ -40,7 +40,7 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "RenderGraph/RenderGraphRuntime.h"
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <Render/Runtime/IUploadService.h>
 #include <Resources/Buffers/Buffer.h>
 #include <ORGModuleServices/BackingPool.h>
@@ -200,7 +200,7 @@ namespace DCLF
 
 		// The GPU's points of the retirement points the frames bound their backings to (render thread, oldest first): what a producer
 		// reusing a copy a frame in flight still binds (BackingPool::Config::reuseBound) has its uploads wait for.
-		using BoundPoints = std::deque<std::pair<std::uint64_t, org::PersistentGraphHost::GpuPoint>>;
+		using BoundPoints = std::deque<std::pair<std::uint64_t, org::GraphHost::GpuPoint>>;
 
 		// Render thread: binds a frame's backings (the built-in parts' and the registered pools') to everything submitted so far (the
 		// frame's last submission) and lets them go, so a backing is not reused before that frame completed on the GPU, and notes that
@@ -571,7 +571,7 @@ namespace DCLF
 			FrameLeases leases;
 			std::array<std::optional<std::uint64_t>, kBuiltInPools> oldestContentEpochs;
 			// A copy a frame in flight still binds (SceneCopies, reuseBound): the GPU point its uploads wait for (empty: none).
-			org::PersistentGraphHost::GpuPoint writeAfter;
+			org::GraphHost::GpuPoint writeAfter;
 			// Per registered pool: its kick's input (held until the producer is done), its backing and its journal's floor, as above.
 			struct RegisteredPart
 			{

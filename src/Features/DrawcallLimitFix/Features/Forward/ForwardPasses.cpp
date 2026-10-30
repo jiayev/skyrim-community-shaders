@@ -14,7 +14,7 @@
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 
 #include "RenderGraph/RenderGraphRuntime.h"
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <RenderPasses/Base/TypedRenderGraphPass.h>
 #include <rhi.h>
 

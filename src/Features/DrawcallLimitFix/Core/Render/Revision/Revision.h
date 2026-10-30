@@ -40,7 +40,7 @@ namespace DCLF::Draws
 		std::uint64_t mainGeneration = 0;
 		std::shared_ptr<ShadowResources> shadow;
 		std::shared_ptr<SceneBuffers> scene;
-		// BuildPoint: the graph's build (PersistentGraphHost::BuildGeneration) and the heaps every recording binds (the graph's own).
+		// BuildPoint: the graph's build (GraphHost::BuildGeneration) and the heaps every recording binds (the graph's own).
 		std::uint64_t buildGeneration = 0;
 		rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 		// The pipeline generations a catalog's sets must be built for (GetIndirectState, GetShadowIndirectState, CatalogFamilyPipelines).
@@ -183,7 +183,7 @@ namespace DCLF::Draws
 	 */
 	struct RevisionRecordings
 	{
-		std::vector<std::shared_ptr<const org::PersistentGraphHost::EpochRecording>> recordings;
+		std::vector<std::shared_ptr<const org::GraphHost::EpochRecording>> recordings;
 		std::uint32_t hosted = 0;
 		/** @brief The host's own variants (each subset's; all of them without a hosted shape). */
 		std::size_t Variants() const { return recordings.size() >> std::popcount(hosted); }

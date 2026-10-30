@@ -9,7 +9,7 @@
 #	include "Vram/VramLedger.h"
 
 #	include <DebugUI/MemoryIntrospectionWidget.h>
-#	include <OpenRenderGraph/PersistentGraphHost.h>
+#	include <OpenRenderGraph/GraphHost.h>
 #	include <Render/MemoryIntrospectionAPI.h>
 #	include <Render/RenderGraph/RenderGraph.h>
 #	include <implot.h>

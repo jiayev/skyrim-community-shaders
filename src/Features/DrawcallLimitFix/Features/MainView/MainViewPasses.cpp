@@ -17,7 +17,7 @@
 
 #include "Features/RemoteControl/NvPerf.h"
 #include "RenderGraph/RenderGraphRuntime.h"
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <RenderPasses/Base/TypedRenderGraphPass.h>
 #include <rhi.h>
 

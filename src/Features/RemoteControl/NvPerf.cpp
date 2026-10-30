@@ -651,7 +651,7 @@ namespace NvPerf
 		return info;
 	}
 
-	void RegisterVulkanDevice(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::PersistentGraphHost& a_host)
+	void RegisterVulkanDevice(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::GraphHost& a_host)
 	{
 		auto backend = MakeVulkanBackend(a_info, a_dxvkModule, a_host);
 		if (!backend)
