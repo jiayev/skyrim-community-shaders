@@ -192,19 +192,13 @@ namespace ExponentialHeightFog
 		return float4(combinedOpacity > 1e-4f ? combinedPremultiplied / combinedOpacity : float3(0.0f, 0.0f, 0.0f), combinedOpacity);
 	}
 
-	float HeightDensityIntegral(float startHeight, float endHeight, float heightFalloff)
-	{
-		const float lower = min(startHeight, endHeight);
-		const float upper = max(startHeight, endHeight);
-		const float belowFraction = upper <= 0.0 ? 1.0 : saturate(-lower / max(upper - lower, 1e-6));
-		const float falloff = heightFalloff * (max(upper, 0.0) - max(lower, 0.0));
-		const float integral = falloff > 0.01 ? (1.0 - exp2(-falloff)) / max(falloff, 1e-6) :
-		                                        0.69314718056 - 0.24022650695 * falloff;
-		return lerp(exp2(-heightFalloff * max(lower, 0.0)) * integral, 0.69314718056, belowFraction);
-	}
-
 	float4 GetExponentialHeightFogInternal(float3 positionWS, float3 cameraWS, float3 fogColor, bool useScreenPosition, float4 screenPosition, bool applyVolumetricFog)
 	{
+#if defined(PHYSICAL_SKY)
+		// Reflection AP already includes this fog, including its extinction.
+		if (ViewAtmosphere::ReflectionEnabled())
+			return 0.0;
+#endif
 		float fogHeightFalloff = SharedData::exponentialHeightFogSettings.fogHeightFalloff * 0.001f;
 		float fogDensity = SharedData::exponentialHeightFogSettings.fogDensity * 0.001f;
 		float fogHeightFalloff2 = SharedData::exponentialHeightFogSettings.fogHeightFalloff2 * 0.001f;

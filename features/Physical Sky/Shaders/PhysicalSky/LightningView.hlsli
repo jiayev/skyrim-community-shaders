@@ -170,8 +170,8 @@ float4 LightningChannel(float3 direction, float sceneDistance, float footprint, 
 							  SharedData::physSkyData.lightningColorIntensity.rgb * SharedData::physSkyData.lightningPhotometry.x,
 		0);
 	const float4 channel = LightningChannel(direction, VolumetricCloudBuffer[0].rayMarchRange, 2.0 / width, 1.0);
-	const float4 air = SampleCloudAerialPerspective(direction, DecodeCloudDepth(channel.a), 0.0);
-	cloud.rgb += channel.rgb * air.a;
+	// Reflection composition applies foreground air together with the cloud source.
+	cloud.rgb += channel.rgb;
 	RWLightningCubeColor[pixel] = float4(min(cloud.rgb, 65504.0), cloud.a);
 }
 #endif

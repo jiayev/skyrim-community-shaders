@@ -1072,7 +1072,7 @@ float3 GetSunColor(float3 normal, float3 viewDirection, float3 worldPosition)
 #				if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
 		sunColor *= PhysSky::SampleTr(normalize(reflect(viewDirection, normal)), DepthSampler);
-	sunColor *= PhysSky::GetDirlightTransmittance(worldPosition + FrameBuffer::CameraPosAdjust.xyz, DepthSampler);
+	sunColor *= PhysSky::GetDirlightTransmittance(worldPosition + FrameBuffer::CameraPosAdjust.xyz, DepthSampler, true);
 #				endif
 
 #				if defined(EXP_HEIGHT_FOG)

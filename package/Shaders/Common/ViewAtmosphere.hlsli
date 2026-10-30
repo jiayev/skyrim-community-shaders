@@ -28,7 +28,20 @@ namespace ViewAtmosphere
 	{
 		uint count, stride;
 		Data.GetDimensions(count, stride);
-		return count > 0u && SharedData::PostWaterComposite != 0u && Data[0].flags.x != 0u;
+		return count > 0u && SharedData::PostWaterComposite != 0u && Data[0].flags.x != 0u && Data[0].flags.w == 0u;
+	}
+
+	bool ReflectionEnabled()
+	{
+		uint count, stride;
+		Data.GetDimensions(count, stride);
+		return count > 0u && Data[0].flags.x != 0u && Data[0].flags.w == 1u;
+	}
+
+	float ReflectionDistance(float slice)
+	{
+		// 10 m logarithmic offset resolves near-ground fog while retaining the 40 km AP range.
+		return Data[0].grids[0].depth.z * (exp2(slice * Data[0].grids[0].depth.w / 31.0) - 1.0);
 	}
 
 	float Distance(Grid grid, float slice)
@@ -71,6 +84,41 @@ namespace ViewAtmosphere
 		Medium result;
 		result.luminance = 0.0;
 		result.transmittance = 1.0;
+		return result;
+	}
+
+	float3 SampleReflectionTexture(Texture3D<float4> source, float3 uvw, SamplerState samp)
+	{
+		// Material samplers need not wrap. Explicitly join the azimuth seam.
+		uvw.x = frac(uvw.x);
+		if (uvw.x < 0.5 / 32.0 || uvw.x > 31.5 / 32.0) {
+			const float weight = frac(uvw.x * 32.0 + 0.5);
+			return lerp(source.SampleLevel(samp, float3(31.5 / 32.0, uvw.yz), 0).rgb,
+				source.SampleLevel(samp, float3(0.5 / 32.0, uvw.yz), 0).rgb, weight);
+		}
+		return source.SampleLevel(samp, uvw, 0).rgb;
+	}
+
+	Medium SampleReflection(float2 uv, float distance, SamplerState samp)
+	{
+		const float end = clamp(distance, 0.0, Data[0].grids[0].depth.y);
+		const float slice = min(floor(31.0 * log2(1.0 + end / Data[0].grids[0].depth.z) / Data[0].grids[0].depth.w), 30.0);
+		const float fraction = saturate((end - ReflectionDistance(slice)) / max(ReflectionDistance(slice + 1.0) - ReflectionDistance(slice), 1e-6));
+		const float3 nearUv = float3(uv, (slice + 0.5) / 32.0);
+		const float3 farUv = float3(uv, (slice + 1.5) / 32.0);
+		const float3 nearL = SampleReflectionTexture(Luminance, nearUv, samp);
+		const float3 farL = SampleReflectionTexture(Luminance, farUv, samp);
+		const float3 nearT = SampleReflectionTexture(Transmittance, nearUv, samp);
+		const float3 farT = SampleReflectionTexture(Transmittance, farUv, samp);
+		const float3 segmentT = saturate(farT / max(nearT, 1e-20));
+		const float3 partialT = pow(max(segmentT, 1e-20), fraction);
+		const float3 weight = float3(
+			segmentT.x > 0.999 ? fraction : (1.0 - partialT.x) / max(1.0 - segmentT.x, 1e-20),
+			segmentT.y > 0.999 ? fraction : (1.0 - partialT.y) / max(1.0 - segmentT.y, 1e-20),
+			segmentT.z > 0.999 ? fraction : (1.0 - partialT.z) / max(1.0 - segmentT.z, 1e-20));
+		Medium result;
+		result.luminance = lerp(nearL, farL, weight);
+		result.transmittance = nearT * partialT;
 		return result;
 	}
 

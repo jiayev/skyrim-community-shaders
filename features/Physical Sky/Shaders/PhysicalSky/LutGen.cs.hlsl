@@ -186,13 +186,15 @@ void rayMarch(
 		inscatter *= data.sunlightColor;
 		inscatter += (muSRayleigh * phaseRayleighMasser + muSAerosol * phaseAerosolMasser) * trMasser * data.masserColor;
 		inscatter += (muSRayleigh * phaseRayleighSecunda + muSAerosol * phaseAerosolSecunda) * trSecunda * data.secundaColor;
-		inscatter += scatterNoPhase * psiMs;
 #	endif
 
 #	ifdef SKY_TAIL
 		const float3 cloudPosition = curr_pos - float3(0, 0, max(data.zCameraPlanet, data.rPlanet)) +
 		                             FrameBuffer::CameraPosAdjust.xyz;
-		inscatter *= GetDirlightTransmittance(cloudPosition, SampTr);
+		inscatter *= GetDirlightTransmittance(cloudPosition, SampTr, true);
+		inscatter += scatterNoPhase * psiMs * GetCloudDiffuseTransmittance(cloudPosition);
+#	elif LUTGEN != 1
+		inscatter += scatterNoPhase * psiMs;
 #	endif
 		float3 scatterIntegeral = inscatter * scatterFactor;
 

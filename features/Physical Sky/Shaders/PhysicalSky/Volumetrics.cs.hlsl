@@ -1586,3 +1586,68 @@ groupshared uint g_density_segment[NTHREADS];
 	offset = float3(axis == 0u ? 0.0 : offset.x, axis == 1u ? 0.0 : offset.y, axis == 2u ? 0.0 : offset.z);
 	RWShadowVolume[pixel] = TexShadowVolume.SampleLevel(TransmittanceSampler, (float3(pixel) + 0.5 - offset) / float3(dims), 0);
 }
+
+RWTexture2D<float4> RWCloudShadowMean : register(u0);
+groupshared float ShadowMeanSamples[64];
+
+// One 8x8 spatial quadrature per height. Reuse complete local prefixes; where
+// the finite box truncates a ray, integrate the actual curved cloud layer.
+// Averaging exp(-tau), rather than tau, preserves clear gaps between clouds.
+[numthreads(64, 1, 1)] void buildCloudShadowMean(uint lane : SV_GroupIndex, uint3 group : SV_GroupID) {
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	uint width, height;
+	RWCloudShadowMean.GetDimensions(width, height);
+	uint3 dims;
+	TexShadowVolume.GetDimensions(dims.x, dims.y, dims.z);
+	const float2 center = CloudShadowVolume::GridCenter(FrameBuffer::CameraPosAdjust.xy, info.shadowVolumeRange, dims.xy);
+	const float2 uv = (float2(lane % 8u, lane / 8u) + 0.5) / 8.0;
+	const float altitude = lerp(info.shadowVolumeBottom, info.shadowVolumeTop, float(group.y) / (height - 2u));
+	float3 pos = float3(center + (uv - 0.5) * info.shadowVolumeRange, altitude);
+	pos.z -= CloudCurvatureOffset(pos.xy - FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
+	const float3 origin = float3(pos.xy - FrameBuffer::CameraPosAdjust.xy, pos.z);
+	const float3 direction = info.dirlightDir;
+	const float2 outer = IntersectCloudBelow(origin, direction, info.shadowVolumeTop, info.cloudCurvatureRadius);
+	const float2 inner = IntersectCloudBelow(origin, direction, info.shadowVolumeBottom, info.cloudCurvatureRadius);
+	const float start = max(outer.x, 0.0);
+	const float nearEnd = min(outer.y, max(inner.x, 0.0));
+	const float farStart = max(start, inner.y);
+	const float nearLength = max(nearEnd - start, 0.0);
+	const float farLength = max(outer.y - farStart, 0.0);
+	const float pathLength = nearLength + farLength;
+	float transmittance = 1.0;
+	if (pathLength > 0.0) {
+		const float3 exitPosition = pos + direction * (farLength > 0.0 ? outer.y : nearEnd);
+		const float2 exitUv = (exitPosition.xy - center) / info.shadowVolumeRange + 0.5;
+		const float z = (pos.z - info.shadowVolumeBottom) / max(info.shadowVolumeTop - info.shadowVolumeBottom, 1.0);
+		// Keep the linear-filter footprint off incomplete side prefixes too.
+		const float2 margin = 2.0 / float2(dims.xy);
+		if (z >= 0.0 && z <= 1.0 && exitPosition.z >= info.shadowVolumeBottom && exitPosition.z <= info.shadowVolumeTop + 1.0 && all(exitUv >= margin) && all(exitUv <= 1.0 - margin)) {
+			transmittance = TexShadowVolume.SampleLevel(TransmittanceSampler, float3(uv, z), 0);
+		} else {
+			const float stepLength = pathLength / 32.0;
+			float opticalDepth = 0.0;
+			[loop] for (uint step = 0u; step < 32u; ++step)
+			{
+				const float distanceInCloud = (step + 0.5) * stepLength;
+				const float distanceAlongRay = distanceInCloud < nearLength ? start + distanceInCloud : farStart + distanceInCloud - nearLength;
+				CloudDensityContext densityContext;
+				const float density = sampleCloudDensity(pos + direction * distanceAlongRay, GetCloudLayer(info), 2.0, 2000.0, 0.0, densityContext);
+				opticalDepth += density * stepLength * info.sunExtinction * GAME_UNIT_TO_M;
+			}
+			transmittance = exp(-max(opticalDepth, 0.0));
+		}
+	}
+	ShadowMeanSamples[lane] = transmittance;
+	GroupMemoryBarrierWithGroupSync();
+	[unroll] for (uint stride = 32u; stride > 0u; stride >>= 1u)
+	{
+		if (lane < stride)
+			ShadowMeanSamples[lane] += ShadowMeanSamples[lane + stride];
+		GroupMemoryBarrierWithGroupSync();
+	}
+	if (lane == 0u) {
+		RWCloudShadowMean[uint2(0, group.y + 1u)] = float4(saturate(ShadowMeanSamples[0] / 64.0), 0, 0, 0);
+		if (group.y == 0u)
+			RWCloudShadowMean[uint2(0, 0)] = float4(info.shadowVolumeBottom, info.shadowVolumeTop, info.cloudCurvatureRadius, 1);
+	}
+}

@@ -2357,7 +2357,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
 		dirLightColor *= PhysSky::SampleTr(normalize(DirLightDirection.xyz), SampShadowMaskSampler);
-		dirLightColor *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, SampColorSampler);
+		dirLightColor *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, SampColorSampler, true);
 	}
 #	endif
 
@@ -3036,9 +3036,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	color.xyz = ColorManagement::LinearToScene(color.xyz);
 #		if defined(PHYSICAL_SKY)
-	if (SharedData::physSkyData.enabled && inWorld) {
+	if (SharedData::physSkyData.enabled && (inWorld || inReflection)) {
 		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
-		if (inReflection)
+		if (inReflection && ViewAtmosphere::ReflectionEnabled() && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting)) {
+			const ViewAtmosphere::Medium medium = PhysSky::SampleReflectionMedium(physSkyViewDir, length(input.WorldPosition.xyz), SampColorSampler, false);
+			color.xyz = ColorManagement::SceneColor::ScaleByLinear(color.xyz, medium.transmittance);
+		} else if (inReflection)
 			color.xyz = PhysSky::CompositeAerialPerspectiveReflection(color.xyz, physSkyViewDir, length(input.WorldPosition.xyz), SampColorSampler);
 		else
 			color.xyz = PhysSky::CompositeAerialPerspective(color.xyz, physSkyViewDir, input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampColorSampler);

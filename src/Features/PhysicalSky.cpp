@@ -1645,14 +1645,14 @@ bool PhysicalSky::ShadersOK()
 								   texCloudAmbientDensity && texCloudAmbientSweep && texCloudAmbientBoundary && texCloudAmbientLayout[0] && texCloudAmbientLayout[1] &&
 								   texCloudAmbientSource[0][0] && texCloudAmbientSource[0][1] && texCloudAmbientSource[1][0] && texCloudAmbientSource[1][1] &&
 								   texCloudAmbientSource[2][0] && texCloudAmbientSource[2][1] && texCloudAmbientSource[3][0] && texCloudAmbientSource[3][1] &&
-								   csVolMainView && csVolMainWithoutStorm && csVolMainSingleVolcanic && csStormTiles && texStormTiles && csVolFilter && csVolReproject && csVolCubeReproject && csVolShadowVolume && csVolShadowResample && texShadowVolumeRaw && csVolCubemap && csVolAmbientSH && csCloudAmbientReduce && texVolCloudAmbientSH && texCloudAmbientPartial &&
+								   csVolMainView && csVolMainWithoutStorm && csVolMainSingleVolcanic && csStormTiles && texStormTiles && csVolFilter && csVolReproject && csVolCubeReproject && csVolShadowVolume && csVolShadowResample && texShadowVolumeRaw && csCloudShadowMean && csCloudShadowMeanVolcanic && texCloudShadowMean && csVolCubemap && csVolAmbientSH && csCloudAmbientReduce && texVolCloudAmbientSH && texCloudAmbientPartial &&
 								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux &&
 								   texVolFilteredTr && texVolFilteredLum && texVolFilteredAux &&
 								   texVolHistoryTr && texVolHistoryLum && texVolHistoryAux && texVolCubeTr && texVolCubeLum &&
 								   texVolCubeAux && texVolCubeHistoryTr && texVolCubeHistoryLum && texVolCubeHistoryAux &&
 								   texVolCubeTraceTr && texVolCubeTraceLum && texVolCubeTraceAux &&
 								   texShadowVolume && baseShapeNoiseSrv && cloudProfileLutSrv && cloudAdjustmentLutSrv && ndfReady && cirrusMapsReady);
-	const bool voxelShadersOk = !voxelCloudManager.Count() || (csVoxelView && csVoxelComposite && csVoxelLighting && csVolCubemapVoxel && csVolShadowVoxel && csCloudAmbientDensityVoxel);
+	const bool voxelShadersOk = !voxelCloudManager.Count() || (csVoxelView && csVoxelComposite && csVoxelLighting && csVolCubemapVoxel && csVolShadowVoxel && csCloudAmbientDensityVoxel && csCloudShadowMeanVoxel);
 	return baseShadersOk && volumetricShadersOk && voxelShadersOk;
 }
 
@@ -1874,9 +1874,13 @@ void PhysicalSky::ReflectionsPrepass()
 		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
 		ID3D11ShaderResourceView* shadowSrv = texShadowVolume ? texShadowVolume->srv.get() : nullptr;
 		globals::d3d::context->PSSetShaderResources(112, 1, &shadowSrv);
+		auto* shadowMeanSrv = texCloudShadowMean ? texCloudShadowMean->srv.get() : nullptr;
+		globals::d3d::context->PSSetShaderResources(69, 1, &shadowMeanSrv);
 		if (texVolCubeTr && texVolCubeLum) {
 			std::array<ID3D11ShaderResourceView*, 2> volCubeSrvs = { texVolCubeTr->srv.get(), texVolCubeLum->srv.get() };
 			globals::d3d::context->PSSetShaderResources(114, (uint)volCubeSrvs.size(), volCubeSrvs.data());
+			auto* cubeDepth = texVolCubeAux ? texVolCubeAux->srv.get() : nullptr;
+			globals::d3d::context->PSSetShaderResources(67, 1, &cubeDepth);
 		}
 	}
 }
@@ -1976,6 +1980,12 @@ void PhysicalSky::Prepass()
 				constexpr FLOAT shadowClear[4] = { 1.f, 0.f, 0.f, 0.f };
 				context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), shadowClear);
 			}
+			if (texCloudShadowMean) {
+				ID3D11ShaderResourceView* nullShadowMean = nullptr;
+				context->PSSetShaderResources(69, 1, &nullShadowMean);
+				context->CSSetShaderResources(69, 1, &nullShadowMean);
+				context->ClearUnorderedAccessViewFloat(texCloudShadowMean->uav.get(), lumClr);
+			}
 			volMainHistoryValid = false;
 			volHistoryFrameDim = {};
 			cloudAmbientValid = false;
@@ -1989,6 +1999,8 @@ void PhysicalSky::Prepass()
 		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
 		auto* skyTailSrv = texSkyTail ? texSkyTail->srv.get() : nullptr;
 		globals::d3d::context->PSSetShaderResources(66, 1, &skyTailSrv);
+		auto* shadowMeanSrv = texCloudShadowMean ? texCloudShadowMean->srv.get() : nullptr;
+		globals::d3d::context->PSSetShaderResources(69, 1, &shadowMeanSrv);
 
 		// Bind volumetric cloud results and shadow volume for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
 		// RenderVolumetricClouds already bound the reconstructed/composited result.
@@ -2000,6 +2012,8 @@ void PhysicalSky::Prepass()
 		if (texVolCubeTr && texVolCubeLum) {
 			std::array<ID3D11ShaderResourceView*, 2> volCubeSrvs = { texVolCubeTr->srv.get(), texVolCubeLum->srv.get() };
 			globals::d3d::context->PSSetShaderResources(114, (uint)volCubeSrvs.size(), volCubeSrvs.data());
+			auto* cubeDepth = texVolCubeAux ? texVolCubeAux->srv.get() : nullptr;
+			globals::d3d::context->PSSetShaderResources(67, 1, &cubeDepth);
 		}
 	}
 }
@@ -2082,6 +2096,10 @@ void PhysicalSky::GenerateSkyTail()
 	context->CSSetShaderResources(66, 1, &nullSrv);
 	auto* cloudShadow = texShadowVolume ? texShadowVolume->srv.get() : nullptr;
 	context->CSSetShaderResources(112, 1, &cloudShadow);
+	auto* cloudShadowMean = texCloudShadowMean ? texCloudShadowMean->srv.get() : nullptr;
+	context->CSSetShaderResources(69, 1, &cloudShadowMean);
+	auto* cloudDiffuseTransport = globals::features::viewAtmosphere.CloudDiffuseTransport();
+	context->CSSetShaderResources(70, 1, &cloudDiffuseTransport);
 	ID3D11ShaderResourceView* srvs[] = { texTrLut->srv.get(), texMsLut->srv.get() };
 	context->CSSetShaderResources(0, 2, srvs);
 	auto* sampler = sampTr.get();
@@ -2097,6 +2115,8 @@ void PhysicalSky::GenerateSkyTail()
 	srvs[0] = srvs[1] = nullptr;
 	context->CSSetShaderResources(0, 2, srvs);
 	context->CSSetShaderResources(112, 1, &nullSrv);
+	context->CSSetShaderResources(69, 1, &nullSrv);
+	context->CSSetShaderResources(70, 1, &nullSrv);
 	sampler = nullptr;
 	context->CSSetSamplers(0, 1, &sampler);
 	context->CSSetShader(nullptr, nullptr, 0);

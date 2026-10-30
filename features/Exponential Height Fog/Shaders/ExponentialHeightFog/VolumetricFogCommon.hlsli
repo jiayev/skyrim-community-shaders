@@ -212,6 +212,17 @@ namespace ExponentialHeightFog
 		return max(localDensity * SharedData::exponentialHeightFogSettings.volumetricFogExtinctionScale * 0.5f, 0.0f);
 	}
 
+	float HeightDensityIntegral(float startHeight, float endHeight, float heightFalloff)
+	{
+		const float lower = min(startHeight, endHeight);
+		const float upper = max(startHeight, endHeight);
+		const float belowFraction = upper <= 0.0 ? 1.0 : saturate(-lower / max(upper - lower, 1e-6));
+		const float falloff = heightFalloff * (max(upper, 0.0) - max(lower, 0.0));
+		const float integral = falloff > 0.01 ? (1.0 - exp2(-falloff)) / max(falloff, 1e-6) :
+		                                        0.69314718056 - 0.24022650695 * falloff;
+		return lerp(exp2(-heightFalloff * max(lower, 0.0)) * integral, 0.69314718056, belowFraction);
+	}
+
 	float HeightFogVerticalOpticalDepth(float height, float baseHeight, float falloff, float density)
 	{
 		if (density <= 0.0f)

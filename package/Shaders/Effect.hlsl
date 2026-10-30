@@ -603,7 +603,7 @@ float GetViewRayShadow(float3 worldPosition, float2 screenPosition, float depth)
 			float sampleShadow = ShadowSampling::GetWorldShadow(samplePositionWS, FrameBuffer::CameraPosAdjust.xyz);
 #		if defined(PHYSICAL_SKY)
 			if (SharedData::physSkyData.enabled)
-				sampleShadow *= dot(PhysSky::GetDirlightTransmittance(samplePositionWS + FrameBuffer::CameraPosAdjust.xyz, SampDepthSampler), 1.0f.xxx / 3.0f);
+				sampleShadow *= dot(PhysSky::GetDirlightTransmittance(samplePositionWS + FrameBuffer::CameraPosAdjust.xyz, SampDepthSampler, true), 1.0f.xxx / 3.0f);
 #		endif
 			shadow += sampleShadow;
 		}
@@ -903,17 +903,28 @@ PS_OUTPUT main(PS_INPUT input)
 	lightColor = Color::EffectMult(lightColor);
 
 #	if !defined(DEFERRED) && defined(PHYSICAL_SKY)
-	if (SharedData::physSkyData.enabled && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
+	if (SharedData::physSkyData.enabled && (Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection))) {
 		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
 		const float physSkyDist = length(input.WorldPosition.xyz);
+		if (ViewAtmosphere::ReflectionEnabled()) {
+			const ViewAtmosphere::Medium medium = PhysSky::SampleReflectionMedium(physSkyViewDir, physSkyDist, SampBaseSampler, false);
 #		if defined(ADDBLEND)
-		lightColor *= PhysSky::SampleAp(physSkyViewDir, input.Position.xy, physSkyDist, SampBaseSampler).w;
-#		elif !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
-		if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0)
-			lightColor = PhysSky::CompositeAerialPerspectiveReflection(lightColor, physSkyViewDir, physSkyDist, SampBaseSampler);
-		else
-			lightColor = PhysSky::CompositeAerialPerspective(lightColor, physSkyViewDir, input.Position.xy, screenUV, physSkyDist, SampBaseSampler);
+			lightColor = ColorManagement::SceneColor::ScaleByLinear(lightColor, medium.transmittance);
+#		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
+			lightColor = lerp(1.0.xxx, lightColor, medium.transmittance);
+#		else
+			lightColor = ColorManagement::SceneColor::ScaleAndAddLinear(lightColor, medium.transmittance, medium.luminance);
 #		endif
+		} else {
+#		if defined(ADDBLEND)
+			lightColor *= PhysSky::SampleAp(physSkyViewDir, input.Position.xy, physSkyDist, SampBaseSampler).w;
+#		elif !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
+			if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0)
+				lightColor = PhysSky::CompositeAerialPerspectiveReflection(lightColor, physSkyViewDir, physSkyDist, SampBaseSampler);
+			else
+				lightColor = PhysSky::CompositeAerialPerspective(lightColor, physSkyViewDir, input.Position.xy, screenUV, physSkyDist, SampBaseSampler);
+#		endif
+		}
 	}
 #	endif
 

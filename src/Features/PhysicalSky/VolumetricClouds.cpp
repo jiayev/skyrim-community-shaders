@@ -778,6 +778,9 @@ void PhysicalSky::SetupVolumetricResources()
 		const FLOAT shadowVolumeClr[4] = { 1.f, 0.f, 0.f, 0.f };
 		context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), shadowVolumeClr);
 		context->ClearUnorderedAccessViewFloat(texShadowVolumeRaw->uav.get(), shadowVolumeClr);
+		// Metadata row plus endpoint-inclusive vertical mean transmittance profile.
+		texCloudShadowMean = createCloudTexture(1, kShadowMeanHeights + 1u, DXGI_FORMAT_R32G32B32A32_FLOAT, "PhysicalSky::CloudShadowMean");
+		context->ClearUnorderedAccessViewFloat(texCloudShadowMean->uav.get(), clearLum);
 	}
 
 	// Load textures and NDF
@@ -839,6 +842,9 @@ void PhysicalSky::CompileVolumetricShaders()
 		ShaderInfo{ &csVolCubeReproject, "Volumetrics.cs.hlsl", {}, "reprojectCubemap" },
 		ShaderInfo{ &csVolShadowVolume, "Volumetrics.cs.hlsl", {}, "renderShadowVolume" },
 		ShaderInfo{ &csVolShadowResample, "Volumetrics.cs.hlsl", {}, "resampleShadowVolume" },
+		ShaderInfo{ &csCloudShadowMean, "Volumetrics.cs.hlsl", {}, "buildCloudShadowMean" },
+		ShaderInfo{ &csCloudShadowMeanVolcanic, "Volumetrics.cs.hlsl", { { "VOLCANIC_STORMS_ONLY", "" } }, "buildCloudShadowMean" },
+		ShaderInfo{ &csCloudShadowMeanVoxel, "Volumetrics.cs.hlsl", { { "CLOUD_VOXELS", "" } }, "buildCloudShadowMean" },
 		ShaderInfo{ &csVolCubemap, "Volumetrics.cs.hlsl", { { "CLOUD_REFLECTION", "" } }, "renderCubemap" },
 		ShaderInfo{ &csCloudCrossSection, "CloudCrossSection.cs.hlsl", {} },
 		ShaderInfo{ &csLightningQuery, "Volumetrics.cs.hlsl", { { "CLOUD_VOXELS", "" } }, "findLightningSource" },
@@ -1333,6 +1339,19 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 		context->CSSetShaderResources(14, 1, &nullPsShadowSrv);
 		globals::profiler->EndPass();
+
+		context->CSSetShaderResources(69, 1, &nullPsShadowSrv);
+		context->PSSetShaderResources(69, 1, &nullPsShadowSrv);
+		auto* shadowInput = texShadowVolume->srv.get();
+		context->CSSetShaderResources(14, 1, &shadowInput);
+		auto* meanOutput = texCloudShadowMean->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &meanOutput, nullptr);
+		context->CSSetShader(voxelActive ? csCloudShadowMeanVoxel.get() : (cloudStormManager.VolcanicOnly() ? csCloudShadowMeanVolcanic.get() : csCloudShadowMean.get()), nullptr, 0);
+		globals::profiler->BeginPass("PhysicalSky::CloudShadowMean");
+		context->Dispatch(1, kShadowMeanHeights, 1);
+		globals::profiler->EndPass();
+		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+		context->CSSetShaderResources(14, 1, &nullPsShadowSrv);
 		state->EndPerfEvent();
 	}
 
