@@ -20,6 +20,9 @@
 #	include "Vram/Debug.h"
 
 #include <OpenRenderGraph/GraphHost.h>
+// This module exports the contributor ABI's table (ORG_GetRenderGraphAPI, below).
+#define ORG_RENDER_GRAPH_HOST_EXPORTS
+#include <OpenRenderGraph/ContributorHost.h>
 #if defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include <ORGModuleServices/PipelineRegistry.h>
 #endif
@@ -410,6 +413,9 @@ struct RenderGraphRuntime::Impl
 	bool framePaceSignalled = false;  // this frame enqueued one
 	std::shared_ptr<rhi::DevicePtr> device = std::make_shared<rhi::DevicePtr>();
 	std::unique_ptr<org::GraphHost> host;
+	// The contributor ABI's host (OpenRenderGraph/ContributorAPI.h): other modules' passes, in the epochs named after the segments.
+	std::unique_ptr<org::contributor::ContributorHost> contributors;
+	rhi::PipelineLayoutPtr contributorLayout;  // the pipeline service's layout: bindless, 16 root constants
 	std::shared_ptr<rhi::TimelinePtr> frameWaitTimeline;  // FrameWaitTimeline
 	std::atomic<bool> faulted = false;
 
@@ -1005,6 +1011,87 @@ struct RenderGraphRuntime::Impl
 	}
 
 	// BasicRHI hands every queue submission here instead of calling vkQueueSubmit.
+	// The contributor ABI's names for the segments' epochs.
+	static const char* ContributorEpochId(Segment a_segment)
+	{
+		switch (a_segment) {
+		case Segment::LightCulling:
+			return "cs.light-culling";
+		case Segment::ZPrepass:
+			return "cs.z-prepass";
+		case Segment::MainOpaque:
+			return "cs.main-opaque";
+		case Segment::ShadowView:
+			return "cs.shadow-view";
+		case Segment::SkyOcclusion:
+			return "cs.sky-occlusion";
+		case Segment::Reflection:
+			return "cs.reflection";
+		case Segment::Forward:
+			return "cs.forward";
+		case Segment::FirstPersonDepth:
+			return "cs.first-person-depth";
+		case Segment::FirstPerson:
+			return "cs.first-person";
+		default:
+			return "cs.unknown";
+		}
+	}
+
+	// Other modules reach the graph through the contributor ABI: ORG_GetRenderGraphAPI (exported below) returns the table, and their
+	// passes run in the segments' epochs, ordered against the frame's ends. No game targets are exported yet.
+	void CreateContributorHost()
+	{
+		try {
+			const rhi::PushConstantRangeDesc constants{ .visibility = rhi::ShaderStage::All, .num32BitValues = 16 };
+			if ((*device)->CreatePipelineLayout(rhi::PipelineLayoutDesc{ .pushConstants = { &constants, 1 },
+					.flags = rhi::PipelineLayoutFlags::PF_None }, contributorLayout) != rhi::Result::Ok)
+				throw std::runtime_error("the contributor pipeline layout could not be created");
+			org::contributor::ContributorHost::Desc desc{};
+			desc.id = "cs";
+			desc.displayName = "Community Shaders";
+			desc.version = std::string(Plugin::VERSION.string());
+			desc.device = device->Get();
+			desc.backend = rhi::Backend::Vulkan;
+			desc.anchors = { { "cs.frame.begin", "Frame begin", "__rg_begin__" }, { "cs.frame.end", "Frame end", "__rg_end__" } };
+			for (std::uint32_t index = 0; index < static_cast<std::uint32_t>(Segment::Count); ++index) {
+				const auto value = static_cast<Segment>(index);
+				desc.epochs.push_back({ ContributorEpochId(value), SegmentLabel(value), EpochOf(value) });
+			}
+			desc.graphicsLayout = desc.computeLayout = contributorLayout->GetHandle();
+			contributors = std::make_unique<org::contributor::ContributorHost>(std::move(desc));
+			host->AddExtension("cs.org.contributors", [self = this] { return self->contributors->CreateExtension(); });
+			LoadTestContributor();
+		} catch (const std::exception& e) {
+			logger::warn("[ORG] Contributors unavailable: {}", e.what());
+			contributors.reset();
+		}
+	}
+
+	// CS_ORG_TEST_CONTRIBUTOR=<path of ORGContributorSample.dll>: loads the sample contributor (OpenRenderGraph's
+	// samples/ContributorSample.cpp) as a plugin would be, in CS_ORG_TEST_CONTRIBUTOR_EPOCH (default cs.light-culling); it unregisters
+	// after CS_ORG_TEST_CONTRIBUTOR_FRAMES frames (default 600) and logs to CommunityShaders-ContributorSample.log beside CS's log.
+	void LoadTestContributor()
+	{
+		wchar_t path[MAX_PATH]{};
+		if (!GetEnvironmentVariableW(L"CS_ORG_TEST_CONTRIBUTOR", path, MAX_PATH))
+			return;
+		char epoch[64] = "cs.light-culling";
+		GetEnvironmentVariableA("CS_ORG_TEST_CONTRIBUTOR_EPOCH", epoch, sizeof(epoch));
+		char frames[16] = "600";
+		GetEnvironmentVariableA("CS_ORG_TEST_CONTRIBUTOR_FRAMES", frames, sizeof(frames));
+		const HMODULE module = LoadLibraryW(path);
+		using Start = int(ORG_RG_CALL*)(const wchar_t*, const char*, std::uint32_t, const char*);
+		const auto start = module ? reinterpret_cast<Start>(GetProcAddress(module, "ORGContributorSampleStart")) : nullptr;
+		if (!start) {
+			logger::warn("[ORG] CS_ORG_TEST_CONTRIBUTOR: no ORGContributorSampleStart in {}", std::filesystem::path(path).string());
+			return;
+		}
+		const auto log = (logger::log_directory().value_or(std::filesystem::path{}) / "CommunityShaders-ContributorSample.log").string();
+		const int status = start(L"CommunityShaders.dll", epoch, static_cast<std::uint32_t>(std::strtoul(frames, nullptr, 10)), log.c_str());
+		logger::info("[ORG] test contributor {} started: {} (epoch {}, log {})", std::filesystem::path(path).filename().string(), status, epoch, log);
+	}
+
 	static const char* SegmentLabel(Segment a_segment)
 	{
 		switch (a_segment) {
@@ -1448,6 +1535,7 @@ bool RenderGraphRuntime::Initialize()
 		return {};
 	});
 #endif
+	state->CreateContributorHost();
 	if (state->asyncEpochs) {
 		try {
 			std::vector<std::uint32_t> epochs{ EpochOf(Segment::Reflection), EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::SkyOcclusion),
@@ -1516,6 +1604,7 @@ void RenderGraphRuntime::Shutdown()
 		if (state->device && *state->device)
 			rhi::vulkan::abandon_device(state->device->Get());
 		(void)state->host.release();
+		(void)state->contributors.release();
 		(void)state.release();
 		disabledReason = "shut down";
 		return;
@@ -1523,8 +1612,9 @@ void RenderGraphRuntime::Shutdown()
 	// The compute queue's last submissions, before the host waits on their timelines.
 	state->computeSubmitter.Stop();
 	try {
-		// Waits only for the graph's own timelines, then releases every graph object.
+		// Waits only for the graph's own timelines, then releases every graph object; the contributors after it.
 		state->host.reset();
+		state->contributors.reset();
 	} catch (const std::exception& e) {
 		logger::error("[ORG] Render graph shutdown failed: {}", e.what());
 	}
@@ -1572,6 +1662,7 @@ RenderGraphRuntime::~RenderGraphRuntime()
 		if (impl->device && *impl->device)
 			rhi::vulkan::abandon_device(impl->device->Get());
 		(void)impl->host.release();
+		(void)impl->contributors.release();
 		(void)impl.release();
 	}
 }
@@ -1584,6 +1675,11 @@ bool RenderGraphRuntime::IsActive() const
 const std::string& RenderGraphRuntime::GetDisabledReason() const
 {
 	return disabledReason;
+}
+
+extern "C" ORGStatus ORG_RG_CALL ORG_GetRenderGraphAPI(std::uint32_t a_version, ORGRenderGraphAPI* a_out)
+{
+	return org::contributor::ContributorHost::GetAPI(a_version, a_out);
 }
 
 org::GraphHost* RenderGraphRuntime::Host()
@@ -1861,6 +1957,8 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<voi
 	if (!std::exchange(impl->holding, false))
 		impl->pendingCount = 0;
 	try {
+		if (impl->contributors)
+			impl->contributors->Poll(*impl->host);
 		std::function<void(org::RenderGraph&)> beforePrepare;
 		if (a_beforePrepare) {
 			beforePrepare = [&](org::RenderGraph& a_graph) {
