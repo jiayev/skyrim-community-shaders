@@ -103,7 +103,7 @@ namespace CinematicCamera
 	RE::NiPoint3 FocusResolver::GetReferenceFocusPosition(RE::TESObjectREFR* a_ref)
 	{
 		RE::NiPoint3 targetPosition = a_ref->GetPosition();
-		if (a_ref->GetFormType() == RE::FormType::ActorCharacter) {
+		if (a_ref->IsActor()) {
 			auto head = a_ref->GetNodeByName("NPC Head [Head]");
 			if (head)
 				targetPosition = head->world.translate;
@@ -472,7 +472,7 @@ namespace CinematicCamera
 			};
 			ImGui::Combo(T("feature.post_processing.cinematic_camera.gate_fit", "Gate Fit"), &fb.GateFit, gateFitNames, (int)std::size(gateFitNames));
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text(T("feature.post_processing.cinematic_camera.gate_fit_desc",
+				ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.gate_fit_desc",
 					"Which sensor dimension maps to the game FOV. Horizontal keeps the horizontal angle of view; Vertical keeps the vertical angle and derives the horizontal FOV from the viewport aspect."));
 		}
 
@@ -522,7 +522,7 @@ namespace CinematicCamera
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.focus_point_y_desc", "0% is the top edge; 100% is the bottom edge."));
 				ImGui::BeginDisabled(SceneWidgetInterceptor::IsArmed());
-				if (ImGui::Button(T("feature.post_processing.cinematic_camera.center_focus_point", "Center Focus Point")))
+				if (Util::Button(T("feature.post_processing.cinematic_camera.center_focus_point", "Center Focus Point")))
 					focus.ScreenPointUV = float2(0.5f, 0.5f);
 				ImGui::EndDisabled();
 			}

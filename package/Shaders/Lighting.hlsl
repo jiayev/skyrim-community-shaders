@@ -288,6 +288,10 @@ VS_OUTPUT main(VS_INPUT input)
 
 typedef VS_OUTPUT PS_INPUT;
 
+#if defined(TERRAIN_BLENDING)
+// Terrain Blending is loaded; objects only read its settings, so they keep this after the undef below.
+#	define TERRAIN_BLENDING_OBJECTS
+#endif
 #if !defined(LANDSCAPE)
 #	undef TERRAIN_BLENDING
 #endif
@@ -1206,7 +1210,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	if (SharedData::extendedMaterialSettings.EnableParallaxWarpingFix
 #			if defined(LANDSCAPE)
-		&& LANDSCAPE_PARALLAX_ENABLED
+	    && LANDSCAPE_PARALLAX_ENABLED
 #			endif
 	) {
 		float3 ndx = ddx(vertexNormal);
@@ -1716,6 +1720,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	sampledLodLandColor = TexLandLodBlend1Sampler.Sample(SampLandLodBlend1Sampler, input.TexCoord0.zw);
 	lodLandColor = ColorManagement::DiffuseToWorking(sampledLodLandColor);
 #		endif
+	// Matches the LOD terrain shader, which applies Color::Albedo to its non-PBR base color.
+	lodLandColor.xyz = Color::LambertAlbedo(lodLandColor.xyz);
 
 #		if defined(LOD_BLENDING)
 	lodLandColor.xyz = pow(abs(lodLandColor.xyz), SharedData::lodBlendingSettings.LODTerrainGamma) * SharedData::lodBlendingSettings.LODTerrainBrightness;
@@ -1736,6 +1742,69 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	glossiness = lerp(glossiness, 0, lodLandBlendFactor);
 #		endif
 #	endif  // LOD_LAND_BLEND
+
+#	if defined(DO_ALPHA_TEST) && !defined(SPARKLE) && !(defined(LANDSCAPE) && !defined(LOD_LAND_BLEND))
+	float alpha = baseColor.w;
+#		if defined(EMAT) && !defined(LANDSCAPE)
+#			if defined(PARALLAX)
+	alpha = TexColorSampler.SampleBias(SampColorSampler, uvOriginal, SharedData::MipBias).w;
+#			elif defined(TRUE_PBR)
+	[branch] if (PBRParallax)
+	{
+		alpha = TexColorSampler.SampleBias(SampColorSampler, uvOriginal, SharedData::MipBias).w;
+	}
+#			endif
+#		endif
+#		if defined(DO_ALPHA_TEST)
+	[branch] if ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::AdditionalAlphaMask) != 0)
+	{
+		uint2 alphaMask = input.Position.xy;
+		alphaMask.x = ((alphaMask.x << 2) & 12);
+		alphaMask.x = (alphaMask.y & 3) | (alphaMask.x & ~3);
+		const float maskValues[16] = {
+			0.003922,
+			0.533333,
+			0.133333,
+			0.666667,
+			0.800000,
+			0.266667,
+			0.933333,
+			0.400000,
+			0.200000,
+			0.733333,
+			0.066667,
+			0.600000,
+			0.996078,
+			0.466667,
+			0.866667,
+			0.333333,
+		};
+
+		float testTmp = 0;
+		if (MaterialData.z - maskValues[alphaMask.x] < 0) {
+			discard;
+		}
+	}
+	else
+#		endif  // defined(DO_ALPHA_TEST)
+	{
+		alpha *= MaterialData.z;
+	}
+#		if !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
+	alpha *= input.Color.w;
+#		endif  // !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
+#		if defined(DO_ALPHA_TEST)
+#			if defined(DEPTH_WRITE_DECALS)
+	if (alpha - 0.0156862754 < 0) {
+		discard;
+	}
+	alpha = saturate(1.05 * alpha);
+#			endif  // DEPTH_WRITE_DECALS
+	if (alpha - AlphaTestRefRS < 0) {
+		discard;
+	}
+#		endif  // DO_ALPHA_TEST
+#	endif
 
 #	if defined(SNOW) && !defined(TRUE_PBR)
 	useSnowSpecular = landSnowMask != 0.0;
@@ -1938,6 +2007,28 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(WORLD_MAP)
 	baseColor.xyz = GetWorldMapBaseColor(sampledBaseColor.xyz, baseColor.xyz, projWeight);
 #	endif  // WORLD_MAP
+
+	float3 localShadowPosition = input.WorldPosition.xyz;
+#	if defined(DEFERRED) && !defined(LANDSCAPE) && defined(TERRAIN_BLENDING_OBJECTS)
+	// Terrain Blending fades terrain over the part of an object below the terrain surface, where the scene
+	// depth holds the terrain. Light that part like the terrain it fades into: bend its normal up, and take
+	// local shadows at the visible surface, since terrain occludes the buried point in the shadow maps.
+	[branch] if (SharedData::terrainBlendingSettings.Enabled)
+	{
+		const float visibleRawDepth = SharedData::DepthTexture.Load(int3(input.Position.xy, 0)).x;
+		const float visibleDepth = SharedData::GetScreenDepth(visibleRawDepth);
+		// Objects read the 16-bit blended depth, so ignore differences within one of its steps.
+		const float depthStep = SharedData::GetScreenDepth(visibleRawDepth + 1.0 / 65535.0) - visibleDepth;
+		const float buriedDepth = max(viewPosition.z - visibleDepth - depthStep, 0.0);
+		[branch] if (buriedDepth > 0.0)
+		{
+			// A downward normal passes through zero halfway, so fall back to up there instead of normalizing it
+			const float3 blendedNormal = lerp(worldNormal, float3(0, 0, 1), saturate(buriedDepth / 10.0));
+			worldNormal = dot(blendedNormal, blendedNormal) > 1e-6 ? normalize(blendedNormal) : float3(0, 0, 1);
+			localShadowPosition *= 1.0 - buriedDepth / viewPosition.z;
+		}
+	}
+#	endif
 
 #	if defined(MODELSPACENORMALS)
 	float3 vertexNormal = worldNormal;
@@ -2278,13 +2369,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float skylightingShadowVisibility = 1.0;
 #		endif
 #		if defined(DEFERRED)
-	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
-		,
-		skylightingShadowVisibility,
-		false
+	// One probe pass serves both lookups when the height clamp leaves the position unchanged.
+	const bool skylightingWantsShadowVis = inWorld && UseSkylightingShadowVisibility();
+	const float3 positionMSShadowVis = Skylighting::ClampToArrayHeight(positionMSSkylight);
+	const bool skylightingShadowVisShared = skylightingWantsShadowVis && positionMSShadowVis.z == positionMSSkylight.z;
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal, skylightingShadowVisibility, skylightingShadowVisShared);
+	[branch] if (skylightingWantsShadowVis && !skylightingShadowVisShared)
+		Skylighting::Sample(positionMSShadowVis, worldNormal, skylightingShadowVisibility);
+#			else
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal);
 #			endif
-	);
 #		else
 	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
@@ -2295,7 +2390,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 									  ) :
 	                              Skylighting::UNIT_SH;
 #		endif
-#		if defined(SKYLIGHTING_SHADOW_VIS)
+#		if defined(SKYLIGHTING_SHADOW_VIS) && !defined(DEFERRED)
 	// Height clamped so shadow visibility stays valid above the volume, unlike the diffuse SH fade
 	[branch] if (inWorld && UseSkylightingShadowVisibility())
 		Skylighting::Sample(Skylighting::ClampToArrayHeight(positionMSSkylight), worldNormal, skylightingShadowVisibility);
@@ -2418,7 +2513,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(VOLUMETRIC_SHADOWS)
 	if (inWorld && !inReflection && ShadowSampling::HasDirectionalShadows()
 #		if defined(DEFERRED)
-		&& !UseSkylightingShadowVisibility()
+	    && !UseSkylightingShadowVisibility()
 #		endif
 	) {
 		const float lightingShadow = ShadowSampling::GetLightingShadow(input.WorldPosition.xyz, dirVSMDetailedShadow);
@@ -2670,7 +2765,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		[branch] if (light.lightFlags & LightLimitFix::LightFlags::LocalShadow)
 		{
 			const float3 localShadowEye = LightLimitFix::FirstPerson ? LightLimitFix::WorldEyePosition.xyz : FrameBuffer::CameraPosAdjust.xyz;
-			shadowComponent = LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, input.WorldPosition.xyz, localShadowEye, normalizedLightDirection, localShadowSkinned, screenNoise);
+			shadowComponent = LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, localShadowPosition, localShadowEye, normalizedLightDirection, localShadowSkinned, screenNoise);
 			lightShadow *= shadowComponent;
 		}
 		else if (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)
@@ -3104,7 +3199,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	if (any(indirectLobeWeights.specular > 0)
 #		if defined(WETNESS_EFFECTS)
-		|| any(wetnessReflectance > 0)
+	    || any(wetnessReflectance > 0)
 #		endif
 	)
 #		if defined(DYNAMIC_CUBEMAPS)
@@ -3167,12 +3262,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 vanillaFogColor = fogColor;
 		float vanillaFogFactor = fogFactor;
 		if (SharedData::exponentialHeightFogSettings.enabled) {
-			float4 exponentialHeightFog;
-			if (inReflection) {
-				exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogNoVolumetric(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
-			} else {
-				exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
-			}
+			float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogInternal(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, true, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1), !inReflection);
 			fogColor = exponentialHeightFog.xyz;
 			fogFactor = exponentialHeightFog.w;
 		}
@@ -3213,18 +3303,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
 	psout.Diffuse.w = 0;
 #	else
+#		if !defined(DO_ALPHA_TEST) || defined(SPARKLE)
 	float alpha = baseColor.w;
-#		if defined(EMAT) && !defined(LANDSCAPE)
-#			if defined(PARALLAX)
+#			if defined(EMAT) && !defined(LANDSCAPE)
+#				if defined(PARALLAX)
 	alpha = TexColorSampler.SampleBias(SampColorSampler, uvOriginal, SharedData::MipBias).w;
-#			elif defined(TRUE_PBR)
+#				elif defined(TRUE_PBR)
 	[branch] if (PBRParallax)
 	{
 		alpha = TexColorSampler.SampleBias(SampColorSampler, uvOriginal, SharedData::MipBias).w;
 	}
+#				endif
 #			endif
-#		endif
-#		if defined(DO_ALPHA_TEST)
+#			if defined(DO_ALPHA_TEST)
 	[branch] if ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::AdditionalAlphaMask) != 0)
 	{
 		uint2 alphaMask = input.Position.xy;
@@ -3255,24 +3346,25 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 	}
 	else
-#		endif  // defined(DO_ALPHA_TEST)
+#			endif  // defined(DO_ALPHA_TEST)
 	{
 		alpha *= MaterialData.z;
 	}
-#		if !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
+#			if !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
 	alpha *= input.Color.w;
-#		endif  // !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
-#		if defined(DO_ALPHA_TEST)
-#			if defined(DEPTH_WRITE_DECALS)
+#			endif  // !(defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS))
+#			if defined(DO_ALPHA_TEST)
+#				if defined(DEPTH_WRITE_DECALS)
 	if (alpha - 0.0156862754 < 0) {
 		discard;
 	}
 	alpha = saturate(1.05 * alpha);
-#			endif  // DEPTH_WRITE_DECALS
+#				endif  // DEPTH_WRITE_DECALS
 	if (alpha - AlphaTestRefRS < 0) {
 		discard;
 	}
-#		endif      // DO_ALPHA_TEST
+#			endif      // DO_ALPHA_TEST
+#		endif
 
 #		if defined(ANISOTROPIC_ALPHA)
 	// Uniform alpha material settings
@@ -3401,7 +3493,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// for pixels that do not write to this RT (sky, water, grass, effects).
 	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, psout.Diffuse.w);
 
-	float stochasticBlend = (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
+	// Additive layers (e.g. weapon blood sheen) only add light, so keep the normals and glossiness beneath them
+	const bool additiveLighting = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting;
+	float stochasticBlend = !additiveLighting && (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
 	psout.NormalGlossiness.w = stochasticBlend;
 #	endif
 

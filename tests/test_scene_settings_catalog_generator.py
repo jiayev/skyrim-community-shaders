@@ -1308,13 +1308,13 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
     def test_brace_scoped_categories_match_exponential_height_fog(self):
         root = self.entries_by_id[("ExponentialHeightFog", "", "fogDensity")]
         volumetric = self.entries_by_id[
-            ("ExponentialHeightFog", "", "volumetricFogDistance")]
-        debug = self.entries_by_id[
-            ("ExponentialHeightFog", "", "volumetricGridSizeZ")]
+            ("ExponentialHeightFog", "", "volumetricFogStartDistance")]
+        noise = self.entries_by_id[
+            ("ExponentialHeightFog", "", "volumetricFogNoiseScale")]
         self.assertEqual(root["displayPath"], "")
         self.assertEqual(volumetric["displayPath"], "Volumetric Fog")
-        self.assertEqual(debug["displayPath"], "Debug")
-        self.assertIn("SceneControllable", debug["flags"])
+        self.assertEqual(noise["displayPath"], "Volumetric Noise")
+        self.assertIn("SceneControllable", noise["flags"])
 
     def test_safe_editor_metadata(self):
         ripple_lifetime = self.entries_by_id[
