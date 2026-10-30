@@ -19,7 +19,7 @@
 #include "Utils/FileRename.h"
 #	include "Vram/Debug.h"
 
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #if defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include <ORGModuleServices/PipelineRegistry.h>
 #endif
@@ -409,7 +409,7 @@ struct RenderGraphRuntime::Impl
 	uint32_t frameLatency = 2;    // CS_FRAME_LATENCY
 	bool framePaceSignalled = false;  // this frame enqueued one
 	std::shared_ptr<rhi::DevicePtr> device = std::make_shared<rhi::DevicePtr>();
-	std::unique_ptr<org::PersistentGraphHost> host;
+	std::unique_ptr<org::GraphHost> host;
 	std::shared_ptr<rhi::TimelinePtr> frameWaitTimeline;  // FrameWaitTimeline
 	std::atomic<bool> faulted = false;
 
@@ -1367,7 +1367,7 @@ bool RenderGraphRuntime::Initialize()
 		return disable("BasicRHI could not adopt DXVK's Vulkan device");
 
 	try {
-		org::PersistentGraphHost::Desc desc{};
+		org::GraphHost::Desc desc{};
 		desc.device = state->device->Get();
 		desc.backend = rhi::Backend::Vulkan;
 		// Everything DXVK submitted before an epoch and everything it submits after
@@ -1400,7 +1400,7 @@ bool RenderGraphRuntime::Initialize()
 		if (!desc.epochOrder.empty())
 			logger::info("[ORG] epoch order: {}", fmt::join(desc.epochOrder, ","));
 		const bool closed = desc.closedExecutions;
-		state->host = std::make_unique<org::PersistentGraphHost>(std::move(desc));
+		state->host = std::make_unique<org::GraphHost>(std::move(desc));
 		// The frame-wait timeline, before anything builds the graph (its packets bind it when prepared): only with a queue of the
 		// uploader's own to signal it from.
 		if (state->uploadQueue) {
@@ -1586,7 +1586,7 @@ const std::string& RenderGraphRuntime::GetDisabledReason() const
 	return disabledReason;
 }
 
-org::PersistentGraphHost* RenderGraphRuntime::Host()
+org::GraphHost* RenderGraphRuntime::Host()
 {
 	return IsActive() ? impl->host.get() : nullptr;
 }
@@ -2249,7 +2249,7 @@ void RenderGraphRuntime::Shutdown() {}
 RenderGraphRuntime::~RenderGraphRuntime() = default;
 bool RenderGraphRuntime::IsActive() const { return false; }
 const std::string& RenderGraphRuntime::GetDisabledReason() const { return disabledReason; }
-org::PersistentGraphHost* RenderGraphRuntime::Host() { return nullptr; }
+org::GraphHost* RenderGraphRuntime::Host() { return nullptr; }
 std::shared_ptr<rhi::TimelinePtr> RenderGraphRuntime::FrameWaitTimeline() const { return nullptr; }
 std::shared_ptr<const void> RenderGraphRuntime::DeviceOwner() const { return {}; }
 bool RenderGraphRuntime::ExecuteEpoch(Segment, const std::function<void(org::RenderGraph&)>&,

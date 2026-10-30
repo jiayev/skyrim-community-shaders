@@ -8,7 +8,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <Render/LatchBlock.h>
 #include <RenderPasses/Base/TypedRenderGraphPass.h>
 #include <Resources/Buffers/Buffer.h>
@@ -357,7 +357,7 @@ namespace DCLF::Draws
 			bool armed = false;
 			std::uint32_t frameSlot = 0, source = 0, stamp = 0;
 			std::uint32_t view = 0, mode = 0;              // a shadow view's labels, for the report
-			org::PersistentGraphHost::GpuPoint done;       // when the slot is not read inside its next commit: the execution's end
+			org::GraphHost::GpuPoint done;       // when the slot is not read inside its next commit: the execution's end
 		} armed;
 		std::uint64_t harvested = 0, missed = 0;  // render thread, since the readback was made
 

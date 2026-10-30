@@ -14,7 +14,7 @@
 #if defined(CS_HAS_RENDER_GRAPH)
 #	include "RenderGraph/RenderGraphRuntime.h"
 
-#	include <OpenRenderGraph/PersistentGraphHost.h>
+#	include <OpenRenderGraph/GraphHost.h>
 #	include <Render/MemoryIntrospectionAPI.h>
 #	include <Render/RenderGraph/RenderGraph.h>
 #	include <Render/Runtime/IStatisticsService.h>

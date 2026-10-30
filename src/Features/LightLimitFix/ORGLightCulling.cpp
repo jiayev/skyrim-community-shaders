@@ -9,7 +9,7 @@
 #include "RenderGraph/ComputeProgram.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <Render/LatchBlock.h>
 #include <Render/RenderGraph/RenderGraph.h>
 #include <Render/Runtime/UploadServiceAccess.h>

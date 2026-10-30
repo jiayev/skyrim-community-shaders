@@ -48,7 +48,7 @@ namespace DCLF
 	 *   (so a skin's previous palette and a placement's previous world settle once its motion stops); a palette rows class's items every
 	 *   frame, their blocks the class's registration's (Api::PaletteRowsContribution: particle quads face the camera);
 	 * - send the frame's buffers the runs they lack on the dedicated upload queue, then signal the frame-wait timeline to the frame's
-	 *   sequence number (always, also after a failure), which every batch of the frame waits for (PersistentGraphHost's frame wait).
+	 *   sequence number (always, also after a failure), which every batch of the frame waits for (GraphHost's frame wait).
 	 *
 	 * The features' registered pools (Api::FrameValuePool, Extensions::RegisteredPools) run beside the built-in row sets, after them: their
 	 * frame-start reads after the built-in ones, their kicks after the built-in inputs, their samples after the built-in sampling, their

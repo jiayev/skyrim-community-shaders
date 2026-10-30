@@ -8,7 +8,7 @@
  * @brief Per-frame GPU times of the render graph's ranges from OpenRenderGraph's pass timestamps: the samples of NvPerf's
  * timestamp traces (NvPerfTrace.h, "source": "timestamps"). Cheap and continuous: every frame is a sample, on every queue.
  *
- * Collecting turns on the graph host's recording timestamps (PersistentGraphHost::SetRecordingTimestamps), which rebuilds the
+ * Collecting turns on the graph host's recording timestamps (GraphHost::SetRecordingTimestamps), which rebuilds the
  * graph so that the recordings kept across frames (Drawcall Limit Fix's revision epochs) are recorded again with timestamps
  * of their own; Ready() tells when that build has happened. Stopping turns them off (another rebuild).
  *

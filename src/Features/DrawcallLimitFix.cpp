@@ -49,7 +49,7 @@
 #	include "RenderGraph/MemoryWindow.h"
 #	include "RenderGraph/ScheduleWindow.h"
 #	include "RenderGraph/RenderGraphRuntime.h"
-#	include <OpenRenderGraph/PersistentGraphHost.h>
+#	include <OpenRenderGraph/GraphHost.h>
 #	include "State.h"
 #	include "DrawcallLimitFix/Core/Engine/Capture/ConstantMirror.h"
 #	include "DrawcallLimitFix/Diagnostics/Scene/CaptureParity.h"

@@ -39,7 +39,7 @@ namespace DCLF
 		struct PendingRecordings
 		{
 			std::shared_ptr<RevisionFragment> fragment;
-			std::vector<std::shared_ptr<const org::PersistentGraphHost::EpochRecording>> recordings;
+			std::vector<std::shared_ptr<const org::GraphHost::EpochRecording>> recordings;
 			std::atomic<std::uint32_t> remaining = 0;
 			std::atomic<bool> failed = false;
 			std::uint32_t hosted = 0;  // the hosted epochs recorded with their shapes, a bit each (RevisionRecordings::hosted)
@@ -127,7 +127,7 @@ namespace DCLF
 		}
 
 		/** @brief A recording of a_work's request a_index completed (ORG's host thread): the fragment resolves once all are, or fails. */
-		void RecordingCompleted(const std::shared_ptr<PendingRecordings>& a_work, std::size_t a_index, std::shared_ptr<const org::PersistentGraphHost::EpochRecording> a_recording,
+		void RecordingCompleted(const std::shared_ptr<PendingRecordings>& a_work, std::size_t a_index, std::shared_ptr<const org::GraphHost::EpochRecording> a_recording,
 			std::exception_ptr a_error)
 		{
 			const auto& work = a_work;
@@ -138,7 +138,7 @@ namespace DCLF
 			if (a_error) {
 				try {
 					std::rethrow_exception(a_error);
-				} catch (const org::PersistentGraphHost::EpochRecordingDropped&) {
+				} catch (const org::GraphHost::EpochRecordingDropped&) {
 					dropped = true;
 				} catch (...) {
 				}
@@ -185,7 +185,7 @@ namespace DCLF
 		 * a_hosted (a bit each, by row: those that have one) - requested of ORG's host thread: the fragment they resolve, or null when
 		 * async epochs stopped under it.
 		 */
-		std::shared_ptr<RevisionFragment> RequestRecordings(org::PersistentGraphHost& a_host, Revisions& a_rv, std::atomic<std::uint32_t>& a_outstanding, std::uint32_t a_epoch,
+		std::shared_ptr<RevisionFragment> RequestRecordings(org::GraphHost& a_host, Revisions& a_rv, std::atomic<std::uint32_t>& a_outstanding, std::uint32_t a_epoch,
 			const std::shared_ptr<const NamedVersions>& a_versions, std::span<const std::shared_ptr<const RevisionFragment>> a_inputs, std::uint32_t a_hosted,
 			std::uint64_t a_builds)
 		{
@@ -252,7 +252,7 @@ namespace DCLF
 			bool refused = false;
 			for (std::size_t i = 0; i < requests.size() && !refused; ++i) {
 				a_outstanding.fetch_add(1, std::memory_order_acq_rel);
-				refused = !a_host.RequestEpochRecording(epoch, requests[i], [work, i](std::shared_ptr<const org::PersistentGraphHost::EpochRecording> a_recording, std::exception_ptr a_error) {
+				refused = !a_host.RequestEpochRecording(epoch, requests[i], [work, i](std::shared_ptr<const org::GraphHost::EpochRecording> a_recording, std::exception_ptr a_error) {
 					RecordingCompleted(work, i, std::move(a_recording), std::move(a_error));
 				});
 				if (refused)

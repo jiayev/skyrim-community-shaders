@@ -23,7 +23,7 @@
 
 #include "Features/RemoteControl/NvPerf.h"
 #include "RenderGraph/RenderGraphRuntime.h"
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <Render/LatchBlock.h>
 #include <Render/PreparedTablePublisher.h>
 #include <RenderPasses/Base/TypedRenderGraphPass.h>

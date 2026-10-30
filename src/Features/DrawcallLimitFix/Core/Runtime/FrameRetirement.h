@@ -1,6 +1,6 @@
 #pragma once
 
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 
 #include <cstdint>
 #include <string>
@@ -16,8 +16,8 @@ namespace DCLF
 	/**
 	 * @brief DCLF's one retirement clock (org::services::RetirementClock, D3): the GPU's progress over everything DCLF submits, which every
 	 * pooled version DCLF leases (the payload's parts, FrameValues' buffers) is bound against. Two sources: the graph host's executions,
-	 * from its retired callback (PersistentGraphHost::SetRetiredCallback: every submission up to a number is complete on the GPU, the
-	 * submissions numbered in their order, PersistentGraphHost::SubmissionsMade), and the CPU pipeline's frames, whose work is in DXVK's
+	 * from its retired callback (GraphHost::SetRetiredCallback: every submission up to a number is complete on the GPU, the
+	 * submissions numbered in their order, GraphHost::SubmissionsMade), and the CPU pipeline's frames, whose work is in DXVK's
 	 * own command buffers (Direct/Sites.cpp: each frame's signal on its CPU-frame timeline). Exact completion, not a frames-in-flight
 	 * window. Never from host frame numbers: an async epoch's ticket is numbered when it is prepared, so a frame's last submission may
 	 * carry a number the clock has passed, and a later-numbered one completing says nothing of one submitted after it. Created on first
@@ -41,7 +41,7 @@ namespace DCLF
 	 * @brief Submitting (render) thread: the GPU points SubmittedRetirementPoint's point stands for (the host's SubmittedPoint, and the
 	 * CPU-frame timeline at its last signal), for a GPU wait on it (FrameValues' uploads into a copy a frame in flight bound).
 	 */
-	org::PersistentGraphHost::GpuPoint SubmittedGpuPoint();
+	org::GraphHost::GpuPoint SubmittedGpuPoint();
 
 	/** @brief The graph host's retired callback (any thread): every host submission up to a_submissions is complete. */
 	void NoteGraphSubmissionsRetired(std::uint64_t a_submissions);

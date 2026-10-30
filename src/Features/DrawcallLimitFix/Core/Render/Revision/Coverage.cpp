@@ -37,7 +37,7 @@ namespace DCLF
 		impl->ReleaseTicketsForRecordings(*host, RenderGraphRuntime::Get().TakeSubmittedSegments());
 	}
 
-	void IndirectDraws::Impl::BuildIfAsked(org::PersistentGraphHost& a_host)
+	void IndirectDraws::Impl::BuildIfAsked(org::GraphHost& a_host)
 	{
 		// What the revision code asked of the owner thread (shadow view slots: their buffers and the extension declaring them), built
 		// here with the rest.
@@ -48,7 +48,7 @@ namespace DCLF
 		PostRevisionInputs();
 	}
 
-	void IndirectDraws::Impl::ReleaseTicketsForRecordings(org::PersistentGraphHost& a_host, std::uint32_t a_submitted)
+	void IndirectDraws::Impl::ReleaseTicketsForRecordings(org::GraphHost& a_host, std::uint32_t a_submitted)
 	{
 		// A live epoch's recording waits for the slot its ready, unsubmitted ticket holds: an epoch outside a_submitted gives that ticket
 		// back while a revision waits for recordings, so none waits on it. Recordings outstanding: an atomic the completions count down
@@ -196,7 +196,7 @@ namespace DCLF
 		}
 	}
 
-	void IndirectDraws::Impl::DecideEpochCoverage(org::PersistentGraphHost* a_host)
+	void IndirectDraws::Impl::DecideEpochCoverage(org::GraphHost* a_host)
 	{
 		using R = SceneRevisions;
 		auto& rv = revisions;
@@ -275,7 +275,7 @@ namespace DCLF
 		return nullptr;
 	}
 
-	void IndirectDraws::Impl::DecideViewCoverage(ViewKind a_kind, org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame)
+	void IndirectDraws::Impl::DecideViewCoverage(ViewKind a_kind, org::GraphHost* a_host, bool a_main, std::uint32_t a_frame)
 	{
 		// What a registered view's coverage is decided from (Api::ViewCoverage), every input read whatever the others: its feature's
 		// callback decides (the first person's: its members withheld from the engine, PassCapture, and drawn by its epochs on a frame the

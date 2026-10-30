@@ -97,5 +97,5 @@ namespace NvPerf::detail
 	/// The D3D11 backend (NVPERF_ENABLED), or null.
 	std::unique_ptr<Backend> MakeD3D11Backend();
 	/// The Vulkan backend on DXVK's device (NVPERF_ENABLED with the render graph), or null.
-	std::unique_ptr<Backend> MakeVulkanBackend(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::PersistentGraphHost& a_host);
+	std::unique_ptr<Backend> MakeVulkanBackend(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::GraphHost& a_host);
 }

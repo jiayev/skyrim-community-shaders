@@ -3,7 +3,7 @@
 #if defined(CS_HAS_RENDER_GRAPH)
 #	include "RenderGraph/RenderGraphRuntime.h"
 
-#	include <OpenRenderGraph/PersistentGraphHost.h>
+#	include <OpenRenderGraph/GraphHost.h>
 #endif
 
 #include <atomic>
@@ -37,7 +37,7 @@ namespace NvPerf::Timestamps
 		}
 
 #if defined(CS_HAS_RENDER_GRAPH)
-		org::PersistentGraphHost* Host()
+		org::GraphHost* Host()
 		{
 			return RenderGraphRuntime::Get().Host();
 		}

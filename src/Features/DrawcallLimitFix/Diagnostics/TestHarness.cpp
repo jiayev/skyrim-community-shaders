@@ -23,7 +23,7 @@
 #include "Vram/VramLedger.h"
 
 #include <ORGModuleServices/PipelineRegistry.h>
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <Render/RenderGraph/ExperimentalRhiExecution.h>
 
 #include <mutex>
@@ -265,7 +265,7 @@ namespace DCLF
 							});
 						return;
 					}
-					// "dclf:rebuild": a graph rebuild requested (PersistentGraphHost::RequestRebuild, here at Present on the graph's owner
+					// "dclf:rebuild": a graph rebuild requested (GraphHost::RequestRebuild, here at Present on the graph's owner
 					// thread), which the next frame's build point performs: every recording invalidated, so that frame waits at its start for
 					// a snapshot recorded on the new build (IndirectDraws::AdoptCurrentSnapshot; the strict epochs line counts the waits).
 					if (command == "dclf:rebuild") {

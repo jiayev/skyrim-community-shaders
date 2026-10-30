@@ -96,7 +96,7 @@ namespace DCLF::Api
 		std::span<const TriggerDef> triggers;
 		std::span<const EpochDef> epochs;
 		std::span<const ForeignEpoch> foreign;
-		std::span<const std::string_view> frameOrder;  // the order a frame runs them (PersistentGraphHost::Desc::epochOrder)
+		std::span<const std::string_view> frameOrder;  // the order a frame runs them (GraphHost::Desc::epochOrder)
 		std::span<const std::string_view> asyncOrder;  // the host's async epochs, in its ticket loop's order (the revision-driven ones: those with revision)
 	};
 }

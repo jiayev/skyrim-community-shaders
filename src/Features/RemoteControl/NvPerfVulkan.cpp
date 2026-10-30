@@ -8,7 +8,7 @@
 #	include "Globals.h"
 #	include "RenderGraph/DxvkOrgInterop.h"
 
-#	include <OpenRenderGraph/PersistentGraphHost.h>
+#	include <OpenRenderGraph/GraphHost.h>
 #	include <Telemetry/NvPerfCapture.h>
 
 #	include <atomic>
@@ -92,7 +92,7 @@ namespace NvPerf::detail
 			const char* Name() const noexcept override { return "Vulkan"; }
 
 			// DXVK's exports, its device's queue, the graph host's hooks. Nothing here loads the library.
-			bool Register(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::PersistentGraphHost& a_host)
+			bool Register(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::GraphHost& a_host)
 			{
 				const auto module = static_cast<HMODULE>(a_dxvkModule);
 				enqueueQueueCallback = reinterpret_cast<PFN_dxvkEnqueueQueueCallback>(::GetProcAddress(module, "dxvkEnqueueQueueCallback"));
@@ -447,7 +447,7 @@ namespace NvPerf::detail
 			// Frames between arming and the first pass: every command buffer that executes in a pass must have been
 			// recorded while armed, and the graph host records its epochs up to its frame slots ahead.
 			std::uint64_t lead = 4;
-			org::PersistentGraphHost* host = nullptr;  // the graph host, rebuilt at arming and disarming
+			org::GraphHost* host = nullptr;  // the graph host, rebuilt at arming and disarming
 
 			// Render thread.
 			std::uint64_t frame = 0;
@@ -468,7 +468,7 @@ namespace NvPerf::detail
 		};
 	}
 
-	std::unique_ptr<Backend> MakeVulkanBackend(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::PersistentGraphHost& a_host)
+	std::unique_ptr<Backend> MakeVulkanBackend(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::GraphHost& a_host)
 	{
 		auto backend = std::make_unique<VulkanBackend>();
 		backend->Register(a_info, a_dxvkModule, a_host);
@@ -482,7 +482,7 @@ namespace NvPerf::detail
 
 namespace NvPerf::detail
 {
-	std::unique_ptr<Backend> MakeVulkanBackend(const DxvkOrgInteropDeviceInfo&, void*, org::PersistentGraphHost&)
+	std::unique_ptr<Backend> MakeVulkanBackend(const DxvkOrgInteropDeviceInfo&, void*, org::GraphHost&)
 	{
 		return nullptr;
 	}

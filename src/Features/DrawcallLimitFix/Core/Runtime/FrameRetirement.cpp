@@ -6,7 +6,7 @@
 #include "RenderGraph/RenderGraphRuntime.h"
 
 #include <ORGModuleServices/BackingPool.h>
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <rhi.h>
 
 #include <algorithm>
@@ -75,10 +75,10 @@ namespace DCLF
 		return point;
 	}
 
-	org::PersistentGraphHost::GpuPoint SubmittedGpuPoint()
+	org::GraphHost::GpuPoint SubmittedGpuPoint()
 	{
 		const auto* host = RenderGraphRuntime::Get().Host();
-		org::PersistentGraphHost::GpuPoint point = host ? host->SubmittedPoint() : org::PersistentGraphHost::GpuPoint{};
+		org::GraphHost::GpuPoint point = host ? host->SubmittedPoint() : org::GraphHost::GpuPoint{};
 		auto& s = State();
 		if (const std::uint64_t cpu = s.cpuSignalled.load(std::memory_order_relaxed); cpu && s.cpuTimeline)
 			point.points.emplace_back(s.cpuTimeline, cpu);

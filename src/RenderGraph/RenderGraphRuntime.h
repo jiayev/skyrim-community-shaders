@@ -39,7 +39,7 @@ namespace rhi
 namespace org
 {
 	class ExternalEpochExecution;
-	class PersistentGraphHost;
+	class GraphHost;
 	class RenderGraph;
 	class Resource;
 }
@@ -88,7 +88,7 @@ public:
 	static RenderGraphRuntime& Get();
 
 	/**
-	 * @brief Game frames the graph's work may run behind the render thread (PersistentGraphHost::Desc::framesInFlight). The host
+	 * @brief Game frames the graph's work may run behind the render thread (GraphHost::Desc::framesInFlight). The host
 	 * sizes its frame slot ring from it, a slot per epoch of every frame (FrameSlots), and each epoch's next slot waits for that
 	 * slot's last GPU work: fewer frames than the CPU runs ahead of the GPU (DXVK's frame latency) would stall the render thread
 	 * every few frames.
@@ -110,7 +110,7 @@ public:
 	static void RequestDeviceFeatures(HMODULE a_dxvkD3D11);
 
 	/**
-	 * @brief The frame's epochs, as Segment values: the order a frame runs them (PersistentGraphHost::Desc::epochOrder), the host's async
+	 * @brief The frame's epochs, as Segment values: the order a frame runs them (GraphHost::Desc::epochOrder), the host's async
 	 * epochs in its ticket loop's order, and the revision-driven ones among them (their submissions carry a recording, no live ticket).
 	 */
 	struct FrameConfig
@@ -136,9 +136,9 @@ public:
 	const std::string& GetDisabledReason() const;
 
 	/** @brief The persistent graph host; null when inactive. */
-	org::PersistentGraphHost* Host();
+	org::GraphHost* Host();
 	/**
-	 * @brief The host's frame-wait timeline (PersistentGraphHost::SetFrameWaitTimeline): signalled from the dedicated upload queue by a
+	 * @brief The host's frame-wait timeline (GraphHost::SetFrameWaitTimeline): signalled from the dedicated upload queue by a
 	 * producer of per-frame values after their copies, and waited for by every batch submitted while its value is set. The producer's
 	 * signal must be submitted before the frame's Present enters DXVK: upload submissions take DXVK's submission lock, which DXVK
 	 * holds across a present, and a present that waits for the frame's GPU work (AMD's windowed one) would deadlock against it (DCLF:
@@ -158,7 +158,7 @@ public:
 		std::shared_ptr<const void> a_resourceOwner = {});
 
 	/**
-	 * @brief Render thread: an external epoch (org::PersistentGraphHost::SetExternalEpochs) submitted at the current point of the
+	 * @brief Render thread: an external epoch (org::GraphHost::SetExternalEpochs) submitted at the current point of the
 	 * D3D11 stream, as ExecuteEpoch submits one, but executed by the caller: its ticket's recording comes back to be executed in
 	 * DXVK's own command buffer (EmitExternalCommands, with its waits and signals), and nothing is flushed or submitted here. Null
 	 * when inactive or without async epochs (nothing ran); throws as the host's SubmitEpoch does.

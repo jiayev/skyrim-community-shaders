@@ -59,7 +59,7 @@ namespace DCLF::Draws
 		return CpuPipelineFor(a_set, a_interior) || CpuPipelineForced();
 	}
 
-	void RefreshGraphConditions(org::PersistentGraphHost& a_host)
+	void RefreshGraphConditions(org::GraphHost& a_host)
 	{
 		GraphConditions next;
 		const auto* tes = RE::TES::GetSingleton();

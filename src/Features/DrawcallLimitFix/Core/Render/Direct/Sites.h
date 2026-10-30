@@ -16,7 +16,7 @@
 // wrapper, the executions' owners, the pre-work, the batch set and the cull frame) is its frame slot's, kept until the frame's signal on
 // DCLF's CPU-frame timeline (signalled after the frame's last callback, EndFrame) completes: the slot's next frame waits for it at its
 // start (one host wait, the slots' depth ahead) before it resets them. The ORG latch regions the commits write are the same slot's
-// (PersistentGraphHost::BeginExternalFrameSlot), so they are not rewritten while the GPU reads them either.
+// (GraphHost::BeginExternalFrameSlot), so they are not rewritten while the GPU reads them either.
 
 #include "Features/DrawcallLimitFix/Api/Passes.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Direct.h"

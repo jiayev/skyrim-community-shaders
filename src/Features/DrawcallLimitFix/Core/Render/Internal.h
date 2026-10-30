@@ -53,7 +53,7 @@
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "ShaderCache.h"
 #include "State.h"
-#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <Render/BindingTable.h>
 #include <Render/LatchBlock.h>
 #include <Render/Runtime/ExternalSignalReservation.h>
