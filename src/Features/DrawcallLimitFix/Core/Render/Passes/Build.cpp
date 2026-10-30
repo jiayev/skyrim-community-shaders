@@ -4,6 +4,12 @@
 #include "Features/DrawcallLimitFix/Core/Render/Passes/PassesInternal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 
+#include <array>
+#include <cstddef>
+#include <cstring>
+#include <type_traits>
+#include <vector>
+
 namespace DCLF::Draws
 {
 	struct BuildDrawsBindings
@@ -21,15 +27,60 @@ namespace DCLF::Draws
 		org::ResourceBindingToken retestArguments;          // phase 2: that dispatch, as its ExecuteIndirect's arguments
 	};
 
+	namespace
+	{
+		static_assert(std::is_trivially_copyable_v<BuildDrawsConstants> && sizeof(BuildDrawsConstants) == kBuildDrawsConstantWords * sizeof(std::uint32_t));
+
+		/**
+		 * @brief The words of a BuildDrawsConstants its recording fills with declared views' bindless indices (PassRecordContext::Index):
+		 * Prepare chooses the view each names, the recording resolves them against the frame it records.
+		 */
+		class ViewIndexWords
+		{
+		public:
+			/** @brief Has the recording fill a_field (a word of a_constants) with a_view's index; a later Set of the same word replaces it. */
+			void Set(const BuildDrawsConstants& a_constants, const std::uint32_t& a_field, const org::DeclaredViewToken& a_view)
+			{
+				const auto word = static_cast<std::uint32_t>(
+					(reinterpret_cast<const std::byte*>(&a_field) - reinterpret_cast<const std::byte*>(&a_constants)) / sizeof(std::uint32_t));
+				for (auto& entry : entries)
+					if (entry.word == word) {
+						entry.view = a_view;
+						return;
+					}
+				entries.push_back({ word, a_view });
+			}
+
+			/** @brief a_constants with every word Set filled from a_recording's views. */
+			BuildDrawsConstants Apply(BuildDrawsConstants a_constants, const org::PassRecordContext& a_recording) const
+			{
+				std::array<std::uint32_t, kBuildDrawsConstantWords> words{};
+				std::memcpy(words.data(), &a_constants, sizeof(a_constants));
+				for (const auto& entry : entries)
+					words[entry.word] = a_recording.Index(entry.view);
+				std::memcpy(&a_constants, words.data(), sizeof(a_constants));
+				return a_constants;
+			}
+
+		private:
+			struct Entry
+			{
+				std::uint32_t word = 0;
+				org::DeclaredViewToken view;
+			};
+			std::vector<Entry> entries;
+		};
+	}
+
 	struct BuildDrawsFrame
 	{
 		std::shared_ptr<const ComputeProgram> program, clearQueries;
 		std::uint32_t queryGroups = 0;
 		BuildDrawsConstants constants{};
+		ViewIndexWords views;  // the constants' view index words
 		std::shared_ptr<const org::LatchBlock> latch;
 		rhi::CommandSignatureHandle signature{};
-		// Phase 2 over the retest list: dispatched from retestArguments (phase 1's groups), not the latch's.
-		org::PreparedResourceReference retestArguments;
+		// Phase 2 over the retest list: dispatched from the bindings' retestArguments (phase 1's groups), not the latch's.
 		bool retestIndirect = false;
 	};
 
@@ -115,17 +166,12 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
+		// The shape and the buffer versions the recording binds are the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>& a_out) const
 		{
-			const auto now = segment;
-			const auto frame = CurrentFrame(a_preparation, now);
-			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(static_cast<std::uint64_t>(now));
+			a_out.push_back(static_cast<std::uint64_t>(segment));
 			a_out.push_back(fixedPhase);
 			a_out.push_back(queries);
-			for (const auto slot : { Api::CullBindingSlot::MemberQueries, Api::CullBindingSlot::MemberResults, Api::CullBindingSlot::MemberClaims, Api::CullBindingSlot::ObjectGates })
-				a_out.push_back(NamedSerial(a_preparation, Extensions::CullBindingBuffer(slot, *resources->scene)));
-			a_out.push_back(resources->pool ? NamedSerial(a_preparation, resources->pool->firsts) : 0);
 		}
 
 		BuildDrawsFrame Prepare(const BuildDrawsBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -143,6 +189,7 @@ namespace DCLF::Draws
 			prepared.latch = frame->latch;
 			prepared.signature = resources->dispatchSignature->GetHandle();
 			auto& constants = prepared.constants;
+			auto& views = prepared.views;
 			constants.latchIndex = frame->latch->SrvIndex();
 			if (queries) {
 				if (!a_bindings.memberQueries.layout || !a_bindings.memberClaims.layout)
@@ -151,69 +198,68 @@ namespace DCLF::Draws
 				prepared.clearQueries = resources->clearPortalQueries;
 				prepared.signature = resources->portalQuerySignature->GetHandle();
 				constants.phaseBits = 1u << 4;
-				constants.memberQueriesIndex = CaptureViewIndex(a_preparation, a_bindings.memberQueries);
-				constants.memberClaimsIndex = CaptureViewIndex(a_preparation, a_bindings.memberClaims);
+				views.Set(constants, constants.memberQueriesIndex, a_bindings.memberQueries);
+				views.Set(constants, constants.memberClaimsIndex, a_bindings.memberClaims);
 				const auto capacity = NamedUnitsOf(a_preparation, Extensions::CullBindingBuffer(Api::CullBindingSlot::MemberQueries, *resources->scene));
 				prepared.queryGroups = static_cast<std::uint32_t>((capacity + 63) / 64);
 				// The programs are the depth latch's portalProgramsIndex (the frame's publication).
 				if (RootRowsCurrent(*resources->scene) && a_bindings.rootPrograms.layout)
-					constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);
+					views.Set(constants, constants.rootProgramsIndex, a_bindings.rootPrograms);
 				return prepared;
 			}
 			if (phase == 1 && a_bindings.memberResults.layout)
-				constants.memberResultsIndex = CaptureViewIndex(a_preparation, a_bindings.memberResults);
+				views.Set(constants, constants.memberResultsIndex, a_bindings.memberResults);
 
-			constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
-			constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
+			views.Set(constants, constants.sequencesIndex, a_bindings.sequences);
+			views.Set(constants, constants.countIndex, a_bindings.count);
 			SetRowStrides(constants);
 			constants.phaseBits = (phase & 0xFu) << 4;
-			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
+			views.Set(constants, constants.visibilityIndex, a_bindings.visibility);
 			// TEMP (CS_DCLF_SET_PARITY): the writer records, through the claims word only the query preparation uses.
 			if (a_bindings.writers.layout)
-				constants.memberClaimsIndex = CaptureViewIndex(a_preparation, a_bindings.writers);
+				views.Set(constants, constants.memberClaimsIndex, a_bindings.writers);
 			// Frustum stamps: only depth phase 1 tests every candidate's frustum.
 			if (resources->frustum && phase == 1)
-				constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);
+				views.Set(constants, constants.frustumIndex, a_bindings.frustum);
 			const bool rootRows = RootRowsCurrent(*resources->scene);
 			if (rootRows) {
-				constants.fadeRootsIndex = CaptureViewIndex(a_preparation, a_bindings.fadeRoots);
+				views.Set(constants, constants.fadeRootsIndex, a_bindings.fadeRoots);
 			}
-			if (Draws::OcclusionTested(*resources, *frame)) {
-				constants.hzbIndex = CaptureViewIndex(a_preparation, a_bindings.hzb);
+			const bool occlusion = Draws::OcclusionTested(*resources, *frame);
+			if (occlusion) {
+				views.Set(constants, constants.hzbIndex, a_bindings.hzb);
 				constants.hzbSizePacked = (resources->hzbWidth & 0xFFFF) | (resources->hzbHeight << 16);
 				constants.hzbMips = resources->hzbMips;
 			}
 			// The retest list, with the HZB test (only it leaves an input OccludedRetest): phase 1 appends, phase 2 runs over the list,
 			// dispatched indirect from phase 1's groups. Both phases decide this from the same shape, so phase 2 never waits on a list
 			// phase 1 did not fill; without it phase 2 runs over every input from the latch's dispatch.
-			if (constants.hzbIndex && now == RenderGraphRuntime::Segment::ZPrepass && a_bindings.retests.layout) {
-				constants.retestsIndex = CaptureViewIndex(a_preparation, a_bindings.retests);
+			if (occlusion && now == RenderGraphRuntime::Segment::ZPrepass && a_bindings.retests.layout) {
 				if (phase == 2) {
-					prepared.retestArguments = a_preparation.CaptureResource(a_bindings.retestArguments);
+					views.Set(constants, constants.retestsIndex, a_bindings.retests);
 					prepared.retestIndirect = true;
 				} else if (a_bindings.retestDispatch.layout) {
-					constants.retestDispatchIndex = CaptureViewIndex(a_preparation, a_bindings.retestDispatch);
-				} else {
-					constants.retestsIndex = 0;
+					views.Set(constants, constants.retestsIndex, a_bindings.retests);
+					views.Set(constants, constants.retestDispatchIndex, a_bindings.retestDispatch);
 				}
 			}
 			if (now == RenderGraphRuntime::Segment::ZPrepass && resources->pool) {
-				constants.bucketCountsIndex = CaptureViewIndex(a_preparation, a_bindings.bucketCounts);
-				constants.poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
+				views.Set(constants, constants.bucketCountsIndex, a_bindings.bucketCounts);
+				views.Set(constants, constants.poolFirstsIndex, a_bindings.poolFirsts);
 			}
 			if (Sorts()) {
-				constants.sortCountsIndex = CaptureViewIndex(a_preparation, a_bindings.sortCounts);
-				constants.sortStagingIndex = CaptureViewIndex(a_preparation, a_bindings.sortStaging);
-				constants.sortRanksIndex = CaptureViewIndex(a_preparation, a_bindings.sortRanks);
+				views.Set(constants, constants.sortCountsIndex, a_bindings.sortCounts);
+				views.Set(constants, constants.sortStagingIndex, a_bindings.sortStaging);
+				views.Set(constants, constants.sortRanksIndex, a_bindings.sortRanks);
 			}
 			constants.phaseTwoBase = frame->sequenceDraws;
 			constants.decalBase = 2 * frame->sequenceDraws;
 			constants.decalStride = frame->sequenceDecals;
 			// The state class sub-ranges' counts: colour segment only (the latch's class table and map say where each class draws).
 			if (now == RenderGraphRuntime::Segment::MainOpaque && resources->classCounts)
-				constants.classCountsIndex = CaptureViewIndex(a_preparation, a_bindings.classCounts);
+				views.Set(constants, constants.classCountsIndex, a_bindings.classCounts);
 			if (now == RenderGraphRuntime::Segment::MainOpaque && a_bindings.objectGates.layout)
-				constants.objectGatesIndex = CaptureViewIndex(a_preparation, a_bindings.objectGates);
+				views.Set(constants, constants.objectGatesIndex, a_bindings.objectGates);
 			// The forward range (its classes' halves: the class table's): colour segment only.
 			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->forwardCapacity) {
 				constants.forwardBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));
@@ -221,24 +267,25 @@ namespace DCLF::Draws
 			}
 			// The forward buckets' draws are pooled (CS_DCLF_FORWARD_PLAIN), as are refraction's.
 			if (now == RenderGraphRuntime::Segment::MainOpaque && resources->pool)
-				constants.poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
+				views.Set(constants, constants.poolFirstsIndex, a_bindings.poolFirsts);
 			// The refraction range follows the forward halves (forwardBase + 2 * forwardCapacity), so forwardBase is set even
 			// without forward capacity.
 			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->refractionCapacity && resources->pool) {
 				constants.forwardBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));
 				constants.refractionCapacity = frame->refractionCapacity;
-				constants.poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
+				views.Set(constants, constants.poolFirstsIndex, a_bindings.poolFirsts);
 			}
 			return prepared;
 		}
 
-		static void Record(const BuildDrawsBindings&, const BuildDrawsFrame& a_frame, org::PassRecordContext& a_recording)
+		static void Record(const BuildDrawsBindings& a_bindings, const BuildDrawsFrame& a_frame, org::PassRecordContext& a_recording)
 		{
 			if (!a_frame.program || !a_frame.latch)
 				return;
 			auto& commands = a_recording.Commands();
+			const auto viewed = a_frame.views.Apply(a_frame.constants, a_recording);
 			if (a_frame.clearQueries) {
-				auto constants = a_frame.constants;
+				auto constants = viewed;
 				constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
 				commands.BindLayout(a_frame.clearQueries->layout->GetHandle());
 				commands.BindPipeline(a_frame.clearQueries->Pipeline());
@@ -252,13 +299,13 @@ namespace DCLF::Draws
 			commands.BindPipeline(a_frame.program->Pipeline());
 			if (a_frame.retestIndirect) {
 				// Phase 2: the latch's values, the retest list's groups.
-				auto constants = a_frame.constants;
+				auto constants = viewed;
 				constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
 				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kBuildDrawsConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
-				commands.ExecuteIndirect(a_frame.signature, a_recording.Resolve(a_frame.retestArguments).GetHandle(), 0, {}, 0, 1);
+				commands.ExecuteIndirect(a_frame.signature, a_recording.Resolve(a_bindings.retestArguments).GetHandle(), 0, {}, 0, 1);
 				return;
 			}
-			RecordLatchedDispatch(a_frame.constants, *a_frame.latch, a_frame.signature, 0, a_recording);
+			RecordLatchedDispatch(viewed, *a_frame.latch, a_frame.signature, 0, a_recording);
 		}
 
 		std::uint32_t Phase(RenderGraphRuntime::Segment a_segment) const
@@ -314,15 +361,10 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto now = segment;
-			const auto frame = CurrentFrame(a_preparation, now);
-			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(static_cast<std::uint64_t>(now));
-		}
+		// The shape is the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>& a_out) const { a_out.push_back(static_cast<std::uint64_t>(segment)); }
 
-		SortSequencesFrame Prepare(const SortSequencesBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		SortSequencesFrame Prepare(const SortSequencesBindings&, const org::PassPrepareContext& a_preparation) const
 		{
 			SortSequencesFrame prepared{};
 			if (!BuildsDraws(a_preparation, *resources, segment))
@@ -333,11 +375,6 @@ namespace DCLF::Draws
 				return prepared;
 			prepared.program = resources->sort->scatter;
 			auto& constants = prepared.constants;
-			constants.stagingIndex = CaptureViewIndex(a_preparation, a_bindings.staging);
-			constants.ranksIndex = CaptureViewIndex(a_preparation, a_bindings.ranks);
-			constants.offsetsIndex = CaptureViewIndex(a_preparation, a_bindings.offsets);
-			constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
-			constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
 			constants.sequenceStride = static_cast<std::uint32_t>(sizeof(DrawSequence));
 			const auto frame = CurrentFrame(a_preparation, segment);
 			constants.drawLimit = frame ? frame->sequenceDraws : 0;
@@ -345,14 +382,20 @@ namespace DCLF::Draws
 			return prepared;
 		}
 
-		static void Record(const SortSequencesBindings&, const SortSequencesFrame& a_frame, org::PassRecordContext& a_recording)
+		static void Record(const SortSequencesBindings& a_bindings, const SortSequencesFrame& a_frame, org::PassRecordContext& a_recording)
 		{
 			if (!a_frame.program || !a_frame.groups)
 				return;
+			auto constants = a_frame.constants;
+			constants.stagingIndex = a_recording.Index(a_bindings.staging);
+			constants.ranksIndex = a_recording.Index(a_bindings.ranks);
+			constants.offsetsIndex = a_recording.Index(a_bindings.offsets);
+			constants.countIndex = a_recording.Index(a_bindings.count);
+			constants.sequencesIndex = a_recording.Index(a_bindings.sequences);
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->Pipeline());
-			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kSortSequencesConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kSortSequencesConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 			commands.Dispatch(a_frame.groups, 1, 1);
 		}
 

@@ -61,44 +61,40 @@ namespace PrefixSum
 				return bindings;
 			}
 
-			void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
+			void Revision(std::vector<std::uint64_t>& a_out) const
 			{
-				a_out.push_back(!desc.active || desc.active(a_preparation) ? 1 : 0);
 				if (desc.revision)
-					desc.revision(a_preparation, a_out);
+					desc.revision(a_out);
 			}
 
-			Frame Prepare(const Bindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+			Frame Prepare(const Bindings&, const org::PassPrepareContext& a_preparation) const
 			{
 				Frame prepared{};
 				if (!desc.programs || !desc.elements || desc.elements > kMaxElements || (desc.active && !desc.active(a_preparation)))
 					return prepared;
 				prepared.programs = desc.programs;
 				auto& constants = prepared.constants;
-				const auto index = [&](const org::DeclaredViewToken& token) {
-					(void)a_preparation.Capture(token);
-					return a_preparation.Resolve(token).index;
-				};
-				constants.countsIndex = index(a_bindings.counts);
-				constants.offsetsIndex = index(a_bindings.offsets);
-				constants.blockSumsIndex = index(a_bindings.blockSums);
-				constants.totalIndex = desc.total ? index(a_bindings.total) : kNoBuffer;
 				constants.elements = desc.elements;
 				constants.blocks = Blocks(desc.elements);
 				constants.flags = desc.clearCounts ? kClearCounts : 0u;
 				return prepared;
 			}
 
-			static void Record(const Bindings&, const Frame& a_frame, org::PassRecordContext& a_recording)
+			static void Record(const Bindings& a_bindings, const Frame& a_frame, org::PassRecordContext& a_recording)
 			{
 				if (!a_frame.programs)
 					return;
+				auto constants = a_frame.constants;
+				constants.countsIndex = a_recording.Index(a_bindings.counts);
+				constants.offsetsIndex = a_recording.Index(a_bindings.offsets);
+				constants.blockSumsIndex = a_recording.Index(a_bindings.blockSums);
+				constants.totalIndex = a_bindings.total.layout ? a_recording.Index(a_bindings.total) : kNoBuffer;
 				auto& commands = a_recording.Commands();
 				const auto& scan = *a_frame.programs->blockScan;
 				commands.BindLayout(scan.layout->GetHandle());
 				commands.BindPipeline(scan.Pipeline());
-				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
-				commands.Dispatch(a_frame.constants.blocks, 1, 1);
+				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
+				commands.Dispatch(constants.blocks, 1, 1);
 				// The block sums and local offsets must be complete before the second dispatch reads them. One pass with a barrier
 				// rather than two passes: the second dispatch reads and writes the offsets the first wrote.
 				const rhi::GlobalBarrier global = rhi::FullMemoryBarrier();
@@ -106,7 +102,7 @@ namespace PrefixSum
 				const auto& offsets = *a_frame.programs->blockOffsets;
 				commands.BindLayout(offsets.layout->GetHandle());
 				commands.BindPipeline(offsets.Pipeline());
-				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
+				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 				commands.Dispatch(1, 1, 1);
 			}
 

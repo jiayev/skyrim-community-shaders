@@ -127,7 +127,6 @@ namespace DCLF::Draws
 	/** @brief What a view's epochs' passes record against; the per-frame values are in its latch. */
 	struct ViewFrame
 	{
-		std::uint64_t generation = 0;
 		ViewKind kind = ViewKind::Reflection;
 		rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 		IndirectState indirect{};  // zLayout and zDrawSignature, the state classes' colour signatures (the version holds them)

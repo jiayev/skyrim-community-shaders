@@ -19,7 +19,6 @@
 
 namespace DCLF::Draws
 {
-	// In DCLF::Draws, where they were defined before the feature moved: ORG's recipe telemetry names a pass by its type (typeid).
 	struct TreeWindBindings
 	{
 		org::DeclaredViewToken trees, clocks, frame;
@@ -56,25 +55,16 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		// The recording depends on the buffers' versions; count and frame inputs are in the uploaded frame row.
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			for (const auto* buffer : { &scene->trees, &scene->treeClocks, &scene->treeWindRows[0], &scene->treeWindRows[1] })
-				a_out.push_back(NamedSerial(a_preparation, *buffer));
-		}
+		// The recording depends on the buffers' versions (the revision's: the ticket's host data); count and frame inputs are in the
+		// uploaded frame row.
+		void Revision(std::vector<std::uint64_t>&) const {}
 
-		TreeWindFramePrepared Prepare(const TreeWindBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		TreeWindFramePrepared Prepare(const TreeWindBindings&, const org::PassPrepareContext& a_preparation) const
 		{
 			TreeWindFramePrepared prepared{};
 			if (!scene->treeWind || !scene->treeFrameBuffer)
 				return prepared;
 			prepared.program = scene->treeWind;
-			auto& constants = prepared.constants;
-			constants.treesIndex = CaptureViewIndex(a_preparation, a_bindings.trees);
-			constants.clocksIndex = CaptureViewIndex(a_preparation, a_bindings.clocks);
-			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
-			for (std::uint32_t h = 0; h < 2; ++h)
-				constants.windIndices[h] = CaptureViewIndex(a_preparation, a_bindings.wind[h]);
 			// Full capacity (the nodeless entry, then the tree slots); the shader stops at the count.
 			const std::uint64_t trees = std::min({ NamedUnitsOf(a_preparation, scene->trees), NamedUnitsOf(a_preparation, scene->treeClocks),
 				NamedUnitsOf(a_preparation, scene->treeWindRows[0]), NamedUnitsOf(a_preparation, scene->treeWindRows[1]) });
@@ -83,20 +73,21 @@ namespace DCLF::Draws
 			return prepared;
 		}
 
-		static void Record(const TreeWindBindings&, const TreeWindFramePrepared& a_frame, org::PassRecordContext& a_recording)
-		{
-			RecordWind(a_recording.Commands(), a_frame);
-		}
-
 		// The dispatch.
-		static void RecordWind(rhi::CommandList& a_commands, const TreeWindFramePrepared& a_frame)
+		static void Record(const TreeWindBindings& a_bindings, const TreeWindFramePrepared& a_frame, org::PassRecordContext& a_recording)
 		{
 			if (!a_frame.program || !a_frame.groups)
 				return;
-			auto& commands = a_commands;
+			auto constants = a_frame.constants;
+			constants.treesIndex = a_recording.Index(a_bindings.trees);
+			constants.clocksIndex = a_recording.Index(a_bindings.clocks);
+			constants.frameIndex = a_recording.Index(a_bindings.frame);
+			for (std::uint32_t h = 0; h < 2; ++h)
+				constants.windIndices[h] = a_recording.Index(a_bindings.wind[h]);
+			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->Pipeline());
-			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::TreeWind::kTreeWindConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::TreeWind::kTreeWindConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 			commands.Dispatch(a_frame.groups, 1, 1);
 		}
 

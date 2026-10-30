@@ -31,7 +31,6 @@
 
 namespace DCLF::Draws
 {
-	// In DCLF::Draws, where it was defined before the feature moved: ORG's recipe telemetry names a pass by its type (typeid).
 
 	namespace
 	{
@@ -110,7 +109,7 @@ namespace DCLF::Draws
 			// TerrainBlending::BlendPrepassDepths reads after this epoch.
 			if (terrainNear && a_prepared.terrainDepth) {
 				rhi::DepthAttachment terrainDepth = a_pass.depth;
-				terrainDepth.dsv = a_recording.Resolve(a_prepared.terrainDepthView);
+				terrainDepth.dsv = a_recording.View(a_bindings.terrainDepth);
 				rhi::PassBeginInfo terrainBegin = begin;
 				terrainBegin.depth = &terrainDepth;
 				terrainBegin.debugName = "DCLF terrain depth";
@@ -498,20 +497,16 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
+		// The shape (with the draw families' pipelines) and the pool's version are the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>& a_out) const
 		{
-			const auto now = segment;
-			const auto frame = CurrentFrame(a_preparation, now);
-			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(static_cast<std::uint64_t>(now));
+			a_out.push_back(static_cast<std::uint64_t>(segment));
 			a_out.push_back(phaseTwo ? 1 : 0);
-			a_out.push_back(resources->pool ? NamedSerial(a_preparation, resources->pool->indices) : 0);
-			// The draw families' (their pipelines as the revision's shape has them: built late, rebuilt on a target change).
+			// The draw families' own (their pipelines are the shape's, which a revision does not see: none).
+			static const std::shared_ptr<const void> kNoPipelines;
 			for (std::size_t f = 0; f < Extensions::kDrawFamilies; ++f)
-				if (const auto& family = Extensions::DrawFamilies()[f]; family.taken) {
-					const std::shared_ptr<const void> pipelines = frame ? frame->families[f] : nullptr;
-					family.contribution.main.revision({ a_preparation, *resources->scene, pipelines }, a_out);
-				}
+				if (const auto& family = Extensions::DrawFamilies()[f]; family.taken)
+					family.contribution.main.revision({ *resources->scene, kNoPipelines }, a_out);
 		}
 
 		PreparedDraws Prepare(const PassBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -537,13 +532,8 @@ namespace DCLF::Draws
 					prepared.families[f] = { frame->families[f], a_bindings.familyRows[f] };
 			prepared.frame = std::move(frame);
 			prepared.targetCount = resources->targetCount;
-			for (std::uint32_t i = 0; i < prepared.targetCount; ++i)
-				prepared.targetViews[i] = a_preparation.Capture(a_bindings.targets[i]);
-			prepared.depthView = a_preparation.Capture(a_bindings.depth);
-			if (prepared.zPrepass && resources->terrainDepth) {
-				prepared.terrainDepthView = a_preparation.Capture(a_bindings.terrainDepth);
+			if (prepared.zPrepass && resources->terrainDepth)
 				prepared.terrainDepth = true;
-			}
 			return prepared;
 		}
 
@@ -554,7 +544,7 @@ namespace DCLF::Draws
 			const auto& frame = *a_prepared.frame;
 			auto& commands = a_recording.Commands();
 			commands.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
-			auto colors = LoadedColours(a_recording, a_prepared.targetViews, a_bindings.targets, a_prepared.targetCount);
+			auto colors = LoadedColours(a_recording, a_bindings.targets, a_prepared.targetCount);
 			const bool zPrepass = a_prepared.zPrepass;
 			if (a_prepared.phaseTwo && !zPrepass)
 				return;
@@ -569,7 +559,7 @@ namespace DCLF::Draws
 
 			// The Z-prepass adds DCLF's objects to the native depth, inside the native depth pass, so everything after (native
 			// depth-tested draws, the sky, depth readers) sees them.
-			auto depth = LoadedDepth(a_recording, a_prepared.depthView);
+			auto depth = LoadedDepth(a_recording, a_bindings.depth);
 			begin.depth = &depth;
 			begin.debugName = "DCLF depth";
 			const MainRecording pass{ frame, commands, sequences, count, classCounts, begin, depth, a_prepared.stats, a_recording.FrameSlot() };

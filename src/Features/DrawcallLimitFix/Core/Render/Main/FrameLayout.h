@@ -53,11 +53,10 @@ namespace DCLF::Draws
 	 * and nothing that changes every frame. The frame's own values (the counts, the view-projection, the
 	 * culling stamp) are in the segment's BuildDrawsLatch, and the draw counts on the GPU. Published by
 	 * the commit before the epoch prepares and replaced only when it changes, so its identity is what
-	 * the passes' invocation revisions carry.
+	 * the revision's recording of the passes is prepared for.
 	 */
 	struct PassFrame
 	{
-		std::uint64_t generation = 0;
 		// The colour segment's state classes' sub-ranges (SetClassPlan), by class in creation order: what its calls draw, each with its
 		// class's signature, and their max counts. None in the depth segment (its draws are bucketed plain draws).
 		std::vector<SetClassRanges> classes;

@@ -120,7 +120,6 @@ namespace DCLF::Diagnostics
 		auto pass = Draws::MakeCounterReadbackPass(Draws::CullCounterView::kColour, { resources->count }, [](const org::PassPrepareContext& a_preparation) {
 			Draws::CounterSource out;
 			if (const auto frame = Draws::CurrentFrame(a_preparation, RenderGraphRuntime::Segment::MainOpaque); frame && frame->latch) {
-				out.generation = frame->generation;
 				out.latch = frame->latch;
 				out.copies.push_back({ 0, 0 });
 			}

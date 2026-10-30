@@ -27,7 +27,6 @@ namespace DCLF::Draws
 		// The latch holding the pool's dispatch, from the shape the epoch runs (shadow or depth: whichever commit gave out ranges).
 		struct LatchOf
 		{
-			std::uint64_t generation = 0;
 			std::shared_ptr<const org::LatchBlock> latch;
 			std::uint32_t poolOffset = 0;
 		};
@@ -43,16 +42,10 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto latch = latchOf(a_preparation);
-			a_out.push_back(latch.generation);
-			a_out.push_back(latch.poolOffset);
-			a_out.push_back(NamedSerial(a_preparation, pool->copies));
-			a_out.push_back(NamedSerial(a_preparation, pool->indices));
-		}
+		// The latch's shape and the pool's versions are the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>&) const {}
 
-		IndexPoolPrepared Prepare(const IndexPoolBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		IndexPoolPrepared Prepare(const IndexPoolBindings&, const org::PassPrepareContext& a_preparation) const
 		{
 			IndexPoolPrepared prepared{};
 			const auto latch = latchOf(a_preparation);
@@ -62,26 +55,21 @@ namespace DCLF::Draws
 			prepared.latch = latch.latch;
 			prepared.poolOffset = latch.poolOffset;
 			prepared.constants.latchIndex = latch.latch->SrvIndex();
-			prepared.constants.copiesIndex = CaptureViewIndex(a_preparation, a_bindings.copies);
-			prepared.constants.poolIndex = CaptureViewIndex(a_preparation, a_bindings.indices);
 			return prepared;
 		}
 
-		static void Record(const IndexPoolBindings&, const IndexPoolPrepared& a_prepared, org::PassRecordContext& a_recording)
-		{
-			RecordCopies(a_recording.Commands(), a_prepared, a_recording.FrameSlot());
-		}
-
-		// The dispatch, from the latch's region of a_frameSlot.
-		static void RecordCopies(rhi::CommandList& a_commands, const IndexPoolPrepared& a_prepared, std::uint32_t a_frameSlot)
+		// The dispatch, from the latch's region of the frame slot.
+		static void Record(const IndexPoolBindings& a_bindings, const IndexPoolPrepared& a_prepared, org::PassRecordContext& a_recording)
 		{
 			if (!a_prepared.pool || !a_prepared.latch)
 				return;
 			auto constants = a_prepared.constants;
+			constants.copiesIndex = a_recording.Index(a_bindings.copies);
+			constants.poolIndex = a_recording.Index(a_bindings.indices);
 			const auto& layout = a_prepared.latch;
-			const std::uint64_t offset = layout->Offset(a_frameSlot) + a_prepared.poolOffset;
+			const std::uint64_t offset = layout->Offset(a_recording.FrameSlot()) + a_prepared.poolOffset;
 			constants.latchOffset = static_cast<std::uint32_t>(offset);
-			auto& commands = a_commands;
+			auto& commands = a_recording.Commands();
 			const auto& program = *a_prepared.pool->program;
 			commands.BindLayout(program.layout->GetHandle());
 			commands.BindPipeline(program.Pipeline());

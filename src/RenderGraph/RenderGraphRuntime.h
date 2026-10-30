@@ -69,7 +69,7 @@ public:
 	/**
 	 * @brief Where in the frame an epoch runs. The graph holds every feature's passes and each epoch
 	 * executes all of them (an empty pass is effectively free), so passes record work only in their own
-	 * segment (CurrentSegment) and include it in their invocation revision.
+	 * segment (CurrentSegment) and include it in their revision.
 	 */
 	enum class Segment : std::uint32_t
 	{

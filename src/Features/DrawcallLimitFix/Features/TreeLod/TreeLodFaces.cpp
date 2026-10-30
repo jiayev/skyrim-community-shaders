@@ -33,7 +33,6 @@
 
 namespace DCLF::Draws
 {
-	// In DCLF::Draws' anonymous namespace, where it was defined before the feature moved: ORG's recipe telemetry names a pass by its type.
 	namespace
 	{
 		// The family's slot in a view's resources and shape (ViewResources::faceRows, faceLists; ViewFrame::faces).
@@ -58,7 +57,6 @@ namespace DCLF::Draws
 			std::shared_ptr<const org::LatchBlock> latch;
 			Features::TreeLod::TreeLodCullConstants constants{};
 			std::uint32_t faces = 0;
-			std::array<std::uint32_t, kMaxViewFaces> rowIndex{}, visibleIndex{};
 			std::uint32_t groups = 0;
 		};
 
@@ -85,17 +83,10 @@ namespace DCLF::Draws
 				return bindings;
 			}
 
-			void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-			{
-				const auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
-				a_out.push_back(frame ? frame->generation : 0);
-				a_out.push_back(NamedSerial(a_preparation, tables->shapes));
-				a_out.push_back(NamedSerial(a_preparation, tables->instances));
-				for (std::uint32_t f = 0; f < resources->traits->faces; ++f)
-					a_out.push_back(NamedSerial(a_preparation, resources->faceLists[kFamily][f]));
-			}
+			// The view's shape and the tables' and lists' versions are the revision's (the ticket's host data).
+			void Revision(std::vector<std::uint64_t>&) const {}
 
-			TreePrepared Prepare(const TreeBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+			TreePrepared Prepare(const TreeBindings&, const org::PassPrepareContext& a_preparation) const
 			{
 				TreePrepared prepared{};
 				const auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
@@ -106,37 +97,29 @@ namespace DCLF::Draws
 				prepared.groups = frame->faces[kFamily].groups;
 				prepared.faces = resources->traits->faces;
 				auto& constants = prepared.constants;
-				constants.shapesIndex = CaptureViewIndex(a_preparation, a_bindings.shapes);
-				constants.instancesIndex = CaptureViewIndex(a_preparation, a_bindings.instances);
 				constants.latchIndex = frame->latch->SrvIndex();
 				constants.phase = 1;
 				constants.retestOffset = static_cast<std::uint32_t>(sizeof(TreeInstances::VisibleHeader));  // never written: no occlusion test
-				for (std::uint32_t f = 0; f < prepared.faces; ++f) {
-					prepared.rowIndex[f] = CaptureViewIndex(a_preparation, a_bindings.rows[f]);
-					prepared.visibleIndex[f] = CaptureViewIndex(a_preparation, a_bindings.visible[f]);
-				}
 				return prepared;
 			}
 
-			static void Record(const TreeBindings&, const TreePrepared& a_prepared, org::PassRecordContext& a_recording)
-			{
-				RecordFaces(a_recording.Commands(), a_prepared, a_recording.FrameSlot());
-			}
-
-			// A dispatch per face, from the latch's region of a_frameSlot.
-			static void RecordFaces(rhi::CommandList& a_commands, const TreePrepared& a_prepared, std::uint32_t a_frameSlot)
+			// A dispatch per face, from the latch's region of the frame slot.
+			static void Record(const TreeBindings& a_bindings, const TreePrepared& a_prepared, org::PassRecordContext& a_recording)
 			{
 				if (!a_prepared.program || !a_prepared.groups || !a_prepared.latch)
 					return;
-				auto& commands = a_commands;
+				auto viewed = a_prepared.constants;
+				viewed.shapesIndex = a_recording.Index(a_bindings.shapes);
+				viewed.instancesIndex = a_recording.Index(a_bindings.instances);
+				auto& commands = a_recording.Commands();
 				commands.BindLayout(a_prepared.program->layout->GetHandle());
 				commands.BindPipeline(a_prepared.program->Pipeline());
-				const auto region = static_cast<std::uint32_t>(a_prepared.latch->Offset(a_frameSlot));
+				const auto region = static_cast<std::uint32_t>(a_prepared.latch->Offset(a_recording.FrameSlot()));
 				for (std::uint32_t f = 0; f < a_prepared.faces; ++f) {
-					auto constants = a_prepared.constants;
+					auto constants = viewed;
 					constants.latchOffset = region + f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
-					constants.drawIndex = a_prepared.rowIndex[f];
-					constants.visibleIndex = a_prepared.visibleIndex[f];
+					constants.drawIndex = a_recording.Index(a_bindings.rows[f]);
+					constants.visibleIndex = a_recording.Index(a_bindings.visible[f]);
 					commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::TreeLod::kTreeLodCullConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 					commands.Dispatch(a_prepared.groups, 1, 1);
 				}

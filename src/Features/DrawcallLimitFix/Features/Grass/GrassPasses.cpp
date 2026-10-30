@@ -25,7 +25,6 @@
 
 namespace DCLF::Draws
 {
-	// In DCLF::Draws, as tree LOD's: ORG's recipe telemetry names a pass by its type (typeid).
 	struct GrassCullBindings
 	{
 		org::DeclaredViewToken draw, instances, owners, shapes, buckets, frame, visible, draws, hzb;
@@ -37,6 +36,7 @@ namespace DCLF::Draws
 		Features::Grass::GrassCullConstants constants{};
 		std::shared_ptr<const org::LatchBlock> latch;
 		std::uint32_t groups = 0;
+		bool occlusion = false;  // the HZB test: its view is bound
 	};
 
 	/**
@@ -71,16 +71,11 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		// The recording depends on the tables' versions (a growth changes views and dispatch) and the depth segment's shape.
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto frame = CurrentFrame(a_preparation, segment);
-			for (const auto* table : { &tables->instances, &tables->owners, &tables->frame, &tables->visible, &tables->shapes, &tables->buckets })
-				a_out.push_back(NamedSerial(a_preparation, *table));
-			a_out.push_back(frame ? frame->generation : 0);
-		}
+		// The recording depends on the tables' versions (a growth changes views and dispatch) and the depth segment's shape: the
+		// revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>&) const {}
 
-		GrassCullPrepared Prepare(const GrassCullBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		GrassCullPrepared Prepare(const GrassCullBindings&, const org::PassPrepareContext& a_preparation) const
 		{
 			GrassCullPrepared prepared{};
 			const auto frame = CurrentFrame(a_preparation, segment);
@@ -92,20 +87,12 @@ namespace DCLF::Draws
 			prepared.program = tables->cull;
 			prepared.latch = frame->latch;
 			auto& constants = prepared.constants;
-			constants.drawIndex = CaptureViewIndex(a_preparation, a_bindings.draw);
-			constants.instancesIndex = CaptureViewIndex(a_preparation, a_bindings.instances);
-			constants.ownersIndex = CaptureViewIndex(a_preparation, a_bindings.owners);
-			constants.shapesIndex = CaptureViewIndex(a_preparation, a_bindings.shapes);
-			constants.bucketsIndex = CaptureViewIndex(a_preparation, a_bindings.buckets);
-			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
-			constants.visibleIndex = CaptureViewIndex(a_preparation, a_bindings.visible);
-			constants.drawsIndex = CaptureViewIndex(a_preparation, a_bindings.draws);
 			constants.latchIndex = frame->latch->SrvIndex();
 			constants.phase = phase;
 			// The retest list past the visible entries (GrassLayout.h): 12 bytes per unit the visible version holds.
 			constants.retestOffset = static_cast<std::uint32_t>(NamedUnitsOf(a_preparation, tables->visible) * GrassInstances::kRetestOffsetPerUnit);
 			if (Draws::OcclusionTested(*resources, *frame)) {
-				constants.hzbIndex = CaptureViewIndex(a_preparation, a_bindings.hzb);
+				prepared.occlusion = true;
 				constants.hzbSizePacked = (resources->hzbWidth & 0xFFFF) | (resources->hzbHeight << 16);
 				constants.hzbMips = resources->hzbMips;
 			}
@@ -114,20 +101,25 @@ namespace DCLF::Draws
 			return prepared;
 		}
 
-		static void Record(const GrassCullBindings&, const GrassCullPrepared& a_frame, org::PassRecordContext& a_recording)
-		{
-			RecordCull(a_recording.Commands(), a_frame, a_recording.FrameSlot());
-		}
-
-		// The dispatch, from the latch's region of a_frameSlot.
-		static void RecordCull(rhi::CommandList& a_commands, const GrassCullPrepared& a_frame, std::uint32_t a_frameSlot)
+		// The dispatch, from the latch's region of the frame slot.
+		static void Record(const GrassCullBindings& a_bindings, const GrassCullPrepared& a_frame, org::PassRecordContext& a_recording)
 		{
 			if (!a_frame.program || !a_frame.groups || !a_frame.latch)
 				return;
 			auto constants = a_frame.constants;
+			constants.drawIndex = a_recording.Index(a_bindings.draw);
+			constants.instancesIndex = a_recording.Index(a_bindings.instances);
+			constants.ownersIndex = a_recording.Index(a_bindings.owners);
+			constants.shapesIndex = a_recording.Index(a_bindings.shapes);
+			constants.bucketsIndex = a_recording.Index(a_bindings.buckets);
+			constants.frameIndex = a_recording.Index(a_bindings.frame);
+			constants.visibleIndex = a_recording.Index(a_bindings.visible);
+			constants.drawsIndex = a_recording.Index(a_bindings.draws);
+			if (a_frame.occlusion)
+				constants.hzbIndex = a_recording.Index(a_bindings.hzb);
 			// The depth segment's BuildDrawsLatch in this frame slot.
-			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_frameSlot));
-			auto& commands = a_commands;
+			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
+			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->Pipeline());
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::Grass::kGrassCullConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
@@ -176,13 +168,10 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			a_out.push_back(NamedSerial(a_preparation, tables->buckets));
-			a_out.push_back(NamedSerial(a_preparation, tables->meshes));
-		}
+		// The tables' versions are the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>&) const {}
 
-		GrassArgsPrepared Prepare(const GrassArgsBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		GrassArgsPrepared Prepare(const GrassArgsBindings&, const org::PassPrepareContext& a_preparation) const
 		{
 			GrassArgsPrepared prepared{};
 			const auto buckets = std::min<std::uint64_t>(NamedUnitsOf(a_preparation, tables->buckets), GrassInstances::kMaxBuckets);
@@ -190,10 +179,6 @@ namespace DCLF::Draws
 				return prepared;
 			prepared.program = tables->args;
 			auto& constants = prepared.constants;
-			constants.drawIndex = CaptureViewIndex(a_preparation, a_bindings.draw);
-			constants.bucketsIndex = CaptureViewIndex(a_preparation, a_bindings.buckets);
-			constants.meshesIndex = CaptureViewIndex(a_preparation, a_bindings.meshes);
-			constants.drawsIndex = CaptureViewIndex(a_preparation, a_bindings.draws);
 			constants.mode = mode;
 			constants.drawSlots = static_cast<std::uint32_t>(buckets * GrassInstances::kTiers);
 			// Dispatched for the buckets the version holds; the shader stops at the draw row's bucket slots.
@@ -201,20 +186,20 @@ namespace DCLF::Draws
 			return prepared;
 		}
 
-		static void Record(const GrassArgsBindings&, const GrassArgsPrepared& a_frame, org::PassRecordContext& a_recording)
-		{
-			RecordArgs(a_recording.Commands(), a_frame);
-		}
-
 		// The dispatch.
-		static void RecordArgs(rhi::CommandList& a_commands, const GrassArgsPrepared& a_frame)
+		static void Record(const GrassArgsBindings& a_bindings, const GrassArgsPrepared& a_frame, org::PassRecordContext& a_recording)
 		{
 			if (!a_frame.program || !a_frame.groups)
 				return;
-			auto& commands = a_commands;
+			auto constants = a_frame.constants;
+			constants.drawIndex = a_recording.Index(a_bindings.draw);
+			constants.bucketsIndex = a_recording.Index(a_bindings.buckets);
+			constants.meshesIndex = a_recording.Index(a_bindings.meshes);
+			constants.drawsIndex = a_recording.Index(a_bindings.draws);
+			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->Pipeline());
-			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::Grass::kGrassArgsConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::Grass::kGrassArgsConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
 			commands.Dispatch(a_frame.groups, 1, 1);
 		}
 
@@ -245,12 +230,9 @@ namespace DCLF::Draws
 			return { a_builder.CopySource(tables->draws) };
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			a_out.push_back(0);
-		}
+		void Revision(std::vector<std::uint64_t>& a_out) const { a_out.push_back(0); }
 
-		GrassReadbackPrepared Prepare(const GrassReadbackBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		GrassReadbackPrepared Prepare(const GrassReadbackBindings&, const org::PassPrepareContext&) const
 		{
 			return { tables->counts };
 		}

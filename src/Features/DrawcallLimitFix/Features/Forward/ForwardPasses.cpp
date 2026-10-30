@@ -26,7 +26,6 @@
 
 namespace DCLF::Draws
 {
-	// In DCLF::Draws, where they were defined before the feature moved: ORG's recipe telemetry names a pass by its type (typeid).
 
 	/*
 	 * The forward epoch's draws (dclf-architecture.md, "The forward epoch"). The colour BuildDraws appends visible forward draws (kObjectForward) with their
@@ -65,13 +64,10 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto frame = CurrentFrame(a_preparation, shapeSegment);
-			a_out.push_back(frame ? frame->generation : 0);
-		}
+		// The colour shape is the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>&) const {}
 
-		PreparedDraws Prepare(const PassBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		PreparedDraws Prepare(const PassBindings&, const org::PassPrepareContext& a_preparation) const
 		{
 			PreparedDraws prepared{};
 			// The forward epoch is prepared for the colour shape (Revision/Assemble.cpp).
@@ -82,9 +78,6 @@ namespace DCLF::Draws
 			prepared.framePushWords = MainFramePushWords(resources->frameConstantsAddress);
 			prepared.frame = std::move(frame);
 			prepared.targetCount = resources->targetCount;
-			for (std::uint32_t i = 0; i < prepared.targetCount; ++i)
-				prepared.targetViews[i] = a_preparation.Capture(a_bindings.targets[i]);
-			prepared.depthView = a_preparation.Capture(a_bindings.depth);
 			return prepared;
 		}
 
@@ -94,8 +87,8 @@ namespace DCLF::Draws
 				return;
 			const auto& frame = *a_prepared.frame;
 			// Every attachment loaded: the draws blend onto the composited frame; G-buffer targets are masked off.
-			auto colors = LoadedColours(a_recording, a_prepared.targetViews, a_bindings.targets, a_prepared.targetCount);
-			auto depth = LoadedDepth(a_recording, a_prepared.depthView);
+			auto colors = LoadedColours(a_recording, a_bindings.targets, a_prepared.targetCount);
+			auto depth = LoadedDepth(a_recording, a_bindings.depth);
 			rhi::PassBeginInfo begin{};
 			begin.width = frame.width;
 			begin.height = frame.height;
@@ -179,7 +172,6 @@ namespace DCLF::Draws
 	struct RefractionPrepared
 	{
 		std::shared_ptr<const PassFrame> frame;
-		org::PreparedDescriptorReference targetView{}, depthView{};
 		std::uint64_t frameConstants = 0;
 	};
 
@@ -209,14 +201,10 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto frame = CurrentFrame(a_preparation, shapeSegment);
-			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(resources->pool ? NamedSerial(a_preparation, resources->pool->indices) : 0);
-		}
+		// The colour shape and the pool's version are the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>&) const {}
 
-		RefractionPrepared Prepare(const RefractionBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		RefractionPrepared Prepare(const RefractionBindings&, const org::PassPrepareContext& a_preparation) const
 		{
 			RefractionPrepared prepared{};
 			// Prepared for the colour shape, as ForwardDrawPass.
@@ -225,8 +213,6 @@ namespace DCLF::Draws
 				frame->indirect.refractionFormat != resources->refractionFormat || !resources->pool)
 				return prepared;
 			prepared.frame = std::move(frame);
-			prepared.targetView = a_preparation.Capture(a_bindings.target);
-			prepared.depthView = a_preparation.Capture(a_bindings.depth);
 			prepared.frameConstants = resources->frameConstantsAddress;
 			return prepared;
 		}
@@ -239,14 +225,14 @@ namespace DCLF::Draws
 			auto& commands = a_recording.Commands();
 			commands.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
 			rhi::ColorAttachment colour{};
-			colour.rtv = a_recording.Resolve(a_prepared.targetView);
+			colour.rtv = a_recording.View(a_bindings.target);
 			colour.loadOp = rhi::LoadOp::Clear;
 			colour.storeOp = rhi::StoreOp::Store;
 			colour.clear.type = rhi::ClearValueType::Color;
 			colour.clear.rgba[0] = colour.clear.rgba[1] = 0.5f;  // FUN_1414b4860's clear colour (0x141ad285c, 0.5), as RENDER_NORMAL_CLEAR writes
 			colour.clear.rgba[2] = colour.clear.rgba[3] = 0.0f;
 			colour.resource = a_recording.Resolve(a_bindings.target.Resource()).GetHandle();
-			auto depth = LoadedDepth(a_recording, a_prepared.depthView);
+			auto depth = LoadedDepth(a_recording, a_bindings.depth);
 			rhi::PassBeginInfo begin{};
 			begin.width = frame.width;
 			begin.height = frame.height;

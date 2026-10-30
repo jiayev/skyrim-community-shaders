@@ -65,13 +65,12 @@ namespace
 
 	struct WriteBindings
 	{
-		org::ResourceBindingToken target;
+		org::DeclaredViewToken target;
 	};
 
 	struct WriteFrame
 	{
 		std::shared_ptr<const Program> program;
-		uint32_t targetIndex = 0;
 		uint32_t value = 0;
 	};
 
@@ -83,18 +82,18 @@ namespace
 		WriteBindings Declare(org::PassBuilder& builder)
 		{
 			builder.PreferQueue(org::QueueKind::Graphics);
-			return { builder.BindUnorderedAccess(target) };
+			return { builder.UnorderedAccess(target).View() };
 		}
-		WriteFrame Prepare(const WriteBindings& bindings, const org::PassPrepareContext& preparation) const
+		WriteFrame Prepare(const WriteBindings&, const org::PassPrepareContext&) const
 		{
-			return { program, preparation.ResolveView(bindings.target, { org::BindlessViewKind::UnorderedAccess }).index, *value };
+			return { program, *value };
 		}
-		static void Record(const WriteBindings&, const WriteFrame& frame, org::PassRecordContext& recording)
+		static void Record(const WriteBindings& bindings, const WriteFrame& frame, org::PassRecordContext& recording)
 		{
 			auto& commands = recording.Commands();
 			commands.BindLayout(frame.program->layout->GetHandle());
 			commands.BindPipeline(frame.program->pipeline->GetHandle());
-			const uint32_t constants[3] = { frame.targetIndex, frame.value, kCount };
+			const uint32_t constants[3] = { recording.Index(bindings.target), frame.value, kCount };
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, 3, constants);
 			commands.Dispatch((kCount + 63) / 64, 1, 1);
 		}

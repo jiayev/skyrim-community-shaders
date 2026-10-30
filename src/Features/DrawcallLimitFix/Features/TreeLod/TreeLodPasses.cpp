@@ -25,7 +25,6 @@
 
 namespace DCLF::Draws
 {
-	// In DCLF::Draws, where they were defined before the feature moved: ORG's recipe telemetry names a pass by its type (typeid).
 	struct TreeLodCullBindings
 	{
 		org::DeclaredViewToken shapes, instances, draw, visible, hzb;
@@ -37,6 +36,7 @@ namespace DCLF::Draws
 		Features::TreeLod::TreeLodCullConstants constants{};
 		std::shared_ptr<const org::LatchBlock> latch;
 		std::uint32_t groups = 0;
+		bool occlusion = false;  // the HZB test: its view is bound
 	};
 
 	/**
@@ -66,16 +66,11 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		// The recording depends on the tables' versions (a growth changes views and dispatch) and the depth segment's shape.
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto frame = CurrentFrame(a_preparation, segment);
-			for (const auto* table : { &tables->shapes, &tables->instances, &tables->visible })
-				a_out.push_back(NamedSerial(a_preparation, *table));
-			a_out.push_back(frame ? frame->generation : 0);
-		}
+		// The recording depends on the tables' versions (a growth changes views and dispatch) and the depth segment's shape: the
+		// revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>&) const {}
 
-		TreeLodCullPrepared Prepare(const TreeLodCullBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		TreeLodCullPrepared Prepare(const TreeLodCullBindings&, const org::PassPrepareContext& a_preparation) const
 		{
 			TreeLodCullPrepared prepared{};
 			const auto frame = CurrentFrame(a_preparation, segment);
@@ -87,16 +82,12 @@ namespace DCLF::Draws
 			prepared.program = tables->cull;
 			prepared.latch = frame->latch;
 			auto& constants = prepared.constants;
-			constants.shapesIndex = CaptureViewIndex(a_preparation, a_bindings.shapes);
-			constants.instancesIndex = CaptureViewIndex(a_preparation, a_bindings.instances);
-			constants.drawIndex = CaptureViewIndex(a_preparation, a_bindings.draw);
-			constants.visibleIndex = CaptureViewIndex(a_preparation, a_bindings.visible);
 			constants.latchIndex = frame->latch->SrvIndex();
 			constants.phase = phase;
 			const std::uint64_t records = shapes * TreeInstances::kMaxGroupInstances;
 			constants.retestOffset = static_cast<std::uint32_t>(sizeof(TreeInstances::VisibleHeader) + records * sizeof(std::uint32_t));
 			if (Draws::OcclusionTested(*resources, *frame)) {
-				constants.hzbIndex = CaptureViewIndex(a_preparation, a_bindings.hzb);
+				prepared.occlusion = true;
 				constants.hzbSizePacked = (resources->hzbWidth & 0xFFFF) | (resources->hzbHeight << 16);
 				constants.hzbMips = resources->hzbMips;
 			}
@@ -105,20 +96,21 @@ namespace DCLF::Draws
 			return prepared;
 		}
 
-		static void Record(const TreeLodCullBindings&, const TreeLodCullPrepared& a_frame, org::PassRecordContext& a_recording)
-		{
-			RecordCull(a_recording.Commands(), a_frame, a_recording.FrameSlot());
-		}
-
-		// The dispatch, from the latch's region of a_frameSlot.
-		static void RecordCull(rhi::CommandList& a_commands, const TreeLodCullPrepared& a_frame, std::uint32_t a_frameSlot)
+		// The dispatch, from the latch's region of the frame slot.
+		static void Record(const TreeLodCullBindings& a_bindings, const TreeLodCullPrepared& a_frame, org::PassRecordContext& a_recording)
 		{
 			if (!a_frame.program || !a_frame.groups || !a_frame.latch)
 				return;
 			auto constants = a_frame.constants;
+			constants.shapesIndex = a_recording.Index(a_bindings.shapes);
+			constants.instancesIndex = a_recording.Index(a_bindings.instances);
+			constants.drawIndex = a_recording.Index(a_bindings.draw);
+			constants.visibleIndex = a_recording.Index(a_bindings.visible);
+			if (a_frame.occlusion)
+				constants.hzbIndex = a_recording.Index(a_bindings.hzb);
 			// The depth segment's BuildDrawsLatch in this frame slot.
-			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_frameSlot));
-			auto& commands = a_commands;
+			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
+			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->Pipeline());
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, Features::TreeLod::kTreeLodCullConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
@@ -213,12 +205,10 @@ namespace DCLF::Draws
 			return { a_builder.CopySource(*tables->visible) };
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			a_out.push_back(NamedSerial(a_preparation, tables->visible));
-		}
+		// The list's version is the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>&) const {}
 
-		TreeLodReadbackPrepared Prepare(const TreeLodReadbackBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		TreeLodReadbackPrepared Prepare(const TreeLodReadbackBindings&, const org::PassPrepareContext&) const
 		{
 			return { tables->counts, tables->stages };
 		}

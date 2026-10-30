@@ -446,10 +446,7 @@ namespace DCLF::Draws
 		PreprocessStates* preprocess = nullptr;  // the frame slot's explicit DGC preprocess state list
 		std::array<std::uint32_t, kFramePushWords> framePushWords{};
 		std::shared_ptr<const PassFrame> frame;
-		std::array<org::PreparedDescriptorReference, kColorTargets> targetViews{};
-		org::PreparedDescriptorReference depthView{};
-		org::PreparedDescriptorReference terrainDepthView{};  // Terrain Blending's terrain depth (the Z-prepass's)
-		bool terrainDepth = false;
+		bool terrainDepth = false;  // Terrain Blending's terrain depth (the Z-prepass's) is drawn
 		std::uint32_t targetCount = 0;
 		bool phaseTwo = false;
 		bool zPrepass = false;

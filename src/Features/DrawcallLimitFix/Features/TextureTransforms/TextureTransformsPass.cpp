@@ -40,7 +40,6 @@ namespace DCLF::Draws
 		constexpr std::uint32_t kGroups = 32;  // of TextureTransformsCS's 64 threads
 	}
 
-	// In DCLF::Draws, where it was defined before the feature moved: ORG's recipe telemetry names a pass by its type (typeid).
 	struct TextureTransformsBindings
 	{};
 
@@ -78,13 +77,9 @@ namespace DCLF::Draws
 			return {};
 		}
 
-		// The recording depends on the depth shape (its latch); the rows, the entries and their count are the latch's and the entries'.
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto frame = CurrentFrame(a_preparation, segment);
-			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(BuildsDraws(a_preparation, *resources, segment) ? 1u : 0u);
-		}
+		// The recording depends on the depth shape (its latch: the revision's, the ticket's host data); the rows, the entries and their
+		// count are the latch's and the entries'.
+		void Revision(std::vector<std::uint64_t>&) const {}
 
 		TextureTransformsPrepared Prepare(const TextureTransformsBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{

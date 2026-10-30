@@ -110,14 +110,18 @@ namespace
 		uint32_t latchSlots = 0;
 	};
 
-	void RecordDispatch(const DispatchFrame& a_frame, org::PassRecordContext& a_recording)
+	bool Dispatches(const DispatchFrame& a_frame)
 	{
-		if (!a_frame.program || !a_frame.groups[0] || !a_frame.groups[1] || !a_frame.groups[2])
-			return;
+		return a_frame.program && a_frame.groups[0] && a_frame.groups[1] && a_frame.groups[2];
+	}
+
+	// a_constants: the frame's, with the pass's view indices.
+	void RecordDispatch(const DispatchFrame& a_frame, OrgClusterConstants a_constants, org::PassRecordContext& a_recording)
+	{
 		auto& commands = a_recording.Commands();
 		commands.BindLayout(a_frame.program->layout->GetHandle());
 		commands.BindPipeline(a_frame.program->Pipeline());
-		auto constants = a_frame.constants;
+		auto constants = a_constants;
 		constants.latchOffset = (a_recording.FrameSlot() % a_frame.latchSlots) * a_frame.latchStride;
 		commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kConstantWords, reinterpret_cast<const uint32_t*>(&constants));
 		commands.Dispatch(a_frame.groups[0], a_frame.groups[1], a_frame.groups[2]);
@@ -165,7 +169,7 @@ namespace
 			return { a_builder.CopyDestination(resources->lights) };
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<uint64_t>& a_out) const
+		void Revision(std::vector<uint64_t>& a_out) const
 		{
 			a_out.push_back(reinterpret_cast<uintptr_t>(CurrentShape(*resources).get()));
 		}
@@ -209,12 +213,12 @@ namespace
 		}
 
 		// The recorded dispatch depends only on the cluster grid; the projection is latched.
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<uint64_t>& a_out) const
+		void Revision(std::vector<uint64_t>& a_out) const
 		{
 			AppendShapeRevision(CurrentShape(*resources).get(), resources->build.get(), a_out);
 		}
 
-		DispatchFrame Prepare(const BuildBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		DispatchFrame Prepare(const BuildBindings&, const org::PassPrepareContext&) const
 		{
 			DispatchFrame frame{};
 			const auto shape = CurrentShape(*resources);
@@ -222,10 +226,6 @@ namespace
 				return frame;
 			frame.program = resources->build;
 			frame.constants = BaseConstants(*resources, *shape, offsetof(LLFLatch, cameraProjInverse));
-			(void)a_preparation.Capture(a_bindings.clusters);
-			(void)a_preparation.Capture(a_bindings.counter);
-			frame.constants.clustersIndex = a_preparation.Resolve(a_bindings.clusters).index;
-			frame.constants.lightIndexCounterIndex = a_preparation.Resolve(a_bindings.counter).index;
 			frame.groups[0] = shape->clusterSize[0];
 			frame.groups[1] = shape->clusterSize[1];
 			frame.groups[2] = shape->clusterSize[2];
@@ -234,9 +234,14 @@ namespace
 			return frame;
 		}
 
-		static void Record(const BuildBindings&, const DispatchFrame& a_frame, org::PassRecordContext& a_recording)
+		static void Record(const BuildBindings& a_bindings, const DispatchFrame& a_frame, org::PassRecordContext& a_recording)
 		{
-			RecordDispatch(a_frame, a_recording);
+			if (!Dispatches(a_frame))
+				return;
+			auto constants = a_frame.constants;
+			constants.clustersIndex = a_recording.Index(a_bindings.clusters);
+			constants.lightIndexCounterIndex = a_recording.Index(a_bindings.counter);
+			RecordDispatch(a_frame, constants, a_recording);
 		}
 
 	private:
@@ -267,12 +272,12 @@ namespace
 			};
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<uint64_t>& a_out) const
+		void Revision(std::vector<uint64_t>& a_out) const
 		{
 			AppendShapeRevision(CurrentShape(*resources).get(), resources->cull.get(), a_out);
 		}
 
-		DispatchFrame Prepare(const CullBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		DispatchFrame Prepare(const CullBindings&, const org::PassPrepareContext&) const
 		{
 			DispatchFrame frame{};
 			const auto shape = CurrentShape(*resources);
@@ -282,24 +287,23 @@ namespace
 			frame.constants = BaseConstants(*resources, *shape, offsetof(LLFLatch, cameraView));
 			frame.latchStride = resources->latch->Stride();
 			frame.latchSlots = resources->latch->Slots();
-			const auto index = [&](const org::DeclaredViewToken& token) {
-				(void)a_preparation.Capture(token);
-				return a_preparation.Resolve(token).index;
-			};
-			frame.constants.clustersIndex = index(a_bindings.clusters);
-			frame.constants.lightsIndex = index(a_bindings.lights);
-			frame.constants.lightIndexCounterIndex = index(a_bindings.counter);
-			frame.constants.lightIndexListIndex = index(a_bindings.lightIndexList);
-			frame.constants.lightGridIndex = index(a_bindings.lightGrid);
 			frame.groups[0] = (shape->clusterSize[0] + kCullGroupX - 1) / kCullGroupX;
 			frame.groups[1] = (shape->clusterSize[1] + kCullGroupY - 1) / kCullGroupY;
 			frame.groups[2] = (shape->clusterSize[2] + kCullGroupZ - 1) / kCullGroupZ;
 			return frame;
 		}
 
-		static void Record(const CullBindings&, const DispatchFrame& a_frame, org::PassRecordContext& a_recording)
+		static void Record(const CullBindings& a_bindings, const DispatchFrame& a_frame, org::PassRecordContext& a_recording)
 		{
-			RecordDispatch(a_frame, a_recording);
+			if (!Dispatches(a_frame))
+				return;
+			auto constants = a_frame.constants;
+			constants.clustersIndex = a_recording.Index(a_bindings.clusters);
+			constants.lightsIndex = a_recording.Index(a_bindings.lights);
+			constants.lightIndexCounterIndex = a_recording.Index(a_bindings.counter);
+			constants.lightIndexListIndex = a_recording.Index(a_bindings.lightIndexList);
+			constants.lightGridIndex = a_recording.Index(a_bindings.lightGrid);
+			RecordDispatch(a_frame, constants, a_recording);
 		}
 
 	private:

@@ -49,7 +49,6 @@ namespace DCLF::Draws
 		constexpr std::uint32_t kPixelObjectRowBytes = 48;  // sizeof(DCLFPixelObjectRow)
 	}
 
-	// In DCLF::Draws, as the other passes: ORG's recipe telemetry names a pass by its type (typeid).
 	struct PixelRowsBindings
 	{};
 
@@ -87,13 +86,8 @@ namespace DCLF::Draws
 			return {};
 		}
 
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto frame = CurrentFrame(a_preparation, segment);
-			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(BuildsDraws(a_preparation, *resources, segment) ? 1u : 0u);
-			a_out.push_back(resources->frameConstantsAddress);
-		}
+		// The shape (and whether it builds draws) is the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>& a_out) const { a_out.push_back(resources->frameConstantsAddress); }
 
 		PixelRowsPrepared Prepare(const PixelRowsBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{

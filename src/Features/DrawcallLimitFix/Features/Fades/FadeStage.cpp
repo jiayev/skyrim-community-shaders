@@ -23,7 +23,6 @@
 
 namespace DCLF::Draws
 {
-	// In DCLF::Draws, where they were defined before the feature moved: ORG's recipe telemetry names a pass by its type (typeid).
 	struct FadeStateBindings
 	{
 		org::DeclaredViewToken roots, states, frame, log, rootPrograms, animated, events, reported;
@@ -37,6 +36,8 @@ namespace DCLF::Draws
 		FadeStateConstants constants{};
 		std::shared_ptr<const org::LatchBlock> latch;
 		std::uint32_t groups = 0;
+		bool queries = false;  // the portal query stage (its queries' view), else its results'
+		bool events = false;   // the write-back events' views are bound
 	};
 
 	/** @brief Fade roots' state (FadeStateCS.hlsl): each root's main-camera OnVisible, once a frame, before the depth culling. */
@@ -73,21 +74,11 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		// The recording depends on the buffers' versions and the depth shape; counts are in the uploaded FadeFrame row.
-		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
-		{
-			const auto frame = CurrentFrame(a_preparation, segment);
-			const auto& scene = *fades;
-			for (const auto* buffer : { &scene.fadeRoots, &scene.fadeStates, &scene.fadeStatesOut[0], &scene.fadeStatesOut[1], &scene.fadeRootPrograms,
-					 &scene.fadeAnimated, &scene.fadeEvents, &scene.fadeReported })
-				a_out.push_back(NamedSerial(a_preparation, *buffer));
-			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(queryStage);
-			a_out.push_back(NamedSerial(a_preparation, scene.portalBatch->queries));
-			a_out.push_back(NamedSerial(a_preparation, scene.portalBatch->results));
-		}
+		// The recording depends on the buffers' versions and the depth shape (the revision's: the ticket's host data); counts are in the
+		// uploaded FadeFrame row.
+		void Revision(std::vector<std::uint64_t>& a_out) const { a_out.push_back(queryStage); }
 
-		FadeStatePrepared Prepare(const FadeStateBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		FadeStatePrepared Prepare(const FadeStateBindings&, const org::PassPrepareContext& a_preparation) const
 		{
 			FadeStatePrepared prepared{};
 			const auto& scene = *fades;
@@ -103,23 +94,11 @@ namespace DCLF::Draws
 			prepared.program = queryStage ? scene.portalQueries : scene.fadeState;
 			prepared.latch = frame->latch;
 			auto& constants = prepared.constants;
-			constants.rootsIndex = CaptureViewIndex(a_preparation, a_bindings.roots);
-			constants.statesIndex = CaptureViewIndex(a_preparation, a_bindings.states);
-			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
-			constants.logIndex = CaptureViewIndex(a_preparation, a_bindings.log);
-			constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);
-			if (queryStage)
-				constants.portalQueriesIndex = CaptureViewIndex(a_preparation, a_bindings.queries);
-			else
-				constants.portalResultsIndex = CaptureViewIndex(a_preparation, a_bindings.results);
-			constants.animatedIndex = CaptureViewIndex(a_preparation, a_bindings.animated);
-			for (std::uint32_t h = 0; h < 2; ++h)
-				constants.outIndices[h] = CaptureViewIndex(a_preparation, a_bindings.published[h]);
+			prepared.queries = queryStage;
 			// Only with a staging set that holds the whole bound list.
 			if (const auto events = static_cast<std::uint32_t>(NamedUnitsOf(a_preparation, scene.fadeEvents));
 				scene.fadeEvents && scene.fadeWriteBack && scene.fadeWriteBack->SetFor(events)) {
-				constants.eventsIndex = CaptureViewIndex(a_preparation, a_bindings.events);
-				constants.reportedIndex = CaptureViewIndex(a_preparation, a_bindings.reported);
+				prepared.events = true;
 				constants.eventCapacity = events;
 			}
 			constants.latchIndex = frame->latch->SrvIndex();
@@ -128,11 +107,27 @@ namespace DCLF::Draws
 			return prepared;
 		}
 
-		static void Record(const FadeStateBindings&, const FadeStatePrepared& a_frame, org::PassRecordContext& a_recording)
+		static void Record(const FadeStateBindings& a_bindings, const FadeStatePrepared& a_frame, org::PassRecordContext& a_recording)
 		{
 			if (!a_frame.program || !a_frame.groups || !a_frame.latch)
 				return;
 			auto constants = a_frame.constants;
+			constants.rootsIndex = a_recording.Index(a_bindings.roots);
+			constants.statesIndex = a_recording.Index(a_bindings.states);
+			constants.frameIndex = a_recording.Index(a_bindings.frame);
+			constants.logIndex = a_recording.Index(a_bindings.log);
+			constants.rootProgramsIndex = a_recording.Index(a_bindings.rootPrograms);
+			if (a_frame.queries)
+				constants.portalQueriesIndex = a_recording.Index(a_bindings.queries);
+			else
+				constants.portalResultsIndex = a_recording.Index(a_bindings.results);
+			constants.animatedIndex = a_recording.Index(a_bindings.animated);
+			for (std::uint32_t h = 0; h < 2; ++h)
+				constants.outIndices[h] = a_recording.Index(a_bindings.published[h]);
+			if (a_frame.events) {
+				constants.eventsIndex = a_recording.Index(a_bindings.events);
+				constants.reportedIndex = a_recording.Index(a_bindings.reported);
+			}
 			// The depth segment's BuildDrawsLatch in this frame slot.
 			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
 			auto& commands = a_recording.Commands();

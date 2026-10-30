@@ -48,7 +48,7 @@ namespace DCLF::Draws
 	{
 		return std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(a_resources->pool, [shadow = a_resources](const org::PassPrepareContext& a_preparation) {
 			const auto frame = CurrentShadowFrame(a_preparation);
-			return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
+			return IndexPoolPass::LatchOf{ frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
 		}));
 	}
 
