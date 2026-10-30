@@ -24,7 +24,7 @@
 
 #include <ORGModuleServices/PipelineRegistry.h>
 #include <OpenRenderGraph/GraphHost.h>
-#include <Render/RenderGraph/ExperimentalRhiExecution.h>
+#include <Render/RenderGraph/RhiExecution.h>
 
 #include <mutex>
 #include <optional>
@@ -452,7 +452,7 @@ namespace DCLF
 					}
 					// "dclf:pass-queries=0|1": the graph's lists recorded with their pass timestamp queries and Tracy GPU zones, or without.
 					if (command.rfind("dclf:pass-queries=", 0) == 0) {
-						org::experimental::DiagnosticSkipPassQueries().store(command.substr(18) == "0", std::memory_order_relaxed);
+						org::diagnostics::DiagnosticSkipPassQueries().store(command.substr(18) == "0", std::memory_order_relaxed);
 						if (auto* host = RenderGraphRuntime::Get().Host())
 							host->RequestRebuild();
 						return;
@@ -511,7 +511,7 @@ namespace DCLF
 					// "dclf:list-heaps=0|1": recordings bind the descriptor heaps at each command list's start, or not (unsafe off: only
 					// passes binding their own heaps then work; timing an empty-epoch run only), from a rebuild.
 					if (command.rfind("dclf:list-heaps=", 0) == 0) {
-						org::experimental::DiagnosticSkipListHeapBinds().store(command.substr(16) == "0", std::memory_order_relaxed);
+						org::diagnostics::DiagnosticSkipListHeapBinds().store(command.substr(16) == "0", std::memory_order_relaxed);
 						if (auto* host = RenderGraphRuntime::Get().Host())
 							host->RequestRebuild();
 						return;
@@ -520,7 +520,7 @@ namespace DCLF
 					// execution's too) or every barrier (unsafe: empty-epoch timing only), from a rebuild.
 					if (command.rfind("dclf:list-barriers=", 0) == 0) {
 						const std::string value = command.substr(19);
-						org::experimental::DiagnosticSkipListBarriers().store(value == "external" ? 1 : value == "all" ? 2 : 0, std::memory_order_relaxed);
+						org::diagnostics::DiagnosticSkipListBarriers().store(value == "external" ? 1 : value == "all" ? 2 : 0, std::memory_order_relaxed);
 						if (auto* host = RenderGraphRuntime::Get().Host())
 							host->RequestRebuild();
 						return;
