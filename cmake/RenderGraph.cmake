@@ -54,7 +54,6 @@ if(CS_RENDER_GRAPH)
         set(OPENRENDERGRAPH_ENABLE_SCHEDULE_UI ON CACHE BOOL "" FORCE)
         # The memory introspection widget (the menu's "Render graph memory" window): Dear ImGui and ImPlot.
         set(OPENRENDERGRAPH_ENABLE_MEMORY_UI ON CACHE BOOL "" FORCE)
-        set(OPENRENDERGRAPH_ENABLE_D3D11_INTEROP OFF CACHE BOOL "" FORCE)
         set(OPENRENDERGRAPH_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
         # Nsight Perf for OpenRenderGraph's Telemetry/NvPerfCapture (NvPerf's Vulkan backend): ORG_ENABLE_NVPERF and the
