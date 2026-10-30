@@ -193,8 +193,6 @@ namespace ImageBasedLighting
 									   dot(EnvIBLTexture.Load(int3(1, 0, 0)), phase),
 									   dot(EnvIBLTexture.Load(int3(2, 0, 0)), phase)));
 		envColor = Color::Saturation(envColor, SharedData::iblSettings.EnvIBLSaturation) * SharedData::iblSettings.EnvIBLScale * GetIBLRatio();
-		if (!SharedData::InInterior && SharedData::iblSettings.SkylightingAffectsEnv != 0)
-			envColor *= visibility;
 		float3 skyColor = 0.0;
 		if (!SharedData::InInterior) {
 			skyColor = max(0.0, float3(
@@ -213,7 +211,7 @@ namespace ImageBasedLighting
 	}
 #endif
 
-	float3 GetFogIBLColor(float3 fogColor, float3 positionMS = float3(0, 0, 0))
+	float3 GetFogIBLColorBlend(float3 fogColor, float3 positionMS)
 	{
 		float3 iblColor;
 		if (SharedData::iblSettings.DALCMode >= 2) {
@@ -234,6 +232,14 @@ namespace ImageBasedLighting
 			}
 		}
 		return lerp(fogColor, iblColor, SharedData::iblSettings.FogAmount);
+	}
+
+	float3 GetFogIBLColor(float3 fogColor, float3 positionMS = float3(0, 0, 0))
+	{
+		float3 result = fogColor;
+		[branch] if (SharedData::iblSettings.FogAmount != 0.0)
+			result = GetFogIBLColorBlend(fogColor, positionMS);
+		return result;
 	}
 }
 

@@ -150,6 +150,11 @@ float2 FixupHistoryUV(float2 uv, float previousCellDepth, out bool validHistory)
 		return;
 	}
 
+	if (all(VBufferA[dispatchID] == 0.0f)) {
+		LightScattering[dispatchID] = 0.0f.xxxx;
+		return;
+	}
+
 	bool validHistory;
 	float3 historyUV = ComputeHistoryVolumeUV(centerPositionWS, validHistory);
 	if (VolumetricFogHasPrevConservativeDepth && validHistory) {

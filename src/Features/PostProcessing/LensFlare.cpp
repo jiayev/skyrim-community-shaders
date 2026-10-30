@@ -65,26 +65,33 @@ void LensFlare::DrawSettings()
 	};
 
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.intensity", "Intensity"), &settings.Intensity, 0.0f, 1.0f, "%.3f");
-	tooltip("Master intensity for the entire lens flare effect");
+	tooltip(T("feature.post_processing.lens_flare.tooltip_intensity", "Master intensity for the entire lens flare effect"));
 
 	// Threshold
 	ImGui::Spacing();
-	ImGui::Text(T("feature.post_processing.lens_flare.threshold", "Threshold"));
+	ImGui::TextUnformatted(T("feature.post_processing.lens_flare.threshold", "Threshold"));
 	ImGui::Separator();
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.threshold_ev", "Threshold (Neutral EV100)"), &settings.ThresholdEV, -7.0f, 23.0f, "%+.2f EV100");
 	tooltip(T("feature.post_processing.lens_flare.threshold_ev_hint", "Threshold on the RGB average before exposure. EV100 denotes equivalent neutral luminance on the Physical Sky / Linear Lighting scale: 0 EV100 = approximately RGB 0.125 = 0.125 cd/m2 for neutral gray (K = 12.5). Colored pixels are not thresholded by luminance."));
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.threshold_range", "Threshold Range"), &settings.ThresholdRange, 0.01f, 5.0f, "%.3f");
-	tooltip("Fade range for the threshold cutoff");
+	tooltip(T("feature.post_processing.lens_flare.tooltip_threshold_range", "Fade range for the threshold cutoff"));
 
 	// Ghost Settings
 	ImGui::Spacing();
-	ImGui::Text(T("feature.post_processing.lens_flare.ghost_settings", "Ghost Settings"));
+	ImGui::TextUnformatted(T("feature.post_processing.lens_flare.ghost_settings", "Ghost Settings"));
 	ImGui::Separator();
 
 	{
-		const char* modeNames[] = { "Fast (Procedural)", "Quality (FFT Bokeh)", "Ultra (Per-Ghost FFT)" };
+		const char* modeNames[] = {
+			T("feature.post_processing.lens_flare.ghost_mode_fast", "Fast (Procedural)"),
+			T("feature.post_processing.lens_flare.ghost_mode_quality", "Quality (FFT Bokeh)"),
+			T("feature.post_processing.lens_flare.ghost_mode_ultra", "Ultra (Per-Ghost FFT)")
+		};
 		ImGui::Combo(T("feature.post_processing.lens_flare.ghost_mode", "Ghost Mode"), &settings.GhostModeInt, modeNames, 3);
-		tooltip("Fast: procedural radial ghosts (low cost).\nQuality: FFT convolution with bokeh shape.\nUltra: per-ghost kernel sizes via multi-pass FFT (expensive).");
+		tooltip(T("feature.post_processing.lens_flare.tooltip_ghost_mode",
+			"Fast: procedural radial ghosts (low cost).\n"
+			"Quality: FFT convolution with bokeh shape.\n"
+			"Ultra: per-ghost kernel sizes via multi-pass FFT (expensive)."));
 	}
 
 	if (settings.GhostModeInt == static_cast<int>(GhostMode::Quality) || settings.GhostModeInt == static_cast<int>(GhostMode::Ultra)) {
@@ -107,19 +114,21 @@ void LensFlare::DrawSettings()
 			const SceneWidgetInterceptor::ProxyScope proxy(&settings.ApertureBlades, 1.0f);
 			ImGui::SliderInt(T("feature.post_processing.lens_flare.aperture_blades", "Aperture Blades"), &apertureBlades, 3, 10);
 		}
-		tooltip("Number of aperture blades for the procedural bokeh shape.");
+		tooltip(T("feature.post_processing.lens_flare.tooltip_aperture_blades", "Number of aperture blades for the procedural bokeh shape."));
 
 		{
 			const SceneWidgetInterceptor::ProxyScope proxy(&settings.FStop, 1.0f);
 			ImGui::SliderFloat(T("feature.post_processing.lens_flare.f_stop", "F-Stop"), &fStop, 1.0f, 22.0f, "F%.1f");
 		}
-		tooltip("Aperture f-number (e.g. F2.8). Smaller = larger aperture.\nControls the bokeh shape characteristics.");
+		tooltip(T("feature.post_processing.lens_flare.tooltip_f_stop",
+			"Aperture f-number (e.g. F2.8). Smaller = larger aperture.\n"
+			"Controls the bokeh shape characteristics."));
 
 		{
 			const SceneWidgetInterceptor::ProxyScope proxy(&settings.ApertureRotation, 1.0f);
 			ImGui::SliderFloat(T("feature.post_processing.lens_flare.aperture_rotation", "Aperture Rotation"), &apertureRotation, -180.0f, 180.0f, "%.1f deg");
 		}
-		tooltip("Rotation of the procedural aperture.");
+		tooltip(T("feature.post_processing.lens_flare.tooltip_aperture_rotation", "Rotation of the procedural aperture."));
 		ImGui::EndDisabled();
 
 		if (!cam && !SceneWidgetInterceptor::IsArmed()) {
@@ -142,37 +151,42 @@ void LensFlare::DrawSettings()
 				settings.FFTResolution = resValues[curIdx];
 			ImGui::EndDisabled();
 
-			tooltip("Resolution of the FFT convolution. Higher = sharper bokeh ghost shapes but more expensive.");
+			tooltip(T("feature.post_processing.lens_flare.tooltip_fft_resolution", "Resolution of the FFT convolution. Higher = sharper bokeh ghost shapes but more expensive."));
 		}
 
 		ImGui::SliderFloat(T("feature.post_processing.lens_flare.kernel_scale", "Kernel Scale"), &settings.KernelScale, 0.01f, 0.5f, "%.3f");
-		tooltip("Base size of the bokeh kernel relative to FFT resolution.\nPer-ghost scales multiply this value in Ultra mode.");
+		tooltip(T("feature.post_processing.lens_flare.tooltip_kernel_scale",
+			"Base size of the bokeh kernel relative to FFT resolution.\n"
+			"Per-ghost scales multiply this value in Ultra mode."));
 	}
 
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.ghost_strength", "Ghost Strength"), &settings.GhostStrength, 0.0f, 1.0f, "%.3f");
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.ghost_chroma_shift", "Ghost Chroma Shift"), &settings.GhostChromaShift, 0.0f, 0.1f, "%.4f");
 	ImGui::Checkbox(T("feature.post_processing.lens_flare.non_intrusive_ghosts", "Non-intrusive Ghosts"), &settings.GLocalMask);
-	tooltip("Only apply ghost flaring when looking directly at light sources");
+	tooltip(T("feature.post_processing.lens_flare.tooltip_non_intrusive_ghosts", "Only apply ghost flaring when looking directly at light sources"));
 
 	if (ImGui::TreeNode(T("feature.post_processing.lens_flare.custom_ghost_colors_scales", "Custom Ghost Colors & Scales"))) {
 		for (int i = 0; i < NUM_GHOSTS; i++) {
 			ImGui::PushID(i);
 			char label[32];
-			snprintf(label, sizeof(label), "Ghost %d", i + 1);
+			snprintf(label, sizeof(label), T("feature.post_processing.lens_flare.ghost", "Ghost %d"), i + 1);
 			if (ImGui::TreeNode(label)) {
 				ImGui::Checkbox(T("feature.post_processing.lens_flare.enabled", "Enabled"), &settings.Ghosts[i].Enabled);
 				ImGui::ColorEdit4(T("feature.post_processing.lens_flare.color", "Color"), settings.Ghosts[i].Color.data());
 				ImGui::SliderFloat(T("feature.post_processing.lens_flare.scale", "Scale"), &settings.Ghosts[i].Scale, -15.0f, 15.0f, "%.2f");
 				if (settings.GhostModeInt == static_cast<int>(GhostMode::Ultra)) {
 					ImGui::SliderFloat(T("feature.post_processing.lens_flare.kernel_scale_2", "Kernel Scale"), &settings.Ghosts[i].KernelScale, 0.1f, 4.0f, "%.2fx");
-					tooltip("Multiplier on global Kernel Scale.\n1x = same as global, <1 = sharper, >1 = softer.\nEach distinct value requires a separate FFT pass.");
+					tooltip(T("feature.post_processing.lens_flare.tooltip_ghost_kernel_scale",
+						"Multiplier on global Kernel Scale.\n"
+						"1x = same as global, <1 = sharper, >1 = softer.\n"
+						"Each distinct value requires a separate FFT pass."));
 				}
 				ImGui::TreePop();
 			}
 			ImGui::PopID();
 		}
 		ImGui::BeginDisabled(SceneWidgetInterceptor::IsArmed());
-		if (ImGui::Button(T("feature.post_processing.lens_flare.reset_ghosts_to_default", "Reset Ghosts to Default"))) {
+		if (Util::Button(T("feature.post_processing.lens_flare.reset_ghosts_to_default", "Reset Ghosts to Default"))) {
 			GhostSettings defaults[NUM_GHOSTS] = {
 				{ { { 1.0f, 0.8f, 0.4f, 1.0f } }, -1.5f, true, 1.0f },
 				{ { { 1.0f, 1.0f, 0.6f, 1.0f } }, 2.5f, true, 1.0f },
@@ -191,21 +205,21 @@ void LensFlare::DrawSettings()
 
 	// Halo Settings
 	ImGui::Spacing();
-	ImGui::Text(T("feature.post_processing.lens_flare.halo_settings", "Halo Settings"));
+	ImGui::TextUnformatted(T("feature.post_processing.lens_flare.halo_settings", "Halo Settings"));
 	ImGui::Separator();
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.halo_strength", "Halo Strength"), &settings.HaloStrength, 0.0f, 1.0f, "%.3f");
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.halo_radius", "Halo Radius"), &settings.HaloRadius, 0.0f, 1.0f, "%.3f");
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.halo_width", "Halo Width"), &settings.HaloWidth, 0.0f, 1.0f, "%.3f");
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.halo_compression", "Halo Compression"), &settings.HaloCompression, 0.1f, 2.0f, "%.3f");
-	tooltip("Fisheye distortion strength for the halo effect");
+	tooltip(T("feature.post_processing.lens_flare.tooltip_halo_compression", "Fisheye distortion strength for the halo effect"));
 	ImGui::SliderFloat(T("feature.post_processing.lens_flare.halo_chroma_shift", "Halo Chroma Shift"), &settings.HaloChromaShift, 0.0f, 0.1f, "%.4f");
 
 	// Tint
 	ImGui::Spacing();
-	ImGui::Text(T("feature.post_processing.lens_flare.color_tint", "Color Tint"));
+	ImGui::TextUnformatted(T("feature.post_processing.lens_flare.color_tint", "Color Tint"));
 	ImGui::Separator();
 	ImGui::ColorEdit3(T("feature.post_processing.lens_flare.tint", "Tint"), settings.Tint.data());
-	tooltip("Radial color gradient applied to the flare effect");
+	tooltip(T("feature.post_processing.lens_flare.tooltip_tint", "Radial color gradient applied to the flare effect"));
 
 	// Debug
 	ImGui::Spacing();
@@ -217,15 +231,15 @@ void LensFlare::DrawSettings()
 		ImGui::Checkbox(T("feature.post_processing.lens_flare.disable_ghosts", "Disable Ghosts"), &debugsettings.disableGhosts);
 		ImGui::Checkbox(T("feature.post_processing.lens_flare.disable_blur", "Disable Blur"), &debugsettings.disableBlur);
 		ImGui::SliderInt(T("feature.post_processing.lens_flare.blur_iterations", "Blur Iterations"), &debugsettings.blurIterations, 1, 4);
-		tooltip("Kawase blur cycles (down+up). 1 = sharp, 2+ = smoother");
+		tooltip(T("feature.post_processing.lens_flare.tooltip_blur_iterations", "Kawase blur cycles (down+up). 1 = sharp, 2+ = smoother"));
 
 		static float debugRescale = .25f;
 		ImGui::SliderFloat(T("feature.post_processing.lens_flare.view_resize", "View Resize"), &debugRescale, 0.f, 1.f);
-		BUFFER_VIEWER_NODE_TITLE(texThreshold, "Threshold (half-res)", debugRescale);
-		BUFFER_VIEWER_NODE_TITLE(texGhostHalo, "Ghost + Halo (half-res)", debugRescale);
-		BUFFER_VIEWER_NODE_TITLE(texBlurTemp, "Blur Temp (quarter-res)", debugRescale);
+		BUFFER_VIEWER_NODE_TITLE(texThreshold, T("feature.post_processing.lens_flare.buffer_threshold", "Threshold (half-res)"), debugRescale);
+		BUFFER_VIEWER_NODE_TITLE(texGhostHalo, T("feature.post_processing.lens_flare.buffer_ghost_halo", "Ghost + Halo (half-res)"), debugRescale);
+		BUFFER_VIEWER_NODE_TITLE(texBlurTemp, T("feature.post_processing.lens_flare.buffer_blur_temp", "Blur Temp (quarter-res)"), debugRescale);
 		if (settings.GhostModeInt >= (int)GhostMode::Quality) {
-			BUFFER_VIEWER_NODE_TITLE(texFFTResult, "FFT Convolution Result", debugRescale);
+			BUFFER_VIEWER_NODE_TITLE(texFFTResult, T("feature.post_processing.lens_flare.buffer_fft_result", "FFT Convolution Result"), debugRescale);
 		}
 	}
 }

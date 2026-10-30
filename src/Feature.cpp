@@ -5,6 +5,7 @@
 #include "FeatureVersions.h"
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
+#include "Features/DeveloperTools.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/Effects11.h"
 #include "Features/ExponentialHeightFog.h"
@@ -25,8 +26,6 @@
 #include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/RainRefraction.h"
-#include "Features/RemoteControl.h"
-#include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
@@ -270,8 +269,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::ibl,
 		&globals::features::extendedTranslucency,
 		&globals::features::upscaling,
-		&globals::features::renderDoc,
-		&globals::features::remoteControl,
+		&globals::features::developerTools,
 		&globals::features::csEditor,
 		&globals::features::sceneManager,
 		&globals::features::screenshotFeature,
