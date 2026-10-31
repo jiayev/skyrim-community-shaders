@@ -26,8 +26,8 @@ namespace DCLF
 
 	enum ObjectFlags : std::uint32_t
 	{
-		kObjectAlphaTest = 1u << 0,  // alpha test on, reference = threshold / 255 (as the native draw's AlphaTestRef)
-		kObjectTwoSided = 1u << 1,   // no culling (the native main pass culls back faces otherwise)
+		kObjectAlphaTest = 1u << 0,                  // alpha test on, reference = threshold / 255 (as the native draw's AlphaTestRef)
+		kObjectTwoSided = 1u << 1,                   // no culling (the native main pass culls back faces otherwise)
 		kObjectSuppressExternalEmittance = 1u << 2,  // ExtraShaderDescriptors::SuppressExternalEmittance in the permutation buffer
 		// 1u << 3: a feature's (kFeatureObjectFlags; a Lighting object flag, Api::LightingObjectFlag).
 		// A palette block: rows at BindlessObject::boneOffset / previousBoneOffset. A skin's (CS_DCLF_SKINNED: vertices from the skin
@@ -43,6 +43,7 @@ namespace DCLF
 		// (Api/MainRanges.h; Features/Decals registers their order).
 		kObjectDecal = 1u << 7,
 		kObjectAlphaThresholdShift = 8,
+		// 1u << 16: Vanilla Fresnel's eye classification (kFeatureObjectFlags).
 		// Alpha-tested and blended: the depth pass uses its own reference (BSUtilityShader::SetupGeometry's AlphaTestRef;
 		// DCLFDepthAlphaTestRef).
 		kObjectAlphaBlended = 1u << 17,
@@ -93,7 +94,7 @@ namespace DCLF
 	 * the fade roots' kObjectFadeTest (27) and kObjectHeightTest (28), still declared in Core's enum until Features/Fades holds them;
 	 * and the Lighting object flags (Api::LightingObjectFlag: Integrations/SubsurfaceScattering's kObjectBeastRace, 3).
 	 */
-	inline constexpr std::uint32_t kFeatureObjectFlags = (1u << 3) | (1u << 6) | (1u << 27) | (1u << 28);
+	inline constexpr std::uint32_t kFeatureObjectFlags = (1u << 3) | (1u << 6) | (1u << 16) | (1u << 27) | (1u << 28);
 
 	/** @brief The high bit of a draw's object-index word: the draw misses every sun cascade (kObjectSunTest). */
 	inline constexpr std::uint32_t kObjectSunMiss = 1u << 31;
@@ -147,7 +148,8 @@ namespace DCLF
 	{
 		if (a_partitions & kPartitionChain)
 			return a_partitions & kPartitionChainCount;
-		return a_partitions == kNoPartitions ? 0u : a_partitions ? static_cast<std::uint32_t>(std::popcount(a_partitions)) : 1u;
+		return a_partitions == kNoPartitions ? 0u : a_partitions ? static_cast<std::uint32_t>(std::popcount(a_partitions)) :
+		                                                           1u;
 	}
 
 	/** @brief Geometry shared by every object that uses the same BSGraphics::TriShape. The buffers are the game's. */
@@ -287,7 +289,7 @@ namespace DCLF
 		// 4 bits: rasterStateDepthBiasMode (0-11). The engine's; its bias is not drawn (kRasterDecalNudge), the index keeps the key the
 		// engine's state.
 		kRasterDepthBiasShift = 4,
-		kRasterBlendModeShift = 8,   // 3 bits: alphaBlendMode (0-6)
+		kRasterBlendModeShift = 8,  // 3 bits: alphaBlendMode (0-6)
 		kRasterAlphaToCoverage = 1u << 11,
 		kRasterWriteModeShift = 12,  // 4 bits: alphaBlendWriteMode (0-12)
 		kRasterBlendExtra = 1u << 16,
@@ -371,7 +373,6 @@ namespace DCLF
 	};
 	static_assert(sizeof(ObjectShading) == 32);
 
-
 	/**
 	 * @brief The occlusion maps DCLF draws from its tables, each a view of the precipitation accumulator (render mode 0x1C) the
 	 * engine would fill by culling the scene lists (Precipitation::SetupMask): Skylighting's sky map and the precipitation mask.
@@ -381,7 +382,6 @@ namespace DCLF
 	inline constexpr std::uint32_t kOcclusionSky = 0;
 	inline constexpr std::uint32_t kOcclusionPrecipitation = 1;
 
-
 	/**
 	 * @brief Fade roots on the GPU (FadeStateCS.hlsl; dclf-architecture.md, "Fades on the GPU"). A member's fade node is a root:
 	 * a FadeRootStatic row (CPU, when listed) and a FadeNodeState row (GPU, reseeded from `initial` on a new generation). The pass
@@ -390,50 +390,50 @@ namespace DCLF
 	 */
 	struct FadeNodeState
 	{
-		std::uint32_t flags = 0;          // +0xF4, only kFadeFlag* (bits 14, 15, 27)
-		float currentFade = 1.0f;         // +0x130
-		float snapRadius = 0.0f;          // +0x134: the bound radius at the placement snap (FUN_14147aa20)
-		std::int32_t lastVisible = 0;     // +0x13C: the fade frame counter it was last in view
-		float amountFade = 1.0f;          // +0x140: the last fadeAmount-driven fade
-		float metric = 0.0f;              // +0x144: the LOD metric (GetRenderPasses' LOD fades)
-		float previousMetric = 0.0f;      // +0x148
-		float blend = 0.0f;               // +0x14C: the LOD cross-fade
-		std::uint32_t levels = 0;         // +0x152 (levels: current, previous) | +0x153 (LOD type, transition) << 8
-		std::uint32_t generation = 0;     // the static row's it was seeded from
-		std::uint32_t verdict = 0;        // kFadeVerdict*: what its last update saw and decided
-		std::uint32_t frame = 0;          // the scene frame of its last update
+		std::uint32_t flags = 0;       // +0xF4, only kFadeFlag* (bits 14, 15, 27)
+		float currentFade = 1.0f;      // +0x130
+		float snapRadius = 0.0f;       // +0x134: the bound radius at the placement snap (FUN_14147aa20)
+		std::int32_t lastVisible = 0;  // +0x13C: the fade frame counter it was last in view
+		float amountFade = 1.0f;       // +0x140: the last fadeAmount-driven fade
+		float metric = 0.0f;           // +0x144: the LOD metric (GetRenderPasses' LOD fades)
+		float previousMetric = 0.0f;   // +0x148
+		float blend = 0.0f;            // +0x14C: the LOD cross-fade
+		std::uint32_t levels = 0;      // +0x152 (levels: current, previous) | +0x153 (LOD type, transition) << 8
+		std::uint32_t generation = 0;  // the static row's it was seeded from
+		std::uint32_t verdict = 0;     // kFadeVerdict*: what its last update saw and decided
+		std::uint32_t frame = 0;       // the scene frame of its last update
 	};
 	static_assert(sizeof(FadeNodeState) == 48);
-	inline constexpr std::uint32_t kFadeFlagFadedIn = 1u << 14;    // the fade's target: faded in
-	inline constexpr std::uint32_t kFadeFlagSettled = 1u << 15;    // OnVisible skips the update while fully faded in
+	inline constexpr std::uint32_t kFadeFlagFadedIn = 1u << 14;      // the fade's target: faded in
+	inline constexpr std::uint32_t kFadeFlagSettled = 1u << 15;      // OnVisible skips the update while fully faded in
 	inline constexpr std::uint32_t kFadeFlagLodInUpdate = 1u << 27;  // FUN_14147a160 runs the LOD step first
 	inline constexpr std::uint32_t kFadeFlagMask = kFadeFlagFadedIn | kFadeFlagSettled | kFadeFlagLodInUpdate;
-	inline constexpr std::uint32_t kFadeVerdictInView = 1u << 0;     // the bound was in the frustum
+	inline constexpr std::uint32_t kFadeVerdictInView = 1u << 0;      // the bound was in the frustum
 	inline constexpr std::uint32_t kFadeVerdictAboveLimit = 1u << 1;  // a tree above the height limit: no update
-	inline constexpr std::uint32_t kFadeVerdictServiced = 1u << 2;   // OnVisible ran
-	inline constexpr std::uint32_t kFadeVerdictDrawn = 1u << 3;      // OnVisible went on into the children
-	inline constexpr std::uint32_t kFadeVerdictAnimated = 1u << 4;   // the animation job's update ran first (FadeFrame anim*)
+	inline constexpr std::uint32_t kFadeVerdictServiced = 1u << 2;    // OnVisible ran
+	inline constexpr std::uint32_t kFadeVerdictDrawn = 1u << 3;       // OnVisible went on into the children
+	inline constexpr std::uint32_t kFadeVerdictAnimated = 1u << 4;    // the animation job's update ran first (FadeFrame anim*)
 
 	struct FadeRootStatic
 	{
-		FadeNodeState initial;            // the node as listed
-		float radius = 0.0f;              // +0xF0, the world bound's (the centre is the member record's fade node row)
-		float fadeAmount = 1.0f;          // NiAVObject +0x100
-		float nearDistance = 0.0f;        // +0x128
-		float farDistance = 0.0f;         // +0x12C
-		std::uint32_t object = ~0u;       // a member's object slot, whose record's fade node row is the root's centre
-		std::uint32_t bits = 0;           // kFadeRoot*, and +0x109 in bits 8-15
-		float lodScale = 1.0f;            // FUN_14147a430's distance scale: powf(e44, logf(+0xF0 / e40) * e54) with +0x109 bit 1
-		std::uint32_t generation = 0;     // new for every listing (and every input refresh): the state row is seeded again
+		FadeNodeState initial;         // the node as listed
+		float radius = 0.0f;           // +0xF0, the world bound's (the centre is the member record's fade node row)
+		float fadeAmount = 1.0f;       // NiAVObject +0x100
+		float nearDistance = 0.0f;     // +0x128
+		float farDistance = 0.0f;      // +0x12C
+		std::uint32_t object = ~0u;    // a member's object slot, whose record's fade node row is the root's centre
+		std::uint32_t bits = 0;        // kFadeRoot*, and +0x109 in bits 8-15
+		float lodScale = 1.0f;         // FUN_14147a430's distance scale: powf(e44, logf(+0xF0 / e40) * e54) with +0x109 bit 1
+		std::uint32_t generation = 0;  // new for every listing (and every input refresh): the state row is seeded again
 	};
 	static_assert(sizeof(FadeRootStatic) == 80);
-	inline constexpr std::uint32_t kFadeRootPlanMask = 0x3u;  // which OnVisible the node has
-	inline constexpr std::uint32_t kFadeRootFade = 0;         // BSFadeNode's
-	inline constexpr std::uint32_t kFadeRootLeaf = 1;         // BSLeafAnimNode's: the LOD step, then BSFadeNode's
-	inline constexpr std::uint32_t kFadeRootTree = 2;         // BSTreeNode's: the height test, BSLeafAnimNode's, the LOD fix-up
-	inline constexpr std::uint32_t kFadeRootOther = 3;        // another class's: not serviced
-	inline constexpr std::uint32_t kFadeRootBitsShift = 8;    // +0x109
-	inline constexpr std::uint32_t kFadeRootTreeLod = 1u << 16;     // a tree whose LOD switch selects past child 0 (+0x180's +0x12C)
+	inline constexpr std::uint32_t kFadeRootPlanMask = 0x3u;            // which OnVisible the node has
+	inline constexpr std::uint32_t kFadeRootFade = 0;                   // BSFadeNode's
+	inline constexpr std::uint32_t kFadeRootLeaf = 1;                   // BSLeafAnimNode's: the LOD step, then BSFadeNode's
+	inline constexpr std::uint32_t kFadeRootTree = 2;                   // BSTreeNode's: the height test, BSLeafAnimNode's, the LOD fix-up
+	inline constexpr std::uint32_t kFadeRootOther = 3;                  // another class's: not serviced
+	inline constexpr std::uint32_t kFadeRootBitsShift = 8;              // +0x109
+	inline constexpr std::uint32_t kFadeRootTreeLod = 1u << 16;         // a tree whose LOD switch selects past child 0 (+0x180's +0x12C)
 	inline constexpr std::uint32_t kFadeRootTreeThresholds = 1u << 17;  // a BSTreeNode: a type-4 node takes the tree LOD thresholds
 	// A listed root (every one FadeRoots.cpp lists, admitted by PrimaryCull or not), whose members follow FadeStateCS's state. The
 	// engine updates roots DCLF does not list; their members keep the distance test (kObjectFadeTest).
@@ -485,37 +485,37 @@ namespace DCLF
 	/** @brief The frame's inputs to the fade update: the main camera and the engine's fade globals (AE addresses). */
 	struct FadeFrame
 	{
-		float eye[3]{};                   // the main camera's world position
-		float lodAdjust = 0.0f;           // its +0x184; 0: no camera this frame, nothing is updated
-		std::int32_t counter = 0;         // the fade frame counter (0x142032e50)
-		float deltaTime = 0.0f;           // 0x142033084
-		std::uint32_t fadesOn = 0;        // 0x142032dfd: OnVisible updates fades
-		std::uint32_t lodUpdates = 0;     // 0x142032dfc
-		float fadeInTime = 0.0f;          // 0x142032e2c
-		float fadeOutTime = 0.0f;         // 0x142032e30
-		float fadeInAbove = 0.0f;         // 0x142032e34
-		float fadeOutBelow = 0.0f;        // 0x142032e38
-		float blendTime = 0.0f;           // 0x142032e3c
-		float distanceMult = 0.0f;        // 0x142032e48
-		float stepMax = 0.0f;             // 0x142032e4c
-		float amountTime = 0.0f;          // 0x14332a214
-		float metricScale = 0.0f;         // 0x141aa6300
-		float defaultScale = 0.0f;        // 0x141ad2840
-		float metricOverride = 0.0f;      // 0x14332a254
-		std::uint32_t overridden = 0;     // 0x14332a254 != 0x141769578 (also selects OnVisible's type-6 branch when clear)
-		float lodFar = 0.0f;              // 0x14332a22c
-		float lodNear = 0.0f;             // 0x14332a25c
-		float treeLodFar = 0.0f;          // 0x14332a238
-		float treeLodNear = 0.0f;         // 0x14332a268
-		float lodMinimum = 0.0f;          // 0x1433dcfa8
-		float one = 1.0f;                 // 0x141ad2870
-		float amountSnapAbove = 0.0f;     // 0x141ad2874
-		float amountSnapOffset = 0.0f;    // 0x141ad288c
-		float snapRadiusLimit = 0.0f;     // 0x141ad29f4
-		float treeHeightBase = 0.0f;      // BSTreeNode::OnVisible's height test: 0x14332a2f0
-		float treeHeightLimit = 0.0f;     // 0x142032fa0, +infinity while the test is off
+		float eye[3]{};                 // the main camera's world position
+		float lodAdjust = 0.0f;         // its +0x184; 0: no camera this frame, nothing is updated
+		std::int32_t counter = 0;       // the fade frame counter (0x142032e50)
+		float deltaTime = 0.0f;         // 0x142033084
+		std::uint32_t fadesOn = 0;      // 0x142032dfd: OnVisible updates fades
+		std::uint32_t lodUpdates = 0;   // 0x142032dfc
+		float fadeInTime = 0.0f;        // 0x142032e2c
+		float fadeOutTime = 0.0f;       // 0x142032e30
+		float fadeInAbove = 0.0f;       // 0x142032e34
+		float fadeOutBelow = 0.0f;      // 0x142032e38
+		float blendTime = 0.0f;         // 0x142032e3c
+		float distanceMult = 0.0f;      // 0x142032e48
+		float stepMax = 0.0f;           // 0x142032e4c
+		float amountTime = 0.0f;        // 0x14332a214
+		float metricScale = 0.0f;       // 0x141aa6300
+		float defaultScale = 0.0f;      // 0x141ad2840
+		float metricOverride = 0.0f;    // 0x14332a254
+		std::uint32_t overridden = 0;   // 0x14332a254 != 0x141769578 (also selects OnVisible's type-6 branch when clear)
+		float lodFar = 0.0f;            // 0x14332a22c
+		float lodNear = 0.0f;           // 0x14332a25c
+		float treeLodFar = 0.0f;        // 0x14332a238
+		float treeLodNear = 0.0f;       // 0x14332a268
+		float lodMinimum = 0.0f;        // 0x1433dcfa8
+		float one = 1.0f;               // 0x141ad2870
+		float amountSnapAbove = 0.0f;   // 0x141ad2874
+		float amountSnapOffset = 0.0f;  // 0x141ad288c
+		float snapRadiusLimit = 0.0f;   // 0x141ad29f4
+		float treeHeightBase = 0.0f;    // BSTreeNode::OnVisible's height test: 0x14332a2f0
+		float treeHeightLimit = 0.0f;   // 0x142032fa0, +infinity while the test is off
 		std::uint32_t padding = 0;
-		float divisors[16]{};             // 0x142032e00, per LOD type
+		float divisors[16]{};  // 0x142032e00, per LOD type
 		// Per-frame values (the invocation is prepared ahead of the commit): root slots, scene frame, parity log's first root.
 		std::uint32_t rootCount = 0, sceneFrame = 0, logBase = ~0u, reserved = 0;
 		// The animation job's fade update (FUN_1402cff60 -> FUN_14147a160) on a root its last cull missed: its inputs, for the roots
@@ -563,17 +563,17 @@ namespace DCLF
 		std::uint64_t materialRowAddress;
 		std::uint32_t objectIndex;
 		std::uint64_t vertexBufferAddress;  // GeometryBuffers::vertexAddress (0 without the render graph)
-		std::uint32_t vertexBufferSize;  // written; no draw reads it
+		std::uint32_t vertexBufferSize;     // written; no draw reads it
 		std::uint32_t vertexStride;
 		std::uint64_t streamBufferAddress;  // slot 1: a face shape's positions, else the slot 0 view again
-		std::uint32_t streamBufferSize;  // written; no draw reads it
+		std::uint32_t streamBufferSize;     // written; no draw reads it
 		std::uint32_t streamStride;
-		std::uint32_t blockPad;  // 0: the block addresses after it start at an even push word (BasicRHI: pushed addresses 8-aligned)
+		std::uint32_t blockPad;            // 0: the block addresses after it start at an even push word (BasicRHI: pushed addresses 8-aligned)
 		std::uint64_t psTechniqueAddress;  // PS b0: pipeline row + kPipelineRowTechniquePS
-		std::uint64_t vsGeometryAddress;  // VS b2: pipeline row + kPipelineRowGeometryVS
-		std::uint64_t psGeometryAddress;  // PS b2: pipeline row + kPipelineRowGeometryPS
+		std::uint64_t vsGeometryAddress;   // VS b2: pipeline row + kPipelineRowGeometryVS
+		std::uint64_t psGeometryAddress;   // PS b2: pipeline row + kPipelineRowGeometryPS
 		std::uint64_t permutationAddress;  // b4, both stages: pipeline row + kPipelineRowPermutation
-		std::uint64_t psMaterialAddress;  // PS b1: material row + kMaterialRowPS
+		std::uint64_t psMaterialAddress;   // PS b1: material row + kMaterialRowPS
 		std::uint64_t indexBufferAddress;  // GeometryBuffers::indexAddress
 		std::uint32_t indexBufferSize;
 		std::uint32_t indexFormat;  // DXGI_FORMAT_R16_UINT

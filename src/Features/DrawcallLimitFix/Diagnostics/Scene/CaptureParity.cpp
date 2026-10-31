@@ -3,12 +3,12 @@
 
 #include "CaptureParity.h"
 
-#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
-#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Engine/SkinPartitions.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
-#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawnLocalShadows.h"
 
 #include <algorithm>
@@ -17,11 +17,12 @@
 #include "Deferred.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
-#include "Features/DrawcallLimitFix/Integrations/SubsurfaceScattering/SubsurfaceScattering.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Shading/MaterialSources.h"
 #include "Features/DrawcallLimitFix/Core/Shading/MaterialWrites.h"
+#include "Features/DrawcallLimitFix/Integrations/SubsurfaceScattering/SubsurfaceScattering.h"
+#include "Features/DrawcallLimitFix/Integrations/VanillaFresnel/VanillaFresnel.h"
 #include "ShaderCache.h"
 #include "State.h"
 
@@ -61,13 +62,13 @@ namespace DCLF
 			PerDrawBits bits;
 			if (a_tables.objects[a_object].flags & kObjectSunTest) {
 				bits.pass |= kShadowBits;
-				bits.pixel |= kShadowBits & ~0x1c0u;  // the pixel stage drops the count
+				bits.pixel |= kShadowBits & ~0x1c0u;    // the pixel stage drops the count
 				bits.vertex |= kShadowBits & 0x48007u;  // DefShadow (VertexDescriptorFromPass)
 			}
 			// The engine's current fade node (a layer's is its layer property's).
 			const auto* geometry = a_object < a_tables.objectGeometry.size() ? a_tables.objectGeometry[a_object] : nullptr;
 			const RE::BSShaderProperty* fadeProperty = !geometry ? nullptr : a_tables.IsLayer(a_object) ? LayerPropertyOf(*geometry) :
-			                                                                                            geometry->GetGeometryRuntimeData().shaderProperty.get();
+			                                                                                              geometry->GetGeometryRuntimeData().shaderProperty.get();
 			if (geometry && LodFadesApply(LodFadeNodeOf(fadeProperty))) {
 				if (a_pass & 0x200u) {
 					bits.pass |= 0x200u;
@@ -458,10 +459,11 @@ namespace DCLF
 		const bool face = technique == 4 || technique == 5;
 		const std::uint32_t lightingExtraBits = static_cast<std::uint32_t>(Extra::InWorld) | static_cast<std::uint32_t>(Extra::IsReflections) |
 		                                        (face ? static_cast<std::uint32_t>(Extra::IsBeastRace) : 0u) |
-		                                        static_cast<std::uint32_t>(Extra::SuppressExternalEmittance) | static_cast<std::uint32_t>(Extra::AdditiveLighting);
+		                                        static_cast<std::uint32_t>(Extra::SuppressExternalEmittance) | static_cast<std::uint32_t>(Extra::AdditiveLighting) | static_cast<std::uint32_t>(Extra::IsEye);
 		const std::uint32_t extra = (expected.extraShaderDescriptor & lightingExtraBits) |
 		                            ((object.flags & kObjectSuppressExternalEmittance) ? static_cast<std::uint32_t>(Extra::SuppressExternalEmittance) : 0u) |
-		                            (face && (object.flags & Integrations::SubsurfaceScattering::kObjectBeastRace) ? static_cast<std::uint32_t>(Extra::IsBeastRace) : 0u);
+		                            (face && (object.flags & Integrations::SubsurfaceScattering::kObjectBeastRace) ? static_cast<std::uint32_t>(Extra::IsBeastRace) : 0u) |
+		                            ((object.flags & Integrations::VanillaFresnel::kObjectEye) ? static_cast<std::uint32_t>(Extra::IsEye) : 0u);
 		// Excluded: hair's ProjectedUV bit (DCLF drops it: HairProjection) and PerDrawBits.
 		const std::uint32_t hairProjection = HairProjection(native.VertexShaderDescriptor) ? kPassProjectedUV : 0u;
 		const PerDrawBits perDraw = PerDrawBitsOf(tables, a_objectIndex, tables.pipelines[object.pipelineIndex].passDescriptor);
@@ -666,19 +668,11 @@ namespace DCLF
 		const bool moved = drawnKnown && (bound.center.x != drawn.bound[0] || bound.center.y != drawn.bound[1] || bound.center.z != drawn.bound[2] || bound.radius != drawn.bound[3]);
 		// Its channels reassigned since (the lights in view changed): the readback's bits name other lights than the native pass's.
 		const bool reassigned = drawnKnown && drawn.channels != Diagnostics::ChannelLights();
-		lightData.Compare(geometry, static_cast<std::uint32_t>(index), tables, drawnKnown ? &drawnWords : nullptr, moved, reassigned,
-			[](void* a_owner, const RE::BSGeometry* a_note, std::string a_message) {
-				static_cast<CaptureParity*>(a_owner)->NoteMismatch(fmt::format("{} {}", Describe(a_note), a_message));
-			},
-			this);
+		lightData.Compare(geometry, static_cast<std::uint32_t>(index), tables, drawnKnown ? &drawnWords : nullptr, moved, reassigned, [](void* a_owner, const RE::BSGeometry* a_note, std::string a_message) { static_cast<CaptureParity*>(a_owner)->NoteMismatch(fmt::format("{} {}", Describe(a_note), a_message)); }, this);
 
 		CompareSkin(a_context, geometry, static_cast<std::uint32_t>(index));
 		// t80-t91: Integrations/TruePBR's.
-		truePBRTextures.Compare(a_context, geometry, static_cast<std::uint32_t>(index), tables,
-			[](void* a_owner, const RE::BSGeometry* a_note, std::string a_message) {
-				static_cast<CaptureParity*>(a_owner)->NoteMismatch(fmt::format("{} {}", Describe(a_note), a_message));
-			},
-			this);
+		truePBRTextures.Compare(a_context, geometry, static_cast<std::uint32_t>(index), tables, [](void* a_owner, const RE::BSGeometry* a_note, std::string a_message) { static_cast<CaptureParity*>(a_owner)->NoteMismatch(fmt::format("{} {}", Describe(a_note), a_message)); }, this);
 
 		CompareFeatureBindings(a_context);
 
@@ -1134,8 +1128,10 @@ namespace DCLF
 			logger::info("[DCLF]   {}", sample);
 
 		if (shadingSinceStart)
-			logger::info("[DCLF] capture parity: {} draws' shading changed since the frame's start sampled it (accepted: DCLF draws it a frame later); "
-						 "compared with the engine's now", shadingSinceStart);
+			logger::info(
+				"[DCLF] capture parity: {} draws' shading changed since the frame's start sampled it (accepted: DCLF draws it a frame later); "
+				"compared with the engine's now",
+				shadingSinceStart);
 		shadingSinceStart = 0;
 		nativeDraws = checkedDraws = mismatchedDraws = untrackedEligible = notInTables = nativeOnlyPasses = perDrawNormalised = materialMismatches = geometryMismatches = 0;
 		drawMismatches = drawsChecked = 0;

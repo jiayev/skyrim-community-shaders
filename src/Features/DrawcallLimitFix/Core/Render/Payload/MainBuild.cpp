@@ -1,10 +1,10 @@
 // The main build (MainBuild.h): both main segments' payloads from a publication's tables and lookups (pipeline and material rows,
 // the resident region, the object loop). Pure; run by the snapshot builder on DCLF's pool, one build at a time.
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF::Draws
@@ -156,7 +156,7 @@ namespace DCLF::Draws
 			       a_left.missingTexture == a_right.missingTexture && a_left.textures == a_right.textures && a_left.samplers == a_right.samplers &&
 			       a_left.features == a_right.features && a_left.tables == a_right.tables && a_left.blocksOk == a_right.blocksOk &&
 			       a_left.texcoordDword == a_right.texcoordDword && a_left.texcoordMask == a_right.texcoordMask &&
-		       a_left.frameVariables == a_right.frameVariables;
+			       a_left.frameVariables == a_right.frameVariables;
 		}
 
 		/**
@@ -166,7 +166,7 @@ namespace DCLF::Draws
 		 */
 		struct PairWork
 		{
-			bool deferred = false;  // a pool chunk's: rows written unmarked into prepared storage, marked by MergeWork
+			bool deferred = false;                                          // a pool chunk's: rows written unmarked into prepared storage, marked by MergeWork
 			std::vector<std::pair<std::uint32_t, std::uint64_t>> rowMarks;  // (material, its parts written): every row it wrote, its bytes moved or not
 			std::array<std::uint64_t, 8> keyMoved{};
 			std::uint64_t materialsWritten = 0, materialRowsWritten = 0;
@@ -774,8 +774,9 @@ namespace DCLF::Draws
 			// Colour alone would test EQUAL against depth nobody wrote: neither segment draws it.
 			static std::atomic<std::uint32_t> logged{ 0 };
 			if (colourBuilt && logged.fetch_add(1, std::memory_order_relaxed) < 8)
-				logger::info("[DCLF] main pair (material {}, pipeline {}): its colour variant is given what it reads, its depth variant not ({}): neither segment "
-							 "draws it <- SEGMENT SPLIT",
+				logger::info(
+					"[DCLF] main pair (material {}, pipeline {}): its colour variant is given what it reads, its depth variant not ({}): neither segment "
+					"draws it <- SEGMENT SPLIT",
 					m, p, kSkipNames[resolved.skipReason]);
 			return;
 		}
@@ -806,8 +807,9 @@ namespace DCLF::Draws
 		static std::atomic<std::uint32_t> logged{ 0 };
 		if (rows.pairStats.packingConflicts++ < 16 && logged.fetch_add(1, std::memory_order_relaxed) < 16) {
 			const auto first = PackingOf(a_first), second = PackingOf(a_second);
-			logger::warn("[DCLF] material slot {}: pipeline slots {} and {} pack its one row differently (technique bindings {}/{}, projected {}/{}, constant tables "
-						 "{:016x}/{:016x}): the row holds the last one's <- ROW PACKING CONFLICT",
+			logger::warn(
+				"[DCLF] material slot {}: pipeline slots {} and {} pack its one row differently (technique bindings {}/{}, projected {}/{}, constant tables "
+				"{:016x}/{:016x}): the row holds the last one's <- ROW PACKING CONFLICT",
 				m, a_first, a_second, first[0], second[0], first[1], second[1], first[2], second[2]);
 		}
 	}
@@ -1019,7 +1021,7 @@ namespace DCLF::Draws
 		const auto& object = tables.objects[o];
 		if (object.flags & kObjectNoBindings) {
 			// A cull-only candidate: bounds for culling, nothing to draw.
-			a_input = { 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, o, 0 };
+			a_input = { 0, 0, object.geometryIndex, InputFlags(object.flags, false), { MainMaskOf(tables, o) }, o, 0 };
 			SetFadeRow(a_input, objectRoots, tables, o);
 			return 0;
 		}
@@ -1034,7 +1036,7 @@ namespace DCLF::Draws
 		const std::uint32_t ordinal = decal ? tables.rangeOrdinal[o] : 0u;
 		const std::uint32_t partitions = PartitionsOf(tables, o);
 		const bool drawable = InSet(o) && blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok;
-		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
+		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, InputFlags(object.flags, drawable),
 			{ MainMaskOf(tables, o) }, o, ordinal, partitions, StreamGeometry(tables, o, in.addresses.streamBuffer) };
 		SetFadeRow(a_input, objectRoots, tables, o);
 		if (!drawable)
@@ -1089,7 +1091,7 @@ namespace DCLF::Draws
 				ReleaseOwner(pair.bindingSeen);
 				ReleaseOwner(pair.maskSeen);
 				// Out of its material's and its pipeline's lists by place: the last one takes it.
-				auto unlist = [&](auto& a_lists, std::uint32_t a_list, std::uint32_t a_at, std::uint32_t ResidentRegion::Pair::*a_place) {
+				auto unlist = [&](auto& a_lists, std::uint32_t a_list, std::uint32_t a_at, std::uint32_t ResidentRegion::Pair::* a_place) {
 					const auto list = a_lists.find(a_list);
 					if (list == a_lists.end())
 						return;
@@ -1182,7 +1184,7 @@ namespace DCLF::Draws
 	{
 		const auto& object = tables.objects[o];
 		// No kInputDrawable; stream and fade row stay none. The partitions word names the decal's slots, each a zero-count draw.
-		return { 0, 0, object.geometryIndex < tables.geometries.size() ? object.geometryIndex : 0u, object.flags, { MainMaskOf(tables, o) }, o, tables.rangeOrdinal[o],
+		return { 0, 0, object.geometryIndex < tables.geometries.size() ? object.geometryIndex : 0u, InputFlags(object.flags, false), { MainMaskOf(tables, o) }, o, tables.rangeOrdinal[o],
 			o < tables.skinPartitions.size() ? tables.skinPartitions[o] : 0u };
 	}
 
@@ -1880,11 +1882,11 @@ namespace DCLF::Draws
 		if (!body.objectState.empty()) {
 			for (std::uint32_t i = 0; i < inputs.size(); ++i)
 				if ((r.sideOf[i] & kSideMain) && inputs[i].objectIndex < body.objectState.size())
-					body.objectState[inputs[i].objectIndex] = r.drawsOf[i] == kRegionDecal ? kObjectStateDecal :
-					                                         r.drawsOf[i]                  ? kObjectStateDrawable :
-					                                         r.pairOf[i] == kNoPair        ? static_cast<std::uint8_t>(Skip::CandidateOnly) :
-					                                         !InSet(inputs[i].objectIndex) ? static_cast<std::uint8_t>(Skip::NotInSet) :
-					                                                                         static_cast<std::uint8_t>(Skip::Pipeline);
+					body.objectState[inputs[i].objectIndex] = r.drawsOf[i] == kRegionDecal  ? kObjectStateDecal :
+					                                          r.drawsOf[i]                  ? kObjectStateDrawable :
+					                                          r.pairOf[i] == kNoPair        ? static_cast<std::uint8_t>(Skip::CandidateOnly) :
+					                                          !InSet(inputs[i].objectIndex) ? static_cast<std::uint8_t>(Skip::NotInSet) :
+					                                                                          static_cast<std::uint8_t>(Skip::Pipeline);
 			for (std::uint32_t o = 0; o < r.candidate.size() && o < body.objectState.size(); ++o)
 				if (r.candidate[o] && body.objectState[o] == kObjectStateAbsent)
 					body.objectState[o] = static_cast<std::uint8_t>(Skip::CandidateOnly);
@@ -1940,7 +1942,7 @@ namespace DCLF::Draws
 		}
 		if (object.flags & kObjectNoBindings) {
 			// No material or pipeline entry: the depth segment submits it cull-only, with its bounds.
-			drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), 0 });
+			drawInputs.push_back({ 0, 0, object.geometryIndex, InputFlags(object.flags, false), { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), 0 });
 			SetFadeRow(drawInputs.back(), objectRoots, tables, o);
 			if (!region)
 				Skipped(Skip::CandidateOnly);
@@ -1964,7 +1966,7 @@ namespace DCLF::Draws
 		} decalSlot;
 		if (decalGroup) {
 			decalSlot.inputs = &drawInputs;
-			decalSlot.blank = { 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), tables.rangeOrdinal[o],
+			decalSlot.blank = { 0, 0, object.geometryIndex, InputFlags(object.flags, false), { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), tables.rangeOrdinal[o],
 				o < tables.skinPartitions.size() ? tables.skinPartitions[o] : 0u };
 		}
 		const auto& blocks = pipelineBlocks[object.pipelineIndex];
@@ -1981,7 +1983,7 @@ namespace DCLF::Draws
 		if (!InSet(o)) {
 			// Still cull-only: the depth segment publishes every candidate's verdict for the colour segment. A decal gets its blank.
 			if (!decalGroup) {
-				drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), 0 });
+				drawInputs.push_back({ 0, 0, object.geometryIndex, InputFlags(object.flags, false), { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), 0 });
 				SetFadeRow(drawInputs.back(), objectRoots, tables, o);
 			}
 			Skipped(Skip::NotInSet);
@@ -2014,7 +2016,7 @@ namespace DCLF::Draws
 			const std::uint32_t ordinal = tables.rangeOrdinal[o];
 			decalSlot.inputs = nullptr;  // drawn: the blank is not needed
 			// The partitions word names the slots (BuildDrawsCS draws a partition at each).
-			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex, object.flags | kInputDrawable, { MainMaskOf(tables, o) },
+			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex, InputFlags(object.flags, true), { MainMaskOf(tables, o) },
 				static_cast<std::uint32_t>(o), ordinal, partitions, streamIndex });
 			decalTemplates[decalGroup - 1][ordinal] = sequence;
 			++body.decalsDrawn;
@@ -2023,7 +2025,7 @@ namespace DCLF::Draws
 		} else {
 			if (o < body.objectState.size())
 				body.objectState[o] = kObjectStateDrawable;
-			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex, object.flags | kInputDrawable, { MainMaskOf(tables, o) },
+			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex, InputFlags(object.flags, true), { MainMaskOf(tables, o) },
 				static_cast<std::uint32_t>(o), 0, partitions, streamIndex });
 			SetFadeRow(drawInputs.back(), objectRoots, tables, o);
 			if (!partitions) {
@@ -2175,14 +2177,16 @@ namespace DCLF::Draws
 		std::string text;
 		if (s.builds || s.aheads) {
 			const double builds = static_cast<double>(std::max<std::uint64_t>(s.builds, 1)), aheads = static_cast<double>(std::max<std::uint64_t>(s.aheads, 1));
-			text = fmt::format("[DCLF] main pairs: {} builds; a build: {:.1f} pairs checked, {:.1f} resolved, {:.1f} entries rewritten, {:.1f} loop list slots; {} checked every pair, {} pipelines "
-							   "moved; Pairs.Resolve {:.3f} ms a build (max {:.3f}), {} on the pool in {} chunks; bundle {:.3f} ms, {} made; inputs {:.3f} ms; resyncs {} ({} on "
-							   "the pool); stages: {} aheads, {} overlapped, stream views {:.3f} ms, main {:.3f} ms, both {:.3f} ms, shadow {:.3f} ms, exclusions {:.3f} ms; "
-							   "parity {} checks, {} differ, packing {} checks, {} conflicts{}\n",
+			text = fmt::format(
+				"[DCLF] main pairs: {} builds; a build: {:.1f} pairs checked, {:.1f} resolved, {:.1f} entries rewritten, {:.1f} loop list slots; {} checked every pair, {} pipelines "
+				"moved; Pairs.Resolve {:.3f} ms a build (max {:.3f}), {} on the pool in {} chunks; bundle {:.3f} ms, {} made; inputs {:.3f} ms; resyncs {} ({} on "
+				"the pool); stages: {} aheads, {} overlapped, stream views {:.3f} ms, main {:.3f} ms, both {:.3f} ms, shadow {:.3f} ms, exclusions {:.3f} ms; "
+				"parity {} checks, {} differ, packing {} checks, {} conflicts{}\n",
 				s.builds, s.checked / builds, s.resolved / builds, s.entriesRewritten / builds, s.loopListed / builds, s.everyPair, s.pipelinesMoved, s.resolveMs / builds, s.resolveMaxMs,
 				s.fannedOut, s.chunks, s.bundleMs / builds, s.bundles, s.inputsMs / builds, s.resyncs, s.resyncsFannedOut, s.aheads, s.overlapped, s.streamsMs / aheads,
 				s.mainMs / aheads, s.stagesMs / aheads, s.shadowMs / aheads, s.exclusionsMs / aheads, s.parityChecks, s.parityMismatches, s.packingChecks,
-				s.packingConflicts, s.parityMismatches ? " <- PAIRS NARROWED" : s.packingConflicts ? " <- ROW PACKING CONFLICT" : "");
+				s.packingConflicts, s.parityMismatches ? " <- PAIRS NARROWED" : s.packingConflicts ? " <- ROW PACKING CONFLICT" :
+																									 "");
 		}
 		s = {};
 		return text;

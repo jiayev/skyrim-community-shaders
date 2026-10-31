@@ -379,10 +379,10 @@ namespace DCLF::Scene
 		Api::TableFamilyId fadeRootFamily;
 		Api::CoordinatorComponentId fadeRootComponent;
 
-		// The record word the root reference rides in: BindlessObject::recordFlags, bits 9-31 the root + 1 (RecordFlagsOf's Core bits stay
+		// The record word the root reference rides in: BindlessObject::recordFlags, bits 10-31 the root + 1 (RecordFlagsOf's Core bits stay
 		// below them).
 		constexpr std::uint32_t kFadeRootRecordWord = static_cast<std::uint32_t>(offsetof(BindlessObject, recordFlags) / 4);
-		static_assert(kRecordFadeRootShift == 9, "the fade roots' record reference is bits 9-31 of recordFlags");
+		static_assert(kRecordFadeRootShift == 10, "the fade roots' record reference is bits 10-31 of recordFlags");
 	}
 
 	Api::TableFamilyId FadeRootFamilyId()
@@ -487,7 +487,7 @@ namespace DCLF::Features::Fades
 	void RegisterScene(Api::InstallContext& a_context)
 	{
 		// The family: registered after TreeWind's trees, so the tables' report reads "trees kept a, fade roots kept b". The record's root
-		// reference is (root + 1) << 9 in recordFlags, none past 23 bits (RecordFlagsOf's cut-off); a row carries its generation, so no tag.
+		// reference is (root + 1) << 10 in recordFlags, none past 22 bits (RecordFlagsOf's cut-off); a row carries its generation, so no tag.
 		Scene::fadeRootFamily = a_context.RegisterTableFamily({ .name = "fade roots",
 			.make = &Scene::MakeFadeRoots,
 			.assign = &Scene::AssignFadeRoots,
@@ -503,7 +503,6 @@ namespace DCLF::Features::Fades
 			.rows = &Scene::FadeRootRows });
 		// The component, last of the components: every shared point (ResetSlotTables' resets, then the owners' hand-back) keeps its order.
 		Scene::fadeRootComponent = a_context.RegisterCoordinatorComponent(Scene::FadeRootComponent());
-		a_context.RegisterReportLines({ .name = "fade root owners", .point = Api::ReportPoint::SceneCoordinatorLastPass, .component = Scene::fadeRootComponent,
-			.componentText = &Scene::OwnerLines });
+		a_context.RegisterReportLines({ .name = "fade root owners", .point = Api::ReportPoint::SceneCoordinatorLastPass, .component = Scene::fadeRootComponent, .componentText = &Scene::OwnerLines });
 	}
 }

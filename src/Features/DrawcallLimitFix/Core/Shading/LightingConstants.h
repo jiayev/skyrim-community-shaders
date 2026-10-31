@@ -197,7 +197,7 @@ namespace DCLF
 		// Values native shaders read from their own constant buffers: the ancestor value (Api::AncestorValueContribution::recordWord 0:
 		// Light Limit Fix's room index, PS b3; its shadow mask is the draw's object word) and the alpha test reference (PS b11).
 		std::int32_t ancestorValue;
-		// kRecord* bits; bits 9-31 the fade root slot + 1 (0: none), by which the pixel stage reads FadeStateCS's fade (DCLFAlphaFade).
+		// kRecord* bits; bits 10-31 the fade root slot + 1 (0: none), by which the pixel stage reads FadeStateCS's fade (DCLFAlphaFade).
 		std::uint32_t recordFlags;
 		float alphaTestRef;
 		// The LOD fades the pass applies (kLodFade*), from LodFadeFrame, while the placement's fade node has them apply
@@ -301,10 +301,10 @@ namespace DCLF
 	inline constexpr std::uint32_t kRecordDecalNudge = 1u << 8;
 	/** @brief The kRecordDecalNudge bit of an object drawn with a_key. */
 	inline constexpr std::uint32_t DecalRecordFlagsOf(const PipelineKey& a_key) { return (a_key.rasterFlags & kRasterDecalNudge) ? kRecordDecalNudge : 0u; }
-	inline constexpr std::uint32_t kRecordFadeRootShift = 9;
+	inline constexpr std::uint32_t kRecordFadeRootShift = 10;
 	/**
-	 * @brief BindlessObject::recordFlags of an object: its flags and its fade root slot + 1 in bits 9-31 (the record's own: the root
-	 * states' family, Api::TableFamily::recordShift, writes it as BuildObjectRecord's families do, with the same 23-bit cut-off).
+	 * @brief BindlessObject::recordFlags of an object: its flags and its fade root slot + 1 in bits 10-31 (the record's own: the root
+	 * states' family, Api::TableFamily::recordShift, writes it as BuildObjectRecord's families do, with the same 22-bit cut-off).
 	 */
 	inline std::uint32_t RecordFlagsOf(std::uint32_t a_objectFlags, std::uint32_t a_fadeRoot)
 	{

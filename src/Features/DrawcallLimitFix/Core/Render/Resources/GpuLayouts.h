@@ -249,6 +249,12 @@ namespace DCLF::Draws
 	static_assert(sizeof(DrawInput) == 64);
 	// An input with a bindings record: the depth segment culls every candidate but records only those it may draw.
 	constexpr std::uint32_t kInputDrawable = 1u << 16;
+	// Object bit 16 describes an eye on the CPU. In a draw input the same bit
+	// means this epoch actually has a pipeline and bindings for the draw.
+	constexpr std::uint32_t InputFlags(std::uint32_t a_objectFlags, bool a_drawable)
+	{
+		return (a_objectFlags & ~kInputDrawable) | (a_drawable ? kInputDrawable : 0u);
+	}
 	// DrawInput::ViewWords::mask and BuildDrawsLatch::viewBits: the view types an object takes part in. BuildDrawsCS.hlsl.
 	constexpr std::uint32_t kViewMainCull = 1u << 0;     // a main-camera visibility candidate (the depth segment's inputs)
 	constexpr std::uint32_t kViewMain = 1u << 1;         // drawn by the main camera (the set's main phase)
@@ -347,7 +353,7 @@ namespace DCLF::Draws
 	// BuildDrawsLatch, so the recorded dispatch never changes with the frame.
 	struct BuildDrawsConstants
 	{
-		std::uint32_t latchIndex;  // the latch block's SRV
+		std::uint32_t latchIndex;      // the latch block's SRV
 		std::uint32_t sequencesIndex;  // BuildDrawsCS's ShadowViews: the views' table (ShadowBuildView rows) instead
 		std::uint32_t countIndex;      // ShadowViews: the table's rows instead
 		// The strides of the rows an input's y names (BuildDrawsCS.hlsl, RowsOf): the material rows (y's low 20 bits) and, below,
@@ -517,11 +523,11 @@ namespace DCLF::Draws
 	 */
 	struct ShadowBuildView
 	{
-		std::uint32_t latchAt = 0;          // the view slot's BuildDrawsLatch, bytes into the frame slot's region
-		std::uint32_t sequencesIndex = 0;   // the slot's sequences, count words and bucket counts (UAVs)
+		std::uint32_t latchAt = 0;         // the view slot's BuildDrawsLatch, bytes into the frame slot's region
+		std::uint32_t sequencesIndex = 0;  // the slot's sequences, count words and bucket counts (UAVs)
 		std::uint32_t countIndex = 0;
 		std::uint32_t bucketCountsIndex = 0;
-		std::uint32_t sequenceDraws = 0;    // the slot's sequences, in draws (BuildDrawsConstants::phaseTwoBase)
+		std::uint32_t sequenceDraws = 0;  // the slot's sequences, in draws (BuildDrawsConstants::phaseTwoBase)
 	};
 	static_assert(sizeof(ShadowBuildView) == 20);
 

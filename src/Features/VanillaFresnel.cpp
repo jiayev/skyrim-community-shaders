@@ -54,14 +54,8 @@ namespace
 			return false;
 		}
 
-		const auto feature = lightingProperty->material->GetFeature();
-		if (feature == RE::BSShaderMaterial::Feature::kEye) {
-			return true;
-		}
-
-		return feature == RE::BSShaderMaterial::Feature::kEnvironmentMap &&
-		       a_pass->geometry &&
-		       ContainsEye(a_pass->geometry->name.c_str());
+		return VanillaFresnel::IsEyeMaterial(lightingProperty->material->GetFeature(),
+			a_pass->geometry ? a_pass->geometry->name.c_str() : "");
 	}
 
 	void UpdateEyePermutation(const RE::BSLightingShader* a_shader, const RE::BSRenderPass* a_pass)
@@ -83,6 +77,12 @@ namespace
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+}
+
+bool VanillaFresnel::IsEyeMaterial(RE::BSShaderMaterial::Feature a_feature, std::string_view a_geometryName)
+{
+	return a_feature == RE::BSShaderMaterial::Feature::kEye ||
+	       (a_feature == RE::BSShaderMaterial::Feature::kEnvironmentMap && ContainsEye(a_geometryName));
 }
 
 void VanillaFresnel::PostPostLoad()

@@ -11,44 +11,44 @@
 #include <fstream>
 #include <rhi_interop_vulkan.h>
 
-#include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/EngineStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/EngineStates.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
-#include "RenderGraph/RenderGraphRuntime.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/SpirvReflection.h"
-#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
-#include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
-#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Lookups.h"
+#include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Shading/VertexInput.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 #include "ShaderCache.h"
 
 #include <Tracy/Tracy.hpp>
 
-#include <OpenRenderGraph/GraphHost.h>
 #include <ORGModuleServices/PipelineRegistry.h>
 #include <ORGModuleServices/PipelineService.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <rhi_helpers.h>
 
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+#include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 #include <algorithm>
 #include <atomic>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
-#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
-#include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 
 namespace DCLF
 {
@@ -271,12 +271,14 @@ namespace DCLF
 		/*
 		 * No DCLF pipeline has input assembly: every vertex stage pulls its attributes (DCLF_PULLED_VERTICES, DCLF_PULLED), so the
 		 * pipelines have no vertex input state, which an execution set's pipelines would otherwise have to share. A key's vertex layout
-		 * must still hold every attribute its vertex stage reads (ShaderPrograms::Program::vertexAttributes), as the input layout the
-		 * engine builds for it had to: else the build fails and its objects stay native.
+		 * must hold the required inputs of its vertex stage (ShaderPrograms::Program::vertexAttributes).
 		 */
 		inline void CheckVertexAttributes(std::uint32_t a_attributes, std::uint64_t a_vertexLayout)
 		{
-			if (const std::uint32_t missing = a_attributes & ~VertexLayoutAttributes(a_vertexLayout))
+			// Some skinned eye meshes omit TEXCOORD2. The native input assembler supplies
+			// zero for that scalar; DCLFPullFloat does the same without reading a stream.
+			constexpr std::uint32_t optionalEyeParameter = 1u << 8;
+			if (const std::uint32_t missing = a_attributes & ~optionalEyeParameter & ~VertexLayoutAttributes(a_vertexLayout))
 				throw std::runtime_error(fmt::format("vertex attributes {:03X} (BSGraphics::Vertex::Attribute bits) are not in the geometry's layout {:016X}", missing,
 					a_vertexLayout));
 		}
@@ -581,7 +583,7 @@ namespace DCLF
 		};
 		// Render thread: what it has asked of the lane already, so it asks each once.
 		std::array<bool, kDrawFamilyLanes> familyAsked{};  // by draw family (RequestFamily)
-		bool refractionAsked = false;  // the refraction pipeline (RequestRefraction)
+		bool refractionAsked = false;                      // the refraction pipeline (RequestRefraction)
 		ankerl::unordered_dense::set<ForwardPipelineKey, ForwardPipelineKeyHash> forwardAsked;
 		rhi::PipelineLayoutHandle ShadowLayout() const { return shadowLayout->GetHandle(); }
 		// The shadow views' plain indirect draw: a DrawSequence's tail as an indexed draw from the index pool (StoreShadowSequence).
@@ -910,9 +912,9 @@ namespace DCLF
 		 */
 		struct Lane : PipelineFamily<PipelineKey, PipelineKeyHash, Entry, ankerl::unordered_dense::map<PipelineKey, std::uint32_t, PipelineKeyHash>>
 		{
-			std::shared_ptr<const FrameInput> input;  // the newest taken
+			std::shared_ptr<const FrameInput> input;                  // the newest taken
 			ankerl::unordered_dense::set<std::uint32_t> statesAsked;  // engine state bits asked of the render thread
-			ShaderPrograms::Finished finishedPrograms;               // UpdateLane's, per pass (every kind's)
+			ShaderPrograms::Finished finishedPrograms;                // UpdateLane's, per pass (every kind's)
 			Versions<SetVersion> versions;
 			std::vector<org::services::PipelinePayload> setPipelines;  // index -> Built, admitted (not necessarily published)
 			// By index: setPipelines' registry slot (AdoptLivePipelines takes what a reload swapped into it).
@@ -921,7 +923,7 @@ namespace DCLF
 			// Z-prepass groups: each pipeline's (numbered as first admitted), and each group's first pipeline.
 			std::vector<std::uint32_t> zGroupOf, zGroupFirst;
 			ankerl::unordered_dense::map<ZPipelineKey, std::uint32_t, ZPipelineKeyHash> zGroups;
-			std::vector<std::array<RegisterUsage, kVariantCount>> usage;  // by set index, then variant
+			std::vector<std::array<RegisterUsage, kVariantCount>> usage;        // by set index, then variant
 			std::vector<std::shared_ptr<const ConstantTables>> constantTables;  // by set index
 			// State classes (Built::stateClass), numbered as first admitted: each pipeline's word (by set index: class << kSetClassShift |
 			// index in the class), each class's members (set indices, in admission order) and each key's class.
@@ -977,10 +979,10 @@ namespace DCLF
 			/** @brief The refraction pipeline, rebuilt with each new main set (RecreateMainSet) or new normals format / write mask. */
 			struct Refraction
 			{
-				bool asked = false;          // RequestRefraction has arrived
-				bool requested = false;      // this build is queued
-				bool failed = false;         // this build failed, or the program did
-				bool programFailed = false;  // for good
+				bool asked = false;                        // RequestRefraction has arrived
+				bool requested = false;                    // this build is queued
+				bool failed = false;                       // this build failed, or the program did
+				bool programFailed = false;                // for good
 				DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;  // the format requested or built for
 				org::services::PipelinePayload built;
 				std::shared_ptr<org::services::LivePipelineSlot> slot;  // built's (AdoptLivePipelines)
@@ -1176,8 +1178,17 @@ namespace DCLF
 			{
 				const rhi::SubobjPrimitiveTopology topology{ rhi::PrimitiveTopology::TriangleList };
 				const rhi::PipelineStreamItem items[] = {
-					rhi::Make(layout), rhi::Make(vertex), rhi::Make(raster), rhi::Make(depth), rhi::Make(blend), rhi::Make(targets), rhi::Make(depthFormat),
-					rhi::Make(topology), rhi::Make(input), rhi::Make(flags), rhi::Make(pixel),
+					rhi::Make(layout),
+					rhi::Make(vertex),
+					rhi::Make(raster),
+					rhi::Make(depth),
+					rhi::Make(blend),
+					rhi::Make(targets),
+					rhi::Make(depthFormat),
+					rhi::Make(topology),
+					rhi::Make(input),
+					rhi::Make(flags),
+					rhi::Make(pixel),
 				};
 				// DXVK_PIPELINE_STATS: the pipeline's statistics are logged under its name.
 				const std::string label = fmt::format("DCLF {}", a_what);

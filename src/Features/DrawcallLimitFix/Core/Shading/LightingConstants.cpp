@@ -2,12 +2,12 @@
 // (BuildObjectRecord, SampleShading) and the constant-group packing.
 
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
-#include "Features/DrawcallLimitFix/Core/Shading/GeometryPort.h"
-#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Shading/GeometryPort.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Globals.h"
 #include "ShaderCache.h"
 
@@ -20,14 +20,14 @@ namespace DCLF
 	namespace
 	{
 		// The land blend's globals (SampleExtrasFrame): BSShaderManager::State's (AE 0x142033060, SE 0x141e0ded0) and AE's 0.2.
-		constexpr Engine::Offset kStateTimer{ { 390953 }, { 513213 } };             // State+0x20: timerValues[0]
-		constexpr Engine::Offset kStateLandFadeSeconds{ { 390972 }, { 513232 } };   // State+0x98: landLOFadeSeconds
-		constexpr Engine::Offset kStateOldGridCenterX{ { 390976 }, { 513236 } };    // State+0xa8: oldGridArrayCenter
+		constexpr Engine::Offset kStateTimer{ { 390953 }, { 513213 } };            // State+0x20: timerValues[0]
+		constexpr Engine::Offset kStateLandFadeSeconds{ { 390972 }, { 513232 } };  // State+0x98: landLOFadeSeconds
+		constexpr Engine::Offset kStateOldGridCenterX{ { 390976 }, { 513236 } };   // State+0xa8: oldGridArrayCenter
 		constexpr Engine::Offset kStateOldGridCenterY{ { 390977 }, { 513237 } };
-		constexpr Engine::Offset kStateGridCenterX{ { 390978 }, { 513238 } };       // State+0xb0: gridArrayCenter
+		constexpr Engine::Offset kStateGridCenterX{ { 390978 }, { 513238 } };  // State+0xb0: gridArrayCenter
 		constexpr Engine::Offset kStateGridCenterY{ { 390979 }, { 513238, 0x4 } };
-		constexpr Engine::Offset kStateGridLerpStart{ { 390980 }, { 513239 } };     // State+0xb8: gridArrayLerpStart
-		constexpr Engine::Offset kLandFadeFraction{ { 470010 }, {} };               // float 0.2, AE only (SE's code divides by 5)
+		constexpr Engine::Offset kStateGridLerpStart{ { 390980 }, { 513239 } };  // State+0xb8: gridArrayLerpStart
+		constexpr Engine::Offset kLandFadeFraction{ { 470010 }, {} };            // float 0.2, AE only (SE's code divides by 5)
 
 		void StoreRelative(float* a_out, const float (&a_world)[12], const RE::NiPoint3& a_posAdjust)
 		{
@@ -146,7 +146,8 @@ namespace DCLF
 		// by 0.2 (the constant at 0x141ad2840) over the fade seconds, SE (FUN_1412f4e20) divides by the fade seconds times 5.
 		const float elapsed = at(kStateTimer) - at(kStateGridLerpStart);
 		float t = REL::Module::IsSE() ? elapsed / (at(kStateLandFadeSeconds) * 5.0f) : elapsed * (at(kLandFadeFraction) / at(kStateLandFadeSeconds));
-		t = t <= 0.0f ? 0.0f : 1.0f <= t ? 1.0f : t;
+		t = t <= 0.0f ? 0.0f : 1.0f <= t ? 1.0f :
+		                                   t;
 		frame.landBlend[0] = (at(kStateGridCenterX) - at(kStateOldGridCenterX)) * t + at(kStateOldGridCenterX);
 		frame.landBlend[1] = (at(kStateGridCenterY) - at(kStateOldGridCenterY)) * t + at(kStateOldGridCenterY);
 		// The ProjectedUV projection (SetupGeometry's ProjectedUV block): a fixed rotation about Z at posAdjust, through the engine's
@@ -363,7 +364,7 @@ namespace DCLF
 	{
 		const auto& object = a_tables.objects[a_objectIndex];
 		a_out.ancestorValue = a_tables.ancestorValue[a_objectIndex].value;
-		// The fade root's reference (bits 9-31) is the root states' family's, ORed in with the families' words below.
+		// The fade root's reference (bits 10-31) is the root states' family's, ORed in with the families' words below.
 		a_out.recordFlags = RecordFlagsOf(object.flags, kNoFadeRoot);
 		// The same reference the native draw's AlphaTestRefBuffer carries: threshold / 255, and 0 when the
 		// object is not alpha tested (the shader's test is then compiled out anyway).
@@ -373,7 +374,7 @@ namespace DCLF
 		// TreeWind's wind, DCLFTreeWind).
 		std::fill(std::begin(a_out.featureBlock), std::end(a_out.featureBlock), 0u);
 		// The table families' references the record carries, ORed into their words after recordFlags (Api::TableFamily::recordWord:
-		// Features/TreeWind's tree slot and listing generation, never 0, for its wind: DCLFTreeWind; the fade roots' (root + 1) << 9 in
+		// Features/TreeWind's tree slot and listing generation, never 0, for its wind: DCLFTreeWind; the fade roots' (root + 1) << 10 in
 		// recordFlags, by which the pixel stage reads FadeStateCS's fade).
 		for (const auto& family : a_tables.families.All())
 			family.WriteRecordWords(reinterpret_cast<std::uint32_t*>(&a_out), a_objectIndex);
@@ -410,7 +411,7 @@ namespace DCLF
 		}
 		const auto& a_property = static_cast<const RE::BSLightingShaderProperty&>(a_base);
 		// BSLightingShader::SetupGeometry (engine notes): which components it writes depends on the pass.
-		const bool specular = (a_pass & 0x200u) != 0;              // the pass descriptor's Specular
+		const bool specular = (a_pass & 0x200u) != 0;  // the pass descriptor's Specular
 		// MaterialData.x (property +0x104, envmapLODFade): SetupGeometry's cases 1, 0xb and 0x10 (Envmap, MultilayerParallax, Eye;
 		// 1414dd040), which Lighting.hlsl's environment map reads under ENVMAP, MULTI_LAYER_PARALLAX and EYE.
 		const std::uint32_t technique = (a_pass >> 24) & 0x3f;

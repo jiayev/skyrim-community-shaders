@@ -440,13 +440,13 @@ struct DCLFFadeRootStatic
 };
 // What GetRenderPasses and SetupGeometry put on a pass's alpha (MaterialData.z): the property's alpha times its fade node's
 // currentFade, and for a LOD cross-fade's copy (the draw's object word bit 30: BuildDrawsCS, kObjectCrossfadeCopy) the
-// cross-fade factor (+0x14C) instead. T1c: from the object's fade root (DCLFRecordFlags bits 9-31, its slot + 1) in
+// cross-fade factor (+0x14C) instead. T1c: from the object's fade root (DCLFRecordFlags bits 10-31, its slot + 1) in
 // FadeStateCS's state, else (a generation it has not updated yet) its seed, else its row's; 1 without a root, or with a row the frame
 // does not hold (generation 0: none bound, or freed).
 float DCLFAlphaFadeFrom(StructuredBuffer<DCLFObjectRecord> a_objects, StructuredBuffer<DCLFFadeRootStatic> a_roots, StructuredBuffer<DCLFFadeNodeState> a_states,
 	StructuredBuffer<DCLFFadeRootStatic> a_seeds, uint a_object, bool a_copy)
 {
-	const uint root = a_objects[a_object].DCLFRecordFlags >> 9;
+	const uint root = a_objects[a_object].DCLFRecordFlags >> 10;
 	if (root == 0)
 		return 1;
 	const DCLFFadeRootStatic row = a_roots[root - 1];

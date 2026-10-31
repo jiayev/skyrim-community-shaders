@@ -51,6 +51,7 @@
 #include "Features/DrawcallLimitFix/Integrations/TerrainBlending/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Integrations/TerrainShadows/TerrainShadows.h"
 #include "Features/DrawcallLimitFix/Integrations/TruePBR/TruePBRIntegration.h"
+#include "Features/DrawcallLimitFix/Integrations/VanillaFresnel/VanillaFresnel.h"
 #include "Features/DrawcallLimitFix/Integrations/VolumetricShadows/VolumetricShadows.h"
 #include "Features/DrawcallLimitFix/Integrations/WaterEffects/WaterEffects.h"
 
@@ -262,6 +263,7 @@ namespace DCLF::Features
 		// Features/Fades declares them. The Lighting object flags' (Api::LightingObjectFlag::objectFlag): Integrations/SubsurfaceScattering's.
 		constexpr std::uint32_t kObjectFlags[] = {
 			Integrations::SubsurfaceScattering::kObjectBeastRace,
+			Integrations::VanillaFresnel::kObjectEye,
 			TreeWind::kObjectTreeAnim,
 			kObjectFadeTest,
 			kObjectHeightTest,
@@ -272,6 +274,7 @@ namespace DCLF::Features
 		// another's.
 		constexpr std::uint32_t kRecordFlags[] = {
 			Integrations::SubsurfaceScattering::kRecordBeastRace,
+			Integrations::VanillaFresnel::kRecordEye,
 		};
 		constexpr std::uint32_t kCoreRecordFlags = kRecordAlphaBlended | kRecordRefraction | kRecordRefractionFalloff | kRecordRefractionClamp |
 		                                           kRecordRefractionNoNormals | kRecordRefractionVertexColors | kRecordRefractionTwoSided | kRecordDecalNudge |
@@ -416,6 +419,7 @@ namespace DCLF::Features
 	static_assert(ViewBitsValid(kRecordFlags, std::size(kRecordFlags), kCoreRecordFlags, 0xFFFFFFFFu),
 		"a Lighting object flag's record bit is not one bit, or is Core's or another's");
 	// Integrations/SubsurfaceScattering's: DCLFRecordFlags bit 0, which Lighting.hlsl reads as IsBeastRace (DCLFObjects.hlsli).
+	static_assert(Integrations::VanillaFresnel::kRecordEye == 1u << 9, "Vanilla Fresnel eye record bit must match Lighting.hlsl");
 	static_assert(Integrations::SubsurfaceScattering::kRecordBeastRace == 1u << 0, "Subsurface Scattering's record bit is not Lighting.hlsl's DCLFRecordFlags bit 0");
 	static_assert(PerDrawRegistersValid(kPerDrawPSRegisters, std::size(kPerDrawPSRegisters), Extensions::kCorePerDrawPS),
 		"a per-draw buffer's register is past b13, Core's or another per-draw buffer's");

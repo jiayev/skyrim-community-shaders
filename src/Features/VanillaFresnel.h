@@ -24,6 +24,8 @@ struct VanillaFresnel : public Feature
 	virtual inline std::string_view GetShaderDefineName() override { return "VANILLA_FRESNEL"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 	virtual void PostPostLoad() override;
+	/** @brief Eye classification shared by native draws and DCLF's captured geometry. */
+	static bool IsEyeMaterial(RE::BSShaderMaterial::Feature a_feature, std::string_view a_geometryName);
 
 	// Settings & UI
 	virtual void RestoreDefaultSettings() override;

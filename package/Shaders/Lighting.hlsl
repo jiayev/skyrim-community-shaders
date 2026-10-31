@@ -2641,7 +2641,11 @@ PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
 
 #			if defined(VANILLA_FRESNEL)
 	const bool enableVanillaFresnel = SharedData::vanillaFresnelSettings.Enable;
+#				if defined(DCLF_BINDLESS)
+	const bool isEyeMaterial = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & (1u << 9)) != 0;
+#				else
 	const bool isEyeMaterial = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsEye) != 0;
+#				endif
 	material.F0 = enableVanillaFresnel ? SharedData::vanillaFresnelSettings.MinF0 : 0.0;
 	if (hasSpecular && enableVanillaFresnel && !isEyeMaterial) {
 		material.F0 = saturate(glossiness * SpecularColor.xyz / Math::PI);
