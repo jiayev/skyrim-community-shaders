@@ -16,6 +16,7 @@
 #include "Upscaling/Streamline.h"
 #include "Utils/Game.h"
 #include "Utils/ImportCallSites.h"
+#include "Utils/SwitchFile.h"
 #include "Utils/UI.h"
 #include "Utils/VersionedRelocation.h"
 #include <Windows.h>
@@ -1630,10 +1631,7 @@ bool Upscaling::IsWindowUnusable()
 
 	// CS_UPSCALE_UNFOCUSED=1: unattended test runs on another monitor keep upscaling (and HDR, frame generation) while another
 	// process has the foreground; minimized and size/move still suspend.
-	static const bool s_ignoreFocus = [] {
-		char v[2] = {};
-		return GetEnvironmentVariableA("CS_UPSCALE_UNFOCUSED", v, sizeof(v)) && v[0] == '1';
-	}();
+	static const bool s_ignoreFocus = Util::SwitchFile::Enabled("CS_UPSCALE_UNFOCUSED");
 
 	return IsWindowMinimized() ||
 	       (!s_ignoreFocus && s_windowUnfocused.load(std::memory_order_relaxed)) ||

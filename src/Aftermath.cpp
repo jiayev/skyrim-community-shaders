@@ -1,4 +1,13 @@
 #include "Aftermath.h"
+#include "Utils/SwitchFile.h"
+
+bool Aftermath::WantsCrashAnalysis()
+{
+	// DXVK's device fault reports and checkpoints also work without the Aftermath SDK.
+	// Opt-in: hang mode serialises concurrent command recording.
+	static const bool requested = Util::SwitchFile::Enabled("CS_GPU_CRASH_ANALYSIS");
+	return requested;
+}
 
 #ifdef CS_ENABLE_AFTERMATH
 
@@ -237,18 +246,6 @@ bool Aftermath::IsEnabled()
 	return g_enabled.load(std::memory_order_acquire);
 }
 
-bool Aftermath::WantsCrashAnalysis()
-{
-	// Deliberately not gated on g_enabled: on AMD the SDK never arms, and that is exactly the
-	// case where the markers matter most, because Radeon GPU Detective is the tool that will read
-	// them. Opt-in: DXVK's hang mode serialises concurrent command recording.
-	static const bool requested = [] {
-		char buf[8] = {};
-		return ::GetEnvironmentVariableA("CS_GPU_CRASH_ANALYSIS", buf, sizeof(buf)) && buf[0] == '1';
-	}();
-	return requested;
-}
-
 const void* Aftermath::RegisterOrgCheckpoint(void*, const char* a_name) noexcept
 {
 	if (!g_enabled.load(std::memory_order_acquire))
@@ -280,7 +277,6 @@ void Aftermath::Disable()
 
 bool Aftermath::Enable() { return false; }
 bool Aftermath::IsEnabled() { return false; }
-bool Aftermath::WantsCrashAnalysis() { return false; }
 const void* Aftermath::RegisterOrgCheckpoint(void*, const char*) noexcept { return nullptr; }
 void Aftermath::Disable() {}
 
