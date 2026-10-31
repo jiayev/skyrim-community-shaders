@@ -14,6 +14,8 @@
 #include "ShaderCache.h"
 #include "State.h"
 
+#include <cstdlib>
+
 #define DLLEXPORT __declspec(dllexport)
 
 std::list<std::string> errors;
@@ -212,6 +214,8 @@ void ApplyDevEnvironmentFile()
 			continue;
 		}
 		SetEnvironmentVariableA(name.c_str(), value.c_str());
+		// Statically linked libraries (including BasicRHI) use the CRT's environment copy through getenv.
+		_putenv_s(name.c_str(), value.c_str());
 		logger::info("[DevEnv] {}={} (from {})", name, value, path->filename().string());
 	}
 }
