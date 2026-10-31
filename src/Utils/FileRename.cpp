@@ -1,6 +1,7 @@
 #include "FileRename.h"
 
 #include <Windows.h>
+#include <winternl.h>
 
 #include <cstring>
 #include <mutex>
@@ -25,17 +26,21 @@ namespace Util
 			HANDLE query = INVALID_HANDLE_VALUE;
 			if (!::DuplicateHandle(::GetCurrentProcess(), a_file, ::GetCurrentProcess(), &query, 0, FALSE, DUPLICATE_SAME_ACCESS))
 				return {};
-			std::wstring path(MAX_PATH, L'\0');
-			DWORD length = ::GetFinalPathNameByHandleW(query, path.data(), static_cast<DWORD>(path.size()), FILE_NAME_NORMALIZED);
-			if (length >= path.size()) {
-				path.resize(length);
-				length = ::GetFinalPathNameByHandleW(query, path.data(), static_cast<DWORD>(path.size()), FILE_NAME_NORMALIZED);
-			}
+			// GetFinalPathNameByHandle queries FileNameInformation with a small internal buffer. Older usvfs
+			// versions read that non-terminated result as a string and can fault during parallel cache writes.
+			// ObjectNameInformation carries an explicit UNICODE_STRING length and the full device path.
+			using QueryObject = NTSTATUS(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+			static const auto queryObject = reinterpret_cast<QueryObject>(::GetProcAddress(::GetModuleHandleW(L"ntdll.dll"), "NtQueryObject"));
+			std::vector<std::byte> buffer(65536 + sizeof(UNICODE_STRING));
+			ULONG needed = 0;
+			const NTSTATUS status = queryObject ? queryObject(query, 1, buffer.data(), static_cast<ULONG>(buffer.size()), &needed) : -1;
 			::CloseHandle(query);
-			if (!length || length >= path.size())
+			if (status < 0)
 				return {};
-			path.resize(length);
-			return path;
+			const auto& name = *reinterpret_cast<const UNICODE_STRING*>(buffer.data());
+			if (!name.Buffer || !name.Length)
+				return {};
+			return L"\\\\?\\GLOBALROOT" + std::wstring(name.Buffer, name.Length / sizeof(wchar_t));
 		}
 
 		// a_from onto a_to without MoveFileExW: false (a_ec unset) when it could not try, so the caller renames normally.
