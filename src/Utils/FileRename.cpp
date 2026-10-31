@@ -20,12 +20,18 @@ namespace Util
 		// The file's real path (\\?\ form), past any redirection; empty if it has none.
 		std::wstring FinalPath(HANDLE a_file)
 		{
+			// usvfs rewrites name queries on handles opened through its hooks back to the virtual path.
+			// A duplicate refers to the same file without that tracked name, so the rename gets its real destination.
+			HANDLE query = INVALID_HANDLE_VALUE;
+			if (!::DuplicateHandle(::GetCurrentProcess(), a_file, ::GetCurrentProcess(), &query, 0, FALSE, DUPLICATE_SAME_ACCESS))
+				return {};
 			std::wstring path(MAX_PATH, L'\0');
-			DWORD length = ::GetFinalPathNameByHandleW(a_file, path.data(), static_cast<DWORD>(path.size()), FILE_NAME_NORMALIZED);
+			DWORD length = ::GetFinalPathNameByHandleW(query, path.data(), static_cast<DWORD>(path.size()), FILE_NAME_NORMALIZED);
 			if (length >= path.size()) {
 				path.resize(length);
-				length = ::GetFinalPathNameByHandleW(a_file, path.data(), static_cast<DWORD>(path.size()), FILE_NAME_NORMALIZED);
+				length = ::GetFinalPathNameByHandleW(query, path.data(), static_cast<DWORD>(path.size()), FILE_NAME_NORMALIZED);
 			}
+			::CloseHandle(query);
 			if (!length || length >= path.size())
 				return {};
 			path.resize(length);
