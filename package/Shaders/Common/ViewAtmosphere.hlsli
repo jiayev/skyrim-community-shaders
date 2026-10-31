@@ -20,9 +20,10 @@ namespace ViewAtmosphere
 		float4 history;
 		row_major float4x4 clipToWorld;
 	};
-	Texture3D<float4> Luminance : register(t125);
-	Texture3D<float4> Transmittance : register(t126);
-	StructuredBuffer<Parameters> Data : register(t127);
+	// Shared with DCLF forward/reflection shaders; t116-t127 hold its per-object tables.
+	Texture3D<float4> Luminance : register(t106);
+	Texture3D<float4> Transmittance : register(t107);
+	StructuredBuffer<Parameters> Data : register(t108);
 
 	bool Enabled()
 	{

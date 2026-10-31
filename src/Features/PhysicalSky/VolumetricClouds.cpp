@@ -1496,7 +1496,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		ID3D11ShaderResourceView* nullOutputs[2] = {};
 		context->PSSetShaderResources(110, 2, nullOutputs);
 		context->PSSetShaderResources(114, 2, nullOutputs);
-		context->PSSetShaderResources(116, 1, nullOutputs);
+		context->PSSetShaderResources(99, 1, nullOutputs);
 		context->PSSetShaderResources(113, 1, nullOutputs);
 		context->PSSetShaderResources(109, 1, nullOutputs);
 		texVolCubeTr.swap(texVolCubeHistoryTr);

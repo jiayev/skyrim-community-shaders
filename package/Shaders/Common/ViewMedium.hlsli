@@ -10,7 +10,7 @@
 #ifdef MEDIUM_COMPOSITE
 Texture2D<float4> TexMediumCloudDepth : register(t41);
 #else
-Texture2D<float4> TexMediumCloudDepth : register(t116);
+Texture2D<float4> TexMediumCloudDepth : register(t99);
 #endif
 
 namespace ViewMedium

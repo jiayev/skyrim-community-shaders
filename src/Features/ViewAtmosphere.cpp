@@ -297,7 +297,7 @@ void ViewAtmosphere::Render()
 		data.history.x = 0.0f;
 	parameters->Update(&data, sizeof(data));
 	auto* paramSrv = parameters->SRV();
-	context->CSSetShaderResources(127, 1, &paramSrv);
+	context->CSSetShaderResources(108, 1, &paramSrv);
 	ID3D11Buffer* shared[] = { globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
 	context->CSSetConstantBuffers(5, 2, shared);
 	auto* frame = *globals::game::perFrame;
@@ -352,7 +352,7 @@ void ViewAtmosphere::Render()
 		context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
 	}
 	globals::profiler->EndPass();
-	for (UINT slot : { 0u, 1u, 2u, 5u, 25u, 31u, 35u, 36u, 37u, 50u, 60u, 61u, 67u, 68u, 69u, 70u, 76u, 77u, 98u, 102u, 103u, 112u, 127u })
+	for (UINT slot : { 0u, 1u, 2u, 5u, 25u, 31u, 35u, 36u, 37u, 50u, 60u, 61u, 67u, 68u, 69u, 70u, 76u, 77u, 98u, 102u, 103u, 108u, 112u })
 		bind(slot, nullptr);
 	ID3D11Buffer* nullBuffers[2]{};
 	ID3D11SamplerState* nullSamplers[2]{};
@@ -372,9 +372,9 @@ void ViewAtmosphere::Bind(bool compute)
 		return;
 	ID3D11ShaderResourceView* srvs[] = { integratedLum->srv.get(), integratedTr->srv.get(), parameters->SRV() };
 	if (compute)
-		globals::d3d::context->CSSetShaderResources(125, 3, srvs);
+		globals::d3d::context->CSSetShaderResources(106, 3, srvs);
 	else
-		globals::d3d::context->PSSetShaderResources(125, 3, srvs);
+		globals::d3d::context->PSSetShaderResources(106, 3, srvs);
 }
 
 void ViewAtmosphere::RenderReflection()
@@ -490,7 +490,7 @@ void ViewAtmosphere::RenderReflection()
 	bind(69, sky.texCloudShadowMean ? sky.texCloudShadowMean->srv.get() : nullptr);
 	bind(114, sky.texVolCubeTr ? sky.texVolCubeTr->srv.get() : nullptr);
 	bind(115, sky.texVolCubeLum ? sky.texVolCubeLum->srv.get() : nullptr);
-	bind(127, reflectionParameters->SRV());
+	bind(108, reflectionParameters->SRV());
 	ID3D11UnorderedAccessView* outputs[] = { reflectionSkySH->uav.get(), nullptr };
 	ID3D11UnorderedAccessView* nullOutputs[2]{};
 	bind(70, nullptr);
@@ -510,13 +510,13 @@ void ViewAtmosphere::RenderReflection()
 	context->Dispatch(16, 32, 1);
 	context->CSSetUnorderedAccessViews(0, 2, nullOutputs, nullptr);
 	globals::profiler->EndPass();
-	for (UINT slot : { 2u, 25u, 50u, 60u, 61u, 62u, 63u, 67u, 69u, 70u, 76u, 77u, 112u, 114u, 115u, 127u })
+	for (UINT slot : { 2u, 25u, 50u, 60u, 61u, 62u, 63u, 67u, 69u, 70u, 76u, 77u, 108u, 112u, 114u, 115u })
 		bind(slot, nullptr);
 	sampler = nullptr;
 	context->CSSetSamplers(0, 1, &sampler);
 	context->CSSetShader(nullptr, nullptr, 0);
 	ID3D11ShaderResourceView* result[] = { reflectionLum->srv.get(), reflectionTr->srv.get(), reflectionParameters->SRV() };
-	context->PSSetShaderResources(125, 3, result);
+	context->PSSetShaderResources(106, 3, result);
 	auto* tail = sky.texSkyTail->srv.get();
 	context->PSSetShaderResources(66, 1, &tail);
 }
@@ -524,8 +524,8 @@ void ViewAtmosphere::RenderReflection()
 void ViewAtmosphere::Unbind()
 {
 	ID3D11ShaderResourceView* nullSrvs[3]{};
-	globals::d3d::context->PSSetShaderResources(125, 3, nullSrvs);
-	globals::d3d::context->CSSetShaderResources(125, 3, nullSrvs);
+	globals::d3d::context->PSSetShaderResources(106, 3, nullSrvs);
+	globals::d3d::context->CSSetShaderResources(106, 3, nullSrvs);
 }
 
 void ViewAtmosphere::ClearShaderCache()
@@ -649,7 +649,7 @@ void ViewAtmosphere::CompositeAfterWater()
 	context->CSSetSamplers(0, static_cast<uint32_t>(nullSamplers.size()), nullSamplers.data());
 	if (sky.texVolFilteredAux) {
 		auto* aux = sky.texVolFilteredAux->srv.get();
-		context->PSSetShaderResources(116, 1, &aux);
+		context->PSSetShaderResources(99, 1, &aux);
 	}
 	mediumCompositeFrame = globals::state->frameCount;
 }
