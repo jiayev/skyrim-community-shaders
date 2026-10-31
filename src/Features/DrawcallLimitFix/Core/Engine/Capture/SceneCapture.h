@@ -4,12 +4,12 @@
 // requests) and carried by SceneTracker's events into the coordinator's mirror (SceneMirror).
 
 #include <array>
-#include <d3d11.h>
-#include <winrt/base.h>
 #include <cstdint>
+#include <d3d11.h>
 #include <memory>
 #include <variant>
 #include <vector>
+#include <winrt/base.h>
 
 #include "Features/DrawcallLimitFix/Api/EntryRanges.h"
 
@@ -53,25 +53,25 @@ namespace DCLF::SceneCapture
 			kParent = 1u << 0,
 			kRtti = 1u << 1,
 			kKind = 1u << 2,
-			kHidden = 1u << 3,       // flags bit 0
-			kFlags = 1u << 4,        // the flag bits the scene work reads that hold still (RecordFlags)
-			kUserData = 1u << 5,     // the reference, its form type, whether an actor
+			kHidden = 1u << 3,    // flags bit 0
+			kFlags = 1u << 4,     // the flag bits the scene work reads that hold still (RecordFlags)
+			kUserData = 1u << 5,  // the reference, its form type, whether an actor
 			kControllers = 1u << 6,
-			kBody = 1u << 7,         // a rigid body whose motion is not fixed
+			kBody = 1u << 7,  // a rigid body whose motion is not fixed
 			kChildren = 1u << 8,
-			kSwitch = 1u << 9,       // index, flags, the selected child's revision current
+			kSwitch = 1u << 9,  // index, flags, the selected child's revision current
 			kFadeNear = 1u << 10,
 			kFadeFar = 1u << 11,
 			kFade109 = 1u << 12,
-			kFadeType = 1u << 13,    // the LOD type (+0x153 & 0xF)
+			kFadeType = 1u << 13,  // the LOD type (+0x153 & 0xF)
 			kTreeLodSwitch = 1u << 14,
-			kName = 1u << 15,        // for the logs only: not compared (Differ)
-			kExtra = 1u << 16,       // a fade node's BSX flags; the reference's emittance source; the reference facts (Api::ReferenceFact)
-			kFadeCurrent = 1u << 17, // a fade node's currentFade (+0x130): the cull's and the fade update's, every frame while it fades
-			kFadeLevel = 1u << 18,   // its LOD level (+0x152 & 0xF): FUN_14147a430's
-			kFadeDoor = 1u << 19,    // its screen-door byte (+0x154)
-			kFadeAmount = 1u << 20,  // a fade node's fadeAmount (+0x100): Actor::SetAlpha's
-			kCaptured = 1u << 21,    // a contributed node's list (Api::kNodeFieldCaptured: its writers' edits, the feature's hooks)
+			kName = 1u << 15,         // for the logs only: not compared (Differ)
+			kExtra = 1u << 16,        // a fade node's BSX flags; the reference's emittance source; the reference facts (Api::ReferenceFact)
+			kFadeCurrent = 1u << 17,  // a fade node's currentFade (+0x130): the cull's and the fade update's, every frame while it fades
+			kFadeLevel = 1u << 18,    // its LOD level (+0x152 & 0xF): FUN_14147a430's
+			kFadeDoor = 1u << 19,     // its screen-door byte (+0x154)
+			kFadeAmount = 1u << 20,   // a fade node's fadeAmount (+0x100): Actor::SetAlpha's
+			kCaptured = 1u << 21,     // a contributed node's list (Api::kNodeFieldCaptured: its writers' edits, the feature's hooks)
 			kFieldCount = 22,
 		};
 		// kCaptured keeps the parities' name for it ("decals": its one contribution's, Features/Decals).
@@ -134,15 +134,15 @@ namespace DCLF::SceneCapture
 		enum Field : std::uint32_t
 		{
 			kType = 1u << 0,
-			kRenderer = 1u << 1,    // renderer data, its buffers and vertex layout, the counts
-			kSkin = 1u << 2,        // instance, type, partition, data, bone count, partitions' buffers, layouts, counts, LOD bytes
-			kDismember = 1u << 3,   // the dismember partitions' shown flags
+			kRenderer = 1u << 1,   // renderer data, its buffers and vertex layout, the counts
+			kSkin = 1u << 2,       // instance, type, partition, data, bone count, partitions' buffers, layouts, counts, LOD bytes
+			kDismember = 1u << 3,  // the dismember partitions' shown flags
 			kProperty = 1u << 4,
 			kAlpha = 1u << 5,
-			kLayer = 1u << 6,       // the additional property, the alt index buffer and its count
-			kExtra = 1u << 7,       // the declared geometry extra data (Api: DeclareGeometryExtra; Extended Translucency's AnisotropicAlphaMaterial)
-			kMultiParams = 1u << 8, // a multi-index shape's material projection, parameters, scale and normal dampener
-			kRanges = 1u << 9,      // a ranged type's drawn ranges (Api::GeometryTypeContribution::ranges: object LOD's segments)
+			kLayer = 1u << 6,        // the additional property, the alt index buffer and its count
+			kExtra = 1u << 7,        // the declared geometry extra data (Api: DeclareGeometryExtra; Extended Translucency's AnisotropicAlphaMaterial)
+			kMultiParams = 1u << 8,  // a multi-index shape's material projection, parameters, scale and normal dampener
+			kRanges = 1u << 9,       // a ranged type's drawn ranges (Api::GeometryTypeContribution::ranges: object LOD's segments)
 			kFieldCount = 10,
 		};
 		static constexpr std::array<const char*, kFieldCount> kFieldNames{ "type", "renderer", "skin", "dismember", "property", "alpha", "layer", "extra",
@@ -153,6 +153,7 @@ namespace DCLF::SceneCapture
 			const void* rendererData = nullptr;  // its buffData (a geometry slot's key)
 			ID3D11Buffer* vertexBuffer = nullptr;
 			ID3D11Buffer* indexBuffer = nullptr;
+			std::array<winrt::com_ptr<ID3D11Buffer>, 2> buffersHeld;
 			std::uint64_t vertexDesc = 0;
 			std::uint16_t vertices = 0, triangles = 0;
 			std::uint8_t lodByte = 0;
@@ -164,6 +165,9 @@ namespace DCLF::SceneCapture
 		const void* rendererData = nullptr;
 		ID3D11Buffer* vertexBuffer = nullptr;
 		ID3D11Buffer* indexBuffer = nullptr;
+		// Hold the captured buffers before handing their addresses to the scene worker. A dynamic shape can replace
+		// its renderer data while the worker still resolves the previous capture (before GpuResources takes its lease).
+		std::array<winrt::com_ptr<ID3D11Buffer>, 2> buffersHeld;
 		std::uint64_t vertexDesc = 0;
 		std::uint32_t vertexCount = 0, triangleCount = 0;
 		const void* skin = nullptr;
@@ -178,6 +182,7 @@ namespace DCLF::SceneCapture
 		const void* layerProperty = nullptr;
 		const void* altIndexList = nullptr;  // the second index list (its first qword is the buffer: the layer's slot key)
 		ID3D11Buffer* altIndexBuffer = nullptr;
+		winrt::com_ptr<ID3D11Buffer> altIndexHeld;
 		std::uint32_t altPrimCount = 0;
 		// kExtra: the extra data's value (an NiIntegerExtraData's), kNoExtra none, kWrongExtra another type.
 		static constexpr std::int64_t kNoExtra = -1, kWrongExtra = -2;
@@ -226,9 +231,9 @@ namespace DCLF::SceneCapture
 			kFadeNode = 1u << 5,
 			kEmissive = 1u << 6,
 			kControllers = 1u << 7,
-			kAlphaValue = 1u << 8,  // BSShaderProperty::alpha, a Lighting property's (1 for any other)
-			kProjected = 1u << 9,   // projectedUVParams and projectedUVColor
-			kLandBlend = 1u << 10,  // a landscape material's landBlendParams
+			kAlphaValue = 1u << 8,     // BSShaderProperty::alpha, a Lighting property's (1 for any other)
+			kProjected = 1u << 9,      // projectedUVParams and projectedUVColor
+			kLandBlend = 1u << 10,     // a landscape material's landBlendParams
 			kShadowPasses = 1u << 11,  // whether a Lighting property's shadow pass list (shadowMapOrMaskPasses) has a head
 			kFieldCount = 12,
 		};
@@ -318,17 +323,18 @@ namespace DCLF::SceneCapture
 	 */
 	struct LeafView
 	{
-		const NodeRecord* node = nullptr;          // the geometry's node half
-		const NodeRecord* parent = nullptr;        // its parent's
+		const NodeRecord* node = nullptr;    // the geometry's node half
+		const NodeRecord* parent = nullptr;  // its parent's
 		const GeometryRecord* geometry = nullptr;
 		const PropertyRecord* property = nullptr;  // its shader property's
 		const PropertyRecord* layer = nullptr;     // the layer the engine draws (GeometryRecord::Layer)
 		const AlphaRecord* alpha = nullptr;
-		const NodeRecord* fadeNode = nullptr;      // its shader property's fade node's
-		const NodeRecord* layerFadeNode = nullptr; // its layer's fade node's
+		const NodeRecord* fadeNode = nullptr;       // its shader property's fade node's
+		const NodeRecord* layerFadeNode = nullptr;  // its layer's fade node's
 		explicit operator bool() const { return node && geometry; }
 		/** @brief a_property's fade node's record (a_property the leaf's property or layer). */
-		const NodeRecord* FadeNodeOf(const PropertyRecord* a_property) const { return a_property == property ? fadeNode : a_property == layer ? layerFadeNode : nullptr; }
+		const NodeRecord* FadeNodeOf(const PropertyRecord* a_property) const { return a_property == property ? fadeNode : a_property == layer ? layerFadeNode :
+		                                                                                                                                        nullptr; }
 		std::uint8_t Type() const { return geometry ? geometry->type : 0; }
 		bool Skinned() const { return geometry && geometry->skin; }
 		// NiAlphaProperty::GetAlphaBlending, GetAlphaTesting.

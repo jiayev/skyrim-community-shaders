@@ -1444,6 +1444,17 @@ namespace DCLF
 	{
 		if ((a_item.firstPerson && a_item.itemClass == Api::FrameValueItemClass::None) || a_item.slot >= a_rows || !a_item.geometry || listed[a_item.slot])
 			return;
+		// Skins are kept movers. An older write or settling item can outlive its skin's membership, while its
+		// palette block is already reused by another actor. Validate against the applied plans before marking
+		// either the slot or the block: different block starts can still overlap a recycled allocation.
+		if (a_settles && a_item.boneRows && a_item.itemClass == Api::FrameValueItemClass::None) {
+			const auto owner = moverAt.find(a_item.geometry.get());
+			if (owner == moverAt.end())
+				return;
+			const auto& current = keptMovers[owner->second].item;
+			if (Plan::Key::Of(current) != Plan::Key::Of(a_item))
+				return;
+		}
 		listed[a_item.slot] = 1;
 		listedSlots.push_back(a_item.slot);
 		if (rowOwner.size() <= a_item.slot)
