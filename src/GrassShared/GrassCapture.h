@@ -62,10 +62,15 @@ namespace GrassShared
 		{
 			RE::NiSourceTexture* normal = nullptr;
 			RE::NiSourceTexture* rmaos = nullptr;
-			RE::NiSourceTexture* features0 = nullptr;  // null when absent or the default white
+			RE::NiSourceTexture* features1 = nullptr;
+			RE::NiSourceTexture* emissive = nullptr;
+			RE::NiSourceTexture* features0 = nullptr;  // optional maps are gated by PBRShaderFlags
 			uint32_t flags = 0;                        // PBRShaderFlags, as BSGrassShader_SetupMaterial uploads them
 			float roughnessScale = 1.0f;
 			float specularLevel = 0.0f;
+			float emissiveScale = 1.0f;
+			float fuzz[4]{};
+			float thinSurface[4]{};
 			float subsurface[4]{};  // colour rgb, opacity
 		} pbrData;
 

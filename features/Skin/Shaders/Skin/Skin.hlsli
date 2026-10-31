@@ -23,7 +23,7 @@ namespace Skin
 #if defined(PSHADER)
 #	if defined(DCLF_BINDLESS_DRAW)
 #		define skinPerGeometry (DCLFShading[DCLFObjectIndex].SkinPerGeometry)
-#		define skinMaterialFlags (DCLFShading[DCLFObjectIndex].SkinMaterialFlags)
+	float4 GetMaterialFlags() { return DCLFShading[DCLFObjectIndex].SkinMaterialFlags; }
 	SharedData::SkinData GetSkinData()
 	{
 		SharedData::SkinData data;
@@ -46,6 +46,7 @@ namespace Skin
 	NSCB_ALIAS(Skin, float4, skinPerGeometry)
 	NSCB_ALIAS(Skin, float4, skinMaterialFlags)
 	NSCB_ALIAS(Skin, SharedData::SkinData, skinPerGeometryProfile)
+	float4 GetMaterialFlags() { return skinMaterialFlags; }
 	SharedData::SkinData GetSkinData() { return skinPerGeometryProfile; }
 #	endif
 #else

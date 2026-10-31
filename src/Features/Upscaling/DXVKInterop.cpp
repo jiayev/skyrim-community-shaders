@@ -336,8 +336,9 @@ void DXVKInterop::CommitPresenterSurfaceStateForRenderFrame()
 	logger::info("[DXVKInterop] Committed presenter surface serial {} for render frames",
 		committedPresenterState.serial);
 	if (ClassifyPresenterEncoding(committedPresenterState) == PresenterEncoding::kHDR10ScRGBFallback) {
-		logger::warn("[DXVKInterop] HDR frame generation disabled for the scRGB presenter fallback; "
-		             "a HUD-less image rendered directly in the presenter encoding is required");
+		logger::warn(
+			"[DXVKInterop] HDR frame generation disabled for the scRGB presenter fallback; "
+			"a HUD-less image rendered directly in the presenter encoding is required");
 	}
 }
 
@@ -352,15 +353,13 @@ void DXVKInterop::BeginPresenterColorSpaceTransition(bool a_hdr, bool a_requireN
 
 	if (!presenterTransitionPending && !a_requireNewSerial &&
 		(PresenterStateMatches(committedPresenterState, requestedColorSpace) ||
-		 PresenterStateMatches(observedPresenterState, requestedColorSpace)))
+			PresenterStateMatches(observedPresenterState, requestedColorSpace)))
 		return;
 
 	presenterTransitionPending = true;
 	presenterTransitionFrameCount = 0;
 	presenterTransitionRequestedColorSpace = requestedColorSpace;
-	presenterTransitionBaselineSerial = observedPresenterState.serial > committedPresenterState.serial
-	                                    ? observedPresenterState.serial
-	                                    : committedPresenterState.serial;
+	presenterTransitionBaselineSerial = observedPresenterState.serial > committedPresenterState.serial ? observedPresenterState.serial : committedPresenterState.serial;
 	logger::info("[DXVKInterop] Presenter color-space transition started: target={}, baselineSerial={}",
 		static_cast<uint32_t>(requestedColorSpace), presenterTransitionBaselineSerial);
 }
@@ -456,7 +455,8 @@ bool DXVKInterop::Initialize()
 			enqueueSubmission = reinterpret_cast<PFN_dxvkEnqueueInteropSubmission>(GetProcAddress(module, "dxvkEnqueueInteropSubmission"));
 	}
 	logger::info("[DXVKInterop] Ring submissions from the render thread {}", enqueueSubmission ?
-		"go through DXVK's command stream (no wait)" : "flush and wait for DXVK's command stream");
+																				 "go through DXVK's command stream (no wait)" :
+																				 "flush and wait for DXVK's command stream");
 	if (!synchronousPresentControlAvailable)
 		logger::warn("[DXVKInterop] dxvkSetSyncPresent is unavailable - DLSS-G disabled");
 	if (!getPresenterSurfaceState)
@@ -573,7 +573,7 @@ bool DXVKInterop::WaitDeviceIdle()
 bool DXVKInterop::CreateCommandResources(uint32_t a_framesInFlight)
 {
 	std::lock_guard lock(commandRingMutex);
-	if (!available)
+	if (!available || deviceLost)
 		return false;
 	if (commandPool != VK_NULL_HANDLE)
 		return !commandRingFaulted;
@@ -745,7 +745,7 @@ bool DXVKInterop::DrainCommandRing()
 bool DXVKInterop::CommandResourcesReady() const
 {
 	std::lock_guard lock(commandRingMutex);
-	return commandPool != VK_NULL_HANDLE && !commandRingFaulted;
+	return commandPool != VK_NULL_HANDLE && !commandRingFaulted && !deviceLost;
 }
 
 bool DXVKInterop::HasCommandRingFault() const
@@ -757,11 +757,14 @@ bool DXVKInterop::HasCommandRingFault() const
 bool DXVKInterop::RecoverCommandRing()
 {
 	std::lock_guard lock(commandRingMutex);
+	if (deviceLost)
+		return false;
 	if (!commandRingFaulted)
 		return commandPool != VK_NULL_HANDLE;
 
 	const uint32_t ringDepth = framesInFlight ? framesInFlight : 3;
-	if (!WaitDeviceIdle())
+	// Device loss permits teardown, but cannot recover a ring on the same device.
+	if (!WaitDeviceIdle() || deviceLost)
 		return false;
 	DestroyCommandResources();
 	if (commandPool != VK_NULL_HANDLE)
@@ -819,7 +822,8 @@ void DXVKInterop::HarvestSlotTiming(uint32_t a_slot)
 
 	uint64_t ticks[2] = {};
 	if (vkGetQueryPoolResults(device, timingPool, a_slot * 2, 2, sizeof(ticks), ticks, sizeof(uint64_t),
-			VK_QUERY_RESULT_64_BIT) != VK_SUCCESS || ticks[1] < ticks[0])
+			VK_QUERY_RESULT_64_BIT) != VK_SUCCESS ||
+		ticks[1] < ticks[0])
 		return;
 	if (a_slot < slotSubmitQpc.size())
 		GpuIdleTrace::AddInteropSpan(label, ticks[0], ticks[1], slotSubmitQpc[a_slot]);
@@ -930,7 +934,7 @@ DXVKInterop::CommandTransaction DXVKInterop::BeginFrameCommandBuffer(const char*
 				v = VK_NULL_HANDLE;
 			}
 		} else if (std::find_if(dead.begin(), dead.end(),
-				       [](VkImageView a_view) { return a_view != VK_NULL_HANDLE; }) != dead.end()) {
+					   [](VkImageView a_view) { return a_view != VK_NULL_HANDLE; }) != dead.end()) {
 			commandRingFaulted = true;
 			logger::error("[DXVKInterop] vkDestroyImageView is unavailable; deferred views remain quarantined");
 			return {};

@@ -3,13 +3,13 @@
 // hooks are GrassShared's, shared with Grass Optimizations (src/GrassShared/GrassCapture.h): either registers its sink and installs
 // them, and they are installed once.
 
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Features/DrawcallLimitFix/Features/Grass/Diagnostics/GrassEvents.h"
 #include "Features/DrawcallLimitFix/Features/Grass/Grass.h"
 #include "Features/DrawcallLimitFix/Features/Grass/GrassMirror.h"
-#include "Features/DrawcallLimitFix/Features/Grass/Diagnostics/GrassEvents.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 
-#include "GrassShared/GrassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
+#include "GrassShared/GrassCapture.h"
 #include "GrassShared/GrassMeshLibrary.h"
 
 #include <cstring>
@@ -36,6 +36,11 @@ namespace DCLF::Features::Grass
 				source.normal.reset(pbr.normal);
 				source.rmaos.reset(pbr.rmaos);
 				source.features0.reset(pbr.features0);
+				source.features1.reset(pbr.features1);
+				source.emissive.reset(pbr.emissive);
+				source.emissiveScale = pbr.emissiveScale;
+				std::copy_n(pbr.fuzz, 4, source.fuzz);
+				std::copy_n(pbr.thinSurface, 4, source.thinSurface);
 				source.pbrFlags = pbr.flags;
 				source.roughnessScale = pbr.roughnessScale;
 				source.specularLevel = pbr.specularLevel;
@@ -51,8 +56,7 @@ namespace DCLF::Features::Grass
 			if (a_add.count)
 				std::memcpy(event.instances.data(), a_add.records, a_add.count * sizeof(GrassInstances::Instance));
 			event.origin = { a_add.origin.x, a_add.origin.y, a_add.origin.z };
-			event.key = { .mesh = a_add.meshKey, .material = a_add.material, .diffuse = a_add.diffuse, .vertexDesc = a_add.vertexDesc, .clampMode = a_add.clampMode,
-				.alphaRef = a_add.alphaRef, .windDirection = { a_add.windDirection[0], a_add.windDirection[1] }, .pbr = a_add.pbr, .sphereNormal = a_add.sphereNormal, .uniformScale = a_add.uniformScale };
+			event.key = { .mesh = a_add.meshKey, .material = a_add.material, .diffuse = a_add.diffuse, .vertexDesc = a_add.vertexDesc, .clampMode = a_add.clampMode, .alphaRef = a_add.alphaRef, .windDirection = { a_add.windDirection[0], a_add.windDirection[1] }, .pbr = a_add.pbr, .sphereNormal = a_add.sphereNormal, .uniformScale = a_add.uniformScale };
 			event.source = SourceOf(a_add);
 			// The shape's mesh record as LoadGrassType named it, while the shape is alive (the drain's may not be).
 			event.lodMesh = GrassShared::MeshOf(a_add.shape);

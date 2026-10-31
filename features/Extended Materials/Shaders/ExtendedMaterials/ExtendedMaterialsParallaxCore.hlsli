@@ -11,7 +11,6 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 #endif
 {
 	surfaceHeight = float2(0.5, 0.0);
-	pixelOffset = 0.0;
 #if defined(DCLF_TEST_NO_POM) && defined(DCLF_ORG)
 	return coords;  // [diag] (dclf:define) parallax mapping's cost
 #endif

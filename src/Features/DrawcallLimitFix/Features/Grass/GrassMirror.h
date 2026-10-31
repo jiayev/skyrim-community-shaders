@@ -14,8 +14,8 @@
 
 #include <winrt/base.h>
 
-#include "Features/DrawcallLimitFix/Features/Grass/GrassLayout.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Features/Grass/GrassLayout.h"
 
 struct ID3D11Buffer;
 
@@ -24,7 +24,7 @@ namespace DCLF::Features::Grass
 	/** @brief A mesh's source (a grass shape's renderer data, or a Grass Optimizations LOD mesh), as the capture or the library hold it. */
 	struct MeshSource
 	{
-		const void* key = nullptr;  // the BSGraphics::TriShape, or the LOD mesh entry
+		const void* key = nullptr;                               // the BSGraphics::TriShape, or the LOD mesh entry
 		winrt::com_ptr<ID3D11Buffer> vertexBuffer, indexBuffer;  // held from the sink until the render thread leases them
 		std::uint64_t vertexDesc = 0;
 		std::uint32_t indexCount = 0;
@@ -56,13 +56,16 @@ namespace DCLF::Features::Grass
 	/** @brief A bucket's material, as the capture read it (the textures referenced while the bucket lives). */
 	struct BucketSource
 	{
-		RE::NiPointer<RE::NiSourceTexture> diffuse, normal, rmaos, features0;
+		RE::NiPointer<RE::NiSourceTexture> diffuse, normal, rmaos, features0, features1, emissive;
 		float boundCenter[3]{};
 		float modelRadius = 0.0f;
 		float wavePeriod = 1.0f;
 		std::uint32_t triangleCount = 0;
 		std::uint32_t pbrFlags = 0;
 		float roughnessScale = 1.0f, specularLevel = 0.0f;
+		float emissiveScale = 1.0f;
+		float fuzz[4]{};
+		float thinSurface[4]{};
 		float subsurface[4]{};
 	};
 
@@ -171,7 +174,7 @@ namespace DCLF::Features::Grass
 		void* lodMesh = nullptr;
 		bool lodPending = false;
 		OwnedRow<GrassInstances::BucketRow> row;
-		std::uint32_t bindingGeneration = ~0u;           // GpuTextures::Generation the bindings were resolved in
+		std::uint32_t bindingGeneration = ~0u;  // GpuTextures::Generation the bindings were resolved in
 		bool bound = false;
 		bool live = false;  // a free slot's is not
 	};

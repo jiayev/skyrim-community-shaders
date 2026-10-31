@@ -50,7 +50,10 @@ namespace DCLF::Features::Grass
 			a_row.scaleMask[2] = 1.0f;
 			a_row.pbrParams1[0] = a_source.roughnessScale;
 			a_row.pbrParams1[1] = a_source.specularLevel;
+			a_row.pbrParams1[2] = a_source.emissiveScale;
 			std::copy_n(a_source.subsurface, 4, a_row.pbrParams2);
+			std::copy_n(a_source.fuzz, 4, a_row.pbrParams3);
+			std::copy_n(a_source.thinSurface, 4, a_row.pbrParams4);
 		}
 	}
 
@@ -439,7 +442,8 @@ namespace DCLF::Features::Grass
 						}
 						row.visibleBase[tier] = tier == 1 ? base - bucket.total : base;
 					}
-					row.flags |= tier == 1 ? GrassInstances::kBucketTierOne : tier == 2 ? GrassInstances::kBucketTierTwo : 0u;
+					row.flags |= tier == 1 ? GrassInstances::kBucketTierOne : tier == 2 ? GrassInstances::kBucketTierTwo :
+					                                                                      0u;
 				}
 				// A LOD tier's own mesh cost (Grass Optimizations' UploadCullBucketConstants: sqrt(triangles / 8)), tier 0's without a mesh.
 				if (tier > 0)
@@ -504,8 +508,7 @@ namespace DCLF::Features::Grass
 				auto vertex = gpu.Acquire(mesh.source.vertexBuffer.get());
 				auto index = vertex ? gpu.Acquire(mesh.source.indexBuffer.get()) : std::nullopt;
 				if (vertex && index) {
-					mesh.row = { .vertexAddress = vertex->buffer.address, .indexAddress = index->buffer.address, .vertexDesc = mesh.source.vertexDesc,
-						.indexCount = mesh.source.indexCount, .vertexStride = static_cast<std::uint32_t>(mesh.source.vertexDesc & 0xF) * 4 };
+					mesh.row = { .vertexAddress = vertex->buffer.address, .indexAddress = index->buffer.address, .vertexDesc = mesh.source.vertexDesc, .indexCount = mesh.source.indexCount, .vertexStride = static_cast<std::uint32_t>(mesh.source.vertexDesc & 0xF) * 4 };
 					mesh.vertexOwner = std::move(vertex->owner);
 					mesh.indexOwner = std::move(index->owner);
 					mesh.resolved = true;
@@ -565,7 +568,8 @@ namespace DCLF::Features::Grass
 	{
 		Readiness readiness;
 		for (const auto& [key, mesh] : meshes)
-			++(mesh.resolved ? readiness.meshesResolved : mesh.failed ? readiness.meshesFailed : readiness.meshesPending);
+			++(mesh.resolved ? readiness.meshesResolved : mesh.failed ? readiness.meshesFailed :
+																		readiness.meshesPending);
 		for (const auto& bucket : buckets)
 			readiness.bucketsDrawable += bucket.live && bucket.row.Plain().instanceCount ? 1u : 0u;
 		return readiness;

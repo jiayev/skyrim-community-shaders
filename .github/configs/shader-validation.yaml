@@ -62,7 +62,23 @@ file_common_defines:
             - SSS
         CSHADER: []
     RunGrass.hlsl:
-        PSHADER: []
+        PSHADER:
+            - IBL
+            - DYNAMIC_CUBEMAPS
+            - LIGHT_LIMIT_FIX
+            - SCREEN_SPACE_SHADOWS
+            - SKYLIGHTING
+            - TERRAIN_SHADOWS
+            - GRASS_LIGHTING
+            - PHYSICAL_SKY
+            - ENABLE_LL
+            - WETNESS_EFFECTS
+            - LOD_BLENDING
+            - SSGI
+            - CLOUD_SHADOWS
+            - GRASS_COLLISION
+            - WATER_EFFECTS
+            - SSS
         VSHADER:
             - IBL
             - DYNAMIC_CUBEMAPS
@@ -71,6 +87,8 @@ file_common_defines:
             - SKYLIGHTING
             - TERRAIN_SHADOWS
             - GRASS_LIGHTING
+            - PHYSICAL_SKY
+            - ENABLE_LL
             - WETNESS_EFFECTS
             - LOD_BLENDING
             - SSGI
@@ -177,6 +195,9 @@ file_common_defines:
             - LOD_BLENDING
             - SSGI
             - EXTENDED_MATERIALS
+            - CS_SKIN
+            - PHYSICAL_SKY
+            - ENABLE_LL
             - EXTENDED_TRANSLUCENCY
         VSHADER:
             - TERRAIN_SHADOWS
@@ -194,6 +215,9 @@ file_common_defines:
             - LOD_BLENDING
             - SSGI
             - EXTENDED_MATERIALS
+            - CS_SKIN
+            - PHYSICAL_SKY
+            - ENABLE_LL
             - EXTENDED_TRANSLUCENCY
         CSHADER: []
     Water.hlsl:

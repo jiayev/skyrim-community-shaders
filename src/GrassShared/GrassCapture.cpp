@@ -1,6 +1,7 @@
 #include "GrassCapture.h"
 
 #include "GrassMeshLibrary.h"
+#include "TruePBR.h"
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "Utils/VersionedRelocation.h"
 
@@ -66,26 +67,19 @@ namespace GrassShared
 		void ReadPbr(AddEvent::Pbr& out, RE::BSShaderMaterial* material)
 		{
 			const auto* pbr = static_cast<const BSLightingShaderMaterialPBR*>(material);
-			const RE::NiSourceTexture* white = globals::game::graphicsState->GetRuntimeData().defaultTextureWhite.get();
-
+			const auto constants = TruePBR::GetGrassPBRConstants(pbr);
 			out.normal = pbr->normalTexture.get();
 			out.rmaos = pbr->rmaosTexture.get();
-			out.features0 = (pbr->featuresTexture0 && pbr->featuresTexture0.get() != white) ? pbr->featuresTexture0.get() : nullptr;
-
-			stl::enumeration<PBRShaderFlags> shaderFlags;
-			if (pbr->pbrFlags.any(PBRFlags::Subsurface))
-				shaderFlags.set(PBRShaderFlags::Subsurface);
-			if (out.features0)
-				shaderFlags.set(PBRShaderFlags::HasFeaturesTexture0);
-			out.flags = shaderFlags.underlying();
-
-			out.roughnessScale = pbr->GetRoughnessScale();
-			out.specularLevel = pbr->GetSpecularLevel();
-			const auto& subsurface = pbr->GetSubsurfaceColor();
-			out.subsurface[0] = subsurface.red;
-			out.subsurface[1] = subsurface.green;
-			out.subsurface[2] = subsurface.blue;
-			out.subsurface[3] = pbr->GetSubsurfaceOpacity();
+			out.features0 = pbr->featuresTexture0.get();
+			out.features1 = pbr->featuresTexture1.get();
+			out.emissive = pbr->emissiveTexture.get();
+			out.flags = constants.flags;
+			out.roughnessScale = constants.params1[0];
+			out.specularLevel = constants.params1[1];
+			out.emissiveScale = constants.params1[2];
+			std::copy_n(constants.params2, 4, out.subsurface);
+			std::copy_n(constants.params3, 4, out.fuzz);
+			std::copy_n(constants.params4, 4, out.thinSurface);
 		}
 
 		/**

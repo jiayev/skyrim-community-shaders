@@ -3,9 +3,7 @@
 // hook): the mirror's changes, the buckets' bindings, the draw row with the engine's per-frame grass values.
 
 // Helpers.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Features/Grass/GrassTables.h"
-#include "Features/DrawcallLimitFix/Features/Grass/GrassMirror.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
@@ -14,10 +12,12 @@
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Uploads.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBufferSet.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
-#include "Features/DrawcallLimitFix/Features/Grass/Diagnostics/GrassEvents.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Features/DrawcallLimitFix/Features/Grass/Diagnostics/GrassEvents.h"
+#include "Features/DrawcallLimitFix/Features/Grass/GrassMirror.h"
 
 #include "GrassShared/GrassFrame.h"
 
@@ -161,13 +161,13 @@ namespace DCLF::Features::Grass
 
 		/** @brief a_view's binding into a_row's a_field (its owner the row's); false when there is no view or it cannot be bound. */
 		template <class Row>
-		bool Bind(OwnedRow<Row>& a_row, DescriptorIndex Row::*a_field, ID3D11ShaderResourceView* a_view)
+		bool Bind(OwnedRow<Row>& a_row, DescriptorIndex Row::* a_field, ID3D11ShaderResourceView* a_view)
 		{
 			return a_view && a_row.Bind(a_field, GpuTextures::Get().ResolveBinding(a_view, 0));
 		}
 
 		template <class Row>
-		bool BindSampler(OwnedRow<Row>& a_row, DescriptorIndex Row::*a_field, std::uint32_t a_address, std::uint32_t a_filter)
+		bool BindSampler(OwnedRow<Row>& a_row, DescriptorIndex Row::* a_field, std::uint32_t a_address, std::uint32_t a_filter)
 		{
 			return a_row.Bind(a_field, GpuTextures::Get().SamplerBinding(a_address, a_filter));
 		}
@@ -198,7 +198,8 @@ namespace DCLF::Features::Grass
 					return view ? view : DefaultView(a_normal);
 				};
 				bound = Bind(row, &BucketRow::normalIndex, viewOr(source.normal, true)) && Bind(row, &BucketRow::rmaosIndex, viewOr(source.rmaos, false)) &&
-				        Bind(row, &BucketRow::featuresIndex, viewOr(source.features0, false)) && BindSampler(row, &BucketRow::pbrSampler, address, 3);
+				        Bind(row, &BucketRow::featuresIndex, viewOr(source.features0, false)) && Bind(row, &BucketRow::fuzzIndex, viewOr(source.features1, false)) &&
+				        Bind(row, &BucketRow::emissiveIndex, viewOr(source.emissive, false)) && BindSampler(row, &BucketRow::pbrSampler, address, 3);
 			}
 			if (!bound)
 				return false;
@@ -488,7 +489,6 @@ namespace DCLF::Features::Grass
 		}
 	}
 
-
 	GrassTables* TablesOf(const Draws::SceneBuffers& a_scene)
 	{
 		return Extensions::SceneResourcesOf<GrassTables>(a_scene, tablesId);
@@ -506,8 +506,7 @@ namespace DCLF::Features::Grass
 
 	void RegisterTables(Api::InstallContext& a_context)
 	{
-		tablesId = a_context.RegisterSceneResources({ .name = "grass", .setup = &Setup, .registerGraph = &RegisterGraph, .require = &Require, .postInputs = &PostInputs,
-			.inputWords = kInputWords, .latched = &Latched });
+		tablesId = a_context.RegisterSceneResources({ .name = "grass", .setup = &Setup, .registerGraph = &RegisterGraph, .require = &Require, .postInputs = &PostInputs, .inputWords = kInputWords, .latched = &Latched });
 		a_context.RegisterCommitHook({ .name = "grass", .commit = &Commit });
 	}
 }

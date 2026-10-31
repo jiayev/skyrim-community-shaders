@@ -2034,9 +2034,9 @@ PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
 	float4 skinsk = 0;
 	float4 skinExtra = 1;
 	float4 skinWetnessSample = 0;
-	bool hasSkinExtra = Skin::skinMaterialFlags.x > 0.5f;
-	bool hasSkinWetness = Skin::skinMaterialFlags.y > 0.5f;
-	if (skinEnabled && Skin::skinMaterialFlags.w > 0.5f) {
+	bool hasSkinExtra = Skin::GetMaterialFlags().x > 0.5f;
+	bool hasSkinWetness = Skin::GetMaterialFlags().y > 0.5f;
+	if (skinEnabled && Skin::GetMaterialFlags().w > 0.5f) {
 		skinsk = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
 	}
 	float4 skinWetnessNormal = float4(0.5f, 0.5f, 1.f, 1.f);
@@ -2323,7 +2323,7 @@ PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
 		float3 combinedTangentNormal = tangentNormal;
 		if (skinData.skinDetailParams.w > 0.0f) {
 			float3 detailNormal = Skin::SampleDetailNormal(detailUV, SharedData::MipBias).rgb * 2.0f - 1.0f;
-			bool normalOnly = Skin::skinMaterialFlags.z > 0.5f;
+			bool normalOnly = Skin::GetMaterialFlags().z > 0.5f;
 			if (normalOnly)
 				detailNormal.z = sqrt(saturate(1.0f - dot(detailNormal.xy, detailNormal.xy)));
 			float detailMask = normalOnly ? 1.0f : saturate(Skin::SampleDetail(SampNormalSampler, uv, SharedData::MipBias).a);

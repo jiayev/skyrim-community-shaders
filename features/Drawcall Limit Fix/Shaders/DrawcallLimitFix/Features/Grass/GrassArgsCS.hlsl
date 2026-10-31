@@ -27,7 +27,7 @@ cbuffer GrassArgsConstants : register(b0)
 // GrassLayout.h.
 static const uint kTiers = 3;
 static const uint kMaxDrawSlots = 3 * 1024;
-static const uint kBucketRowBytes = 160;
+static const uint kBucketRowBytes = 208;
 static const uint kMeshRowBytes = 32;
 static const uint kNoMesh = 0xFFFFFFFFu;
 static const uint kBucketTruePbr = 1;
@@ -49,8 +49,7 @@ void Pack(RWByteAddressBuffer a_draws, uint a_counter, uint a_array, uint a_vert
 	a_draws.Store4(a_array + at * 16, uint4(a_vertices, a_instances, 0, a_first));
 }
 
-[numthreads(64, 1, 1)] void main(uint a_id : SV_DispatchThreadID)
-{
+[numthreads(64, 1, 1)] void main(uint a_id : SV_DispatchThreadID) {
 	ByteAddressBuffer draw = ResourceDescriptorHeap[DrawIndex];
 	RWByteAddressBuffer draws = ResourceDescriptorHeap[DrawsIndex];
 	if (a_id >= DrawSlots || a_id >= kMaxDrawSlots)

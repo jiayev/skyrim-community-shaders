@@ -28,10 +28,10 @@ cbuffer GrassCullConstants : register(b0)
 	uint DrawsIndex;      // RWByteAddressBuffer: the draws buffer (DrawsHeader, the counts, the arguments' arrays)
 	uint LatchIndex;      // ByteAddressBuffer: the depth segment's BuildDrawsLatch (its view-projection, its HZB's UV scale)
 	uint LatchOffset;
-	uint Phase;           // 1 or 2
-	uint RetestOffset;    // bytes: the retest list's first entry
-	uint HzbIndex;        // Texture2D<float>: 0 when there is no HZB to test against
-	uint HzbSizePacked;   // mip 0: width in the low 16 bits, height in the high 16
+	uint Phase;          // 1 or 2
+	uint RetestOffset;   // bytes: the retest list's first entry
+	uint HzbIndex;       // Texture2D<float>: 0 when there is no HZB to test against
+	uint HzbSizePacked;  // mip 0: width in the low 16 bits, height in the high 16
 	uint HzbMips;
 	uint Padding0;
 }
@@ -39,7 +39,7 @@ cbuffer GrassCullConstants : register(b0)
 // GrassLayout.h.
 static const uint kInstanceBytes = 32;
 static const uint kShapeRowBytes = 32;
-static const uint kBucketRowBytes = 160;
+static const uint kBucketRowBytes = 208;
 static const uint kFrameBytes = 8;  // GrassInstances::InstanceFrame: the wind halfs, then the fade (unorm16) and flags (high 16)
 static const uint kTiers = 3;
 static const uint kBucketTierOne = 4;
@@ -85,7 +85,8 @@ bool InView(float4x4 a_viewProj, float3 a_centre, float a_radius)
 	const uint cullFlags = latch.Load(LatchOffset + 16);
 	const float4 r0 = a_viewProj[0], r1 = a_viewProj[1], r2 = a_viewProj[2], r3 = a_viewProj[3];
 	float4 planes[6] = { r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2 };
-	[unroll] for (uint p = 0; p < 6; ++p) {
+	[unroll] for (uint p = 0; p < 6; ++p)
+	{
 		if (p == 4 && (cullFlags & 0x200u) != 0)
 			continue;
 		const float length = sqrt(dot(planes[p].xyz, planes[p].xyz));
@@ -282,8 +283,7 @@ uint Tier(Cull a_cull, float a_projPx, float a_dither, uint a_bucketFlags)
 	return tier;
 }
 
-[numthreads(64, 1, 1)] void main(uint a_id : SV_DispatchThreadID)
-{
+[numthreads(64, 1, 1)] void main(uint a_id : SV_DispatchThreadID) {
 	ByteAddressBuffer draw = ResourceDescriptorHeap[DrawIndex];
 	RWByteAddressBuffer draws = ResourceDescriptorHeap[DrawsIndex];
 	const Cull cull = LoadCull(draw);

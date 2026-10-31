@@ -41,9 +41,9 @@ static const uint kDCLFGrassAlphaParams = 256 + 36;
 // GrassInstances::BucketRow (160 bytes): mesh[3] by tier, flags, ..., diffuse, depth sampler, colour sampler, alpha reference at 32;
 // wavePeriod at 64, pbrFlags at 76, scaleMask at 80, normal, RMAOS, features textures and the PBR sampler at 96, pbrParams1 and 2,
 // windDirection at 144.
-static const uint kDCLFGrassBucketStride = 160, kDCLFGrassBucketFlags = 12, kDCLFGrassBucketTextures = 32, kDCLFGrassBucketWavePeriod = 64,
+static const uint kDCLFGrassBucketStride = 208, kDCLFGrassBucketFlags = 12, kDCLFGrassBucketTextures = 32, kDCLFGrassBucketWavePeriod = 64,
 				  kDCLFGrassBucketPbrFlags = 76, kDCLFGrassBucketScaleMask = 80, kDCLFGrassBucketPbrTextures = 96, kDCLFGrassBucketPbrParams1 = 112,
-				  kDCLFGrassBucketPbrParams2 = 128, kDCLFGrassBucketWindDirection = 144;
+				  kDCLFGrassBucketPbrParams2 = 128, kDCLFGrassBucketWindDirection = 144, kDCLFGrassBucketPbrParams3 = 160, kDCLFGrassBucketPbrParams4 = 176, kDCLFGrassBucketExtraTextures = 192;
 static const uint kDCLFGrassBucketTruePbr = 1u << 0, kDCLFGrassBucketSphereNormal = 1u << 1;
 // GrassInstances::InstanceFrame (8 bytes): windCur and windPrev as halfs; the fade (unorm16) and, in the high 16 bits, the flags (bits 0-1 the
 // tier, 2 in collision range, 3 simple shading). The vertex stage takes it unpacked (DCLFGrassFrame: windCur, windPrev, fade as floats, flags).
@@ -624,6 +624,10 @@ struct PS_OUTPUT
 #endif
 
 #ifdef PSHADER
+SamplerState SampShadowMaskSampler : register(s1);
+#	if defined(PHYSICAL_SKY)
+SamplerState SampPhysicalSkyWrapSampler : register(s7);
+#	endif
 #	if defined(DCLF_PULLED)
 // The pass's textures and samplers by descriptor heap index: the bucket's (its row's, read by DCLFGrassPixelStatics), the frame's
 // shadow mask (the draw row's). A multi-draw's waves may mix buckets, so the indices are non-uniform. PerFrame (b0) is not read.
@@ -646,6 +650,12 @@ SamplerState DCLFGrassSamplerAt(uint a_index)
 // PerMaterial (b1) from the bucket's row: TruePBR's material, which GrassShared reads at capture.
 static uint PBRFlags;
 static float3 PBRParams1;  // roughness scale, specular level
+static float4 PBRParams3, PBRParams4;
+static uint DCLFGrassFuzz, DCLFGrassEmissive;
+#			define SampFuzzSampler DCLFGrassSamplerAt(DCLFGrassPbrSampler)
+#			define SampEmissiveSampler DCLFGrassSamplerAt(DCLFGrassPbrSampler)
+#			define TexFuzzSampler DCLFGrassTextureAt(DCLFGrassFuzz)
+#			define TexEmissiveSampler DCLFGrassTextureAt(DCLFGrassEmissive)
 static float4 PBRParams2;  // subsurface color, subsurface opacity
 static uint DCLFGrassNormal, DCLFGrassRmaos, DCLFGrassFeatures, DCLFGrassPbrSampler;
 #			define SampNormalSampler DCLFGrassSamplerAt(DCLFGrassPbrSampler)
@@ -679,14 +689,15 @@ void DCLFGrassPixelStatics(uint a_bucket)
 	DCLFGrassPbrSampler = pbrTextures.w;
 	PBRParams1 = asfloat(vk::RawBufferLoad<uint3>(DCLFGrassBucketRow + kDCLFGrassBucketPbrParams1, 4));
 	PBRParams2 = asfloat(vk::RawBufferLoad<uint4>(DCLFGrassBucketRow + kDCLFGrassBucketPbrParams2, 4));
+	PBRParams3 = asfloat(vk::RawBufferLoad<uint4>(DCLFGrassBucketRow + kDCLFGrassBucketPbrParams3, 4));
+	PBRParams4 = asfloat(vk::RawBufferLoad<uint4>(DCLFGrassBucketRow + kDCLFGrassBucketPbrParams4, 4));
+	const uint2 extraTextures = vk::RawBufferLoad<uint2>(DCLFGrassBucketRow + kDCLFGrassBucketExtraTextures, 4);
+	DCLFGrassFuzz = extraTextures.x;
+	DCLFGrassEmissive = extraTextures.y;
 #		endif
 }
 #	else
 SamplerState SampBaseSampler : register(s0);
-SamplerState SampShadowMaskSampler : register(s1);
-#		if defined(PHYSICAL_SKY)
-SamplerState SampPhysicalSkyWrapSampler : register(s7);
-#		endif
 #		if defined(GRASS_LIGHTING) && defined(TRUE_PBR)
 SamplerState SampNormalSampler : register(s2);
 SamplerState SampRMAOSSampler : register(s3);

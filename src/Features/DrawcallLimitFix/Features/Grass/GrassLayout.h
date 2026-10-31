@@ -78,7 +78,7 @@ namespace DCLF::GrassInstances
 		// Tiers 0 and 1: their first entries in the visible list, filled upward; tier 2: the end of the range it shares with tier 1, filled
 		// downward from it (GrassCullCS Append).
 		std::uint32_t visibleBase[kTiers]{};
-		std::uint32_t instanceCount = 0;  // each range's capacity in the visible list; 0: a free slot (or not drawable yet)
+		std::uint32_t instanceCount = 0;                            // each range's capacity in the visible list; 0: a free slot (or not drawable yet)
 		DescriptorIndex diffuseIndex, depthSampler, colourSampler;  // OwnedRow's (GrassTables.cpp, BindBucket)
 		float alphaRef = 0.0f;
 		float boundCenter[3]{};
@@ -89,12 +89,18 @@ namespace DCLF::GrassInstances
 		float scaleMask[3]{};
 		std::uint32_t pad = 0;
 		DescriptorIndex normalIndex, rmaosIndex, featuresIndex, pbrSampler;
-		float pbrParams1[4]{};  // roughness scale, specular level, 0, 0
-		float pbrParams2[4]{};  // subsurface colour rgb, opacity
+		float pbrParams1[4]{};                 // roughness scale, specular level, emissive scale, 0
+		float pbrParams2[4]{};                 // subsurface colour rgb, opacity
 		float windDirection[2]{ 0.0f, 1.0f };  // the vertex stage's WindVector.xy: the shapes' model Y axis in world space
 		float lodMeshCost[2]{ 1.0f, 1.0f };    // tiers 1 and 2's sqrt(cost) (tier 0's minPixelScale where the tier has no mesh)
+		float pbrParams3[4]{};                 // fuzz colour rgb, weight
+		float pbrParams4[4]{};                 // subsurface balance, front/back specular weights, back roughness scale
+		DescriptorIndex fuzzIndex, emissiveIndex;
+		std::uint32_t materialPad[2]{};
 	};
-	static_assert(sizeof(BucketRow) == 160);
+	static_assert(sizeof(BucketRow) == 208);
+	static_assert(offsetof(BucketRow, pbrParams3) == 160 && offsetof(BucketRow, pbrParams4) == 176 &&
+				  offsetof(BucketRow, fuzzIndex) == 192 && offsetof(BucketRow, emissiveIndex) == 196);
 	static_assert(offsetof(BucketRow, flags) == 12 && offsetof(BucketRow, visibleBase) == 16 && offsetof(BucketRow, instanceCount) == 28 &&
 				  offsetof(BucketRow, diffuseIndex) == 32 && offsetof(BucketRow, alphaRef) == 44 && offsetof(BucketRow, boundCenter) == 48 &&
 				  offsetof(BucketRow, modelRadius) == 60 && offsetof(BucketRow, wavePeriod) == 64 && offsetof(BucketRow, distScale) == 68 &&
@@ -154,7 +160,7 @@ namespace DCLF::GrassInstances
 		float dirLightDirection[4]{};  // w: ShadowClampValue
 		float dirLightColor[4]{};      // w: FogNearColor.w
 		float ambientColor[4]{};
-		DescriptorIndex shadowMaskIndex;  // OwnedRow's (GrassTables.cpp, BindFrameTextures)
+		DescriptorIndex shadowMaskIndex;                                  // OwnedRow's (GrassTables.cpp, BindFrameTextures)
 		DescriptorIndex collisionIndex = DescriptorIndex::Sentinel(~0u);  // ~0u: no collision displacement
 		std::uint32_t bucketSlots = 0;
 		std::uint32_t flags = 0;
@@ -182,10 +188,10 @@ namespace DCLF::GrassInstances
 	struct DrawsHeader
 	{
 		std::uint32_t phaseOneDraws = 0, phaseTwoDraws = 0, colourDraws[2]{};
-		std::uint32_t retests = 0;            // phase 1's occluded instances (the retest list's length)
-		std::uint32_t tested = 0;             // instances that reached the occlusion test in phase 1
+		std::uint32_t retests = 0;  // phase 1's occluded instances (the retest list's length)
+		std::uint32_t tested = 0;   // instances that reached the occlusion test in phase 1
 		std::uint32_t phaseOneInstances = 0, phaseTwoInstances = 0;
-		std::uint32_t stats[8]{};             // kStat*
+		std::uint32_t stats[8]{};  // kStat*
 	};
 	static_assert(sizeof(DrawsHeader) == 64 && offsetof(DrawsHeader, retests) == 16 && offsetof(DrawsHeader, phaseOneInstances) == 24 &&
 				  offsetof(DrawsHeader, stats) == 32);
