@@ -24,6 +24,7 @@ namespace DCLF::Api
 	{
 		SkinPerGeometry,  // Advanced Skin's SkinPerGeometry (PS b7): float4
 		SkinMaterial,     // Per-mesh flags, profile, three texture descriptors and detail sampler.
+		LandscapeSeams,   // Per-quad weight, data and borrowed layer descriptors (index + 1; zero: inactive).
 		Count,
 	};
 
@@ -71,7 +72,8 @@ namespace DCLF::Api
 	 *
 	 * - name: what the registration's failures call it.
 	 * - field: the row's field (one contribution's).
-	 * - members: the entry class (not None) whose members are the field's slots (Core zeroes a slot's value when it leaves the class).
+	 * - members: the entry class whose members are the field's slots (Core zeroes a slot's value when it leaves the class).
+	 *   None: the capture tracks geometry through changedObjects and clears its own retired slots; membership is unused.
 	 * - membership: render thread, at the frame's start as it takes each publication's deltas (FrameView::HandOverAtFrameStart), in the
 	 *   publications' order: the class's membership writes, for the feature's own index of owners (none: a publication without writes).
 	 * - capture: render thread, at the frame's start (FrameDriver, before FrameValues::Kick), in registration order: the members' values

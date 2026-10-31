@@ -435,7 +435,7 @@ namespace DCLF::Features
 	static_assert(Reflection::kFaces <= Draws::kMaxViewFaces, "the reflection's faces are past Core's kMaxViewFaces");
 	// The feature block: BindlessObject and BindlessShading are the C++ mirrors of the frozen DCLFObjects.hlsli (DCLFObjectRecord words 4-11,
 	// DCLFShadingRow words 16-23), so neither size nor the block's place moves.
-	static_assert(sizeof(BindlessObject) == 64 && sizeof(BindlessShading) == 240, "an object row is not DCLFObjects.hlsli's size");
+	static_assert(sizeof(BindlessObject) == 64 && sizeof(BindlessShading) == 272, "an object row is not DCLFObjects.hlsli's size");
 	static_assert(sizeof(BindlessObject::featureBlock) == Api::kShadingBlockWords * 4 && sizeof(BindlessShading::featureBlock) == Api::kShadingBlockWords * 4,
 		"the feature block is not Api::kShadingBlockWords");
 	static_assert(offsetof(BindlessObject, featureBlock) == TreeWind::kRecordBlockWord * 4, "TreeWind's record block word is not DCLFTreeParams");

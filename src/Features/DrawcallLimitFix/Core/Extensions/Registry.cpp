@@ -12,9 +12,9 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/NodeCaptures.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
@@ -410,8 +410,8 @@ namespace DCLF::Extensions
 		bool MaterialContributorComplete(const Api::MaterialContributor& a_contributor)
 		{
 			const bool stageValid = a_contributor.stage == Api::MaterialStage::Replace ? a_contributor.takesPass && !a_contributor.covers :
-			                        a_contributor.stage == Api::MaterialStage::After  ? a_contributor.covers && !a_contributor.takesPass :
-			                                                                            false;
+			                        a_contributor.stage == Api::MaterialStage::After   ? a_contributor.covers && !a_contributor.takesPass :
+			                                                                             false;
 			const auto& materialClass = a_contributor.materialClass;
 			const int classCallbacks = (materialClass.owns ? 1 : 0) + (materialClass.bytes ? 1 : 0) + (materialClass.textureFields ? 1 : 0);
 			const auto registers = a_contributor.textureRegisters;
@@ -728,7 +728,8 @@ namespace DCLF::Extensions
 				if (component && (!a_lines.component || a_lines.component.index >= lists.coordinatorComponents.size()))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s report lines {} name no registered component", feature, a_lines.name));
 				if (a_lines.name.empty() || (component ? a_lines.text || a_lines.lines :
-				                                        text ? !a_lines.text || a_lines.lines || a_lines.componentText : !a_lines.lines || a_lines.text || a_lines.componentText))
+												text   ? !a_lines.text || a_lines.lines || a_lines.componentText :
+														 !a_lines.lines || a_lines.text || a_lines.componentText))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered incomplete report lines", feature));
 				lists.reportLines.push_back({ std::string(a_lines.name), a_lines.point, a_lines.lines, a_lines.text, a_lines.component, a_lines.componentText });
 			}
@@ -872,7 +873,7 @@ namespace DCLF::Extensions
 				                        (entry.entryClass == Api::EntryClass::None ? !entry.parentKind && !entry.perFrame && !entry.holdsParent : entry.parentKind != 0);
 				const bool classValid = a_type.toggle ||
 				                        (!a_type.propertyFlags && a_type.itemClass == Api::FrameValueItemClass::None && !a_type.moves && !a_type.ranges &&
-				                            entry.entryClass != Api::EntryClass::None);
+											entry.entryClass != Api::EntryClass::None);
 				if (a_type.geometryType >= kGeometryTypeSlots || a_type.itemClass >= Api::FrameValueItemClass::Count || !entryValid || !classValid)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete geometry type contribution", feature));
 				auto& contribution = lists.geometryTypeContributions[a_type.geometryType];
@@ -1122,8 +1123,8 @@ namespace DCLF::Extensions
 
 			Api::ShadingFieldId RegisterShadingField(const Api::ShadingFieldContribution& a_field) override
 			{
-				if (a_field.field >= Api::ShadingRowField::Count || a_field.name.empty() || !a_field.membership || !a_field.capture ||
-					a_field.members == Api::EntryClass::None || a_field.members >= Api::EntryClass::Count)
+				if (a_field.field >= Api::ShadingRowField::Count || a_field.name.empty() || !a_field.capture ||
+					(a_field.members != Api::EntryClass::None && !a_field.membership) || a_field.members >= Api::EntryClass::Count)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete shading field", feature));
 				if (std::exchange(lists.shadingFieldTaken[static_cast<std::size_t>(a_field.field)], true))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes shading field {} ({}), which another registration has", feature,
@@ -1228,7 +1229,7 @@ namespace DCLF::Extensions
 			void RegisterLightingPassRules(const Api::LightingPassRules& a_rules) override { AddLightingPassRules(lists, feature, a_rules); }
 			void DeclarePerDrawBuffer(const Api::PerDrawBuffer& a_buffer) override { AddPerDrawBuffer(lists, feature, a_buffer); }
 
-			std::string_view feature;                       // the feature installing
+			std::string_view feature;                      // the feature installing
 			const Api::FrameSchedule* schedule = nullptr;  // the schedule InstallFeatures resolves (FindTrigger)
 
 		private:

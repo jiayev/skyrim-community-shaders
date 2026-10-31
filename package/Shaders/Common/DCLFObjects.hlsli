@@ -55,7 +55,8 @@ struct DCLFShadingRow
 	float4 DCLFShadingWindTimers;
 	float4 SkinMaterialFlags;
 	float4 SkinProfile[7];
-	uint4 SkinTextures;  // Controls, wetness, detail normal, detail sampler.
+	uint4 SkinTextures;               // Controls, wetness, detail normal, detail sampler.
+	uint4 LandscapeSeamsTextures[2];  // Weight/data views and six borrowed layer views, each descriptor index + 1.
 };
 
 // The object's placement (LightingConstants.h, BindlessPlacement), by the same index: what a move changes.

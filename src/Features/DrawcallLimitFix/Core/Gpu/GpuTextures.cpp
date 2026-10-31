@@ -201,7 +201,7 @@ namespace DCLF
 		{
 			winrt::com_ptr<ID3D11ShaderResourceView> view;
 			rhi::ResourcePtr image;
-			bool tracked = false;  // pinless: the import is tracked, ended here
+			IUnknown* tracked = nullptr;  // Held by view: image SRV or its buffer resource; untrack the same object.
 			// Pinless: the old storages of relocations that superseded the import, which its image reads (appended under the registry's
 			// lock).
 			std::vector<std::shared_ptr<const void>> storages;
@@ -211,8 +211,7 @@ namespace DCLF
 				// import, then the storage the wrapper's image was.
 				image = {};
 				if (tracked) {
-					IUnknown* object = view.get();
-					RenderGraphRuntime::Get().UntrackResources({ &object, 1 });
+					RenderGraphRuntime::Get().UntrackResources({ &tracked, 1 });
 				}
 				storages.clear();
 			}
@@ -459,7 +458,24 @@ namespace DCLF
 			D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
 			view->GetDesc(&viewDesc);
 			rhi::SrvDesc srv{};
-			if (!DescribeView(viewDesc, srv)) {
+			winrt::com_ptr<ID3D11Resource> bufferResource;
+			const bool structured = viewDesc.ViewDimension == D3D11_SRV_DIMENSION_BUFFER && viewDesc.Format == DXGI_FORMAT_UNKNOWN;
+			if (structured) {
+				view->GetResource(bufferResource.put());
+				auto buffer = bufferResource.try_as<ID3D11Buffer>();
+				D3D11_BUFFER_DESC desc{};
+				if (!buffer)
+					return Reject::View;
+				buffer->GetDesc(&desc);
+				if (!desc.StructureByteStride || desc.StructureByteStride % 4)
+					return Reject::View;
+				// Vulkan structured and raw SRVs both use storage-buffer descriptors. Express the range in words
+				// so DXVK's suballocation offset need not be a multiple of the shader's structure stride.
+				srv.dimension = rhi::SrvDim::Buffer;
+				srv.buffer.kind = rhi::BufferViewKind::Raw;
+				srv.buffer.firstElement = std::uint64_t(viewDesc.Buffer.FirstElement) * desc.StructureByteStride / 4;
+				srv.buffer.numElements = viewDesc.Buffer.NumElements * (desc.StructureByteStride / 4);
+			} else if (!DescribeView(viewDesc, srv)) {
 				if (a_counters.rejected[static_cast<std::size_t>(Reject::View)].load(std::memory_order_relaxed) < 8)
 					logger::info("[DCLF] Game texture view not supported: format {}, dimension {}", static_cast<int>(viewDesc.Format), static_cast<int>(viewDesc.ViewDimension));
 				return Reject::View;
@@ -479,63 +495,78 @@ namespace DCLF
 			{
 				ZoneScopedN("CS.DCLF.Texture.Import.DescribeResource");
 				auto& runtime = RenderGraphRuntime::Get();
+				// DXVK accepts image views, but buffer imports must name the underlying resource.
+				IUnknown* object = structured ? static_cast<IUnknown*>(bufferResource.get()) : view;
 				if (runtime.PinlessImports()) {
-					IUnknown* object = view;
 					DxvkOrgInteropTrackedResource tracked{};
 					HRESULT result = E_FAIL;
 					if (!runtime.TrackResources({ &object, 1 }, { &tracked, 1 }, { &result, 1 }) || FAILED(result))
 						return Reject::NotImage;
-					tracking.object = view;
+					tracking.object = object;
 					info = tracked.info;
 					a_entry.cookie = tracked.cookie;
 					a_entry.storageSerial = tracked.storageSerial;
 					a_entry.pinned = (tracked.flags & DXVK_ORG_TRACKED_PINNED) != 0;
-				} else if (!runtime.DescribeResource(view, info)) {
+				} else if (!runtime.DescribeResource(object, info)) {
 					return Reject::NotImage;
 				}
-				if (info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
+				if (info.kind != (structured ? DXVK_ORG_INTEROP_RESOURCE_BUFFER : DXVK_ORG_INTEROP_RESOURCE_IMAGE))
 					return Reject::NotImage;
 			}
-			const auto& image = info.image;
-			// DXVK keeps images it hands out (marked stable) in GENERAL and uses them between the graph's
-			// commands: imported with simultaneous access, they are read in GENERAL and never transitioned.
-			if (image.layout != VK_IMAGE_LAYOUT_GENERAL) {
-				if (a_counters.unsupportedLayouts.fetch_add(1, std::memory_order_relaxed) == 0)
-					logger::warn("[DCLF] A game texture is in Vulkan layout {}, not GENERAL; such textures stay native", static_cast<int>(image.layout));
-				return Reject::Import;
-			}
-
-			rhi::vulkan::ImportedImageDesc import{};
-			import.image = image.image;
-			import.createInfo.flags = image.flags;
-			import.createInfo.imageType = image.type;
-			import.createInfo.format = image.format;
-			import.createInfo.extent = image.extent;
-			import.createInfo.mipLevels = image.mipLevels;
-			import.createInfo.arrayLayers = image.arrayLayers;
-			import.createInfo.samples = image.samples;
-			import.createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-			import.createInfo.usage = image.usage;
-			import.createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-			import.createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-			import.currentLayout = image.layout;
-			import.simultaneousAccess = true;
-			// Aftermath resource tracking reports Vulkan object names at a fault. Distinguish
-			// imports by the stable DXVK image and the game SRV that produced this view.
-			const auto importName = std::format("DCLF texture image {:#x} SRV {:#x}",
-				reinterpret_cast<std::uintptr_t>(image.image), reinterpret_cast<std::uintptr_t>(view));
-			import.debugName = importName.c_str();
-			{
-				ZoneScopedN("CS.DCLF.Texture.Import.WrapImage");
-				if (rhi::vulkan::import_image(a_context.device, import, a_entry.image) != rhi::Result::Ok || !a_entry.image)
+			if (structured) {
+				const auto& buffer = info.buffer;
+				if (buffer.offset % 4 || !(buffer.usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT))
 					return Reject::Import;
-			}
+				rhi::vulkan::ImportedBufferDesc import{};
+				import.buffer = buffer.buffer;
+				import.size = buffer.offset + buffer.size;
+				import.usage = buffer.usage;
+				import.debugName = "DCLF imported structured buffer";
+				if (rhi::vulkan::import_buffer(a_context.device, import, a_entry.image) != rhi::Result::Ok || !a_entry.image)
+					return Reject::Import;
+				srv.buffer.firstElement += buffer.offset / 4;
+			} else {
+				const auto& image = info.image;
+				// DXVK keeps images it hands out (marked stable) in GENERAL and uses them between the graph's
+				// commands: imported with simultaneous access, they are read in GENERAL and never transitioned.
+				if (image.layout != VK_IMAGE_LAYOUT_GENERAL) {
+					if (a_counters.unsupportedLayouts.fetch_add(1, std::memory_order_relaxed) == 0)
+						logger::warn("[DCLF] A game texture is in Vulkan layout {}, not GENERAL; such textures stay native", static_cast<int>(image.layout));
+					return Reject::Import;
+				}
 
-			srv.componentMapping = MappingOf(image.components);
+				rhi::vulkan::ImportedImageDesc import{};
+				import.image = image.image;
+				import.createInfo.flags = image.flags;
+				import.createInfo.imageType = image.type;
+				import.createInfo.format = image.format;
+				import.createInfo.extent = image.extent;
+				import.createInfo.mipLevels = image.mipLevels;
+				import.createInfo.arrayLayers = image.arrayLayers;
+				import.createInfo.samples = image.samples;
+				import.createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+				import.createInfo.usage = image.usage;
+				import.createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+				import.createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+				import.currentLayout = image.layout;
+				import.simultaneousAccess = true;
+				// Aftermath resource tracking reports Vulkan object names at a fault. Distinguish
+				// imports by the stable DXVK image and the game SRV that produced this view.
+				const auto importName = std::format("DCLF texture image {:#x} SRV {:#x}",
+					reinterpret_cast<std::uintptr_t>(image.image), reinterpret_cast<std::uintptr_t>(view));
+				import.debugName = importName.c_str();
+				{
+					ZoneScopedN("CS.DCLF.Texture.Import.WrapImage");
+					if (rhi::vulkan::import_image(a_context.device, import, a_entry.image) != rhi::Result::Ok || !a_entry.image)
+						return Reject::Import;
+				}
+
+				srv.componentMapping = MappingOf(image.components);
+			}
 			auto backing = a_context.cleanup->Make<ImportedBacking>();
 			backing->view.copy_from(view);
 			backing->image = std::move(a_entry.image);
-			backing->tracked = std::exchange(tracking.object, nullptr) != nullptr;
+			backing->tracked = std::exchange(tracking.object, nullptr);
 			a_entry.backing = backing;
 			{
 				ZoneScopedN("CS.DCLF.Texture.Import.CreateView");
@@ -547,7 +578,7 @@ namespace DCLF
 			TracyPlot("CS.DCLF.Texture.ImportSource", static_cast<std::int64_t>(a_sourceTag));
 			if (!SwitchValue(Switch::TraceTexturePaths).empty()) {
 				TracyPlot("CS.DCLF.Texture.ImportView", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(view)));
-				TracyPlot("CS.DCLF.Texture.ImportImage", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(image.image)));
+				TracyPlot("CS.DCLF.Texture.ImportImage", structured ? 0 : static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(info.image.image)));
 			}
 			return Reject::None;
 		}

@@ -235,8 +235,9 @@ namespace DCLF
 		float featureBlock[8];
 		// Skin: material flags, seven profile rows, and bit-cast texture/sampler descriptor indices.
 		float skinMaterial[36];
+		std::uint32_t landscapeSeams[8];  // Descriptor index + 1; zero disables seam resources for this quad.
 	};
-	static_assert(sizeof(BindlessShading) == 240);
+	static_assert(sizeof(BindlessShading) == 272);
 
 	/**
 	 * @brief An object's shading from its property now (SetupGeometry's MaterialData, EmitColor, SSRParams.w for a_pass); wetness left

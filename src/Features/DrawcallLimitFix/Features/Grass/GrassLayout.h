@@ -87,7 +87,7 @@ namespace DCLF::GrassInstances
 		float distScale = 1.0f, minPixelScale = 1.0f;  // Grass Optimizations' mesh cost bias, tier 0's: 1/sqrt(cost), sqrt(cost)
 		std::uint32_t pbrFlags = 0;
 		float scaleMask[3]{};
-		std::uint32_t pad = 0;
+		float canopyHeight = 1.0f;
 		DescriptorIndex normalIndex, rmaosIndex, featuresIndex, pbrSampler;
 		float pbrParams1[4]{};                 // roughness scale, specular level, emissive scale, 0
 		float pbrParams2[4]{};                 // subsurface colour rgb, opacity
@@ -96,9 +96,10 @@ namespace DCLF::GrassInstances
 		float pbrParams3[4]{};                 // fuzz colour rgb, weight
 		float pbrParams4[4]{};                 // subsurface balance, front/back specular weights, back roughness scale
 		DescriptorIndex fuzzIndex, emissiveIndex;
-		std::uint32_t materialPad[2]{};
+		float lodCanopyHeights[2]{ 1.0f, 1.0f };
 	};
 	static_assert(sizeof(BucketRow) == 208);
+	static_assert(offsetof(BucketRow, canopyHeight) == 92 && offsetof(BucketRow, lodCanopyHeights) == 200);
 	static_assert(offsetof(BucketRow, pbrParams3) == 160 && offsetof(BucketRow, pbrParams4) == 176 &&
 				  offsetof(BucketRow, fuzzIndex) == 192 && offsetof(BucketRow, emissiveIndex) == 196);
 	static_assert(offsetof(BucketRow, flags) == 12 && offsetof(BucketRow, visibleBase) == 16 && offsetof(BucketRow, instanceCount) == 28 &&
@@ -166,7 +167,8 @@ namespace DCLF::GrassInstances
 		std::uint32_t flags = 0;
 		std::array<std::byte, 64> collision{};  // GrassCollision::PerFrame (GrassShared::Collision::perFrame)
 		float eye[4]{};                         // the main camera's world position (the cull's distances)
-		std::uint32_t reserved[4]{};
+		DescriptorIndex skyClampSampler, skyWrapSampler;
+		std::uint32_t reserved[2]{};
 		CullRow cull;
 	};
 	static_assert(sizeof(DrawRow) == 384);
@@ -174,7 +176,8 @@ namespace DCLF::GrassInstances
 				  offsetof(DrawRow, windVector) == 64 && offsetof(DrawRow, timeBase) == 80 && offsetof(DrawRow, dirLightDirection) == 96 &&
 				  offsetof(DrawRow, dirLightColor) == 112 && offsetof(DrawRow, ambientColor) == 128 && offsetof(DrawRow, shadowMaskIndex) == 144 &&
 				  offsetof(DrawRow, collisionIndex) == 148 && offsetof(DrawRow, bucketSlots) == 152 && offsetof(DrawRow, flags) == 156 &&
-				  offsetof(DrawRow, collision) == 160 && offsetof(DrawRow, eye) == 224 && offsetof(DrawRow, cull) == 256);
+				  offsetof(DrawRow, collision) == 160 && offsetof(DrawRow, eye) == 224 && offsetof(DrawRow, skyClampSampler) == 240 &&
+				  offsetof(DrawRow, skyWrapSampler) == 244 && offsetof(DrawRow, cull) == 256);
 
 	/*
 	 * The draws buffer (fixed, not versioned; the family's declared indirect-argument resource): per draw slot (a bucket's tier,

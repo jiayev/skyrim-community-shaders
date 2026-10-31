@@ -19,6 +19,7 @@
 #include "Features/DrawcallLimitFix/Features/Grass/Diagnostics/GrassEvents.h"
 #include "Features/DrawcallLimitFix/Features/Grass/GrassMirror.h"
 
+#include "Features/PhysicalSky.h"
 #include "GrassShared/GrassFrame.h"
 
 #include "RenderGraph/ComputeProgram.h"
@@ -380,6 +381,24 @@ namespace DCLF::Features::Grass
 		/** @brief The frame's shadow mask (bShadowsOnGrass: the engine's, else its white default) and Grass Collision's published state. */
 		bool BindFrameTextures(OwnedRow<DrawRow>& a_row)
 		{
+			// Physical Sky's clamp and 3D wrap samplers must travel with the pulled draw, like its textures.
+			// Cache the exact feature samplers; the engine's 2D address modes need not wrap the W coordinate.
+			static std::array<winrt::com_ptr<ID3D11SamplerState>, 2> sources;
+			static std::array<GpuTextures::Binding, 2> bindings;
+			static std::uint32_t generation = ~0u;
+			auto& textures = GpuTextures::Get();
+			const bool changedDevice = generation != textures.Generation();
+			generation = textures.Generation();
+			auto& sky = globals::features::physicalSky;
+			const std::array<ID3D11SamplerState*, 2> samplers{ sky.loaded ? sky.sampTr.get() : nullptr, sky.loaded ? sky.sampTileable.get() : nullptr };
+			for (std::size_t i = 0; i < samplers.size(); ++i) {
+				if (changedDevice || sources[i].get() != samplers[i] || bindings[i].index == GpuTextures::kInvalid) {
+					sources[i].copy_from(samplers[i]);
+					bindings[i] = samplers[i] ? textures.ResolveSamplerBinding(samplers[i]) : textures.SamplerBinding(0, 2);
+				}
+			}
+			if (!a_row.Bind(&DrawRow::skyClampSampler, bindings[0]) || !a_row.Bind(&DrawRow::skyWrapSampler, bindings[1]))
+				return false;
 			static auto* shadowsOnGrass = RE::GetINISetting("bShadowsOnGrass:Display");
 			ID3D11ShaderResourceView* mask = DefaultView(false);
 			if ((!shadowsOnGrass || shadowsOnGrass->GetBool()) && globals::game::renderer)

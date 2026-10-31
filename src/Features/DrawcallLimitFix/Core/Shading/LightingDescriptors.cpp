@@ -3,18 +3,18 @@
 
 #include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 
-#include "ShaderCache.h"
-#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
-#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
-#include "State.h"
-#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
-#include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
+#include "ShaderCache.h"
+#include "State.h"
 
 namespace DCLF
 {
@@ -287,7 +287,8 @@ namespace DCLF
 				// accumulated pass the hint is GetRenderPasses' for the settled object: 2 + (material alpha < 1 or blending).
 				if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Decal) || !(f & Bit(Flag::kZBufferTest)))
 					return Ineligible::Decal;
-				const std::uint32_t hint = a_accumulated ? a_accumulated->hint : (a_property.materialAlpha < 1.0f || blending) ? 3u : 2u;
+				const std::uint32_t hint = a_accumulated ? a_accumulated->hint : (a_property.materialAlpha < 1.0f || blending) ? 3u :
+				                                                                                                                 2u;
 				if (hint == 2) {
 					if (blending)
 						return Ineligible::Decal;  // not measured in this group; the state would be a guess
@@ -343,7 +344,7 @@ namespace DCLF
 			// GetRenderPasses would. A material alpha of 0 registers nothing: left native (so not drawn).
 			if (f & (Bit(Flag::kRefraction) | Bit(Flag::kTempRefraction))) {
 				if (!Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Refraction) || !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward) ||
-				    a_out.decalGroup || a_layer || a_out.terrainGroup || a_property.materialAlpha <= 0.0f) {
+					a_out.decalGroup || a_layer || a_out.terrainGroup || a_property.materialAlpha <= 0.0f) {
 					a_out.rejectedTechnique = kRefractionReject;
 					return Ineligible::Technique;
 				}
@@ -366,8 +367,10 @@ namespace DCLF
 			if (a_out.refraction) {
 				// The refraction draw's forward state (above): alpha property not applied.
 			} else if (translucent && a_out.decalGroup == 0 && !a_layer && a_out.terrainGroup == 0 &&
-			           Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward)) {
-				const std::uint32_t blendMode = blending ? AlphaBlendModeOf(*alpha) : 0u;
+					   Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward)) {
+				// SetupAlphaBlend (FUN_14150bc80) uses source-alpha blending for material fades even without
+				// NiAlphaProperty blending. Mode 0 makes hidden outfit meshes with alpha 0 draw opaque.
+				const std::uint32_t blendMode = blending ? AlphaBlendModeOf(*alpha) : 1u;
 				if (blending && blendMode == 0)
 					return Ineligible::AlphaBlend;
 				a_out.forward = true;

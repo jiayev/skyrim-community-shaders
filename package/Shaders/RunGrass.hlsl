@@ -449,7 +449,10 @@ VS_OUTPUT DCLFGrassVertex(VS_INPUT input, float3 a_origin, uint4 a_frame, uint a
 #			ifdef GRASS_LIGHTING
 	float3x3 world3x3 = float3x3(input.InstanceData2.xyz, input.InstanceData3.xyz, float3(input.InstanceData4.x, input.InstanceData2.w, input.InstanceData3.w));
 	vsout.VertexNormal.xyz = mul(world3x3, input.Normal.xyz * 2.0 - 1.0);
-	vsout.VertexNormal.w = input.Color.w;
+	const uint tier = a_frame.w & kDCLFGrassTierMask;
+	const float canopyHeight = asfloat(vk::RawBufferLoad<uint>(DCLFGrassBucketRow + (tier == 0 ? 92 : 200 + 4 * (tier - 1)), 4));
+	vsout.VertexNormal.w = GetCanopyHeight(input, canopyHeight);
+	vsout.ClumpNormal = GetClumpNormal(input, world3x3, canopyHeight);
 #			endif
 #		endif
 
@@ -624,14 +627,17 @@ struct PS_OUTPUT
 #endif
 
 #ifdef PSHADER
+#	if !defined(DCLF_PULLED)
 SamplerState SampShadowMaskSampler : register(s1);
-#	if defined(PHYSICAL_SKY)
+#		if defined(PHYSICAL_SKY)
 SamplerState SampPhysicalSkyWrapSampler : register(s7);
+#		endif
 #	endif
 #	if defined(DCLF_PULLED)
 // The pass's textures and samplers by descriptor heap index: the bucket's (its row's, read by DCLFGrassPixelStatics), the frame's
 // shadow mask (the draw row's). A multi-draw's waves may mix buckets, so the indices are non-uniform. PerFrame (b0) is not read.
 static uint DCLFGrassDiffuse, DCLFGrassSampler, DCLFGrassShadowMask;
+static uint DCLFGrassSkyClampSampler, DCLFGrassSkyWrapSampler;
 static float AlphaTestRefRS;
 Texture2D<float4> DCLFGrassTextureAt(uint a_index)
 {
@@ -644,6 +650,8 @@ SamplerState DCLFGrassSamplerAt(uint a_index)
 	return s;
 }
 #		define SampBaseSampler DCLFGrassSamplerAt(DCLFGrassSampler)
+#		define SampShadowMaskSampler DCLFGrassSamplerAt(DCLFGrassSkyClampSampler)
+#		define SampPhysicalSkyWrapSampler DCLFGrassSamplerAt(DCLFGrassSkyWrapSampler)
 #		define TexBaseSampler DCLFGrassTextureAt(DCLFGrassDiffuse)
 #		define TexShadowMaskSampler DCLFGrassTextureAt(DCLFGrassShadowMask)
 #		if defined(GRASS_LIGHTING) && defined(TRUE_PBR)
@@ -680,6 +688,8 @@ void DCLFGrassPixelStatics(uint a_bucket)
 	// [UNVERIFIED] the engine's grass alpha reference (b11): the bucket's, 0.5 until stage 0 logs it.
 	AlphaTestRefRS = asfloat(textures.w);
 	DCLFGrassShadowMask = DCLFGrassDrawUint(kDCLFGrassShadowMaskIndex);
+	DCLFGrassSkyClampSampler = DCLFGrassDrawUint(240);
+	DCLFGrassSkyWrapSampler = DCLFGrassDrawUint(244);
 #		if defined(GRASS_LIGHTING) && defined(TRUE_PBR)
 	PBRFlags = vk::RawBufferLoad<uint>(DCLFGrassBucketRow + kDCLFGrassBucketPbrFlags, 4);
 	const uint4 pbrTextures = vk::RawBufferLoad<uint4>(DCLFGrassBucketRow + kDCLFGrassBucketPbrTextures, 4);

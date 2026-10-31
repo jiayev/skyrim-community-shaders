@@ -22,6 +22,16 @@ namespace LandscapeSeams
 	static const float QuadSize = 2048.0;
 	static const float GridCells = 16.0;
 
+#if defined(DCLF_BINDLESS_DRAW)
+	uint Descriptor(uint index)
+	{
+		return DCLFShading[DCLFObjectIndex].LandscapeSeamsTextures[index >> 2][index & 3];
+	}
+	Texture2D<float4> Borrowed(uint layer, uint texture)
+	{
+		return ResourceDescriptorHeap[Descriptor(2 + layer * 3 + texture) - 1];
+	}
+#else
 	Texture2DArray<float4> Weights : register(t117);
 	StructuredBuffer<QuadData> Quad : register(t118);
 
@@ -32,6 +42,7 @@ namespace LandscapeSeams
 	Texture2D<float4> Color1 : register(t122);
 	Texture2D<float4> Normal1 : register(t123);
 	Texture2D<float4> Rmaos1 : register(t124);
+#endif
 
 	static QuadData Data;
 	static float2 ExtraWeights = 0;
@@ -43,6 +54,9 @@ namespace LandscapeSeams
 
 	float4 FetchSlice(int2 cell, float2 blend, int slice)
 	{
+#if defined(DCLF_BINDLESS_DRAW)
+		Texture2DArray<float4> Weights = ResourceDescriptorHeap[Descriptor(0) - 1];
+#endif
 		float4 w00 = Weights.Load(int4(cell, slice, 0));
 		float4 w10 = Weights.Load(int4(cell + int2(1, 0), slice, 0));
 		float4 w01 = Weights.Load(int4(cell + int2(0, 1), slice, 0));
@@ -52,8 +66,14 @@ namespace LandscapeSeams
 
 	void Load(float2 worldXY, inout float4 weights1, inout float4 weights2)
 	{
-		Data = Quad[0];
 		ExtraWeights = 0;
+#if defined(DCLF_BINDLESS_DRAW)
+		Data = (QuadData)0;
+		if (Descriptor(0) == 0 || Descriptor(1) == 0)
+			return;
+		StructuredBuffer<QuadData> Quad = ResourceDescriptorHeap[Descriptor(1) - 1];
+#endif
+		Data = Quad[0];
 		[branch] if ((Data.Flags & FlagValid) != 0)
 		{
 			float2 grid = saturate((worldXY - Data.Origin) / QuadSize) * GridCells;
@@ -110,8 +130,14 @@ namespace LandscapeSeams
 		LIGHTING_LANDSCAPE_BLEND_ONE_LAYER(INDEX, COLOR_TEX, SampColorSampler, NORM_TEX, SampColorSampler, WEIGHT, LandscapeSeams::Data.IsSnow[INDEX])
 #endif
 
-#define LANDSCAPE_SEAMS_BLEND_EXTRAS                                                                                                        \
-	LANDSCAPE_SEAMS_BLEND_EXTRA(0, LandscapeSeams::Color0, LandscapeSeams::Normal0, LandscapeSeams::Rmaos0, LandscapeSeams::ExtraWeights.x) \
-	LANDSCAPE_SEAMS_BLEND_EXTRA(1, LandscapeSeams::Color1, LandscapeSeams::Normal1, LandscapeSeams::Rmaos1, LandscapeSeams::ExtraWeights.y)
+#if defined(DCLF_BINDLESS_DRAW)
+#	define LANDSCAPE_SEAMS_BLEND_EXTRAS                                                                                                                               \
+		LANDSCAPE_SEAMS_BLEND_EXTRA(0, LandscapeSeams::Borrowed(0, 0), LandscapeSeams::Borrowed(0, 1), LandscapeSeams::Borrowed(0, 2), LandscapeSeams::ExtraWeights.x) \
+		LANDSCAPE_SEAMS_BLEND_EXTRA(1, LandscapeSeams::Borrowed(1, 0), LandscapeSeams::Borrowed(1, 1), LandscapeSeams::Borrowed(1, 2), LandscapeSeams::ExtraWeights.y)
+#else
+#	define LANDSCAPE_SEAMS_BLEND_EXTRAS                                                                                                        \
+		LANDSCAPE_SEAMS_BLEND_EXTRA(0, LandscapeSeams::Color0, LandscapeSeams::Normal0, LandscapeSeams::Rmaos0, LandscapeSeams::ExtraWeights.x) \
+		LANDSCAPE_SEAMS_BLEND_EXTRA(1, LandscapeSeams::Color1, LandscapeSeams::Normal1, LandscapeSeams::Rmaos1, LandscapeSeams::ExtraWeights.y)
+#endif
 
 #endif

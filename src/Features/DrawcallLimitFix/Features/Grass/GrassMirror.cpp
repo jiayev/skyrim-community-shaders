@@ -35,6 +35,9 @@ namespace DCLF::Features::Grass
 			a_row.alphaRef = a_key.alphaRef;
 			std::copy_n(a_source.boundCenter, 3, a_row.boundCenter);
 			a_row.modelRadius = a_source.modelRadius;
+			// Match Grass Optimizations' canopy normalization, including each resolved LOD's own bound.
+			a_row.canopyHeight = a_source.boundCenter[2] > 1.0f ? 2.0f * a_source.boundCenter[2] : std::max(a_source.boundCenter[2] + a_source.modelRadius, 1.0f);
+			std::fill_n(a_row.lodCanopyHeights, 2, a_row.canopyHeight);
 			a_row.wavePeriod = a_source.wavePeriod;
 			// Grass Optimizations' mesh cost (GrassBucketStore::CacheBucketTypeParams): a mesh of more triangles is drawn less far and
 			// larger, as the cost bias ramps in.
@@ -372,6 +375,7 @@ namespace DCLF::Features::Grass
 				source.vertexBuffer.copy_from(lod->vertexBuffer);
 				source.indexBuffer.copy_from(lod->indexBuffer);
 				bucket.meshes[tier] = AddMeshUser(std::move(source));
+				bucket.row.Plain().lodCanopyHeights[tier - 1] = lod->canopyHeight;
 			}
 			bucket.lodPending = false;
 			--lodPending;
