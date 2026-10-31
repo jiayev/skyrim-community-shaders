@@ -44,6 +44,6 @@ struct Border : public PostProcessFeature
 	virtual void Draw(TextureInfo&) override;
 
 	/// Clear motion vectors in border areas before frame generation copies them.
-	/// Must be called before CopySharedD3D12Resources to prevent FrameGen artifacts.
+	/// Must be called before frame generation reads the motion vectors, to prevent FrameGen artifacts.
 	void ClearMotionVectorsForFrameGen();
 };

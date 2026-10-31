@@ -1,5 +1,20 @@
-#include "Common/FrameBuffer.hlsli"
 #include "LightLimitFix/Common.hlsli"
+
+// See ClusterBuildingCS.hlsl for the LLF_ORG_BINDLESS build.
+#if defined(LLF_ORG_BINDLESS)
+#	include "LightLimitFix/OrgBindless.hlsli"
+#	define LLF_WORLD_TO_VIEW(p) LLFWorldToView(p)
+#	define LLF_DECLARE_RESOURCES                                                                    \
+		LLFLoadLatch();                                                                              \
+		StructuredBuffer<ClusterAABB> clusters = ResourceDescriptorHeap[ClustersIndex];              \
+		StructuredBuffer<Light> lights = ResourceDescriptorHeap[LightsIndex];                        \
+		RWStructuredBuffer<uint> lightIndexCounter = ResourceDescriptorHeap[LightIndexCounterIndex]; \
+		RWStructuredBuffer<uint> lightIndexList = ResourceDescriptorHeap[LightIndexListIndex];       \
+		RWStructuredBuffer<LightGrid> lightGrid = ResourceDescriptorHeap[LightGridIndex];
+#else
+#	include "Common/FrameBuffer.hlsli"
+#	define LLF_WORLD_TO_VIEW(p) FrameBuffer::WorldToView(p)
+#	define LLF_DECLARE_RESOURCES
 
 cbuffer PerFrame : register(b0)
 {
@@ -8,15 +23,16 @@ cbuffer PerFrame : register(b0)
 	uint4 ClusterSize;
 }
 
-//references
-//https://github.com/pezcode/Cluster
-
 StructuredBuffer<ClusterAABB> clusters : register(t0);
 StructuredBuffer<Light> lights : register(t1);
 
 RWStructuredBuffer<uint> lightIndexCounter : register(u0);
 RWStructuredBuffer<uint> lightIndexList : register(u1);
 RWStructuredBuffer<LightGrid> lightGrid : register(u2);
+#endif
+
+//references
+//https://github.com/pezcode/Cluster
 
 groupshared Light sharedLights[GROUP_SIZE];
 
@@ -30,11 +46,12 @@ bool LightIntersectsCluster(float3 position, float radiusSquared, ClusterAABB cl
 
 [numthreads(NUMTHREAD_X, NUMTHREAD_Y, NUMTHREAD_Z)] void main(
 	uint3 groupId : SV_GroupID, uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupThreadID, uint groupIndex : SV_GroupIndex) {
+	LLF_DECLARE_RESOURCES
+
 	if (any(dispatchThreadId >= uint3(ClusterSize.x, ClusterSize.y, ClusterSize.z)))
 		return;
 
 	uint visibleLightCount = 0;
-	uint visibleLightIndices[MAX_CLUSTER_LIGHTS];
 
 	uint clusterIndex = dispatchThreadId.x +
 	                    dispatchThreadId.y * ClusterSize.x +
@@ -50,23 +67,27 @@ bool LightIntersectsCluster(float3 position, float radiusSquared, ClusterAABB cl
 
 	GroupMemoryBarrierWithGroupSync();
 
+	// Counted first, then written straight into lightIndexList, rather than staged through a local
+	// uint[MAX_CLUSTER_LIGHTS]. That array is indexed by a runtime value, which no GPU can keep in
+	// registers: on RDNA2 it became 1024 bytes of scratch memory per thread (measured with Radeon
+	// GPU Analyzer against gfx1035), read and written in the hottest loop this shader has. Testing
+	// each light twice is a buffer load and a handful of ALU; the scratch traffic it replaces is far
+	// more expensive, and the second pass is exact rather than conservative because neither the
+	// light set nor the cluster changes between the two.
 	for (uint i = 0; i < LightCount; i++) {
 		Light light = lights[i];
 
 		float radiusSquared = light.radius * light.radius;
 
-		float3 positionVS = FrameBuffer::WorldToView(light.positionWS.xyz);
+		float3 positionVS = LLF_WORLD_TO_VIEW(light.positionWS.xyz);
 
 		[branch] if (LightIntersectsCluster(positionVS, radiusSquared, cluster))
 		{
-			visibleLightIndices[visibleLightCount] = i;
 			visibleLightCount++;
 			if (visibleLightCount >= MAX_CLUSTER_LIGHTS)
 				break;
 		}
 	}
-
-	GroupMemoryBarrierWithGroupSync();
 
 	uint offset = 0;
 	InterlockedAdd(lightIndexCounter[0], visibleLightCount, offset);
@@ -76,8 +97,20 @@ bool LightIntersectsCluster(float3 position, float radiusSquared, ClusterAABB cl
 	lightIndexList.GetDimensions(capacity, stride);
 	visibleLightCount = min(visibleLightCount, capacity - min(offset, capacity));
 
-	for (uint j = 0; j < visibleLightCount; j++) {
-		lightIndexList[offset + j] = visibleLightIndices[j];
+	uint written = 0;
+
+	for (uint k = 0; k < LightCount && written < visibleLightCount; k++) {
+		Light light = lights[k];
+
+		float radiusSquared = light.radius * light.radius;
+
+		float3 positionVS = LLF_WORLD_TO_VIEW(light.positionWS.xyz);
+
+		[branch] if (LightIntersectsCluster(positionVS, radiusSquared, cluster))
+		{
+			lightIndexList[offset + written] = k;
+			written++;
+		}
 	}
 
 	LightGrid output = {

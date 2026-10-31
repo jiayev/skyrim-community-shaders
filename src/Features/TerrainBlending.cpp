@@ -1,5 +1,7 @@
 #include "TerrainBlending.h"
 
+#include "Features/DrawcallLimitFix.h"
+
 #include "Deferred.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -313,7 +315,7 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 			bool inTerrain = a_pass->shaderProperty && a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
 
 			if (inTerrain && a_pass->geometry) {
-				if ((a_pass->geometry->worldBound.center.GetDistance(singleton.eyePosition) - a_pass->geometry->worldBound.radius) > 1024.0f) {
+				if ((a_pass->geometry->worldBound.center.GetDistance(singleton.eyePosition) - a_pass->geometry->worldBound.radius) > kTerrainDepthDistance) {
 					inTerrain = false;
 				}
 			}

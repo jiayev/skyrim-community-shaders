@@ -37,10 +37,31 @@ list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 # ########################################################################################################################
 message("Options:")
 option(
+    AFTERMATH
+    "Integrate the NVIDIA Nsight Aftermath SDK so a GPU fault writes a decodable crash dump instead of a bare device-lost. Requires the SDK; pass -DAFTERMATH=OFF to build without it."
+    ON
+)
+option(
     AUTO_PLUGIN_DEPLOYMENT
     "Copy the build output and addons to env:CommunityShadersOutputDir."
     OFF
 )
+# The deploy targets, cached from env:CommunityShadersOutputDir when it is set, so that a reconfigure from a shell
+# without the variable keeps deploying to them instead of dropping the deploy rules without a word.
+if(DEFINED ENV{CommunityShadersOutputDir})
+    set(CS_DEPLOY_DIRS
+        "$ENV{CommunityShadersOutputDir}"
+        CACHE STRING
+        "Deploy targets (from env:CommunityShadersOutputDir)"
+        FORCE
+    )
+else()
+    set(CS_DEPLOY_DIRS
+        ""
+        CACHE STRING
+        "Deploy targets (from env:CommunityShadersOutputDir)"
+    )
+endif()
 option(
     ZIP_TO_DIST
     "Zip the base mod and addons to their own zip file in dist."
@@ -48,17 +69,28 @@ option(
 )
 option(
     AIO_ZIP_TO_DIST
-    "Zip the base mod and addons to a AIO zip file in dist."
+    "Package the base mod and addons as an AIO archive in dist."
     ON
 )
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
+# Nsight Perf (Remote Control's GPU counters; both NvPerf backends). On by default with the SDK BasicRenderer ships, when
+# this checkout sits in SARP; otherwise opt in with NVPERF_SDK_ROOT.
+set(_NVPERF_DEFAULT_ROOT
+    "${CMAKE_SOURCE_DIR}/../../BasicRenderer/ThirdParty/NVPerf"
+)
+if(EXISTS "${_NVPERF_DEFAULT_ROOT}/include/nvperf_host.h")
+    set(_NVPERF_DEFAULT ON)
+else()
+    set(_NVPERF_DEFAULT OFF)
+    set(_NVPERF_DEFAULT_ROOT "")
+endif()
 option(
     NVPERF_SUPPORT
-    "Enable the Nsight Perf range profiler in Developer Tools (requires NVPERF_SDK_ROOT)"
-    OFF
+    "Enable the Nsight Perf range profiler in Remote Control (requires NVPERF_SDK_ROOT)"
+    ${_NVPERF_DEFAULT}
 )
 set(NVPERF_SDK_ROOT
-    ""
+    "${_NVPERF_DEFAULT_ROOT}"
     CACHE PATH
     "Nsight Perf SDK directory (the one holding include/nvperf_host.h)"
 )
@@ -69,7 +101,7 @@ option(
 )
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
-message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
+message("\tAIO archive to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
 message("\tNsight Perf: ${NVPERF_SUPPORT}")
 
@@ -134,6 +166,16 @@ message("\tBuild branch: ${GIT_BRANCH}")
 # #######################################################################################################################
 include(XSEPlugin)
 
+# The crash dump helper (tools/crash-dump-helper): the plugin starts it at load and it writes CommunityShaders.dmp from
+# outside the game (XSEPlugin.cpp, StartCrashDumpHelper). Shipped beside the DLL in SKSE/Plugins.
+add_executable(
+    CommunityShadersCrashDump
+    ${CMAKE_SOURCE_DIR}/tools/crash-dump-helper/main.cpp
+)
+target_compile_features(CommunityShadersCrashDump PRIVATE cxx_std_23)
+target_link_libraries(CommunityShadersCrashDump PRIVATE dbghelp)
+add_dependencies(${PROJECT_NAME} CommunityShadersCrashDump)
+
 # #######################################################################################################################
 # # Find dependencies
 # #######################################################################################################################
@@ -153,14 +195,11 @@ find_package(unordered_dense CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
-find_package(directx-headers CONFIG REQUIRED)
 find_package(effects11 CONFIG REQUIRED)
 
 if(DEVBENCH_BRIDGE)
     find_package(devbench-api CONFIG REQUIRED)
 endif()
-add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
-
 # NRD — NVIDIA Real-time Denoisers (DX11 via embedded DXBC shaders, no NRI)
 set(NRD_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
 set(NRD_NRI OFF CACHE BOOL "" FORCE)
@@ -174,13 +213,97 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/extern/NRD EXCLUDE_FROM_ALL)
 
 find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
 find_library(DETOURS_LIBRARY detours REQUIRED)
-include(FidelityFX-SDK)
+
+# Vulkan headers must match across the DXVK and upscaler interop boundary.
+find_package(Vulkan REQUIRED)
+
+# NVIDIA Nsight Aftermath. A GPU fault otherwise surfaces only as VK_ERROR_DEVICE_LOST with
+# nothing to attribute it to; Aftermath turns that into a dump naming the faulting shader and
+# the last markers the GPU reached. Searched in order: -DAFTERMATH_SDK_DIR, the
+# NSIGHT_AFTERMATH_SDK environment variable, a vendored extern/aftermath, then the default
+# install location.
+if(AFTERMATH)
+    set(AFTERMATH_SDK_DIR
+        ""
+        CACHE PATH
+        "Root of the Nsight Aftermath SDK (the directory holding include/ and lib/)."
+    )
+    set(_AFTERMATH_CANDIDATES
+        "${AFTERMATH_SDK_DIR}"
+        "$ENV{NSIGHT_AFTERMATH_SDK}"
+        "${CMAKE_SOURCE_DIR}/extern/aftermath"
+        "D:/dev/aftermath"
+    )
+    set(_AFTERMATH_ROOT "")
+    foreach(_candidate IN LISTS _AFTERMATH_CANDIDATES)
+        if(_candidate AND EXISTS "${_candidate}/include/GFSDK_Aftermath.h")
+            set(_AFTERMATH_ROOT "${_candidate}")
+            break()
+        endif()
+    endforeach()
+
+    if(NOT _AFTERMATH_ROOT)
+        message(
+            FATAL_ERROR
+            "AFTERMATH is ON but the Nsight Aftermath SDK was not found. Searched: ${_AFTERMATH_CANDIDATES}. "
+            "Install it, point -DAFTERMATH_SDK_DIR or NSIGHT_AFTERMATH_SDK at it, or build with -DAFTERMATH=OFF."
+        )
+    endif()
+
+    set(_AFTERMATH_LIB "${_AFTERMATH_ROOT}/lib/x64/GFSDK_Aftermath_Lib.x64.lib")
+    set(AFTERMATH_RUNTIME_DLL
+        "${_AFTERMATH_ROOT}/lib/x64/GFSDK_Aftermath_Lib.x64.dll"
+    )
+    foreach(_required IN ITEMS "${_AFTERMATH_LIB}" "${AFTERMATH_RUNTIME_DLL}")
+        if(NOT EXISTS "${_required}")
+            message(
+                FATAL_ERROR
+                "Nsight Aftermath SDK at ${_AFTERMATH_ROOT} is missing ${_required}"
+            )
+        endif()
+    endforeach()
+
+    message(STATUS "Nsight Aftermath: ${_AFTERMATH_ROOT}")
+    target_include_directories(
+        ${PROJECT_NAME}
+        PRIVATE "${_AFTERMATH_ROOT}/include"
+    )
+    target_link_libraries(${PROJECT_NAME} PRIVATE "${_AFTERMATH_LIB}" delayimp)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE CS_ENABLE_AFTERMATH)
+
+    # Delay-load it. The SDK runtime ships in CommunityShaders/bin, which is not on the DLL search
+    # path, so an ordinary import would stop CommunityShaders.dll loading at all whenever the file
+    # is missing -- a diagnostic aid must never be able to do that. Aftermath::Enable() loads it by
+    # full path first and touches no imported symbol if that fails.
+    target_link_options(
+        ${PROJECT_NAME}
+        PRIVATE "/DELAYLOAD:GFSDK_Aftermath_Lib.x64.dll"
+    )
+endif()
+
+# Streamline is linked as headers and loaded through its Vulkan interposer at runtime.
+add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
 
 target_compile_definitions(
     ${PROJECT_NAME}
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
     PRIVATE "$<$<BOOL:${ENABLE_ENB_EXTENDER}>:ENABLE_ENB_EXTENDER>"
 )
+
+if(MSVC)
+    # With IPO on, the libraries (ORGModuleServices among them) carry /GL objects in this configuration: select LTCG up front
+    # so MSVC does not emit LNK4075 (the plugin treats linker warnings as errors). With IPO off nothing carries /GL.
+    if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+        target_link_options(
+            ${PROJECT_NAME}
+            PRIVATE "$<$<CONFIG:RelWithDebInfo>:/LTCG>"
+        )
+    endif()
+    target_link_options(
+        ${PROJECT_NAME}
+        PRIVATE "$<$<CONFIG:RelWithDebInfo>:/INCREMENTAL:NO>"
+    )
+endif()
 
 file(
     GLOB FEATURE_SHADER_DIRS
@@ -225,16 +348,16 @@ target_link_libraries(
         efsw::efsw
         xxHash::xxhash
         Tracy::TracyClient
-        Streamline
         NRD
-        d3d12.lib
         bcrypt.lib
-        Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
         Microsoft::Effects11
         windowsapp
         windowscodecs
         comdlg32
+        dbghelp
+        Vulkan::Vulkan
+        Streamline
 )
 
 # devbench bridge: opt-out via -DDEVBENCH_BRIDGE=OFF. When off, the port isn't required
@@ -244,9 +367,13 @@ if(DEVBENCH_BRIDGE)
     target_compile_definitions(${PROJECT_NAME} PRIVATE DEVBENCH_BRIDGE_ENABLED)
 endif()
 
-# Nsight Perf: opt-in via -DNVPERF_SUPPORT=ON -DNVPERF_SDK_ROOT=<sdk>. The SDK is a login-gated NVIDIA
-# download, so it is never fetched. nvperf_grfx_host.dll is delay-loaded (NvPerf.cpp loads it by path
-# before the first call), so the plugin still loads where the file is absent.
+# Nsight Perf: NVPERF_SUPPORT with NVPERF_SDK_ROOT (by default the SDK BasicRenderer ships, when present). The SDK is a
+# login-gated NVIDIA download, so it is never fetched. One SDK drives both NvPerf backends: the D3D11 one builds with
+# NVPERF_ENABLED; the Vulkan one also needs the render graph (cmake/RenderGraph.cmake), whose OpenRenderGraph
+# Telemetry/NvPerfCapture links the same SDK (NVPerf::Host, ORG_ENABLE_NVPERF). nvperf_grfx_host.dll is delay-loaded
+# and installed once, in CommunityShaders/bin beside the DXVK DLLs; NvPerf loads it by path before the first call, so
+# the plugin still loads where the file is absent.
+set(CS_NVPERF_DLL)
 if(NVPERF_SUPPORT)
     find_path(
         NVPERF_INCLUDE_DIR
@@ -274,18 +401,36 @@ if(NVPERF_SUPPORT)
             "nvperf_grfx_host.lib (${NVPERF_LIBRARY}) and bin/x64/nvperf_grfx_host.dll (${NVPERF_DLL})"
         )
     endif()
-    target_include_directories(
-        ${PROJECT_NAME}
-        SYSTEM
-        PRIVATE "${NVPERF_INCLUDE_DIR}"
-    )
-    target_link_libraries(${PROJECT_NAME} PRIVATE "${NVPERF_LIBRARY}" delayimp)
+    # The SDK as a target: the plugin links it, and OpenRenderGraph picks it up by name.
+    if(NOT TARGET NVPerf::Host)
+        add_library(NVPerf::Host UNKNOWN IMPORTED GLOBAL)
+        set_target_properties(
+            NVPerf::Host
+            PROPERTIES
+                IMPORTED_LOCATION "${NVPERF_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${NVPERF_INCLUDE_DIR}"
+        )
+    endif()
+    target_link_libraries(${PROJECT_NAME} PRIVATE NVPerf::Host delayimp)
     target_link_options(
         ${PROJECT_NAME}
         PRIVATE "/DELAYLOAD:nvperf_grfx_host.dll"
     )
     target_compile_definitions(${PROJECT_NAME} PRIVATE NVPERF_ENABLED)
+    set(CS_NVPERF_DLL "${NVPERF_DLL}")
+    install(
+        FILES "${NVPERF_DLL}"
+        DESTINATION SKSE/Plugins/CommunityShaders/bin
+        COMPONENT DXVK
+    )
+    set(ORG_ENABLE_NVPERF ON CACHE BOOL "" FORCE)
+    set(ORG_NVPERF_ROOT "${NVPERF_SDK_ROOT}" CACHE PATH "" FORCE)
+else()
+    set(ORG_ENABLE_NVPERF OFF CACHE BOOL "" FORCE)
 endif()
+
+# OpenRenderGraph on DXVK's Vulkan device; defines CS_HAS_RENDER_GRAPH.
+include(cmake/RenderGraph.cmake)
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
 if(MSVC_VERSION GREATER_EQUAL 1936 AND MSVC_IDE) # 17.6+
     # When using /std:c++latest, "Build ISO C++23 Standard Library Modules" defaults to "Yes".
@@ -669,6 +814,10 @@ install(
 )
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION SKSE/Plugins COMPONENT SKSE)
 install(
+    TARGETS CommunityShadersCrashDump
+    RUNTIME DESTINATION SKSE/Plugins COMPONENT SKSE
+)
+install(
     FILES $<TARGET_PDB_FILE:${PROJECT_NAME}>
     DESTINATION SKSE/Plugins
     COMPONENT SKSE
@@ -708,13 +857,166 @@ install(
     DESTINATION ${LICENSES_DESTINATION}
     COMPONENT SKSE
 )
-if(NVPERF_SUPPORT)
+
+# Remove runtime directories superseded by the unified bin layout.
+install(
+    CODE
+        "file(REMOVE_RECURSE
+        \"\${CMAKE_INSTALL_PREFIX}/SKSE/Plugins/CommunityShaders/dxvk\"
+        \"\${CMAKE_INSTALL_PREFIX}/SKSE/Plugins/CommunityShaders/Streamline\"
+        \"\${CMAKE_INSTALL_PREFIX}/SKSE/Plugins/CommunityShaders/NvPerf\"
+    )"
+    COMPONENT Shaders
+)
+
+# Stage prefixed DXVK DLLs without colliding with the system D3D modules.
+set(DXVK_BUILD_DIR "${CMAKE_SOURCE_DIR}/extern/dxvk/build/src")
+set(_DXVK_RUNTIME_DLLS
+    "${DXVK_BUILD_DIR}/d3d11/dxvk_d3d11.dll"
+    "${DXVK_BUILD_DIR}/dxgi/dxvk_dxgi.dll"
+)
+install(
+    CODE
+        "
+    execute_process(
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File \"${CMAKE_SOURCE_DIR}/tools/stage-dxvk-dlls.ps1\"
+            -Src \"${DXVK_BUILD_DIR}\"
+            -Dst \"\${CMAKE_INSTALL_PREFIX}/SKSE/Plugins/CommunityShaders/bin\"
+        RESULT_VARIABLE _dxvk_stage_rc
+    )
+    if(NOT _dxvk_stage_rc EQUAL 0)
+        message(FATAL_ERROR \"stage-dxvk-dlls.ps1 failed with code \${_dxvk_stage_rc}\")
+    endif()
+    "
+    COMPONENT DXVK
+)
+
+# DXC for the render graph's runtime SPIR-V compilation, beside the DXVK DLLs (RenderGraphRuntime loads it from there).
+if(CS_DXC_RUNTIME_DLLS)
     install(
-        FILES "${NVPERF_DLL}"
-        DESTINATION SKSE/Plugins/CommunityShaders/NvPerf
-        COMPONENT SKSE
+        FILES ${CS_DXC_RUNTIME_DLLS}
+        DESTINATION SKSE/Plugins/CommunityShaders/bin
+        COMPONENT DXVK
     )
 endif()
+
+# Prebuilt runtimes ship from package/; locally built fork plugins are staged below.
+# FSR requires the pinned Vulkan runtime to be present and unmodified.
+set(_FFX_VK_RUNTIME
+    "${CMAKE_SOURCE_DIR}/package/SKSE/Plugins/CommunityShaders/bin/amd_fidelityfx_vk.dll"
+)
+if(NOT EXISTS "${_FFX_VK_RUNTIME}")
+    message(FATAL_ERROR "Missing Vulkan FSR runtime: ${_FFX_VK_RUNTIME}")
+endif()
+set(_FFX_VK_PINNED
+    "${CMAKE_SOURCE_DIR}/extern/Streamline/external/fidelityfx-bin/amd_fidelityfx_vk.dll"
+)
+if(NOT EXISTS "${_FFX_VK_PINNED}")
+    message(
+        FATAL_ERROR
+        "Missing pinned Vulkan FSR runtime: ${_FFX_VK_PINNED}; run git lfs pull in extern/Streamline"
+    )
+endif()
+file(SHA256 "${_FFX_VK_RUNTIME}" _FFX_VK_RUNTIME_SHA256)
+file(SHA256 "${_FFX_VK_PINNED}" _FFX_VK_PINNED_SHA256)
+if(NOT _FFX_VK_RUNTIME_SHA256 STREQUAL _FFX_VK_PINNED_SHA256)
+    message(
+        FATAL_ERROR
+        "Packaged Vulkan FSR runtime does not match the pinned Streamline fork"
+    )
+endif()
+
+# Reject legacy backend binaries in Vulkan package inputs.
+file(
+    GLOB_RECURSE _LEGACY_UPSCALING_RUNTIMES
+    "${CMAKE_SOURCE_DIR}/package/*dx12*"
+    "${CMAKE_SOURCE_DIR}/package/*d3d12*"
+    "${CMAKE_SOURCE_DIR}/features/Upscaling/*dx12*"
+    "${CMAKE_SOURCE_DIR}/features/Upscaling/*d3d12*"
+)
+if(_LEGACY_UPSCALING_RUNTIMES)
+    message(
+        FATAL_ERROR
+        "Legacy upscaling runtimes found in Vulkan package inputs: ${_LEGACY_UPSCALING_RUNTIMES}"
+    )
+endif()
+
+# Only stage plugins requested by Streamline initialization. Explicit paths make
+# a missing build output fail package installation instead of silently omitting it.
+set(_SL_FORK_DLLS)
+foreach(_plugin IN ITEMS sl.interposer sl.fsr sl.fsr_g sl.xess)
+    list(
+        APPEND _SL_FORK_DLLS
+        "${CMAKE_SOURCE_DIR}/extern/Streamline/_artifacts/${_plugin}/Develop_x64/${_plugin}.dll"
+    )
+endforeach()
+install(
+    FILES ${_SL_FORK_DLLS}
+    DESTINATION SKSE/Plugins/CommunityShaders/bin
+    COMPONENT Streamline
+)
+
+if(AFTERMATH)
+    install(
+        FILES "${AFTERMATH_RUNTIME_DLL}"
+        DESTINATION SKSE/Plugins/CommunityShaders/bin
+        COMPONENT Aftermath
+    )
+
+    # Ship the SDK's terms alongside its runtime, as we do for every other bundled binary.
+    if(EXISTS "${_AFTERMATH_ROOT}/LICENSE")
+        install(
+            FILES "${_AFTERMATH_ROOT}/LICENSE"
+            DESTINATION SKSE/Plugins/CommunityShaders/bin
+            RENAME aftermath.license.txt
+            COMPONENT Aftermath
+        )
+    endif()
+endif()
+
+set(_DXVK_LICENSE "${CMAKE_SOURCE_DIR}/extern/dxvk/LICENSE")
+set(_FFX_LICENSE
+    "${CMAKE_SOURCE_DIR}/extern/Streamline/external/fidelityfx-sdk/LICENSE.txt"
+)
+set(_XESS_LICENSE
+    "${CMAKE_SOURCE_DIR}/extern/Streamline/external/xess/LICENSE.txt"
+)
+set(_XESS_THIRD_PARTY_NOTICES
+    "${CMAKE_SOURCE_DIR}/extern/Streamline/external/xess/third-party-programs.txt"
+)
+install(
+    FILES "${_DXVK_LICENSE}"
+    DESTINATION SKSE/Plugins/CommunityShaders/bin
+    RENAME dxvk.license.txt
+    COMPONENT DXVK
+)
+install(
+    FILES "${_FFX_LICENSE}"
+    DESTINATION SKSE/Plugins/CommunityShaders/bin
+    RENAME fidelityfx.license.txt
+    COMPONENT Streamline
+)
+install(
+    FILES "${_XESS_LICENSE}"
+    DESTINATION SKSE/Plugins/CommunityShaders/bin
+    RENAME xess.license.txt
+    COMPONENT Streamline
+)
+install(
+    FILES "${_XESS_THIRD_PARTY_NOTICES}"
+    DESTINATION SKSE/Plugins/CommunityShaders/bin
+    RENAME xess.third-party-programs.txt
+    COMPONENT Streamline
+)
+set(_AIO_RUNTIME_INPUTS
+    ${_DXVK_RUNTIME_DLLS}
+    ${_SL_FORK_DLLS}
+    "${_DXVK_LICENSE}"
+    "${_FFX_LICENSE}"
+    "${_XESS_LICENSE}"
+    "${_XESS_THIRD_PARTY_NOTICES}"
+)
 
 # #######################################################################################################################
 # # Automatic AIO preparation (incremental copy system)
@@ -764,6 +1066,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         list(FILTER _tmp EXCLUDE REGEX "/Shaders/")
         list(APPEND _AIO_PACKAGE_FILES ${_tmp})
     endforeach()
+    list(APPEND _AIO_PACKAGE_FILES ${_AIO_RUNTIME_INPUTS})
     list(APPEND _AIO_PACKAGE_FILES ${CS_ICON_FONT_FILES})
     list(APPEND _AIO_PACKAGE_FILES ${ROOT_LICENSE_FILES})
 
@@ -779,6 +1082,37 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     file(WRITE "${_feature_paths_file}" "")
     foreach(_fpath IN LISTS FEATURE_PATHS)
         file(APPEND "${_feature_paths_file}" "${_fpath}\n")
+    endforeach()
+
+    set(_runtime_paths_file "${CMAKE_CURRENT_BINARY_DIR}/runtime_paths.txt")
+    file(WRITE "${_runtime_paths_file}" "")
+    # Every runtime PREPARE_AIO stages into bin (DXC and NvPerf too): the cleanup removes what is not listed, and the staging
+    # then copies it again with a fresh timestamp each build, which changes the render graph's compiler fingerprint (the
+    # DLL's write time) and so every ORG shader cache key.
+    foreach(
+        _runtime_file
+        IN
+        LISTS _DXVK_RUNTIME_DLLS _SL_FORK_DLLS CS_DXC_RUNTIME_DLLS CS_NVPERF_DLL
+    )
+        get_filename_component(_runtime_name "${_runtime_file}" NAME)
+        file(
+            APPEND "${_runtime_paths_file}"
+            "SKSE/Plugins/CommunityShaders/bin/${_runtime_name}\n"
+        )
+    endforeach()
+    foreach(
+        _runtime_name
+        IN
+        ITEMS
+            dxvk.license.txt
+            fidelityfx.license.txt
+            xess.license.txt
+            xess.third-party-programs.txt
+    )
+        file(
+            APPEND "${_runtime_paths_file}"
+            "SKSE/Plugins/CommunityShaders/bin/${_runtime_name}\n"
+        )
     endforeach()
 
     # Ensure SKSE/Plugins dir exists
@@ -799,6 +1133,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DAIO_DIR="${AIO_DIR}"
         -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
         -DFEATURE_PATHS_FILE="${_feature_paths_file}"
+        -DRUNTIME_PATHS_FILE="${_runtime_paths_file}"
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
@@ -853,6 +1188,101 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         endif()
     endforeach()
 
+    # Mirror runtime install rules into the glob-based AIO staging path.
+    set(_aio_runtime_dir "${AIO_DIR}/SKSE/Plugins/CommunityShaders/bin")
+
+    # Remove the old split layout without clearing other incremental AIO files.
+    list(
+        APPEND _prepare_aio_cmds
+        COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        remove_directory
+        "${AIO_DIR}/SKSE/Plugins/CommunityShaders/dxvk"
+        COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        remove_directory
+        "${AIO_DIR}/SKSE/Plugins/CommunityShaders/Streamline"
+        COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        remove_directory
+        "${AIO_DIR}/SKSE/Plugins/CommunityShaders/NvPerf"
+        COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        "${_aio_runtime_dir}"
+    )
+
+    list(
+        APPEND _prepare_aio_cmds
+        COMMAND
+        powershell
+        -NoProfile
+        -ExecutionPolicy
+        Bypass
+        -File
+        "${CMAKE_SOURCE_DIR}/tools/stage-dxvk-dlls.ps1"
+        -Src
+        "${DXVK_BUILD_DIR}"
+        -Dst
+        "${_aio_runtime_dir}"
+    )
+    foreach(_dxc IN LISTS CS_DXC_RUNTIME_DLLS CS_NVPERF_DLL)
+        list(
+            APPEND _prepare_aio_cmds
+            COMMAND
+            ${CMAKE_COMMAND}
+            -E
+            copy_if_different
+            "${_dxc}"
+            "${_aio_runtime_dir}/"
+        )
+    endforeach()
+
+    # Stage locally built Streamline fork plugins.
+    foreach(_sl IN LISTS _SL_FORK_DLLS)
+        list(
+            APPEND _prepare_aio_cmds
+            COMMAND
+            ${CMAKE_COMMAND}
+            -E
+            copy_if_different
+            "${_sl}"
+            "${_aio_runtime_dir}/"
+        )
+    endforeach()
+
+    list(
+        APPEND _prepare_aio_cmds
+        COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        copy_if_different
+        "${_DXVK_LICENSE}"
+        "${_aio_runtime_dir}/dxvk.license.txt"
+        COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        copy_if_different
+        "${_FFX_LICENSE}"
+        "${_aio_runtime_dir}/fidelityfx.license.txt"
+        COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        copy_if_different
+        "${_XESS_LICENSE}"
+        "${_aio_runtime_dir}/xess.license.txt"
+        COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        copy_if_different
+        "${_XESS_THIRD_PARTY_NOTICES}"
+        "${_aio_runtime_dir}/xess.third-party-programs.txt"
+    )
+
     # Remove CORE from AIO if it exists (keep rest intact)
     list(
         APPEND _prepare_aio_cmds
@@ -877,7 +1307,8 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${_prepare_aio_cmds}
         DEPENDS
             ${_AIO_PACKAGE_FILES}
-            ${PROJECT_NAME}
+            ${CS_DXC_RUNTIME_DLLS}
+            ${CS_NVPERF_DLL}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
     )
 
@@ -896,6 +1327,9 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         ALL
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
     )
+    # Ordered after the plugin, but not rerun by its link: the staging copies none of its outputs (its POST_BUILD below
+    # copies the DLL and PDB), so a file dependency on it reran the staging, the AIO shader copy and the deploys every link.
+    add_dependencies(PREPARE_AIO ${PROJECT_NAME})
 
     # Copy DLL and PDB using POST_BUILD to avoid race conditions with file locking
     # This ensures the linker has fully released the files before we attempt to copy them
@@ -911,24 +1345,13 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_PDB_FILE:${PROJECT_NAME}>"
             "${AIO_DIR}/SKSE/Plugins/$<TARGET_PDB_FILE_NAME:${PROJECT_NAME}>"
-        COMMENT "Copying built DLL and PDB to AIO package"
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:CommunityShadersCrashDump>"
+            "${AIO_DIR}/SKSE/Plugins/$<TARGET_FILE_NAME:CommunityShadersCrashDump>"
+        COMMENT "Copying built DLL, PDB and crash dump helper to AIO package"
         VERBATIM
     )
-    if(NVPERF_SUPPORT)
-        add_custom_command(
-            TARGET ${PROJECT_NAME}
-            POST_BUILD
-            COMMAND
-                ${CMAKE_COMMAND} -E make_directory
-                "${AIO_DIR}/SKSE/Plugins/CommunityShaders/NvPerf"
-            COMMAND
-                ${CMAKE_COMMAND} -E copy_if_different "${NVPERF_DLL}"
-                "${AIO_DIR}/SKSE/Plugins/CommunityShaders/NvPerf/nvperf_grfx_host.dll"
-            COMMENT "Copying nvperf_grfx_host.dll to AIO package"
-            VERBATIM
-        )
-    endif()
-
     # Only copy shaders when HLSL files change; copy individually so unchanged
     # files do not get their timestamps updated.
     file(
@@ -987,6 +1410,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         DEPENDS
             ${HLSL_FILES}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
+            ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
         COMMENT "Copying changed shaders into AIO/Shaders"
     )
 
@@ -1030,7 +1454,8 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 "Git HEAD changed (${_prev_git_head} -> ${_git_head}): clearing AIO shaders and deploy stamps for full redeploy"
             )
             # Delete the entire AIO directory so PREPARE_AIO re-copies everything
-            # with fresh timestamps. Without this, copy_if_different skips
+            # with fresh timestamps (the deployed shaders come from their sources
+            # with theirs, so this recompiles nothing: see _direct_shader_cmds). Without this, copy_if_different skips
             # content-identical files (shaders, textures, configs, etc.) and
             # leaves them with old timestamps that previously-deployed files
             # (e.g. from a manual package install) can beat on timestamp delta.
@@ -1056,7 +1481,7 @@ if(AUTO_PLUGIN_DEPLOYMENT)
 
     set(DEPLOY_TARGET_HASHES)
     if(WIN32)
-        foreach(DEPLOY_TARGET $ENV{CommunityShadersOutputDir})
+        foreach(DEPLOY_TARGET ${CS_DEPLOY_DIRS})
             message("Deploying AIO to ${DEPLOY_TARGET} (incremental)")
 
             # Ensure destination root exists
@@ -1092,10 +1517,13 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     "Incremental deploy (excluding Shaders) to ${DEPLOY_TARGET} (robocopy-wrapper)"
             )
 
-            # Ensure plugin DLL/PDB are copied directly to the target SKSE/Plugins
-            # folder in case robocopy rules do not copy them as expected.
+            # The plugin DLL/PDB go to the target on every link, as a POST_BUILD step of the plugin itself:
+            # a stamp rule in DEPLOY_ALL left the deployed DLL stale whenever the plugin was built on its own
+            # (--target CommunityShaders) or DEPLOY_ALL's copy of the rule judged itself up to date. The copy
+            # fails the build if the game holds the DLL, instead of leaving an old one in place silently.
             add_custom_command(
-                OUTPUT ${DEPLOY_TARGET_HASH}_plugin.stamp
+                TARGET ${PROJECT_NAME}
+                POST_BUILD
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory
                     "${DEPLOY_TARGET}/SKSE/Plugins"
@@ -1108,14 +1536,47 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     $<TARGET_PDB_FILE:${PROJECT_NAME}>
                     "${DEPLOY_TARGET}/SKSE/Plugins/$<TARGET_PDB_FILE_NAME:${PROJECT_NAME}>"
                 COMMAND
-                    ${CMAKE_COMMAND} -E touch ${DEPLOY_TARGET_HASH}_plugin.stamp
-                DEPENDS
-                    ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
-                    ${PROJECT_NAME}
-                COMMENT "Copy plugin DLL/PDB to ${DEPLOY_TARGET}/SKSE/Plugins"
+                    ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:CommunityShadersCrashDump>
+                    "${DEPLOY_TARGET}/SKSE/Plugins/$<TARGET_FILE_NAME:CommunityShadersCrashDump>"
+                COMMENT
+                    "Copy plugin DLL/PDB and the crash dump helper to ${DEPLOY_TARGET}/SKSE/Plugins"
+                VERBATIM
             )
 
-            list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}_plugin.stamp)
+            # The shaders straight from their sources, for every shader deploy (DEPLOY_SHADERS, the shader-only and full ones
+            # below): the same tree as AIO/Shaders (package/Shaders, then every feature's Shaders, less Tests), with the
+            # sources' timestamps. The AIO staging restamps its copies (a git HEAD change recreates it), and the shader cache
+            # takes a source newer than its entry as changed: a deploy from it would recompile every shader.
+            set(_direct_shader_cmds)
+            foreach(
+                _shader_source
+                IN
+                ITEMS "${CMAKE_SOURCE_DIR}/package/Shaders" ${FEATURE_PATHS}
+            )
+                if(NOT _shader_source MATCHES "/Shaders$")
+                    set(_shader_source "${_shader_source}/Shaders")
+                endif()
+                if(EXISTS "${_shader_source}")
+                    list(
+                        APPEND _direct_shader_cmds
+                        COMMAND
+                        ${ROBOCOPY_WRAPPER}
+                        "${_shader_source}"
+                        "${DEPLOY_TARGET}/Shaders"
+                        "/E"
+                        "/XD"
+                        "Tests"
+                        "/COPY:DAT"
+                        "/R:1"
+                        "/W:1"
+                        "/NFL"
+                        "/NDL"
+                        "/NJH"
+                        "/NJS"
+                    )
+                endif()
+            endforeach()
 
             # Incremental shader-only copy for fast dev iteration
             # Depends ONLY on copy_shaders.stamp (no DLL, no PREPARE_AIO)
@@ -1124,11 +1585,8 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory
                     "${DEPLOY_TARGET}/Shaders"
-                # See /XO rationale above on the main deploy block.
-                COMMAND
-                    ${ROBOCOPY_WRAPPER} "${AIO_DIR}/Shaders"
-                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/R:1" "/W:1"
-                    "/NFL" "/NDL" "/NJH" "/NJS"
+                    # See /XO rationale above on the main deploy block.
+                    ${_direct_shader_cmds}
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
                     ${DEPLOY_TARGET_HASH}_shaders_only.stamp
@@ -1148,11 +1606,8 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory
                     "${DEPLOY_TARGET}/Shaders"
-                # See /XO rationale above on the main deploy block.
-                COMMAND
-                    ${ROBOCOPY_WRAPPER} "${AIO_DIR}/Shaders"
-                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/R:1" "/W:1"
-                    "/NFL" "/NDL" "/NJH" "/NJS"
+                    # See /XO rationale above on the main deploy block.
+                    ${_direct_shader_cmds}
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
                     ${DEPLOY_TARGET_HASH}_shaders_full.stamp
@@ -1163,12 +1618,40 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     "Full shader deploy to ${DEPLOY_TARGET}/Shaders (with PREPARE_AIO)"
             )
 
+            add_custom_command(
+                OUTPUT ${DEPLOY_TARGET_HASH}_shaders_direct.stamp
+                COMMAND
+                    ${CMAKE_COMMAND} -E make_directory
+                    "${DEPLOY_TARGET}/Shaders" ${_direct_shader_cmds}
+                COMMAND
+                    ${CMAKE_COMMAND} -E touch
+                    ${DEPLOY_TARGET_HASH}_shaders_direct.stamp
+                DEPENDS ${HLSL_FILES}
+                COMMENT
+                    "Shader deploy from the sources to ${DEPLOY_TARGET}/Shaders"
+            )
+            list(
+                APPEND SHADER_DIRECT_HASHES
+                ${DEPLOY_TARGET_HASH}_shaders_direct.stamp
+            )
+
             list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}_deploy.stamp)
             list(
                 APPEND DEPLOY_TARGET_HASHES
                 ${DEPLOY_TARGET_HASH}_shaders_full.stamp
             )
         endforeach()
+
+        # The plugin's build deploys the changed shaders too, so building the plugin alone (--target CommunityShaders) leaves
+        # the deploy targets' DLL and shaders matching. Every other writer of the deployed Shaders runs after the plugin (their
+        # rules reach prepare_aio.stamp, whose PREPARE_AIO is ordered after it), so none copies beside this one.
+        add_custom_target(
+            DEPLOY_SHADERS
+            DEPENDS ${SHADER_DIRECT_HASHES}
+            COMMENT
+                "Shader deploy from the sources (part of the plugin's build)"
+        )
+        add_dependencies(${PROJECT_NAME} DEPLOY_SHADERS)
     else()
         # AUTO_PLUGIN_DEPLOYMENT is enabled but the host is not Windows. Do
         # not attempt to deploy to local Skyrim directories on non-Windows
@@ -1196,10 +1679,15 @@ if(AUTO_PLUGIN_DEPLOYMENT)
         DEPENDS copy_shaders.stamp ${DEPLOY_TARGET_HASHES}
         COMMENT "Full deployment: DLL + shaders + all files to game directory"
     )
+    # The Visual Studio generator gives every target whose rules depend on prepare_aio.stamp its own copy of the
+    # PREPARE_AIO rule; built in parallel, the two copies wrote the same AIO files at once ("Permission denied").
+    # Ordering DEPLOY_ALL after PREPARE_AIO leaves its copy of the rule up to date.
+    add_dependencies(DEPLOY_ALL PREPARE_AIO)
 endif()
 
-if(NOT DEFINED ENV{CommunityShadersOutputDir})
+if(AUTO_PLUGIN_DEPLOYMENT AND NOT CS_DEPLOY_DIRS)
     message(
+        WARNING
         "When using AUTO_PLUGIN_DEPLOYMENT option, you need to set environment variable 'CommunityShadersOutputDir'"
     )
 endif()
@@ -1210,8 +1698,19 @@ find_program(
     PATHS "C:/Program Files/7-Zip" "C:/Program Files (x86)/7-Zip"
     DOC "7-Zip archiver for compressed packages"
 )
-# mx5 keeps the AIO well under Discord's 100 MB upload limit; mx1 is ~30 MB larger.
-set(SEVENZ_AIO_ARGS a -t7z -mx5 -mmt=on)
+# The Vulkan AIO carries DXVK and Streamline: maximum compression keeps it within the upload limits.
+set(SEVENZ_AIO_ARGS
+    a
+    -t7z
+    -mx=9
+    -m0=lzma2
+    -md=128m
+    -mfb=273
+    -ms=on
+    -mmt=on
+    -bd
+    -y
+)
 
 # Zip base CommunityShaders and all addons as their own zip in dist folder
 if(ZIP_TO_DIST)
@@ -1288,8 +1787,15 @@ if(ZIP_TO_DIST)
     endforeach()
 endif()
 
-# Create a AIO zip for easier testing
+# Create an AIO archive for easier testing
 if(AIO_ZIP_TO_DIST)
+    if(NOT SEVENZ_EXECUTABLE)
+        message(
+            FATAL_ERROR
+            "7-Zip is required for the maximum-compression AIO package"
+        )
+    endif()
+
     if(NOT ZIP_TO_DIST)
         add_custom_command(
             TARGET ${PROJECT_NAME}
@@ -1300,19 +1806,15 @@ if(AIO_ZIP_TO_DIST)
         )
     endif()
 
-    # Create a stamp-producing custom command for the AIO archive so CMake
-    # only rebuilds the archive when its inputs change. The archive filename
-    # keeps the UTC timestamp as before, but the command writes a stable
-    # stamp file that CMake can track as OUTPUT.
-    if(SEVENZ_EXECUTABLE)
-        set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
-    else()
-        set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO-${UTC_NOW}.zip")
-    endif()
+    # Use a stamp-producing custom command so the archive is rebuilt only when
+    # its inputs change. The timestamped archive name itself is not a stable
+    # output that CMake can track across configure runs.
+    # Solid LZMA2 keeps the Vulkan AIO below the distribution size limit.
+    set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
     set(AIO_ARCHIVE "${CMAKE_SOURCE_DIR}/dist/${TARGET_AIO_ZIP}")
-    set(AIO_ZIP_STAMP "${CMAKE_CURRENT_BINARY_DIR}/aio_package.stamp")
+    set(AIO_ZIP_STAMP "${CMAKE_CURRENT_BINARY_DIR}/aio_package_7z.stamp")
 
-    message("Zipping ${AIO_DIR} to ${AIO_ARCHIVE}")
+    message("Compressing ${AIO_DIR} to ${AIO_ARCHIVE}")
 
     if(SEVENZ_EXECUTABLE)
         add_custom_command(
@@ -1341,12 +1843,6 @@ if(AIO_ZIP_TO_DIST)
     endif()
 
     add_custom_target(AIO_ZIP_PACKAGE ALL DEPENDS ${AIO_ZIP_STAMP})
-endif()
-
-if(NOT DEFINED ENV{CommunityShadersOutputDir})
-    message(
-        "When using AUTO_PLUGIN_DEPLOYMENT option, you need to set environment variable 'CommunityShadersOutputDir'"
-    )
 endif()
 
 # #######################################################################################################################
@@ -1429,10 +1925,11 @@ if(TARGET PREPARE_AIO)
         "AIO"
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp copy_shaders.stamp
     )
+    add_dependencies("AIO" PREPARE_AIO)
 else()
     add_custom_command(
         OUTPUT ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll
-        DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
+        DEPENDS ${PROJECT_NAME} ${CORE_SOURCES} ${_AIO_RUNTIME_INPUTS}
         COMMAND
             ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG>
             --prefix ${AIO_DIR}
@@ -1459,7 +1956,8 @@ if(TARGET PREPARE_AIO)
                 ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
                 copy_shaders.stamp
                 ${PROJECT_NAME}
-            COMMENT "Creating AIO archive (from prepared AIO dir)"
+            COMMENT
+                "Creating maximum-compression AIO package (from prepared AIO dir)"
         )
     else()
         add_custom_command(
@@ -1471,7 +1969,7 @@ if(TARGET PREPARE_AIO)
                 ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
                 copy_shaders.stamp
                 ${PROJECT_NAME}
-            COMMENT "Creating AIO zip package (from prepared AIO dir)"
+            COMMENT "Creating fallback AIO zip package (from prepared AIO dir)"
         )
     endif()
 else()
@@ -1498,7 +1996,7 @@ else()
     endif()
     add_custom_command(
         OUTPUT ${AIO_PACKAGE}
-        DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
+        DEPENDS ${PROJECT_NAME} ${CORE_SOURCES} ${_AIO_RUNTIME_INPUTS}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
         COMMAND
             ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG>

@@ -826,7 +826,7 @@ void PresetsPageRenderer::RenderScreenshotLightbox()
 	const ImGuiStyle& style = ImGui::GetStyle();
 	const int shotCount = static_cast<int>(pack->screenshotSRVs.size());
 
-	// Full-viewport dim layer. Semi-transparent WindowBg lets BackgroundBlur show through.
+	// Full-viewport dim layer. Semi-transparent WindowBg lets the scene show through.
 	ImGui::SetNextWindowPos(viewport->Pos);
 	ImGui::SetNextWindowSize(viewport->Size);
 	ImGui::SetNextWindowFocus();

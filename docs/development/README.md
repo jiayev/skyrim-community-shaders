@@ -4,7 +4,15 @@
 
 - **[VSCode Setup](./vscode-setup.md)** - IDE configuration, extensions, and auto-deploy
 - **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
-- **[Nsight Perf](./nsight-perf.md)** - GPU hardware counters per render pass (Developer Tools, `NVPERF_SUPPORT`)
+- **[Nsight Perf](./nsight-perf.md)** - GPU hardware counters per render pass, D3D11 and DXVK/Vulkan backends (Remote Control, `NVPERF_SUPPORT`, `CS_NVPERF_*`)
+- **[OpenRenderGraph on DXVK](./render-graph.md)** - How features run render-graph work on DXVK's Vulkan device
+- **[Render graph schedule](./render-graph-schedule.md)** - The persistent schedule inspector window and the `communityshaders.schedule` DevBench tool: batches per queue, barriers, cross-queue waits and their causes
+- **[DCLF architecture](./dclf-architecture.md)** - Drawcall Limit Fix's design: the frame by thread, the scene from engine events to GPU draws, ownership and withholding, shading, fades, object classes and views
+- **[DCLF layout](./dclf-layout.md)** - DCLF's code layout: the folders, the extension points, the view and schedule contracts, and the rules `tools/dclf-layout-check.py` enforces
+- **[DCLF validation](./dclf-validation.md)** - DCLF's switches, parity checks, diagnostics and probes, how to validate a change, crash triage, and the bugs parity found
+- **[DCLF open defects](./dclf-open-defects.md)** - Defects and failing parity checks under investigation, with their evidence
+- **[DCLF roadmap](./dclf-roadmap.md)** - The work left, by priority: engine work still on the render thread, the scene lane, GPU cost, coverage, integrations and tooling
+- **[Skyrim engine notes](./skyrim-engine-notes.md)** - What the decompiled game binary does, where features depend on it
 
 ## Subsystems
 
@@ -59,6 +67,11 @@ The alias is installed into local Git config by default, so it does not affect o
 | `COPY_SHADERS`    | ❌         | ✅             | Fast shader iteration  |
 | `DEPLOY_ALL`      | ✅         | ✅             | Full deployment (auto) |
 | `prepare_shaders` | ❌         | ✅ (AIO only)  | CI shader validation   |
+
+With `AUTO_PLUGIN_DEPLOYMENT`, the plugin's own build copies its DLL and PDB to every deploy target, so building just
+the `CommunityShaders` target deploys it too; `DEPLOY_ALL` adds the rest of the package. The deploy targets are taken
+from `CommunityShadersOutputDir` when CMake configures and cached (`CS_DEPLOY_DIRS`), so a later reconfigure from a
+shell without the variable keeps them.
 
 ## Contributing
 

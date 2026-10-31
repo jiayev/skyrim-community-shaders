@@ -1,0 +1,56 @@
+{
+ "overThresholds": {
+  "DCLF::CaptureParity::OnNativeLightingDraw": [
+   205,
+   100
+  ],
+  "DCLF::CaptureParity::Report": [
+   171,
+   71
+  ],
+  "DCLF::Diagnostics::Check": [
+   123,
+   67
+  ],
+  "DCLF::Diagnostics::CheckBuildParity": [
+   230,
+   77
+  ],
+  "DCLF::Diagnostics::CheckSetParity": [
+   386,
+   222
+  ],
+  "DCLF::Diagnostics::CheckShapeCapacities": [
+   92,
+   42
+  ],
+  "DCLF::Diagnostics::CheckWalkParity": [
+   175,
+   83
+  ],
+  "DCLF::Diagnostics::FoliageParityReport": [
+   167,
+   61
+  ],
+  "DCLF::Diagnostics::OnTablesReplayed": [
+   100,
+   60
+  ],
+  "DCLF::Reports::Coordinator": [
+   202,
+   82
+  ],
+  "DCLF::Reports::SceneLines": [
+   136,
+   66
+  ],
+  "DCLF::Reports::Stats": [
+   220,
+   90
+  ],
+  "DrawcallLimitFix::ProbeOpaqueTarget": [
+   196,
+   55
+  ]
+ }
+}

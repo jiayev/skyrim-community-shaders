@@ -7,7 +7,9 @@ void WaterEffects::SetupResources()
 	auto device = globals::d3d::device;
 	auto context = globals::d3d::context;
 
-	DirectX::CreateDDSTextureFromFile(device, context, L"Data\\Shaders\\WaterEffects\\watercaustics.dds", nullptr, causticsView.put());
+	winrt::com_ptr<ID3D11Resource> texture;
+	DirectX::CreateDDSTextureFromFile(device, context, L"Data\\Shaders\\WaterEffects\\watercaustics.dds", texture.put(), causticsView.put());
+	Util::SetResourceName(texture.get(), "WaterEffects::Caustics");
 }
 
 void WaterEffects::Prepass()

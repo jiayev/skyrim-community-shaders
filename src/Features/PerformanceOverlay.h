@@ -4,7 +4,6 @@
 #include "OverlayFeature.h"
 #include "PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Utils/PerfUtils.h"
-#include <deque>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string_view>
@@ -142,6 +141,11 @@ struct PerformanceOverlay : OverlayFeature
 				T("feature.performance_overlay.key_feature_7", "Movable overlay window with persistent positioning") } };
 	}
 	virtual void DrawSettings() override;
+
+	/** @brief Collects the frame metrics. Call once per present, independent of whether the
+	 *         overlay is drawn -- a metric that only advances while visible reports the hidden
+	 *         interval as one huge frame when it returns. */
+	void UpdateMetrics();
 	virtual void DataLoaded() override;
 	void DrawOverlay() override;
 	// Settings persistence and defaults
@@ -170,16 +174,6 @@ struct PerformanceOverlay : OverlayFeature
 	*
 	* No parameters; uses settings from the singleton.
 	*/
-	void UpdateGraphValues();
-
-	/** @brief Clears the smoothed FPS accumulator and the rolling Avg / 1% low window. */
-	void ResetFrameStats();
-
-	/** @brief Adds the current frame time to the smoothed FPS and the rolling window; resets on a frame gap. */
-	void AccumulateFrameStats();
-
-	/** @brief Recomputes Avg and 1% low FPS from the rolling window. */
-	void UpdateFrameStats();
 	void DrawFPS();
 	void DrawVRAM();
 	void DrawPostFGFrameTimeGraph();
@@ -247,20 +241,22 @@ struct PerformanceOverlay : OverlayFeature
 		// Smoothed metrics
 		float smoothFps = 0.0f;
 		float smoothFrameTimeMs = 0.0f;
+		uint64_t lastPresentedFrames = 0;
+		/// Seconds the FSR-FG presented-frame counter has not advanced. A swapchain recreate stops
+		/// it permanently, and holding the last derived rate then reports a stale figure forever.
+		float presentedStalledSeconds = 0.0f;
+		float presentedAccum = 0.0f;
+		float presentedElapsed = 0.0f;
 		float postFGSmoothFps = 0.0f;
 		float postFGSmoothFrameTimeMs = 0.0f;
 
-		// Exponentially weighted frames / elapsed time: both sums decay with wall time, so a frame's weight halves
-		// every UpdateInterval * ln 2 seconds and the shown FPS moves every frame without stepping
-		double smoothTimeSumMs = 0.0;
-		double smoothFrameWeight = 0.0;
-
-		// Time-based rolling window of every frame, for Avg and 1% low
-		std::deque<float> statsFrameTimes;
-		double statsFrameTimeSumMs = 0.0;
-		uint32_t lastStatsFrame = UINT32_MAX;
+		// Average and 1% low, over the history the graphs draw. The 1% low is the mean of the worst
+		// one percent of frame intervals expressed as a frame rate: a mean alone cannot distinguish
+		// evenly delivered frames from the same average delivered unevenly, which is what is felt.
 		float avgFps = 0.0f;
-		float onePercentLowFps = 0.0f;
+		float low1PctFps = 0.0f;
+		float postFGAvgFps = 0.0f;
+		float postFGLow1PctFps = 0.0f;
 
 		// Update timing using QueryPerformanceCounter
 		float updateTimer = 0.0f;
@@ -291,7 +287,6 @@ struct PerformanceOverlay : OverlayFeature
 		static constexpr float kGraphSpreadMultiplier = 2.0f;        // Standard deviation multiplier for graph range
 		static constexpr float kGraphMinSpread = 2.0f;               // ms - Minimum graph spread
 		static constexpr float kGraphMaxSpread = 20.0f;              // ms - Maximum graph spread
-		static constexpr float kFrameGenerationMultiplier = 2.0f;    // Frame generation doubles frame rate
 		static constexpr float kMaxUpdateInterval = 2.0f;            // seconds - Maximum update interval
 		static constexpr float kDefaultWindowPadding = 10.0f;        // pixels - Default window padding
 		static constexpr float kLabelPadding = 100.0f;               // pixels - Padding for labels
@@ -299,10 +294,6 @@ struct PerformanceOverlay : OverlayFeature
 		static constexpr float kVRAMSectionWidth = 300.0f;           // pixels - VRAM section width
 		static constexpr float kWindowBorderPadding = 20.0f;         // pixels - Window border padding
 		static constexpr float kDefaultFrameTimeMs = 16.67f;         // ms - Default frame time (60 FPS)
-		static constexpr float kStatsWindowSeconds = 5.0f;           // seconds - Rolling window for Avg / 1% low
-		static constexpr float kStatsMinSeconds = 1.0f;              // seconds - Minimum window before Avg / 1% low are shown
-		static constexpr float kMinSmoothingSeconds = 0.01f;         // seconds - Shortest FPS smoothing time constant
-		static constexpr float kMinStatsRefreshSeconds = 0.25f;      // seconds - Fastest Avg / 1% low refresh
 		static constexpr int kMinFrameHistorySize = 120;             // 2s @ 60fps, 0.5s @ 240fps
 		static constexpr int kMaxFrameHistorySize = 1800;            // 30s @ 60fps, 7.5s @ 240fps
 

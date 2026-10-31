@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Utils/ContentHash.h"
+#include "Utils/FileRename.h"
 
 #include <algorithm>
 #include <atomic>
@@ -115,7 +116,7 @@ namespace Util::ShaderContentStore
 					return false;
 				}
 			}
-			std::filesystem::rename(tmp, path, ec);
+			Util::RenameSerialized(tmp, path, ec);
 			if (ec) {
 				std::filesystem::remove(tmp, ec);
 				return false;

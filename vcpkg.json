@@ -14,18 +14,20 @@
     },
     "default-features": ["commonlibsse-ng"],
     "dependencies": [
+        "boost-container-hash",
         "bshoshany-thread-pool",
         "clib-util",
         "cppwinrt",
-        "directx-headers",
         "directxtex",
         "effects11",
         "eastl",
         "efsw",
+        "flecs",
         {
             "name": "imgui",
             "features": ["dx11-binding", "win32-binding", "docking-experimental"]
         },
+        "implot",
         {
             "name": "libavif",
             "default-features": false,
@@ -37,6 +39,7 @@
         "pystring",
         "renderdoc",
         "stb",
+        "tbb",
         {
             "name": "tracy",
             "features": ["on-demand"]

@@ -1,4 +1,5 @@
 #include "MenuHeaderRenderer.h"
+#include "DxvkLoader.h"
 #include "Menu/IconLoader.h"
 
 #include <imgui.h>
@@ -148,9 +149,9 @@ std::string MenuHeaderRenderer::GetGameVersionText()
 
 std::string MenuHeaderRenderer::GetSwapChainText()
 {
-	return I18n::GetSingleton()->Format("menu.footer.d3d12_swap_chain",
-		{ { "status", globals::features::upscaling.d3d12SwapChainActive ? std::string(T("common.active", "Active")) : std::string(T("common.inactive", "Inactive")) } },
-		"D3D12 Swap Chain: {status}");
+	return I18n::GetSingleton()->Format("menu.footer.dxvk_renderer",
+		{ { "status", DxvkLoader::IsLoaded() ? std::string(T("common.active", "Active")) : std::string(T("common.inactive", "Inactive")) } },
+		"DXVK Renderer: {status}");
 }
 
 std::string MenuHeaderRenderer::GetGpuText()

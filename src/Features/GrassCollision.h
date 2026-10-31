@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "GrassShared/GrassFrame.h"
 #include "Utils/VersionedRelocation.h"
 
 struct GrassCollision : Feature
@@ -62,6 +63,8 @@ public:
 	Settings settings;
 
 	ConstantBuffer* perFrame = nullptr;
+	// The constants of the latest Update, published to GrassShared on frames DCLF owns grass.
+	PerFrame lastPerFrame{};
 
 	eastl::unique_ptr<Buffer> collisionBoundingBoxes = nullptr;
 	eastl::unique_ptr<Buffer> collisionInstances = nullptr;
@@ -93,15 +96,20 @@ public:
 	/**
 	 * @brief Uploads queued collision data to GPU buffers and dispatches the collision texture update.
 	 *
-	 * Called once per frame from the grass shader setup geometry hook.
+	 * Called once per frame: from the grass shader setup geometry hook (a_eye the renderer's, the main view's there), or stood down
+	 * (a_eye the frame's, from GrassShared).
 	 */
-	void Update();
+	void Update(const RE::NiPoint3& a_eye);
+
+	/** @brief GrassShared stood-down callback, on frames DCLF owns grass and no grass SetupGeometry runs: updates the
+	    collision texture and publishes it with its constants for DCLF's grass draws. */
+	static void StoodDownUpdate(const GrassShared::StoodDownFrame& a_frame);
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 
-	/** @brief Installs the BSGrassShader and main update hooks after all plugins have loaded. */
+	/** @brief Installs the BSGrassShader and main update hooks after all plugins have loaded, and registers the stood-down update. */
 	virtual void PostPostLoad() override;
 
 	struct Hooks

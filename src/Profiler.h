@@ -20,7 +20,9 @@ class Profiler
 {
 public:
 	static constexpr uint32_t kMaxTimers = 128;
-	static constexpr uint32_t kFrameLatency = 6;
+	// Frames whose queries can be in flight at once. The render thread may run several frames ahead of the GPU
+	// (nothing in the frame waits for it), and a frame's queries are read only once all of them are done.
+	static constexpr uint32_t kFrameRing = 8;
 	static constexpr uint32_t kHistorySize = 300;
 	// Must exceed the longest legitimate gap between samples of a still-running pass;
 	// the DynamicCubemaps state machine spreads its passes over 6 frames.
@@ -76,6 +78,10 @@ public:
 		float cpuP95Ms = 0.0f;
 		float cpuP99Ms = 0.0f;
 		bool valid = false;
+		// Share of recent samples whose begin and end timestamps landed in different DXVK submissions.
+		// Such a span also counts any time the GPU sat idle waiting for the later submission, so it
+		// overstates the pass; see Profiler.cpp.
+		float splitFraction = 0.0f;
 
 		const float* historyBuffer = nullptr;
 		uint32_t historyHead = 0;
@@ -93,7 +99,6 @@ public:
 		}
 	};
 
-	/** @brief Rolling wall-clock statistics of the interval between EndFrame calls. */
 	struct FrameStats
 	{
 		float lastMs = 0.0f;
@@ -102,6 +107,7 @@ public:
 		float p99Ms = 0.0f;
 		uint32_t count = 0;
 	};
+	FrameStats GetFrameStats() const;
 
 	/**
 	 * @brief Creates timestamp query objects and prepares the frame ring buffer.
@@ -124,7 +130,7 @@ public:
 		endPerfEvent = std::move(endCb);
 	}
 
-	/** @brief Collects resolved frames; begins one unless the ring is full. */
+	/** @brief Begins a new profiling frame; collects results from the oldest in-flight frame. */
 	void BeginFrame();
 
 	/**
@@ -139,11 +145,7 @@ public:
 	/** @brief Ends the current profiling frame and advances the ring buffer write cursor. */
 	void EndFrame();
 
-	/**
-	 * @brief Keeps GPU/CPU pass timing running for the next few frames; call it each frame a consumer reads the results.
-	 * @param frames Frames to stay active for. Timing stops once no consumer has asked within that window.
-	 * A shorter request never cuts a longer one short, so the overlay cannot end a DevBench window.
-	 */
+	/** @brief Request timing queries for the next frames; called by active consumers. */
 	void KeepActive(uint32_t frames = 2)
 	{
 		const uint64_t until = frameCounter.load(std::memory_order_relaxed) + frames;
@@ -153,6 +155,16 @@ public:
 	}
 	/** @brief True while a consumer asked for timings within its KeepActive window. */
 	bool IsActive() const { return frameCounter.load(std::memory_order_relaxed) <= activeUntilFrame.load(std::memory_order_relaxed); }
+
+	/**
+	 * @brief Adds GPU time measured outside the D3D11 queries: the render graph's pass timestamps, and the
+	 * Streamline interop buffers' own timestamps. Work submitted outside DXVK's command lists must not also be
+	 * bracketed by a D3D11 timer, whose span would straddle the submission (see TimerResult::splitFraction).
+	 *
+	 * Samples accumulate until the next collected frame and are averaged over the frames that passed since the
+	 * last one, so a source that reports late or in bursts still yields a per-frame figure.
+	 */
+	void AddExternalSample(std::string_view a_name, float a_gpuMs);
 
 	/** @brief Gets the live timings and history from the last collected frame. Rolling statistics are left at zero; see GetStatistics. */
 	const std::vector<TimerResult>& GetResults() const { return results; }
@@ -164,13 +176,6 @@ public:
 	 * @param timerPrefix Includes only passes starting with this prefix, or all passes when empty.
 	 */
 	std::vector<TimerResult> GetStatistics(std::string_view timerPrefix = {}) const;
-
-	/**
-	 * @brief Gets the present-cadence frame interval statistics, tracked even while GPU timing is off.
-	 * Re-sorts the history if it gained a sample, so callers should throttle it.
-	 * Not synchronized: call it only on the thread that calls EndFrame, like GetResults.
-	 */
-	FrameStats GetFrameStats() const;
 
 	/** @brief Gets the total GPU time in milliseconds for the last collected frame. */
 	float GetTotalTimeMs() const { return totalTimeMs; }
@@ -185,6 +190,7 @@ public:
 		knownTimers.clear();
 		knownTimerIndex.clear();
 		collectedFrames = 0;
+		lastLoggedFrame = 0;
 		totalTimeMs = 0.0f;
 		cpuTotalTimeMs = 0.0f;
 	}
@@ -213,30 +219,32 @@ private:
 			std::string name;
 			LARGE_INTEGER cpuBegin{};
 			float cpuMs = 0.0f;
+			uint64_t submissionAtBegin = 0;
+			bool split = false;
 		};
 		std::vector<TimerPair> timers;
 		uint32_t activeCount = 0;
+		bool inFlight = false;
 	};
 
 	ID3D11DeviceContext* context = nullptr;
 
-	FrameQueries frames[kFrameLatency];
+	FrameQueries frames[kFrameRing];
 	uint32_t writeFrame = 0;
-	uint32_t readFrame = 0;
-	// Ended frames awaiting collection, oldest at readFrame.
-	uint32_t pendingFrames = 0;
+	uint32_t readFrame = 0;  // the oldest frame not yet collected
 	bool initialized = false;
 	bool frameActive = false;
-	bool passOpen = false;
-	// Ring was full at BeginFrame; the whole frame is unprofiled.
+	// The current frame is not timed: every slot of the ring still holds a frame the GPU has not finished.
+	// Its passes still emit their perf events.
 	bool frameSkipped = false;
+	uint64_t lastLoggedFrame = 0;
 	static double QpcTicksToMs();
-
 	double cpuTicksToMs = QpcTicksToMs();
 	std::atomic<uint64_t> frameCounter{ 0 };
 	std::atomic<uint64_t> activeUntilFrame{ 0 };
 	RollingHistory frameHistory;
 	int64_t lastFrameTicks = 0;
+	bool passOpen = false;
 
 	PerfEventCallback beginPerfEvent;
 	PerfEventCallback endPerfEvent;
@@ -248,18 +256,27 @@ private:
 		std::string name;
 		RollingHistory gpu;
 		RollingHistory cpu;
+		RollingHistory split;
 		uint64_t lastSampleFrame = 0;
 	};
+	std::unordered_map<std::string, float> pendingExternal;
+	uint32_t framesSinceExternalMerge = 0;
 	std::vector<KnownTimer> knownTimers;
 	std::unordered_map<std::string, size_t> knownTimerIndex;
 	uint64_t collectedFrames = 0;
+	// DXVK's submission counter (dxvkGetSubmissionCounter), or null on native D3D11 or an older DXVK.
+	const volatile uint64_t* submissionCounter = nullptr;
 	float totalTimeMs = 0.0f;
 	float cpuTotalTimeMs = 0.0f;
 
+	/** @brief Collects every frame the GPU has finished, oldest first, then rebuilds the results. */
 	void CollectResults();
+	/** @brief Reads one finished frame's queries into the timers' histories; false while the GPU is not done with it. */
+	bool CollectFrame(FrameQueries& frame, std::unordered_map<std::string, std::pair<float, float>>& activeTimers);
 
 	/** @brief Drops timers that have not been sampled for kTimerRetireFrames, so disabled passes stop reporting stale values. */
 	void RetireStaleTimers();
+	void LogResultsIfRequested();
 
 	/** @brief Repoints knownTimerIndex at the current knownTimers positions after an erase. */
 	void RebuildTimerIndex();

@@ -22,6 +22,7 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/Streamline.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
@@ -175,12 +176,12 @@ void PerformanceOverlay::DrawSettings()
 
 		bool isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
 		if (this->settings.ShowFPS && isFrameGenerationActive) {
-			ImGui::Checkbox(T(TKEY("show_pre_fg_graph"), "Show Pre-FG Frametime Graph"), &this->settings.ShowPreFGFrameTimeGraph);
+			ImGui::Checkbox(T(TKEY("show_render_graph"), "Show Render Frametime Graph"), &this->settings.ShowPreFGFrameTimeGraph);
 
-			ImGui::Checkbox(T(TKEY("show_post_fg_graph"), "Show Post-FG Frametime Graph"), &this->settings.ShowPostFGFrameTimeGraph);
+			ImGui::Checkbox(T(TKEY("show_true_graph"), "Show True Frametime Graph"), &this->settings.ShowPostFGFrameTimeGraph);
 			if (ImGui::IsItemHovered()) {
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("%s", T(TKEY("post_fg_graph_tooltip"), "Frame Generation uses calculated timing data (2x Pre-FG)."));
+					ImGui::Text("%s", T(TKEY("true_graph_tooltip"), "True timing is the presented frame interval. The frame-generation backend reports how many frames it actually presented; where it publishes no count, the interval is derived from the render frame time and the reported multiplier."));
 				}
 			}
 		} else if (this->settings.ShowFPS) {
@@ -197,19 +198,17 @@ void PerformanceOverlay::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("text_size"), "Text Size"), &this->settings.TextSize, 0.8f, 1.2f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("bg_opacity"), "Background Opacity"), &this->settings.BackgroundOpacity, 0.0f, 1.0f, "%.2f");
 		ImGui::Checkbox(T(TKEY("show_border"), "Show Border"), &this->settings.ShowBorder);
-		ImGui::SliderFloat(T(TKEY("update_interval"), "FPS Smoothing"), &this->settings.UpdateInterval, 0.001f, PerformanceOverlay::Settings::kMaxUpdateInterval, "%.2f seconds");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(T(TKEY("update_interval_tooltip"), "How long the FPS readout averages over. It updates every frame; higher values steady it, lower values follow changes faster. Avg and 1% low refresh at this rate too (at most 4 times a second)."));
+		ImGui::SliderFloat(T(TKEY("update_interval"), "Update Interval"), &this->settings.UpdateInterval, 0.001f, PerformanceOverlay::Settings::kMaxUpdateInterval, "%.2f seconds");
 		ImGui::SliderInt(T(TKEY("frame_history_size"), "Frame History Size"), &this->settings.FrameHistorySize,
 			this->settings.kMinFrameHistorySize, this->settings.kMaxFrameHistorySize, "%d", ImGuiSliderFlags_AlwaysClamp);
 
 		ImGui::Separator();
 		ImGui::Text("%s", T(TKEY("position"), "Position:"));
-		if (Util::Button(T(TKEY("reset_position"), "Reset Position"))) {
+		if (ImGui::Button(T(TKEY("reset_position"), "Reset Position"))) {
 			this->settings.PositionSet = false;
 		}
 		ImGui::SameLine();
-		if (Util::Button(T(TKEY("restore_defaults"), "Restore Defaults"))) {
+		if (ImGui::Button(T(TKEY("restore_defaults"), "Restore Defaults"))) {
 			RestoreDefaultSettings();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -250,7 +249,6 @@ void PerformanceOverlay::RestoreDefaultSettings()
 	this->state.smoothFrameTimeMs = 0.0f;
 	this->state.postFGSmoothFps = 0.0f;
 	this->state.postFGSmoothFrameTimeMs = 0.0f;
-	ResetFrameStats();
 	this->state.minFrameTime = 1000.0f;
 	this->state.maxFrameTime = 0.0f;
 	this->state.smoothedMinFrameTime = 0.0f;
@@ -336,7 +334,7 @@ void PerformanceOverlay::DrawOverlay()
 			// Measure FPS text width
 			std::string fpsText = std::format("{:.1f} ({:.2f} ms)", this->state.smoothFps, this->state.smoothFrameTimeMs);
 			if (this->state.isFrameGenerationActive) {
-				fpsText = std::format("Raw FPS: {:.1f} ({:.2f} ms)", this->state.smoothFps, this->state.smoothFrameTimeMs);
+				fpsText = std::format("Render FPS   {:.0f}   {:.0f}  1%", this->state.avgFps, this->state.low1PctFps);
 			}
 			float fpsWidth = ImGui::CalcTextSize(fpsText.c_str()).x;
 			minWidth = std::max(minWidth, fpsWidth + Settings::kLabelPadding * scale);
@@ -371,8 +369,8 @@ void PerformanceOverlay::DrawOverlay()
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * scale, 1.0f * scale));
 	ImGui::SetWindowFontScale(this->settings.TextSize);
 
-	// Update graph values
-	this->UpdateGraphValues();
+	// Metrics are collected once per frame by UpdateMetrics(), whether or not the overlay is
+	// drawn; drawing must not be what decides whether a frame is measured.
 
 	bool needsSeparator = false;
 
@@ -418,31 +416,28 @@ void PerformanceOverlay::DrawOverlay()
 
 void PerformanceOverlay::DrawFPS()
 {
-	if (ImGui::BeginTable("FrametimeTargets", 2, ImGuiTableFlags_SizingStretchProp)) {
-		ImGui::TableSetupColumn("##prop", ImGuiTableColumnFlags_WidthFixed, ImGui::GetTextLineHeight() * 5);
-		ImGui::TableSetupColumn("##value");
+	// Label, average, 1% low. The two figures sit in their own aligned columns rather than being
+	// run together with a separator, so the rows line up and read as a small table.
+	if (ImGui::BeginTable("FpsReadout", 3, ImGuiTableFlags_SizingStretchProp)) {
+		ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, ImGui::GetTextLineHeight() * 5);
+		ImGui::TableSetupColumn("##avg", ImGuiTableColumnFlags_WidthFixed, ImGui::GetTextLineHeight() * 2.5f);
+		ImGui::TableSetupColumn("##low");
 
-		ImGui::TableNextColumn();
-		ImGui::Text(this->state.isFrameGenerationActive ? T(TKEY("raw_fps"), "Raw FPS:") : T(TKEY("fps"), "FPS:"));
-		ImGui::TableNextColumn();
+		// Same shape as the driver overlay: average, then the 1% low tagged as such. No separator
+		// glyph between them -- the columns already keep the two figures apart and aligned.
+		const auto row = [](const char* a_label, float a_avg, float a_low) {
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(a_label);
+			ImGui::TableNextColumn();
+			ImGui::Text("%.0f", a_avg);
+			ImGui::TableNextColumn();
+			ImGui::TextDisabled("%.0f (1%%L)", a_low);
+		};
 
-		ImGui::Text("%.1f (%.2f ms)", this->state.smoothFps, this->state.smoothFrameTimeMs);
-
-		if (this->state.avgFps > 0.0f) {
-			ImGui::TableNextColumn();
-			ImGui::Text("%s", T(TKEY("avg_fps"), "Avg:"));
-			ImGui::TableNextColumn();
-			ImGui::Text("%.1f | %s %.1f", this->state.avgFps, T(TKEY("one_percent_low"), "1% Low:"), this->state.onePercentLowFps);
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("%s", T(TKEY("avg_fps_tooltip"), "Average FPS (frames / time) and 1% low (FPS of the 99th percentile frame time) over the last 5 seconds."));
-		}
-
-		if (this->state.isFrameGenerationActive) {
-			ImGui::TableNextColumn();
-			ImGui::TextUnformatted(T(TKEY("post_fg_fps"), "Post-FG FPS:"));
-			ImGui::TableNextColumn();
-			ImGui::Text("%.1f (%.2f ms)", this->state.postFGSmoothFps, this->state.postFGSmoothFrameTimeMs);
-		}
+		row(this->state.isFrameGenerationActive ? T(TKEY("render_fps"), "Render FPS") : T(TKEY("fps"), "FPS"),
+			this->state.avgFps, this->state.low1PctFps);
+		if (this->state.isFrameGenerationActive)
+			row(T(TKEY("true_fps"), "True FPS"), this->state.postFGAvgFps, this->state.postFGLow1PctFps);
 
 		ImGui::EndTable();
 	}
@@ -452,9 +447,9 @@ void PerformanceOverlay::DrawFPS()
 		// Prepare overlay text
 		char overlay_text[128];
 		snprintf(overlay_text, IM_ARRAYSIZE(overlay_text),
-			"%s%.2f ms (%.1f FPS)",
-			this->state.isFrameGenerationActive ? "Pre-FG: " : "",
-			this->state.smoothFrameTimeMs, this->state.smoothFps);
+			"%s%.1f FPS   %.2f ms",
+			this->state.isFrameGenerationActive ? "Render   " : "",
+			this->state.smoothFps, this->state.smoothFrameTimeMs);
 
 		// Set graph colors
 		ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));  // Green line
@@ -486,11 +481,8 @@ void PerformanceOverlay::DrawFPS()
 		}
 	}
 
-	// Show Post-FG frametime graph if enabled
-	if (this->settings.ShowPostFGFrameTimeGraph && this->state.isFrameGenerationActive) {
-		Util::Text::Warning("%s", T(TKEY("post_fg_calculated"), "Post-FG: Calculated timing (2x Pre-FG)"));
+	if (this->settings.ShowPostFGFrameTimeGraph && this->state.isFrameGenerationActive)
 		this->DrawPostFGFrameTimeGraph();
-	}
 }
 
 void PerformanceOverlay::DrawVRAM()
@@ -511,7 +503,7 @@ void PerformanceOverlay::DrawVRAM()
 		float percent = currentGpuUsage / totalGpuMemory;
 
 		// Center the VRAM text
-		ImGui::TextUnformatted(T(TKEY("vram_usage"), "VRAM Usage:"));
+		ImGui::Text(T(TKEY("vram_usage"), "VRAM Usage:"));
 
 		// Use a centered text format for the numeric values
 		std::string vramText = std::format("{:.2f}GB/{:.2f}GB ({:.1f}%)", currentGpuUsage, totalGpuMemory, 100 * percent);
@@ -539,8 +531,8 @@ void PerformanceOverlay::DrawPostFGFrameTimeGraph()
 	// Prepare overlay text
 	char overlay_text[128];
 	snprintf(overlay_text, IM_ARRAYSIZE(overlay_text),
-		"Post-FG: %.2f ms (%.1f FPS)",
-		state.postFGSmoothFrameTimeMs, state.postFGSmoothFps);
+		"True   %.1f FPS   %.2f ms",
+		state.postFGSmoothFps, state.postFGSmoothFrameTimeMs);
 
 	// Set graph colors - blue for post-FG
 	ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0.0f, 0.5f, 1.0f, 1.0f));  // Blue line
@@ -1192,11 +1184,11 @@ void PerformanceOverlay::DrawABTestSection(const std::vector<DrawCallRow>& allRo
 		// --- A/B Results Controls ---
 		static bool showSettingsDiff = false;
 		ImGui::BeginGroup();
-		if (Util::Button(showSettingsDiff ? "Hide Settings Diff" : "Show Settings Diff")) {
+		if (ImGui::Button(showSettingsDiff ? "Hide Settings Diff" : "Show Settings Diff")) {
 			showSettingsDiff = !showSettingsDiff;
 		}
 		ImGui::SameLine();
-		if (Util::Button("Clear A/B Test Results")) {
+		if (ImGui::Button("Clear A/B Test Results")) {
 			aggregator.Clear();
 			this->settingsDiff.clear();
 			this->settingsDiffLoaded = false;
@@ -1310,7 +1302,7 @@ void PerformanceOverlay::DrawDrawCallsTable(const std::vector<DrawCallRow>& main
 	overlay.CaptureTestData();
 	bool anyTestData = !overlay.testData.empty();
 	if (anyTestData) {
-		if (Util::Button(T(TKEY("clear_test_data"), "Clear Test Data"))) {
+		if (ImGui::Button(T(TKEY("clear_test_data"), "Clear Test Data"))) {
 			clearTestDataRequested = true;
 		}
 	}
@@ -1416,7 +1408,7 @@ std::vector<ColumnConfig> PerformanceOverlay::BuildDrawCallTableColumns(const Me
 				if (!row.enabled)
 					ImGui::PushStyleColor(ImGuiCol_Text, theme.StatusPalette.Disable);
 				bool wasEnabled = row.enabled;
-				if (Util::Selectable(row.label.c_str(), false)) {
+				if (ImGui::Selectable(row.label.c_str(), false)) {
 					auto maybeType = magic_enum::enum_cast<RE::BSShader::Type>(row.shaderType);
 					if (maybeType.has_value()) {
 						auto classIndex = magic_enum::enum_integer(*maybeType) - 1;
@@ -1625,7 +1617,7 @@ std::function<void(int, int, const DrawCallRow&)> PerformanceOverlay::CreateTabl
 		// Special handling for summary rows
 		if ((row.label == "Total:" || row.label == "Other:") && colIdx == 0) {
 			if (row.label == "Total:") {
-				if (Util::Selectable(row.label.c_str(), false, ImGuiSelectableFlags_SpanAllColumns)) {
+				if (ImGui::Selectable(row.label.c_str(), false, ImGuiSelectableFlags_SpanAllColumns)) {
 					HandleTotalRowToggle();
 				}
 				if (ImGui::IsItemHovered()) {
@@ -1909,69 +1901,17 @@ void PerformanceOverlay::UpdateSummaryTestData(float smoothedFrameTime, float ot
 // PERFORMANCE OVERLAY STATE MANAGEMENT
 // ============================================================================
 
-void PerformanceOverlay::ResetFrameStats()
+void PerformanceOverlay::UpdateMetrics()
 {
-	state.smoothTimeSumMs = 0.0;
-	state.smoothFrameWeight = 0.0;
-	state.statsFrameTimes.clear();
-	state.statsFrameTimeSumMs = 0.0;
-	state.avgFps = 0.0f;
-	state.onePercentLowFps = 0.0f;
-}
-
-void PerformanceOverlay::AccumulateFrameStats()
-{
-	// The overlay only updates while drawn; a gap means the measured delta spans hidden frames
-	const uint32_t frame = globals::state->frameCount;
-	const bool contiguous = frame == state.lastStatsFrame + 1;
-	const bool repeat = frame == state.lastStatsFrame;
-	state.lastStatsFrame = frame;
-	if (repeat)
+	// Called once per present. Everything here is measurement only -- no ImGui -- because a
+	// metric that stops updating when the overlay is hidden reports the hidden interval as one
+	// enormous frame the moment it comes back, which is what made the 1% low read zero.
+	static uint32_t s_lastMetricFrame = UINT32_MAX;
+	const uint32_t metricFrame = globals::state ? globals::state->frameCount : 0u;
+	if (s_lastMetricFrame == metricFrame)
 		return;
-	if (!contiguous) {
-		ResetFrameStats();
-		return;
-	}
-	if (state.frameTimeMs <= 0.0f)
-		return;
+	s_lastMetricFrame = metricFrame;
 
-	// Older frames fade by the time that has passed, not by how many frames came after, so the smoothing feels the
-	// same at any frame rate; the ratio of the two sums stays frames / elapsed time
-	const double timeConstantMs = std::max(settings.UpdateInterval, Settings::kMinSmoothingSeconds) * 1000.0;
-	const double decay = std::exp(-state.frameTimeMs / timeConstantMs);
-	state.smoothTimeSumMs = state.smoothTimeSumMs * decay + state.frameTimeMs;
-	state.smoothFrameWeight = state.smoothFrameWeight * decay + 1.0;
-
-	// Every frame counts, hitches included, so the average matches frames / elapsed time
-	state.statsFrameTimes.push_back(state.frameTimeMs);
-	state.statsFrameTimeSumMs += state.frameTimeMs;
-	constexpr double windowMs = Settings::kStatsWindowSeconds * 1000.0;
-	while (state.statsFrameTimes.size() > 1 && state.statsFrameTimeSumMs - state.statsFrameTimes.front() >= windowMs) {
-		state.statsFrameTimeSumMs -= state.statsFrameTimes.front();
-		state.statsFrameTimes.pop_front();
-	}
-}
-
-void PerformanceOverlay::UpdateFrameStats()
-{
-	if (state.statsFrameTimes.empty() || state.statsFrameTimeSumMs < Settings::kStatsMinSeconds * 1000.0) {
-		state.avgFps = 0.0f;
-		state.onePercentLowFps = 0.0f;
-		return;
-	}
-
-	state.avgFps = Util::CalcFPS(static_cast<float>(state.statsFrameTimeSumMs / state.statsFrameTimes.size()));
-
-	// 1% low as the FPS of the 99th percentile frame time (CapFrameX "P1")
-	std::vector<float> sorted(state.statsFrameTimes.begin(), state.statsFrameTimes.end());
-	const size_t idx = static_cast<size_t>(0.99 * static_cast<double>(sorted.size() - 1));
-	std::nth_element(sorted.begin(), sorted.begin() + idx, sorted.end());
-	state.onePercentLowFps = Util::CalcFPS(sorted[idx]);
-}
-
-void PerformanceOverlay::UpdateGraphValues()
-{
-	// Check if Frame Generation is active
 	state.isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
 
 	// Sync frame history buffer size with user settings
@@ -1990,8 +1930,6 @@ void PerformanceOverlay::UpdateGraphValues()
 	// Calculate frametime and fps
 	state.frameTimeMs = Util::CalcFrameTime(elapsedCounter, state.frequency);
 	state.fps = Util::CalcFPS(state.frameTimeMs);
-
-	AccumulateFrameStats();
 
 	// Calculate smooth values for display using the user-defined update interval
 	// Initialize overlay timing frequency if needed
@@ -2053,31 +1991,153 @@ void PerformanceOverlay::UpdateGraphValues()
 	state.smoothedMaxFrameTime = state.smoothedMaxFrameTime + Settings::kSmoothingFactor * (graphMax - state.smoothedMaxFrameTime);
 
 	if (state.isFrameGenerationActive) {
-		state.postFGFrameTimeMs = state.frameTimeMs / Settings::kFrameGenerationMultiplier;
-		state.postFGFps = state.fps * Settings::kFrameGenerationMultiplier;
-
-		// Update post-FG frametime history
-		if (sampleGraph)
+		// Prefer the frame-generation swapchain's own presented-frame counter: differencing it over
+		// time gives the true post-FG rate. The per-present multiplier is a flag that reads 1 on any
+		// present with no prepared frame -- with FSR-FG roughly a third of presents are un-prepared,
+		// so sampling it instantaneously made Post-FG FPS flicker to the un-doubled value.
+		// Pick the source by who owns present, not by whether the counter happens to read zero. The
+		// counter belongs to FSR-FG's swapchain and is a running total that is never reset, so after
+		// switching to DLSS-G it holds a stale non-zero value: it no longer advances, so the counter
+		// branch cannot fire, and it is not zero, so the fallback cannot either. That left both
+		// branches unreachable and pinned Post-FG FPS at 0 for the rest of the session.
+		auto* streamline = Streamline::GetSingleton();
+		const bool fsrOwnsPresent = streamline->IsFSRFGPresentOwner();
+		const uint64_t presented = fsrOwnsPresent ? streamline->GetTotalPresentedFrames() : 0u;
+		if (fsrOwnsPresent) {
+			// The FSR present counter is authoritative only while it is actually advancing. It sits at
+			// zero until sl.fsr_g's own present loop publishes it, and it is not written at all while
+			// the game is paused or a menu is up, because the capture call lives on the gameplay path.
+			// The elapsed window therefore has to accumulate unconditionally: gating it on the counter
+			// having advanced meant that if the counter never moved, lastPresentedFrames stayed 0, the
+			// guard could never pass, and Post-FG FPS read a permanent 0 -- which is what the overlay
+			// showed for FSR-FG. When the counter is not moving, fall back to the same multiplier
+			// estimate the DLSS-G path uses rather than reporting zero frames per second.
+			// Per frame, not per quarter second. This used to average the presented count over a
+			// 0.25 s window and push that same value into the history every frame, so the True
+			// graph was a flat stepped line next to an instantaneous Render graph and the two
+			// could not be compared. The presented delta for this frame over this frame's own
+			// delta time is the presented interval, on the same footing as the render interval.
+			if (deltaTime > 0.0f) {
+				const uint64_t deltaPresented =
+					(state.lastPresentedFrames != 0 && presented > state.lastPresentedFrames) ? presented - state.lastPresentedFrames : 0u;
+				if (deltaPresented > 0u) {
+					state.postFGFrameTimeMs = (deltaTime * 1000.0f) / static_cast<float>(deltaPresented);
+					state.postFGFps = state.postFGFrameTimeMs > 0.0f ? 1000.0f / state.postFGFrameTimeMs : 0.0f;
+					state.presentedStalledSeconds = 0.0f;
+				} else if (state.postFGFrameTimeMs <= 0.0f ||
+						   (state.presentedStalledSeconds += deltaTime) > 0.5f) {
+					// Either nothing has been published yet, or the counter has stopped advancing --
+					// a swapchain recreate (a vsync toggle, an FG method switch) leaves it frozen, and
+					// holding the last derived rate then reports a stale figure indefinitely. Observed
+					// after toggling vsync: Post-FG pinned at 2485.4 fps for minutes while the render
+					// rate sat at a correct 60. Fall back to the reported multiplier instead.
+					const float fsrMultiplier = static_cast<float>(
+						std::max(streamline->GetFrameGenerationMultiplier(), 2u));
+					state.postFGFps = state.fps * fsrMultiplier;
+					state.postFGFrameTimeMs = state.frameTimeMs / fsrMultiplier;
+				}
+			}
+		} else {
+			// DLSS-G publishes no such counter: fall back to the reported multiplier.
+			const uint32_t rawMultiplier = streamline->GetFrameGenerationMultiplier();
+			const float multiplier = static_cast<float>(std::max(rawMultiplier, 2u));
+			state.postFGFrameTimeMs = state.frameTimeMs / multiplier;
+			state.postFGFps = state.fps * multiplier;
+			// Drop any partial window left by FSR-FG so a switch back starts clean.
+			state.presentedAccum = 0.0f;
+			state.presentedElapsed = 0.0f;
+		}
+		state.lastPresentedFrames = presented;
+		if (state.postFGFrameTimeMs > 0.0f)
 			state.postFGFrameTimeHistory.Push(state.postFGFrameTimeMs);
-	}
-
-	// The smoothed FPS updates every frame
-	if (state.smoothFrameWeight > 0.0 && state.smoothTimeSumMs > 0.0) {
-		state.smoothFrameTimeMs = static_cast<float>(state.smoothTimeSumMs / state.smoothFrameWeight);
-		state.smoothFps = Util::CalcFPS(state.smoothFrameTimeMs);
 	} else {
-		state.smoothFps = state.fps;
-		state.smoothFrameTimeMs = state.frameTimeMs;
-	}
-	if (state.isFrameGenerationActive) {
-		state.postFGSmoothFrameTimeMs = state.smoothFrameTimeMs / Settings::kFrameGenerationMultiplier;
-		state.postFGSmoothFps = state.smoothFps * Settings::kFrameGenerationMultiplier;
+		state.postFGFrameTimeMs = 0.0f;
+		state.postFGFps = 0.0f;
+		state.lastPresentedFrames = 0;
+		state.presentedAccum = 0.0f;
+		state.presentedElapsed = 0.0f;
 	}
 
-	// Avg and 1% low sort the whole window, so they refresh on the interval instead
+	// Periodic present-rate trace. The overlay is the only place these numbers exist, so when the
+	// question is "why is the frame rate not going above the refresh rate", there was nothing in
+	// the log to answer it. Samples what the overlay itself shows, once every few seconds.
+	{
+		static float s_traceTimer = 0.0f;
+		s_traceTimer += deltaTime;
+		if (s_traceTimer >= 5.0f) {
+			s_traceTimer = 0.0f;
+			auto& up = globals::features::upscaling;
+			logger::info("[Perf] rendered {:.1f} fps ({:.2f} ms) | post-FG {:.1f} fps ({:.2f} ms) | fg={} method={} mult={}",
+				state.fps, state.frameTimeMs, state.postFGFps, state.postFGFrameTimeMs,
+				state.isFrameGenerationActive ? "on" : "off",
+				up.GetFrameGenMethod() == Upscaling::FrameGenMethod::kDLSSG ? "DLSS-G" : "FSR-FG",
+				Streamline::GetSingleton()->GetFrameGenerationMultiplier());
+		}
+	}
+
+	// Pacing trace. The averaged frame rate says nothing about how evenly frames land, which is
+	// the thing that actually gets noticed, so report the spread of the same history the graphs
+	// draw: median, 99th percentile and worst, for the render and true timelines.
+	{
+		static float s_pacingTimer = 0.0f;
+		s_pacingTimer += deltaTime;
+		if (s_pacingTimer >= 5.0f) {
+			s_pacingTimer = 0.0f;
+			// Same figures the overlay shows, so a log from a play session can be compared against
+			// what was on screen. p99 is included because it is the interval the 1% low is derived
+			// from, and it says how long the worst frames actually were.
+			const auto p99 = [](std::span<const float> a_hist) {
+				std::vector<float> v;
+				v.reserve(a_hist.size());
+				for (float s : a_hist)
+					if (s > 0.0f)
+						v.push_back(s);
+				if (v.empty())
+					return 0.0f;
+				std::sort(v.begin(), v.end());
+				return v[static_cast<size_t>(static_cast<double>(v.size() - 1) * 0.99)];
+			};
+			auto& up = globals::features::upscaling;
+			logger::info("[Pacing] render {:.0f} | {:.0f} (1%L), p99 {:.2f} ms | true {:.0f} | {:.0f} (1%L), p99 {:.2f} ms | fg={} method={}",
+				state.avgFps, state.low1PctFps, p99(state.frameTimeHistory.GetData()),
+				state.postFGAvgFps, state.postFGLow1PctFps, p99(state.postFGFrameTimeHistory.GetData()),
+				state.isFrameGenerationActive ? "on" : "off",
+				up.GetFrameGenMethod() == Upscaling::FrameGenMethod::kDLSSG ? "DLSS-G" : "FSR-FG");
+		}
+	}
+
+	// Update smooth values with user-specified interval
 	state.updateTimer += deltaTime;
-	if (state.updateTimer >= std::max(settings.UpdateInterval, Settings::kMinStatsRefreshSeconds)) {
-		UpdateFrameStats();
+	if (state.updateTimer >= settings.UpdateInterval) {
+		state.smoothFps = state.fps;  // Sampling white noise won't give you smoothed noise. This is useless.
+		state.smoothFrameTimeMs = state.frameTimeMs;
+		state.postFGSmoothFps = state.postFGFps;
+		state.postFGSmoothFrameTimeMs = state.postFGFrameTimeMs;
+
+		// Average and 1% low, the way an overlay usually reports them: the 1% low is the mean of the
+		// worst one percent of intervals, converted to a frame rate, so a handful of long frames
+		// shows up as a number instead of disappearing into the average.
+		const auto summarise = [](std::span<const float> a_hist, float& a_avgFps, float& a_lowFps) {
+			std::vector<float> v;
+			v.reserve(a_hist.size());
+			for (float s : a_hist)
+				if (s > 0.0f)
+					v.push_back(s);
+			if (v.empty()) {
+				a_avgFps = a_lowFps = 0.0f;
+				return;
+			}
+			const double mean = std::accumulate(v.begin(), v.end(), 0.0) / double(v.size());
+			a_avgFps = mean > 0.001 ? static_cast<float>(1000.0 / mean) : 0.0f;
+			std::sort(v.begin(), v.end());
+			const size_t worst = std::max<size_t>(1u, v.size() / 100u);
+			const double worstMean =
+				std::accumulate(v.end() - worst, v.end(), 0.0) / double(worst);
+			a_lowFps = worstMean > 0.001 ? static_cast<float>(1000.0 / worstMean) : 0.0f;
+		};
+		summarise(state.frameTimeHistory.GetData(), state.avgFps, state.low1PctFps);
+		summarise(state.postFGFrameTimeHistory.GetData(), state.postFGAvgFps, state.postFGLow1PctFps);
+
 		state.updateTimer = 0.0f;
 	}
 }

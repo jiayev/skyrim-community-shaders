@@ -399,6 +399,19 @@ public:
 
 	/** @brief True when local shadows are enabled and their hooks were installed at startup. */
 	bool IsLocalShadowsEnabled() const { return settings.EnableLocalShadows && localShadowHooksInstalled; }
+	/**
+	 * @brief Whether Drawcall Limit Fix blocks the local shadow cache (its hooks are never installed). DCLF draws the shadow maps
+	 * for its own port of the engine's light selection, which the cache's caster rotation (FilterLocalShadowCaster, through
+	 * UpdateCamera) does not reach, so the two would choose different lights (dclf-open-defects.md).
+	 */
+	static bool LocalShadowsBlockedByDCLF();
+	/**
+	 * @brief This frame's light index list: the render graph's when it culled the clusters, else the D3D11 fallback's.
+	 * Valid for consumers that run after Prepass.
+	 */
+	ID3D11ShaderResourceView* GetLightIndexListSRV() const;
+	/** @brief This frame's light grid, from the same source as GetLightIndexListSRV. */
+	ID3D11ShaderResourceView* GetLightGridSRV() const;
 	/** @brief True when local shadows are enabled and the cache texture exists. */
 	bool IsLocalShadowCacheActive() const { return IsLocalShadowsEnabled() && localShadowCache; }
 	/** @brief Draws the experimental local shadow settings. */
@@ -484,6 +497,23 @@ public:
 
 	uint clusterSize[3] = { 16 };
 
+	/** @brief Whether this frame's clusters came from the render graph (its outputs are bound at t36/t37). */
+	bool orgCulledThisFrame = false;
+
+	/** @brief Updates near/far and the dynamic-resolution cluster grid for this frame. */
+	void UpdateClusterParameters();
+
+	/** @brief Culls the frame's lights on the render graph; false means the D3D11 dispatches must run. */
+	bool CullOnRenderGraph(const eastl::vector<LightData>& a_lightsData);
+
+	/**
+	 * @brief Debug (CS_ORG_LLF_PARITY=1): reruns this frame's culling on D3D11 and compares
+	 * each cluster's light set against the render graph's output. Logs the result.
+	 */
+	void CompareRenderGraphCulling();
+
+	uint32_t orgParityFrame = 0;
+
 	Settings settings;
 
 	/** @brief Pre-geometry setup: initializes strict light data and determines the room index for the pass. */
@@ -496,6 +526,17 @@ public:
 	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
 
 	eastl::hash_map<RE::NiNode*, uint8_t> roomNodes;
+	eastl::hash_map<RE::NiNode*, uint8_t> nextRoomNodes;  // reused scratch; never invalidates the published mapping
+	std::uint64_t roomMapGeneration = 0;
+
+	/** @brief StrictLightData::RoomIndex for a geometry: its room's index this frame, or -1 outside rooms. */
+	int GetRoomIndex(RE::NiAVObject* a_object) const;
+	RE::NiNode* GetRoomNode(RE::NiAVObject* a_object) const;
+	int GetRoomIndexForRoom(const RE::NiNode* a_room) const;
+	std::uint64_t GetRoomMapGeneration() const { return roomMapGeneration; }
+
+	/** @brief StrictLightData::ShadowBitMask for a lighting pass: the shadow mask channels of its shadow lights. */
+	static uint GetShadowBitMask(const RE::BSRenderPass* a_pass);
 
 	/** @brief Contains vtable hooks for BSLightingShader, BSEffectShader, and BSWaterShader geometry setup. */
 	struct Hooks

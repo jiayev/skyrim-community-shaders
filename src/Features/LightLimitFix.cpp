@@ -1,7 +1,9 @@
 #include "LightLimitFix.h"
 #include "CSEditor/EditorWindow.h"
+#include "DrawcallLimitFix.h"
 #include "Effects11.h"
 #include "LightLimitFix/Common.h"
+#include "LightLimitFix/ORGLightCulling.h"
 #include "LinearLighting.h"
 #include "PhysicalSky.h"
 #include "Util.h"
@@ -44,15 +46,29 @@ static int FindOptionIndex(const std::array<uint32_t, N>& a_options, uint32_t a_
 	return index;
 }
 
+bool LightLimitFix::LocalShadowsBlockedByDCLF()
+{
+	return globals::features::drawcallLimitFix.loaded;
+}
+
 void LightLimitFix::DrawLocalShadowSettings()
 {
 	ImGui::SeparatorText(T(TKEY("local_shadows"), "Local Light Shadows"));
 
+	const bool blockedByDCLF = LocalShadowsBlockedByDCLF();
+	ImGui::BeginDisabled(blockedByDCLF);
 	ImGui::Checkbox(T(TKEY("enable_local_shadows"), "(Experimental) Enable Local Light Shadows"), &settings.EnableLocalShadows);
+	ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("enable_local_shadows_tooltip"),
 							  "Keeps a cache of the shadow maps the game renders for shadow-casting lights and rotates which lights the game renders each frame.\n"
 							  "More than four lights can cast shadows at once at the same rendering cost as vanilla. Lights with characters inside their radius are refreshed every frame, nearest to the camera first."));
+	}
+
+	if (blockedByDCLF) {
+		ImGui::TextDisabled("%s", T(TKEY("local_shadows_dclf_unavailable"), "Unavailable while Drawcall Limit Fix is loaded: it draws the shadow maps for the lights it selects itself, which the cache's light rotation would not reach."));
+		ImGui::Spacing();
+		return;
 	}
 
 	if (settings.EnableLocalShadows && !localShadowHooksInstalled)
@@ -89,6 +105,44 @@ void LightLimitFix::DrawLocalShadowSettings()
 	}
 
 	ImGui::Spacing();
+}
+
+namespace
+{
+	bool OrgParityEnabled()
+	{
+		static const bool enabled = [] {
+			char buf[4] = {};
+			return GetEnvironmentVariableA("CS_ORG_LLF_PARITY", buf, sizeof(buf)) && buf[0] == '1';
+		}();
+		return enabled;
+	}
+
+	// Blocking copy of a buffer's first a_bytes into CPU memory (debug use only).
+	std::vector<uint32_t> ReadBackBuffer(ID3D11Resource* a_resource, uint32_t a_bytes)
+	{
+		auto device = globals::d3d::device;
+		auto context = globals::d3d::context;
+
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = a_bytes;
+		desc.Usage = D3D11_USAGE_STAGING;
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		winrt::com_ptr<ID3D11Buffer> staging;
+		if (FAILED(device->CreateBuffer(&desc, nullptr, staging.put())))
+			return {};
+
+		const D3D11_BOX box{ 0, 0, 0, a_bytes, 1, 1 };
+		context->CopySubresourceRegion(staging.get(), 0, 0, 0, 0, a_resource, 0, &box);
+
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (FAILED(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped)))
+			return {};
+		std::vector<uint32_t> words(a_bytes / sizeof(uint32_t));
+		std::memcpy(words.data(), mapped.pData, a_bytes);
+		context->Unmap(staging.get(), 0);
+		return words;
+	}
 }
 
 void LightLimitFix::DrawSettings()
@@ -199,8 +253,8 @@ void LightLimitFix::SetupResources()
 		clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", clusterDefines, "cs_5_0");
 		clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", clusterDefines, "cs_5_0");
 
-		lightBuildingCB = new ConstantBuffer(ConstantBufferDesc<LightBuildingCB>());
-		lightCullingCB = new ConstantBuffer(ConstantBufferDesc<LightCullingCB>());
+		lightBuildingCB = new ConstantBuffer(ConstantBufferDesc<LightBuildingCB>(), "LLF::LightBuildingCB");
+		lightCullingCB = new ConstantBuffer(ConstantBufferDesc<LightCullingCB>(), "LLF::LightCullingCB");
 	}
 
 	{
@@ -259,6 +313,10 @@ void LightLimitFix::SetupResources()
 		lightGrid->CreateUAV(uavDesc);
 	}
 
+	// Culling runs on the render graph when DXVK's device could be adopted; the D3D11
+	// buffers above stay as the fallback for native D3D11 and for graph failures.
+	ORGLightCulling::Get().Setup(clusterCount, MAX_LIGHTS, sizeof(LightData), CLUSTER_MAX_LIGHTS);
+
 	{
 		D3D11_BUFFER_DESC sbDesc{};
 		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
@@ -278,7 +336,7 @@ void LightLimitFix::SetupResources()
 	}
 
 	{
-		strictLightDataCB = new ConstantBuffer(ConstantBufferDesc<StrictLightDataCB>());
+		strictLightDataCB = new ConstantBuffer(ConstantBufferDesc<StrictLightDataCB>(), "LLF::StrictLightDataCB");
 	}
 }
 
@@ -325,14 +383,40 @@ void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pa
 	strictLightDataTemp.ShadowBitMask = 0;
 	strictLightDataTemp.FirstPerson = localShadowFirstPersonPass ? 1u : 0u;
 
-	strictLightDataTemp.RoomIndex = -1;
-	if (!roomNodes.empty()) {
-		if (RE::NiNode* roomNode = GetParentRoomNode(a_pass->geometry)) {
-			if (auto it = roomNodes.find(roomNode); it != roomNodes.cend()) {
-				strictLightDataTemp.RoomIndex = it->second;
-			}
-		}
+	strictLightDataTemp.RoomIndex = GetRoomIndex(a_pass->geometry);
+}
+
+int LightLimitFix::GetRoomIndex(RE::NiAVObject* a_object) const
+{
+	return GetRoomIndexForRoom(GetRoomNode(a_object));
+}
+
+RE::NiNode* LightLimitFix::GetRoomNode(RE::NiAVObject* a_object) const
+{
+	return GetParentRoomNode(a_object);
+}
+
+int LightLimitFix::GetRoomIndexForRoom(const RE::NiNode* a_room) const
+{
+	if (a_room && !roomNodes.empty())
+		if (auto it = roomNodes.find(const_cast<RE::NiNode*>(a_room)); it != roomNodes.cend())
+			return it->second;
+	return -1;
+}
+
+uint LightLimitFix::GetShadowBitMask(const RE::BSRenderPass* a_pass)
+{
+	uint mask = 0;
+	for (uint32_t i = 0; i < a_pass->numShadowLights; i++) {
+		auto bsLight = a_pass->sceneLights[i + 1];
+		if (!bsLight)
+			continue;
+		auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
+		const auto maskIndex = GetShadowMaskIndex(shadowLight);
+		if (maskIndex < SHADOW_MASK_CHANNEL_COUNT)
+			mask |= (1u << maskIndex);
 	}
+	return mask;
 }
 
 void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass)
@@ -371,16 +455,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 		strictLightDataTemp.StrictLights[writeIdx++] = light;
 	}
 	strictLightDataTemp.NumStrictLights = writeIdx;
-
-	for (uint32_t i = 0; i < a_pass->numShadowLights; i++) {
-		auto bsLight = a_pass->sceneLights[i + 1];
-		if (!bsLight)
-			continue;
-		auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-		const auto maskIndex = GetShadowMaskIndex(shadowLight);
-		if (maskIndex < SHADOW_MASK_CHANNEL_COUNT)
-			strictLightDataTemp.ShadowBitMask |= (1u << maskIndex);
-	}
+	strictLightDataTemp.ShadowBitMask |= GetShadowBitMask(a_pass);
 }
 
 void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
@@ -446,13 +521,24 @@ void LightLimitFix::Prepass()
 	state->BeginPerfEvent("LightLimitFix Prepass");
 	UpdateLights();
 
-	ID3D11ShaderResourceView* views[3]{};
-	views[0] = lights->srv.get();
-	views[1] = lightIndexList->srv.get();
-	views[2] = lightGrid->srv.get();
+	ID3D11ShaderResourceView* views[3]{ lights->srv.get(), GetLightIndexListSRV(), GetLightGridSRV() };
 	context->PSSetShaderResources(35, ARRAYSIZE(views), views);
 
 	state->EndPerfEvent();
+}
+
+ID3D11ShaderResourceView* LightLimitFix::GetLightIndexListSRV() const
+{
+	if (orgCulledThisFrame)
+		return ORGLightCulling::Get().GetLightIndexListSRV();
+	return lightIndexList ? lightIndexList->srv.get() : nullptr;
+}
+
+ID3D11ShaderResourceView* LightLimitFix::GetLightGridSRV() const
+{
+	if (orgCulledThisFrame)
+		return ORGLightCulling::Get().GetLightGridSRV();
+	return lightGrid ? lightGrid->srv.get() : nullptr;
 }
 
 bool LightLimitFix::IsValidLight(RE::BSLight* a_light)
@@ -469,7 +555,9 @@ void LightLimitFix::PostPostLoad()
 {
 	particleLightConfigs.Load();
 	Hooks::Install();
-	if (settings.EnableLocalShadows) {
+	if (settings.EnableLocalShadows && LocalShadowsBlockedByDCLF())
+		logger::info("[LLF] Local light shadows stay off: Drawcall Limit Fix is loaded");
+	else if (settings.EnableLocalShadows) {
 		Hooks::InstallLocalShadows();
 		localShadowHooksInstalled = true;
 	}
@@ -669,13 +757,13 @@ void LightLimitFix::UpdateLights()
 
 	// Process point lights
 
-	roomNodes.clear();
+	nextRoomNodes.clear();
 
 	auto addRoom = [&](RE::NiNode* node, LightData& light) {
 		uint8_t roomIndex = 0;
-		if (auto it = roomNodes.find(node); it == roomNodes.cend()) {
-			roomIndex = static_cast<uint8_t>(roomNodes.size());
-			roomNodes.insert_or_assign(node, roomIndex);
+		if (auto it = nextRoomNodes.find(node); it == nextRoomNodes.cend()) {
+			roomIndex = static_cast<uint8_t>(nextRoomNodes.size());
+			nextRoomNodes.insert_or_assign(node, roomIndex);
 		} else {
 			roomIndex = it->second;
 		}
@@ -749,6 +837,19 @@ void LightLimitFix::UpdateLights()
 	for (auto& e : shadowSceneNode->GetRuntimeData().activeShadowLights) {
 		addLight(e);
 	}
+	// The numeric room IDs are transient, but their mapping often stands across thousands of frames.
+	// Only an actual mapping change invalidates DCLF's identity-to-index bindings.
+	bool roomMapChanged = nextRoomNodes.size() != roomNodes.size();
+	if (!roomMapChanged)
+		for (const auto& [node, index] : nextRoomNodes)
+			if (const auto it = roomNodes.find(node); it == roomNodes.end() || it->second != index) {
+				roomMapChanged = true;
+				break;
+			}
+	if (roomMapChanged) {
+		roomNodes.swap(nextRoomNodes);
+		++roomMapGeneration;
+	}
 
 	AddParticleLightsToBuffer(lightsData);
 	const auto& flash = globals::features::physicalSky.cbData;
@@ -785,13 +886,80 @@ void LightLimitFix::UpdateLights()
 	memcpy_s(mapped.pData, bytes, lightsData.data(), bytes);
 	context->Unmap(lights->resource.get(), 0);
 
-	UpdateStructure();
+	UpdateClusterParameters();
+	orgCulledThisFrame = CullOnRenderGraph(lightsData);
+	if (!orgCulledThisFrame) {
+		UpdateStructure();
+	} else if (OrgParityEnabled() && (orgParityFrame++ % 300) == 0) {
+		// The D3D11 buffers are not bound this frame, so filling them is free of side effects.
+		UpdateStructure();
+		CompareRenderGraphCulling();
+	}
 }
 
-void LightLimitFix::UpdateStructure()
+void LightLimitFix::CompareRenderGraphCulling()
 {
-	auto context = globals::d3d::context;
+	auto& orgCulling = ORGLightCulling::Get();
+	auto* orgGridSRV = orgCulling.GetLightGridSRV();
+	auto* orgListSRV = orgCulling.GetLightIndexListSRV();
+	if (!orgGridSRV || !orgListSRV)
+		return;
 
+	winrt::com_ptr<ID3D11Resource> orgGrid;
+	winrt::com_ptr<ID3D11Resource> orgList;
+	orgGridSRV->GetResource(orgGrid.put());
+	orgListSRV->GetResource(orgList.put());
+
+	const uint32_t clusterTotal = clusterSize[0] * clusterSize[1] * clusterSize[2];
+	const uint32_t gridBytes = clusterTotal * static_cast<uint32_t>(sizeof(LightGrid));
+	const uint32_t listBytes = clusterTotal * CLUSTER_MAX_LIGHTS * static_cast<uint32_t>(sizeof(uint32_t));
+
+	const auto d3dGridData = ReadBackBuffer(lightGrid->resource.get(), gridBytes);
+	const auto d3dListData = ReadBackBuffer(lightIndexList->resource.get(), listBytes);
+	const auto orgGridData = ReadBackBuffer(orgGrid.get(), gridBytes);
+	const auto orgListData = ReadBackBuffer(orgList.get(), listBytes);
+	if (d3dGridData.empty() || d3dListData.empty() || orgGridData.empty() || orgListData.empty()) {
+		logger::warn("[ORG] LLF parity: readback failed");
+		return;
+	}
+
+	constexpr uint32_t kGridWords = sizeof(LightGrid) / sizeof(uint32_t);
+	auto lightSet = [&](const std::vector<uint32_t>& a_grid, const std::vector<uint32_t>& a_list, uint32_t a_cluster) {
+		const uint32_t offset = a_grid[a_cluster * kGridWords + 0];
+		const uint32_t count = a_grid[a_cluster * kGridWords + 1];
+		std::vector<uint32_t> set;
+		for (uint32_t i = 0; i < count && offset + i < a_list.size(); ++i)
+			set.push_back(a_list[offset + i]);
+		std::sort(set.begin(), set.end());
+		return set;
+	};
+
+	uint32_t mismatched = 0;
+	uint64_t references = 0;
+	uint32_t firstMismatch = UINT32_MAX;
+	for (uint32_t cluster = 0; cluster < clusterTotal; ++cluster) {
+		const auto d3dSet = lightSet(d3dGridData, d3dListData, cluster);
+		const auto orgSet = lightSet(orgGridData, orgListData, cluster);
+		references += d3dSet.size();
+		if (d3dSet != orgSet) {
+			if (firstMismatch == UINT32_MAX)
+				firstMismatch = cluster;
+			++mismatched;
+		}
+	}
+
+	if (mismatched == 0) {
+		logger::info("[ORG] LLF parity OK: {} clusters, {} lights, {} light references match", clusterTotal, lightCount, references);
+	} else {
+		const auto d3dSet = lightSet(d3dGridData, d3dListData, firstMismatch);
+		const auto orgSet = lightSet(orgGridData, orgListData, firstMismatch);
+		logger::warn("[ORG] LLF parity MISMATCH: {}/{} clusters differ ({} lights); first cluster {}: D3D11 {} lights, graph {} lights",
+			mismatched, clusterTotal, lightCount, firstMismatch, d3dSet.size(), orgSet.size());
+	}
+}
+
+void LightLimitFix::UpdateClusterParameters()
+{
 	lightsNear = *globals::game::cameraNear;
 	lightsFar = *globals::game::cameraFar;
 
@@ -799,6 +967,32 @@ void LightLimitFix::UpdateStructure()
 	clusterSize[0] = ((uint)renderSize.x + 63) / 64;
 	clusterSize[1] = ((uint)renderSize.y + 63) / 64;
 	clusterSize[2] = 32;
+}
+
+bool LightLimitFix::CullOnRenderGraph(const eastl::vector<LightData>& a_lightsData)
+{
+	auto& orgCulling = ORGLightCulling::Get();
+	if (!orgCulling.IsActive())
+		return false;
+
+	ORGLightCulling::FrameInputs inputs{};
+	inputs.lights = a_lightsData.data();
+	inputs.lightCount = lightCount;
+	std::copy(clusterSize, clusterSize + 3, inputs.clusterSize);
+	inputs.lightsNear = lightsNear;
+	inputs.lightsFar = lightsFar;
+	// The same matrices the D3D11 shaders read from the FrameBuffer cbuffer (row-major).
+	std::memcpy(inputs.cameraProjInverse.data(), &globals::game::frameBufferCached.GetCameraProjInverse(), sizeof(float) * 16);
+	std::memcpy(inputs.cameraView.data(), &globals::game::frameBufferCached.GetCameraView(), sizeof(float) * 16);
+
+	// No D3D11 timer here: the epoch is submitted between two DXVK command lists, so one would also count the
+	// queue's idle time. Its passes report their own GPU time (RenderGraphRuntime::ProfilerName).
+	return orgCulling.Execute(inputs);
+}
+
+void LightLimitFix::UpdateStructure()
+{
+	auto context = globals::d3d::context;
 
 	{
 		LightBuildingCB updateData{};

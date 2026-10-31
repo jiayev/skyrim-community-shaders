@@ -1,4 +1,5 @@
 ﻿#include "UnifiedWater.h"
+#include "Features/DrawcallLimitFix.h"
 
 #include "I18n/I18n.h"
 #include "Menu.h"
@@ -529,7 +530,7 @@ void UnifiedWater::UpdateWaterLODCull() const
 	if (gWaterLOD && *gWaterLOD) {
 		const bool cull = !IsExteriorWorldspaceActive() && !mapMenuOpen.load(std::memory_order_acquire);
 		if ((*gWaterLOD)->GetAppCulled() != cull) {
-			(*gWaterLOD)->SetAppCulled(cull);
+			DrawcallLimitFix::WriteHidden(*gWaterLOD, cull);
 		}
 	}
 }
@@ -608,7 +609,7 @@ void UnifiedWater::BGSTerrainNode_UpdateWaterMeshSubVisibility::thunk(const RE::
 			}
 		}
 
-		child->SetAppCulled(cull);
+		DrawcallLimitFix::WriteHidden(child.get(), cull);
 	}
 }
 

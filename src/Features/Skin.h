@@ -79,6 +79,21 @@ struct Skin : Feature
 	};
 	static_assert(sizeof(SkinData) == 112);
 	static_assert(sizeof(PerGeometryData) == 144);
+	struct GeometrySnapshot
+	{
+		PerGeometryData data{};
+		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 3> textures;
+	};
+	/** @brief Render-thread actor wetness, cached once per frame for native and DCLF draws. */
+	float4 GetWetness(RE::BSGeometry* a_geometry);
+	/** @brief Prepare published meshes before capturing their per-frame material values. */
+	void PrepareCapture(std::span<RE::BSGeometry* const> a_geometries);
+	/** @brief Resolve the native per-mesh material without changing D3D state. Render thread. */
+	GeometrySnapshot CaptureGeometry(RE::BSGeometry* a_geometry, RE::BSShaderProperty* a_property);
+	/** @brief The detail-normal sampler shared by native and DCLF draws. Render thread. */
+	ID3D11SamplerState* GetDetailSampler() const { return detailSampler.get(); }
+	/** @brief Last native upload, for DCLF capture parity. Render thread. */
+	PerGeometryData lastNativeData{};
 	SkinData GetCommonBufferData();
 
 	enum class Layer
@@ -250,7 +265,7 @@ private:
 	void DrawEditorDialogs();
 	void DrawGlobalSettings();
 	float GetWaterHeight(const RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_pos);
-	float4 GetWetness(RE::BSGeometry* a_geometry);
+
 	struct Hooks
 	{
 		struct SetupGeometry

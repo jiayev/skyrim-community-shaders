@@ -9,6 +9,7 @@ struct VolumetricShadows;
 struct ExtendedMaterials;
 struct GrassCollision;
 struct GrassLighting;
+struct DrawcallLimitFix;
 struct GrassOptimizations;
 struct HairSpecular;
 struct HorizonFix;
@@ -35,6 +36,7 @@ struct UnifiedWater;
 struct VanillaFresnel;
 struct VolumetricLighting;
 class ViewAtmosphere;
+struct VRAMBudget;
 struct WaterEffects;
 struct PerformanceOverlay;
 struct WetnessEffects;
@@ -109,6 +111,7 @@ namespace globals
 		extern ExtendedMaterials extendedMaterials;
 		extern GrassCollision grassCollision;
 		extern GrassLighting grassLighting;
+		extern DrawcallLimitFix drawcallLimitFix;
 		extern GrassOptimizations grassOptimizations;
 		extern HairSpecular hairSpecular;
 		extern HorizonFix horizonFix;
@@ -135,6 +138,7 @@ namespace globals
 		extern VanillaFresnel vanillaFresnel;
 		extern VolumetricLighting volumetricLighting;
 		extern ViewAtmosphere viewAtmosphere;
+		extern VRAMBudget vramBudget;
 		extern WaterEffects waterEffects;
 		extern PerformanceOverlay performanceOverlay;
 		extern WetnessEffects wetnessEffects;
@@ -285,4 +289,7 @@ namespace globals
 	 * @param a_context The D3D11 device context to hook.
 	 */
 	void InstallD3DHooks(ID3D11DeviceContext* a_context);
+	/** @brief Opt-in DCLF diagnostic: record D3D11 operations affecting main depth between the two epochs. */
+	void BeginDCLFDepthTrace(ID3D11Texture2D* a_depth);
+	void EndDCLFDepthTrace();
 }

@@ -16,6 +16,7 @@
 #	include "Feature.h"
 #	include "Features/DeveloperTools.h"
 #	include "Features/RemoteControl/NvPerf.h"
+#	include "Features/RemoteControl/NvPerfTrace.h"
 #	include "Features/RenderDoc.h"
 #	include "Features/ScreenshotFeature.h"
 #	include "Features/Upscaling.h"
@@ -25,6 +26,13 @@
 #	include "ShaderCache.h"
 #	include "State.h"
 #	include "Utils/FileSystem.h"
+
+#	if defined(CS_HAS_RENDER_GRAPH)
+#		include "RenderGraph/RenderGraphRuntime.h"
+#		include "RenderGraph/ScheduleWindow.h"
+#		include <ORGModuleServices/PipelineRegistry.h>
+#		include "Features/DrawcallLimitFix/Diagnostics/TestHarness.h"
+#	endif
 
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
@@ -661,7 +669,7 @@ namespace
 			NvPerf::Probe();
 			const auto device = NvPerf::GetDeviceInfo();
 			return json{ { "built", device.built }, { "available", device.available }, { "gpuSupported", device.gpuSupported },
-				{ "device", device.deviceName }, { "chip", device.chipName }, { "deviceError", device.error },
+				{ "backend", device.backend }, { "device", device.deviceName }, { "chip", device.chipName }, { "deviceError", device.error },
 				{ "library", Util::PathHelpers::ToUtf8(device.libraryPath) }, { "capture", StatusJson(NvPerf::GetStatus()) } };
 		}
 
@@ -729,6 +737,187 @@ namespace
 	void NvPerfToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
 		RunHandler("communityshaders.nvperf", &BuildNvPerfResult, a_argsJson, a_sink, a_write);
+	}
+
+	const char* TraceStateName(NvPerf::Trace::State a_state)
+	{
+		switch (a_state) {
+		case NvPerf::Trace::State::Running:
+			return "running";
+		case NvPerf::Trace::State::Done:
+			return "done";
+		case NvPerf::Trace::State::Failed:
+			return "failed";
+		default:
+			return "idle";
+		}
+	}
+
+	/**
+	 * @brief The trace tool (NvPerfTrace.h): a template's captures or timestamp samples run to one report. templates: their names
+	 * and descriptions. start: a template by name, or "templateJson" (an object in a template file's form, which may extend a known
+	 * one), with "label" and an optional "baseline" report label. status: the running trace's progress. result: the latest report
+	 * (or a saved one by "label") as its JSON, and its text. cancel.
+	 */
+	json BuildTraceResult(const json& a_args)
+	{
+		namespace T = NvPerf::Trace;
+		const std::string action = a_args.value("action", std::string{});
+		if (action == "templates") {
+			json out = json::array();
+			for (const auto& t : T::Templates())
+				out.push_back({ { "name", t.name }, { "description", t.description }, { "source", t.source.string() } });
+			return json{ { "templates", out } };
+		}
+		if (action == "start") {
+			std::string error;
+			const std::string label = a_args.value("label", std::string{});
+			const std::string baseline = a_args.value("baseline", std::string{});
+			bool started = false;
+			if (a_args.contains("templateJson"))
+				started = T::StartInline(a_args["templateJson"].is_string() ? a_args["templateJson"].get<std::string>() : a_args["templateJson"].dump(), label, baseline,
+					error);
+			else
+				started = T::Start(a_args.value("template", std::string{}), label, baseline, error);
+			if (!started)
+				return json{ { "error", error } };
+			return json{ { "started", true }, { "label", label }, { "enqueued_at_frame", EnqueuedFrame() } };
+		}
+		if (action == "status") {
+			const auto status = T::GetStatus();
+			return json{ { "state", TraceStateName(status.state) }, { "template", status.templateName }, { "label", status.label }, { "capture", status.capture },
+				{ "captures", status.captures }, { "phase", status.phase }, { "error", status.error } };
+		}
+		if (action == "result") {
+			std::shared_ptr<const T::Report> report;
+			std::string error;
+			if (const auto label = a_args.value("label", std::string{}); !label.empty())
+				report = T::LoadReport(label, error);
+			else
+				report = T::Latest();
+			if (!report)
+				return json{ { "error", error.empty() ? "no report" : error } };
+			return json{ { "report", json::parse(T::ReportToJson(*report), nullptr, false) }, { "text", T::FormatReport(*report) } };
+		}
+		if (action == "cancel") {
+			T::Cancel();
+			return json{ { "cancelled", true } };
+		}
+		return json{ { "error", "unknown action (templates|start|status|result|cancel)" }, { "action", action } };
+	}
+
+	void TraceToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
+	{
+		RunHandler("communityshaders.trace", &BuildTraceResult, a_argsJson, a_sink, a_write);
+	}
+
+	/**
+	 * @brief The render graph's pipeline hot reload (docs/development/dclf-hot-reload.md). reload: every live pipeline built again
+	 * from the shader files as they are now ("file": only those built from it; "force": swap even unchanged ones), swapped at the
+	 * graph's next build. status: the registry's publication generation (moves when a reload's pipelines are swapped in) and the
+	 * last finished reload's counts and first errors.
+	 */
+	json BuildPipelinesResult(const json& a_args)
+	{
+#	if defined(CS_HAS_RENDER_GRAPH)
+		const std::string action = a_args.value("action", std::string{});
+		auto* registry = RenderGraphRuntime::PipelineRegistry();
+		if (!registry)
+			return json{ { "error", "no pipeline registry (the render graph is not running)" } };
+		if (action == "reload") {
+			const auto before = registry->LastReload().serial;
+			RenderGraphRuntime::RequestShaderReload(a_args.value("file", std::string{}), a_args.value("force", false));
+			return json{ { "queued", true }, { "reloadSerialBefore", before }, { "generationBefore", registry->Generation() } };
+		}
+		if (action == "status") {
+			const auto reload = registry->LastReload();
+			return json{ { "generation", registry->Generation() }, { "sourcesGeneration", registry->SourcesGeneration() }, { "entries", registry->EntryCount() },
+				{ "lastReload", { { "serial", reload.serial }, { "entries", reload.entries }, { "rebuilt", reload.rebuilt }, { "failed", reload.failed },
+									{ "unchanged", reload.unchanged }, { "seconds", reload.seconds }, { "errors", reload.errors } } } };
+		}
+		return json{ { "error", "unknown action (reload|status)" }, { "action", action } };
+#	else
+		(void)a_args;
+		return json{ { "error", "built without the render graph" } };
+#	endif
+	}
+
+	void PipelinesToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
+	{
+		RunHandler("communityshaders.pipelines", &BuildPipelinesResult, a_argsJson, a_sink, a_write);
+	}
+
+	/**
+	 * @brief The render graph's persistent schedule (docs/development/render-graph-schedule.md). enable/disable: the graph traces its
+	 * schedule while this tool or the menu's schedule window wants it. json: the snapshot (ScheduleTraceToJson). text: one executable's
+	 * (label) or every executable's ScheduleTraceToText.
+	 */
+	json BuildScheduleResult(const json& a_args)
+	{
+#	if defined(CS_HAS_RENDER_GRAPH)
+		const std::string action = a_args.value("action", std::string{});
+		if (action == "enable" || action == "disable") {
+			RenderGraphSchedule::SetTracing(RenderGraphSchedule::Requester::DevBench, action == "enable");
+			return json{ { "action", action }, { "tracing", RenderGraphSchedule::TracingEnabled() }, { "enqueued_at_frame", EnqueuedFrame() } };
+		}
+		if (action == "json" || action == "text") {
+			const auto snapshot = RenderGraphSchedule::Snapshot();
+			if (!snapshot)
+				return json{ { "error", "no schedule snapshot (tracing off, no render graph, or no frame traced yet): run action=enable and wait a frame" },
+					{ "tracing", RenderGraphSchedule::TracingEnabled() } };
+			if (action == "json")
+				return json::parse(org::ScheduleTraceToJson(*snapshot));
+			const std::string label = a_args.value("label", std::string{});
+			std::string text;
+			json labels = json::array();
+			for (const auto& executable : snapshot->executables) {
+				if (!executable)
+					continue;
+				labels.push_back(executable->label);
+				if (label.empty() || executable->label == label) {
+					text += org::ScheduleTraceToText(*executable);
+					text += '\n';
+				}
+			}
+			if (text.empty())
+				return json{ { "error", "no executable with that label" }, { "label", label }, { "labels", labels } };
+			return json{ { "labels", labels }, { "text", text } };
+		}
+		return json{ { "error", "unknown action (enable|disable|json|text)" }, { "action", action } };
+#	else
+		(void)a_args;
+		return json{ { "error", "built without the render graph" } };
+#	endif
+	}
+
+	void ScheduleToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
+	{
+		RunHandler("communityshaders.schedule", &BuildScheduleResult, a_argsJson, a_sink, a_write);
+	}
+
+	/** @brief Drawcall Limit Fix's test harness commands (TestHarness.h), queued for the next Present. */
+	json BuildDclfResult(const json& a_args)
+	{
+#	if defined(CS_HAS_RENDER_GRAPH)
+		// Every reply carries the command list's progress, so a client drives a run by it (a waited-for signal, the list's frame) rather
+		// than by the log. No command: the progress alone.
+		const auto progress = DCLF::TestHarnessStatus();
+		json harness{ { "frame", progress.frame }, { "shift", progress.shift }, { "next", progress.next }, { "commands", progress.commands },
+			{ "nextFrame", progress.nextFrame }, { "nextCommand", progress.nextCommand }, { "waiting", progress.waiting } };
+		const std::string command = a_args.value("command", std::string{});
+		if (command.empty())
+			return json{ { "harness", std::move(harness) } };
+		DCLF::QueueTestCommand(command);
+		return json{ { "queued", command }, { "enqueued_at_frame", EnqueuedFrame() }, { "harness", std::move(harness) } };
+#	else
+		(void)a_args;
+		return json{ { "error", "built without the render graph" } };
+#	endif
+	}
+
+	void DclfToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
+	{
+		RunHandler("communityshaders.dclf", &BuildDclfResult, a_argsJson, a_sink, a_write);
 	}
 
 	/**
@@ -872,8 +1061,24 @@ namespace DevBenchBridge
 		});
 
 		static constexpr const char* settingsDesc =
-			R"({"description":"Save, load, or reset the GLOBAL Community Shaders user configuration (Data/SKSE/Plugins/CommunityShaders/*.json). Action-dispatched, all fire-and-forget on the main thread. save: persist current settings (State::Save). load: re-read settings from disk and apply (State::Load). reset: restore every feature to its defaults then persist. Use after communityshaders.feature set/reset to make changes durable, or to roll an A/B session back to the saved baseline.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["save","load","reset"]}},"required":["action"]}})";
+			R"({"description":"Save, load, or reset the GLOBAL Community Shaders user configuration (the *.json files in Data/SKSE/Plugins/CommunityShaders). Action-dispatched, all fire-and-forget on the main thread. save: persist current settings (State::Save). load: re-read settings from disk and apply (State::Load). reset: restore every feature to its defaults then persist. Use after communityshaders.feature set/reset to make changes durable, or to roll an A/B session back to the saved baseline.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["save","load","reset"]}},"required":["action"]}})";
 		dvb->RegisterTool("communityshaders.settings", settingsDesc, &SettingsToolHandler, nullptr);
+
+		static constexpr const char* traceDesc =
+			R"({"description":"Community Shaders traces (NvPerfTrace.h): a template run to one report, either NvPerf captures merged or ORG pass timestamps sampled every frame until each range's mean converges (statistical sampler). Action-dispatched. templates -> {templates:[{name,description,source}]}. start: template (name) or templateJson (object in a template file's form: name, extends, source (nvperf|timestamps), ranges, groups, confidence, relativeHalfWidth, absoluteHalfWidthUs, minSamples, maxSamples, settlingFrames, timeoutFrames, samples, repeats, maxRepeats, metricGroups), label (the report's name), baseline (an earlier report's label) -> {started}. status -> {state:idle|running|done|failed,template,label,capture,captures,phase,error}. result: optional label (a saved report; default the latest) -> {report (the .json's content: rows and groups with mean, CI half-width, n_eff, converged, baseline delta), text}. cancel. Timestamp traces see sub-ranges a pass records inside itself (DCLF's shadow views cs.dclf.shadow.view-N, colour parts cs.dclf.colour.*), nested in their pass and out of the total.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["templates","start","status","result","cancel"]},"template":{"type":"string"},"templateJson":{"type":"object"},"label":{"type":"string"},"baseline":{"type":"string"}},"required":["action"]}})";
+		dvb->RegisterTool("communityshaders.trace", traceDesc, &TraceToolHandler, nullptr);
+
+		static constexpr const char* pipelinesDesc =
+			R"({"description":"Render graph pipeline hot reload (one registry for every ORG/DCLF pipeline: compute programs, DCLF's draw pipelines, Light Limit Fix's). reload: rebuild every live pipeline from the shader files as they are now (file: only those built from it, e.g. Lighting.hlsl; force: swap even unchanged ones), swapped in at the graph's next build -> {queued,reloadSerialBefore,generationBefore}. status -> {generation (moves when a reload's pipelines are swapped in),sourcesGeneration,entries,lastReload:{serial,entries,rebuilt,failed,unchanged,seconds,errors}}. Wait for lastReload.serial > reloadSerialBefore, then generation > generationBefore (when rebuilt > 0) before measuring.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["reload","status"]},"file":{"type":"string"},"force":{"type":"boolean"}},"required":["action"]}})";
+		dvb->RegisterTool("communityshaders.pipelines", pipelinesDesc, &PipelinesToolHandler, nullptr);
+
+		static constexpr const char* scheduleDesc =
+			R"({"description":"The render graph's persistent schedule, explained (docs/development/render-graph-schedule.md): every executable (the whole frame and each epoch) with its batches per queue, passes, each pass's accesses and the barriers before it, and every cross-queue wait with its causes, plus the last frame's submission waits. Action-dispatched. enable: start tracing (the graph traces while this tool or the menu's Render graph schedule window wants it) -> {tracing}; wait a frame before reading. disable: stop this tool's request -> {tracing}. json -> the snapshot as ScheduleTraceToJson writes it ({executables,lastSubmission}). text: optional label (an executable's, e.g. frame or epoch 3; default every executable concatenated) -> {labels,text}. json/text fail with an error while nothing is traced.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["enable","disable","json","text"]},"label":{"type":"string"}},"required":["action"]}})";
+		dvb->RegisterTool("communityshaders.schedule", scheduleDesc, &ScheduleToolHandler, nullptr);
+
+		static constexpr const char* dclfDesc =
+			R"({"description":"Drawcall Limit Fix's test harness commands (CS_DCLF_TEST_COMMANDS' forms), run at the next Present: dclf:<toggle>=0|1 (a live toggle), dclf:async-compute=0|1|default (the async compute passes' queue, from a graph rebuild), dclf:rebuild, dclf:reload-shaders[=all|=<file>], dclf:define=<NAME[=v],...>, dclf:signal=<name> (releases a list's dclf:wait=signal:<name>), dclf:nvperf=<range|range...>[#samples], dclf:gpu-window=<label>, dclf:mark[=label], dclf:feature=0|1, dclf:pov=first|third, dclf:draw=0|1; any other is a console command. Omit command for the progress alone. -> {queued, harness:{frame,shift,next,commands,nextFrame,nextCommand,waiting}}","inputSchema":{"type":"object","properties":{"command":{"type":"string"}},"required":[]}})";
+		dvb->RegisterTool("communityshaders.dclf", dclfDesc, &DclfToolHandler, nullptr);
 	}
 
 	std::optional<Request> GetLastRequest()

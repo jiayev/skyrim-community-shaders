@@ -14,6 +14,7 @@
 #include "IconsTabler.h"
 #include "Menu.h"
 #include "Menu/BackgroundBlur.h"
+#include "Menu/Fonts.h"
 #include "Menu/Icons/helpers/IconFonts.h"
 #include "Menu/Icons/helpers/SceneActionIcons.h"
 #include "Menu/Icons/helpers/WeatherTypeIcons.h"
@@ -960,11 +961,10 @@ void EditorWindow::RenderUI()
 			}
 			ImGui::SameLine(0.0f, menuGap);
 			if (ImGui::BeginMenu(T(TKEY("window"), "Window"))) {
-				const bool hdrActive = globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.settings.enableHDR;
+				const bool hdrActive = globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.IsHDREnabledForFrame();
 				if (hdrActive)
 					ImGui::BeginDisabled();
 				if (ImGui::Checkbox(T(TKEY("viewport"), "Viewport"), &settings.showViewport)) {
-					BackgroundBlur::SetCSEditorActive(settings.showViewport);
 					Save();
 				}
 				if (hdrActive) {
@@ -1392,7 +1392,7 @@ void EditorWindow::ReloadFormEdits(const FormEditSources::FormKeySet& keys)
 
 bool EditorWindow::IsViewportActive() const
 {
-	return settings.showViewport && !(globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.settings.enableHDR);
+	return settings.showViewport && !(globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.IsHDREnabledForFrame());
 }
 
 void EditorWindow::UpdateOpenState()
@@ -1430,7 +1430,6 @@ void EditorWindow::UpdateOpenState()
 		widgetsHidden = false;
 		widgetsFade = 1.0f;
 		HideGameMenus();
-		BackgroundBlur::SetCSEditorActive(IsViewportActive());
 		overlayWeatherLockPending = true;
 		Effects11Editor::GetSingleton().Close();  // Restores the menu first so returnToMenu below records it.
 		returnToMenu = globals::menu->IsEnabled;
@@ -1439,7 +1438,6 @@ void EditorWindow::UpdateOpenState()
 	} else if (!open && wasOpen) {
 		lightEditor.ResetOverrides();
 		ShowGameMenus();
-		BackgroundBlur::SetCSEditorActive(false);
 		Effects11Editor::GetSingleton().Close(false);
 		if (std::exchange(returnToMenu, false))
 			globals::menu->IsEnabled = true;
@@ -1477,7 +1475,6 @@ void EditorWindow::Draw()
 		static bool prevViewportActive = false;
 		const bool viewportActive = IsViewportActive();
 		if (viewportActive != prevViewportActive) {
-			BackgroundBlur::SetCSEditorActive(viewportActive);
 			prevViewportActive = viewportActive;
 		}
 	}
@@ -2466,9 +2463,8 @@ void EditorWindow::HideGameMenus()
 	if (gameMenusHidden)
 		return;
 
-	// ShowMenus(false) stops the game from rendering to the back buffer.
-	// Without d3d12SwapChain, blur reads directly from that buffer and would freeze.
-	if (!globals::features::upscaling.d3d12SwapChainActive)
+	// The viewport blur reads the live back buffer, which stops updating while game menus are hidden.
+	if (IsViewportActive())
 		return;
 
 	if (auto ui = RE::UI::GetSingleton()) {

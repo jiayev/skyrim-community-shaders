@@ -151,6 +151,23 @@ public:
 	 * @param a_context The D3D11 device context to bind resources on.
 	 */
 	void SetShaderResources(ID3D11DeviceContext* a_context);
+
+	/** @brief First pixel texture register of TruePBR's own slots, and how many: the landscape displacement layers (t80-t85), then RMAOS (t86-t91). */
+	static constexpr uint32_t FirstExtendedTexture = 80;
+	static constexpr uint32_t NumExtendedTextures = 12;
+	/**
+	 * @brief TruePBR's own slots as BSLightingShader_SetupMaterial left them for the next SetShaderResources: the views, and which
+	 * of them are pending (bit per slot). Drawcall Limit Fix's stand-in SetupMaterial runs this feature's hook: it reads what the
+	 * hook set and restores the state afterwards, so that the next native draw does not bind the evaluated material's textures.
+	 */
+	struct ExtendedTextures
+	{
+		std::array<ID3D11ShaderResourceView*, NumExtendedTextures> views{};
+		uint32_t modified = 0;
+	};
+	ExtendedTextures GetExtendedTextures() const;
+	void SetExtendedTextures(const ExtendedTextures& a_textures);
+
 	/**
 	 * @brief Pre-compiles all PBR-specific lighting shader permutations.
 	 * @param shader The BSShader whose PBR permutations to generate.

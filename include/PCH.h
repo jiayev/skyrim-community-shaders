@@ -25,6 +25,10 @@ void* operator new[](size_t size, size_t alignment, size_t alignmentOffset, cons
 	#undef TRACY_ENABLE
 #endif
 
+// Profiling call sites are shared by profiling and non-profiling builds. Include after
+// selecting TRACY_ENABLE so the disabled configuration receives Tracy's no-op macros.
+#include <Tracy/Tracy.hpp>
+
 using namespace std::literals;
 
 // Defined in src/Utils/VTableHookFallback.cpp

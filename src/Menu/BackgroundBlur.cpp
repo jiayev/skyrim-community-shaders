@@ -113,24 +113,10 @@ namespace BackgroundBlur
 			ID3D11RenderTargetView* rtv = nullptr;
 		};
 
-		bool ShouldUseD3D12UIBufferForBlur()
+		UIBufferViews GetHDRUIBufferViews(HDRDisplay& hdr)
 		{
-			return globals::features::hdrDisplay.ShouldUseD3D12UIBuffer();
-		}
-
-		UIBufferViews GetD3D12UIBufferViews(const DX12SwapChain::BlurResources& res)
-		{
-			return { res.uiBufferSRV, res.uiBufferRTV };
-		}
-
-		UIBufferViews GetHDRUIBufferViews(HDRDisplay& hdr, Upscaling& upscaling)
-		{
-			if (upscaling.d3d12SwapChainActive && ShouldUseD3D12UIBufferForBlur())
-				return GetD3D12UIBufferViews(upscaling.GetBlurResources());
-
 			if (hdr.uiTexture && hdr.uiTexture->srv && hdr.uiTexture->rtv)
 				return { hdr.uiTexture->srv.get(), hdr.uiTexture->rtv.get() };
-
 			return {};
 		}
 
@@ -581,13 +567,9 @@ namespace BackgroundBlur
 			return;
 		}
 
-		// Check if upscaling with D3D12 swap chain is active
-		auto& upscaling = globals::features::upscaling;
-		bool useUpscalingBackbuffer = upscaling.d3d12SwapChainActive;
-
 		auto* hdr = globals::features::hdrDisplay.loaded ? &globals::features::hdrDisplay : nullptr;
 		bool hdrActive = hdr &&
-		                 hdr->settings.enableHDR && hdr->hdrDataCB && hdr->outputTexture &&
+		                 hdr->IsHDREnabledForFrame() && hdr->hdrDataCB && hdr->outputTexture &&
 		                 hdr->hdrTexture && hdr->hdrTexture->resource && hdr->hdrTexture->srv && hdr->hdrTexture->rtv;
 
 		// Startup main/loading back buffer can be black until DataLoaded and initial shader work finish.
@@ -607,20 +589,7 @@ namespace BackgroundBlur
 			sourceSRV = hdr->hdrTexture->srv.get();
 			currentRTV = hdr->hdrTexture->rtv;
 
-			uiBuffer = GetHDRUIBufferViews(*hdr, upscaling);
-		} else if (useUpscalingBackbuffer) {
-			// When D3D12 swap chain is active, get all resources in one call
-			auto res = upscaling.GetBlurResources();
-			if (!res.backbufferTex || !res.backbufferRTV || !res.backbufferSRV) {
-				return;
-			}
-			currentTexture.copy_from(res.backbufferTex);
-			currentRTV.copy_from(res.backbufferRTV);
-			sourceSRV = res.backbufferSRV;
-
-			// D3D12 HDR/FG can route vanilla UI into a separate buffer.
-			if (ShouldUseD3D12UIBufferForBlur())
-				uiBuffer = GetD3D12UIBufferViews(res);
+			uiBuffer = GetHDRUIBufferViews(*hdr);
 		} else {
 			// Normal path: get current render target
 			ID3D11RenderTargetView* rawRTV = nullptr;

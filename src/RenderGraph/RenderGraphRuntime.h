@@ -1,0 +1,369 @@
+#pragma once
+
+#include <d3d11.h>
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <winrt/base.h>
+
+struct DxvkOrgInteropResourceInfo;
+struct DxvkOrgInteropTrackedResource;
+struct DxvkOrgInteropRelocation;
+
+// The Vulkan handles EmitExternalCommands takes, declared as vulkan_core.h does on 64-bit targets (identical redeclarations),
+// so this header stays free of Vulkan includes.
+typedef struct VkSemaphore_T* VkSemaphore;
+typedef struct VkCommandBuffer_T* VkCommandBuffer;
+typedef std::uint64_t VkPipelineStageFlags2;
+
+namespace org::services
+{
+	class ShaderCompiler;
+	class PipelineRegistry;
+}
+
+namespace rhi
+{
+	class Timeline;
+	template <class TObject>
+	class ObjectPtr;
+	using TimelinePtr = ObjectPtr<Timeline>;
+}
+
+namespace org
+{
+	class ExternalEpochExecution;
+	class GraphHost;
+	class RenderGraph;
+	class Resource;
+}
+
+/**
+ * @brief OpenRenderGraph running on DXVK's own Vulkan device.
+ *
+ * BasicRHI adopts the VkDevice and graphics queue DXVK created for the game's D3D11
+ * device, so graph passes record native Vulkan work that shares memory and the
+ * queue with the translated D3D11 stream. Synchronization is coarse: each epoch
+ * flushes DXVK (everything recorded so far is submitted ahead of the graph), then
+ * the graph submits on the same queue under DXVK's submission lock, with full
+ * memory barriers at its entry and exit. Later D3D11 work is therefore ordered
+ * after the graph without semaphores.
+ *
+ * Graph-owned outputs are handed to D3D11 as wrappers over the graph's own Vulkan
+ * objects (WrapBuffer). Game resources the graph reads directly (Drawcall Limit Fix's
+ * static geometry and textures) are described through DescribeResource, which marks
+ * them stable in DXVK; nothing else the game or DXVK owns is pinned or relocated.
+ *
+ * Header deliberately free of ORG/BasicRHI/Vulkan includes: those require volk
+ * ahead of any Vulkan header, which only the implementation files arrange.
+ */
+class RenderGraphRuntime
+{
+public:
+	/**
+	 * @brief Where in the frame an epoch runs. The graph holds every feature's passes and each epoch
+	 * executes all of them (an empty pass is effectively free), so passes record work only in their own
+	 * segment (CurrentSegment) and include it in their invocation revision.
+	 */
+	enum class Segment : std::uint32_t
+	{
+		LightCulling,  // Light Limit Fix, before the main pass
+		ZPrepass,      // Drawcall Limit Fix's depth, inside Main::RenderDepth after the world's depth draws, before kPOST_ZPREPASS_COPY
+		MainOpaque,    // Drawcall Limit Fix's colour, where the main pass's opaque batches end
+		ShadowView,    // Drawcall Limit Fix's shadow casters, inside one shadow view's draw
+		SkyOcclusion,  // Drawcall Limit Fix's variant of Skylighting's occlusion map, after the engine's RenderMask
+		Reflection,    // Drawcall Limit Fix's water reflection faces, after the engine's face render (TESWaterReflections::Update)
+		Forward,       // Drawcall Limit Fix's forward epoch (T7d): blended Lighting, at the engine's blended draw after the composite
+		FirstPersonDepth,  // Drawcall Limit Fix's first-person depth (T7e), at RenderDepth's first-person draw, before kPOST_ZPREPASS_COPY
+		FirstPerson,       // Drawcall Limit Fix's first-person colour (T7e), at Main::RenderFirstPersonView's accumulator render
+		Count
+	};
+
+	static RenderGraphRuntime& Get();
+
+	/**
+	 * @brief Game frames the graph's work may run behind the render thread (GraphHost::Desc::framesInFlight). The host
+	 * sizes its frame slot ring from it, a slot per epoch of every frame (FrameSlots), and each epoch's next slot waits for that
+	 * slot's last GPU work: fewer frames than the CPU runs ahead of the GPU (DXVK's frame latency) would stall the render thread
+	 * every few frames.
+	 */
+	static constexpr std::uint32_t kGameFramesInFlight = 4;
+
+	/**
+	 * @brief CS_ORG_EPOCHS (default on, =0 off): each segment is an ORG host epoch. The graph compiles once
+	 * over the whole frame - scheduling and transient aliasing see every segment's lifetimes, in frame order -
+	 * and each ExecuteEpoch prepares, admits, records and submits only its own segment's passes. Off, every
+	 * epoch runs every pass of every feature and the passes no-op outside their segment, as before.
+	 */
+	static bool EpochsEnabled();
+
+	/** @brief The ORG epoch a segment's passes declare (ExternalPassDesc::Epoch); every epoch when EpochsEnabled is off. */
+	static std::uint32_t EpochOf(Segment a_segment);
+
+	/** @brief Asks DXVK to enable the device features BasicRHI needs. Call before the D3D11 device exists. */
+	static void RequestDeviceFeatures(HMODULE a_dxvkD3D11);
+
+	/**
+	 * @brief The frame's epochs, as Segment values: the order a frame runs them (GraphHost::Desc::epochOrder), the host's async
+	 * epochs in its ticket loop's order, and the revision-driven ones among them (their submissions carry a recording, no live ticket).
+	 */
+	struct FrameConfig
+	{
+		std::vector<std::uint32_t> epochOrder, asyncOrder, revisionEpochs;
+	};
+	/**
+	 * @brief Once, before Initialize (Drawcall Limit Fix's shell, from its schedule, when it installs): the frame's epochs, which Initialize
+	 * uses. Without one (a build without Drawcall Limit Fix, or Drawcall Limit Fix off), Initialize uses the built-in orders.
+	 */
+	static void ConfigureFrame(FrameConfig a_config);
+
+	/** @brief Adopts DXVK's Vulkan device. Safe to call repeatedly; returns whether the runtime is active. */
+	bool Initialize();
+
+	/** @brief Retires all graph work and releases the adopted device (never destroys it). */
+	void Shutdown();
+
+	/** @brief Whether graph epochs can run. */
+	bool IsActive() const;
+
+	/** @brief Why the runtime is inactive (empty when active). */
+	const std::string& GetDisabledReason() const;
+
+	/** @brief The persistent graph host; null when inactive. */
+	org::GraphHost* Host();
+	/**
+	 * @brief The host's frame-wait timeline (GraphHost::SetFrameWaitTimeline): signalled from the dedicated upload queue by a
+	 * producer of per-frame values after their copies, and waited for by every batch submitted while its value is set. The producer's
+	 * signal must be submitted before the frame's Present enters DXVK: upload submissions take DXVK's submission lock, which DXVK
+	 * holds across a present, and a present that waits for the frame's GPU work (AMD's windowed one) would deadlock against it (DCLF:
+	 * FrameValues::EndFrame). Null when inactive or without a dedicated upload queue (nothing could signal it beside the frame).
+	 */
+	std::shared_ptr<rhi::TimelinePtr> FrameWaitTimeline() const;
+	/** @brief Retains the adopted BasicRHI wrapper for owned external bindings. */
+	std::shared_ptr<const void> DeviceOwner() const;
+
+	/**
+	 * @brief Runs one graph epoch at the current point of the D3D11 stream.
+	 * @param a_beforePrepare Called with the graph's services active, before its passes
+	 *        prepare: queue this frame's uploads (BUFFER_UPLOAD) here.
+	 * @return false when inactive or the graph failed; callers fall back to their D3D11 path.
+	 */
+	bool ExecuteEpoch(Segment a_segment, const std::function<void(org::RenderGraph&)>& a_beforePrepare = {},
+		std::shared_ptr<const void> a_resourceOwner = {});
+
+	/**
+	 * @brief Render thread: an external epoch (org::GraphHost::SetExternalEpochs) submitted at the current point of the
+	 * D3D11 stream, as ExecuteEpoch submits one, but executed by the caller: its ticket's recording comes back to be executed in
+	 * DXVK's own command buffer (EmitExternalCommands, with its waits and signals), and nothing is flushed or submitted here. Null
+	 * when inactive or without async epochs (nothing ran); throws as the host's SubmitEpoch does.
+	 */
+	std::shared_ptr<org::ExternalEpochExecution> ExecuteExternalEpoch(Segment a_segment, const std::function<void(org::RenderGraph&)>& a_beforePrepare,
+		std::shared_ptr<const void> a_resourceOwner = {});
+
+	/**
+	 * @brief The render thread's ExecuteEpoch time since startup, every segment's, split three ways. Render thread. A feature
+	 * takes the difference across its own call to attribute what the epoch cost it (DCLF's render-thread budget).
+	 */
+	struct EpochCpuTotals
+	{
+		double inputsUs = 0.0;    // the feature's a_beforePrepare
+		double submitUs = 0.0;    // the submission proper: the ticket (and any wait for it), the queue submission, the stream's close
+		double overheadUs = 0.0;  // the rest: releases, the ticket's check, upload recording, the native flush, completions, posts
+		std::uint64_t epochs = 0;
+	};
+	const EpochCpuTotals& RenderThreadEpochTotals() const { return epochTotals; }
+
+	/** @brief The segment of the epoch being executed (valid while passes prepare and record). */
+	Segment CurrentSegment() const { return segment; }
+
+	/**
+	 * @brief CS_ORG_EPOCH_STATS: a feature's whole call around one epoch (its inputs, joins and bookkeeping
+	 * before and after ExecuteEpoch), on the render thread. Counted only when an epoch ran inside it.
+	 */
+	class EpochBodyScope
+	{
+	public:
+		explicit EpochBodyScope(Segment a_segment);
+		~EpochBodyScope();
+		EpochBodyScope(const EpochBodyScope&) = delete;
+		EpochBodyScope& operator=(const EpochBodyScope&) = delete;
+
+	private:
+		Segment segment;
+		std::chrono::steady_clock::time_point start;
+	};
+
+	/** @brief Time the render thread spent waiting on a worker inside the current EpochBodyScope. */
+	static void AddEpochJoinWait(std::chrono::steady_clock::duration a_waited);
+
+	/**
+	 * @brief The render thread's pacing point. DXVK's own frame-latency wait is off (D3D11SwapChain::SyncFrameLatency, for the
+	 * frame-generation presenters), so without this nothing bounds how far the CPU runs ahead but the host's slot rings
+	 * (kGameFramesInFlight): their waits land mid-frame, inside whichever epoch needs a ticket, and released the render thread
+	 * in bursts (frames alternating ~4.5 and ~17.5 ms at a steady GPU rate). SignalFramePace, before the present, has DXVK's
+	 * stream signal the frame's number once the GPU has done every command of the frame; WaitFramePace, after it, waits
+	 * until the GPU has finished all but the last CS_FRAME_LATENCY - 1 frames (default 2: the GPU at most one frame behind,
+	 * inside the rings, so ticket preparation never waits). CS_FRAME_LATENCY=0 turns it off. Render thread; no-ops while
+	 * inactive or while frame generation paces the present (a_active false).
+	 */
+	void SignalFramePace(bool a_active);
+	void WaitFramePace();
+
+	/** @brief Render thread: the segments submitted since the last call, one bit per Segment. */
+	std::uint32_t TakeSubmittedSegments();
+
+	/**
+	 * @brief The Vulkan resource behind a D3D11 buffer, texture or SRV (dxvkGetInteropResourceInfo).
+	 * Marks it stable in DXVK; keep a reference on the D3D11 object while using the result. Fails for
+	 * buffers the game can map. Synchronizes with DXVK's worker thread: resolve once and cache.
+	 */
+	bool DescribeResource(IUnknown* a_object, DxvkOrgInteropResourceInfo& a_info);
+	/**
+	 * @brief DescribeResource for many objects, synchronizing with DXVK's worker thread once in all (the buffers it pins go in one
+	 * chunk). a_results[i] is object i's result. False when the DXVK build lacks the batched export (nothing was described).
+	 */
+	bool DescribeResources(std::span<IUnknown* const> a_objects, std::span<DxvkOrgInteropResourceInfo> a_infos, std::span<HRESULT> a_results);
+
+	/**
+	 * @brief Whether imports can be tracked instead of pinned (the DXVK exports exist; CS_ORG_PINNED_IMPORTS=1 turns it off).
+	 * Fixed once the runtime is up.
+	 */
+	bool PinlessImports() const;
+	/**
+	 * @brief DescribeResources without pinning (dxvkTrackInteropResources): counts one import of each object's resource, which
+	 * DXVK may still move; each move is a relocation (PollRelocations) holding the old storage until ReleaseStorage. Each success
+	 * must be ended with UntrackResources once nothing uses it, with the D3D11 object still referenced. False when unavailable.
+	 */
+	bool TrackResources(std::span<IUnknown* const> a_objects, std::span<DxvkOrgInteropTrackedResource> a_resources, std::span<HRESULT> a_results);
+	/** @brief Ends one import of each object's resource (any thread). */
+	void UntrackResources(std::span<IUnknown* const> a_objects);
+	/** @brief Takes reported relocations, oldest first (any thread); each one's storage must be released. */
+	std::uint32_t PollRelocations(std::span<DxvkOrgInteropRelocation> a_relocations);
+	/** @brief Releases relocations' old storage once the GPU no longer uses it (any thread). */
+	void ReleaseStorage(std::span<void* const> a_storages);
+
+	/** @brief A timeline semaphore point an external recording waits for or signals (stages 0: all commands). */
+	struct ExternalCommandsWait
+	{
+		VkSemaphore semaphore;
+		std::uint64_t value;
+		VkPipelineStageFlags2 stages;
+	};
+	/**
+	 * @brief Render thread: queues a_record on DXVK's worker in D3D11 stream order, into DXVK's own command buffer
+	 * (dxvkEmitExternalCommands), outside any render pass. With a_bindsState DXVK forgets every binding afterwards (pipelines,
+	 * descriptor heaps or buffers, push data, vertex/index buffers, dynamic state). a_waits and a_signals join the graphics
+	 * submission of the command list the commands land in; a signal completes once that whole submission did, the commands
+	 * included (values grow in stream order per semaphore). The recording finds every image in DxvkOrgInteropImageInfo::layout,
+	 * must leave it there, and releases its own accesses with barriers (a_fullBarrier: DXVK records a full memory barrier after
+	 * it instead). False when unsupported.
+	 */
+	bool EmitExternalCommands(void (*a_record)(void* a_user, VkCommandBuffer a_commandBuffer), void* a_user,
+		std::span<const ExternalCommandsWait> a_waits, std::span<const ExternalCommandsWait> a_signals, bool a_bindsState,
+		const char* a_label, bool a_fullBarrier = false);
+
+	/**
+	 * @brief Runtime DXC compilation to SPIR-V with BasicRHI's ABI (ORGModuleServices), content-addressed
+	 * with a disk cache under Data/ShaderCache/ORG. Null when inactive, or when the build or the
+	 * installation has no DXC (dxcompiler.dll beside the DXVK DLLs).
+	 */
+	org::services::ShaderCompiler* ShaderCompiler();
+
+	/**
+	 * @brief The directory the runtime builds compile from (Data/Shaders), and every .hlsl/.hlsli in it: listed once, and again for each
+	 * shader reload (PipelineRegistry's SourcesGeneration: a file added or removed since).
+	 */
+	static constexpr const char* kShaderDirectory = "Data/Shaders";
+	static const std::vector<std::filesystem::path>& ShaderSourceFiles();
+
+	/**
+	 * @brief Shader hot reload (docs/development/dclf-hot-reload.md): every live pipeline a CS feature builds from Data/Shaders (the
+	 * render graph's compute programs, Drawcall Limit Fix's graphics pipelines) registers here once, with how to build it again, and
+	 * binds through the slot it gets. Process-lifetime (a rebuild may complete at teardown); null without ORGModuleServices.
+	 */
+	static org::services::PipelineRegistry* PipelineRegistry();
+	/**
+	 * @brief Any thread, lock-free for the caller's purposes: the live pipelines built from a_changedFile (empty: every one) built
+	 * again from the shader files as they are now; a_force: each is built and swapped even when unchanged. Served by the render thread
+	 * at the next present (ServicePipelineReload); the new pipelines are swapped in at the graph's next build.
+	 */
+	static void RequestShaderReload(std::string_view a_changedFile = {}, bool a_force = false);
+	/** @brief Any thread: the next a_epochs completed epochs log each graphics timestamp range in GPU order ("[TSDUMP]"). */
+	static void RequestTimestampDump(std::uint32_t a_epochs);
+	/**
+	 * @brief Any thread (diagnostics): Drawcall Limit Fix's epochs of the segments a_segments names (a bit by Segment) report submitted
+	 * without submitting (ExecuteEpoch returns at once). a_boundary, what each still does at its point, so a run separates the boundary's
+	 * pieces from the epoch's own work: 0 nothing, 1 the D3D11 Flush (DXVK's command list closed), 2 that and an empty enqueued
+	 * submission (one vkQueueSubmit2 of nothing), 3 that with a timeline signal instead (the compute entry's stream point).
+	 */
+	static void SkipDclfEpochs(std::uint32_t a_segments, std::uint32_t a_boundary = 0);
+	/**
+	 * @brief Any thread (diagnostics): the epochs of a_segments (a bit by Segment) submit nothing at their end; the next epoch's single
+	 * enqueue takes their submissions with its own (a submission-level merge: their GPU work runs at that later point). Timing only.
+	 */
+	static void HoldDclfSubmissions(std::uint32_t a_segments);
+	/**
+	 * @brief Any thread (diagnostics): each skipped epoch (SkipDclfEpochs) busy-waits a_microseconds on the render thread: an epoch's CPU cost
+	 * alone; a_submitted: each submitted DCLF epoch instead, after its enqueue.
+	 */
+	static void SetSkippedEpochSpin(std::uint32_t a_microseconds, bool a_submitted = false);
+	/** @brief Any thread (diagnostics): the next a_epochs epochs log their enqueued submissions' waits (with each semaphore's value then) and signals. */
+	static void RequestSubmissionDump(std::uint32_t a_epochs);
+	/**
+	 * @brief Any thread (diagnostics): each epoch's batched submissions go to DXVK as one VkSubmitInfo2 (every list; the waits on semaphores
+	 * it does not signal; each semaphore's highest value signalled once). Unsafe with cross-queue work inside the epoch: timing only.
+	 */
+	static void CoalesceEpochSubmits(bool a_coalesce, bool a_split = false);
+	/**
+	 * @brief Any thread (diagnostics): DCLF's epochs run whole on the CPU (inputs, preparation, recording, uploads queued) but their
+	 * submissions reach the queue as their signals alone: no list runs. Unsafe beyond empty epochs: timing only.
+	 */
+	static void DropDclfLists(bool a_drop);
+	/**
+	 * @brief Any thread (diagnostics): each skipped epoch (SkipDclfEpochs) has DXVK's worker busy-wait a_microseconds at its point in the
+	 * stream (dxvkEmitCommandBufferCallback), and with a_sync the render thread waits for the worker to get there (one synchronization).
+	 */
+	static void SetSkippedEpochWorkerLoad(std::uint32_t a_microseconds, bool a_sync);
+	/** @brief Any thread (diagnostics): the D3D11 flush before each epoch on (1), off (0) or as CS_ORG_EARLY_FLUSH says (-1). */
+	static void SetEarlyFlush(int a_flush);
+
+	/** @brief Wraps a materialized graph-owned buffer as a D3D11 buffer (DEFAULT usage, no CPU access). */
+	winrt::com_ptr<ID3D11Buffer> WrapBuffer(org::Resource& a_buffer, const D3D11_BUFFER_DESC& a_desc);
+
+	/**
+	 * @brief Totals (and with a_log, logs) the GPU time of every segment and of the passes inside it, from ORG's own pass timestamps,
+	 * averaged over `a_frames` frames, and starts a new window. Render thread.
+	 *
+	 * The measurement to hold a capture tool's attribution against: timestamps bracket each pass as the
+	 * graph records it, each epoch's are read back separately once its slot's GPU work is known complete,
+	 * and a pass's exclusive time is taken along the queue (from the previous pass's end, not its own begin,
+	 * which can run ahead of it), so neither overlapping passes nor epochs sharing a pass double-count.
+	 */
+	void ReportGpuTimings(std::uint32_t a_frames, bool a_log);
+
+	/** @brief One line per segment from the last ReportGpuTimings, for the menu; empty before the first. */
+	const std::string& GpuTimingSummary() const { return gpuTimingSummary; }
+
+	~RenderGraphRuntime();
+
+private:
+	RenderGraphRuntime() = default;
+	/** @brief The render thread, every frame (SignalFramePace): the registry's reload served, and its staged pipelines' build asked for. */
+	void ServicePipelineReload();
+
+	struct Impl;
+	std::unique_ptr<Impl> impl;
+	std::string disabledReason = "not initialized";
+	std::string gpuTimingSummary;
+	EpochCpuTotals epochTotals;
+	Segment segment = Segment::LightCulling;
+	bool attempted = false;
+	FrameConfig frameConfig;  // ConfigureFrame's (frameConfigured)
+	bool frameConfigured = false;
+};

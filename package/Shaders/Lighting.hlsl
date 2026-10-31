@@ -13,17 +13,61 @@
 
 #include "Common/BRDF.hlsli"
 #include "Common/ColorManagement.hlsli"
+#include "Common/DCLFObjects.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
 #include "Common/LodLandscape.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
+
+// The pixel stage's pass descriptor. Under DCLF a pass carries the shadow bits the object can take (StaticShadowBits), and
+// the draw decides them as GetRenderPasses' light selection would this frame (BuildDrawsCS): ShadowDir unless its bound
+// meets no cascade (DCLFSunMiss), DefShadow when the sun or a local shadow light (DCLFLocalShadowMask) reaches it.
+uint PixelDescriptor()
+{
+#if defined(DCLF_BINDLESS)
+	uint descriptor = Permutation::PixelShaderDescriptor;
+	if (DCLFSunMiss)
+		descriptor &= ~Permutation::LightingFlags::ShadowDir;
+	if (!(descriptor & Permutation::LightingFlags::ShadowDir) && DCLFLocalShadowMask == 0)
+		descriptor &= ~Permutation::LightingFlags::DefShadow;
+	return descriptor;
+#else
+	return Permutation::PixelShaderDescriptor;
+#endif
+}
+
+#if defined(DCLF_BINDLESS_DRAW)
+// The draw's shadow lights (Light Limit Fix's ShadowBitMask, LightLimitFix.hlsli's ShadowBitMaskOf). GetRenderPasses gives a pass
+// shadow lights only where it lets the pass have deferred shadows (FUN_1414fcf80's flag, AE 0x1414adfb0): a translucent object
+// takes none unless it is screen-door faded, a decal or kAssumeShadowmask, which is when its static bits (StaticShadowBits) carry
+// DefShadow. BuildDrawsCS selects them by the bound alone, so a pass without DefShadow drops them here: a blended object would
+// otherwise take each light unshadowed (no DefShadow, no shadow mask) where the engine leaves it out.
+uint DCLFShadowLightMask()
+{
+	return (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) ? DCLFLocalShadowMask : 0;
+}
+#	define DCLF_SHADOW_LIGHT_MASK DCLFShadowLightMask()
+#endif
+
 #include "Common/Random.hlsli"
 #include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 #include "Common/Triplanar.hlsli"
+
+#if defined(DCLF_PULLED_ROWS)
+// The permutation block (b4) as the draw's pipeline row holds it (Permutation.hlsli, DCLF_PULLED_ROWS).
+void DCLFPermutationStatics()
+{
+	Permutation::VertexShaderDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock);
+	Permutation::PixelShaderDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock + 4);
+	Permutation::ExtraShaderDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock + 8);
+	Permutation::ExtraFeatureDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock + 12);
+	Permutation::EffectRadius = DCLFRowFloat(DCLFPipelineRowAddress, kDCLFPermutationBlock + 16);
+}
+#endif  // DCLF_PULLED_ROWS
 
 #if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
 #	define SKIN
@@ -106,16 +150,39 @@ struct VS_OUTPUT
 	float4 FogParam: COLOR1;
 
 	float3 ModelPosition: TEXCOORD12;
+#if defined(DCLF_PULLED)
+	// Drawcall Limit Fix's plain draws (DCLF_PULLED): the draw's instance, by which the pixel stage reads its sequence as the vertex
+	// stage does (DCLFDrawSequence). One flat word: the five the stage reads (its rows and object word) cost a pixel shader 60 bytes of
+	// attribute storage a warp, which cost the terrain shader a warp of occupancy.
+	nointerpolation uint DCLFDrawInstance: TEXCOORD15;
+#endif
 };
 #ifdef VSHADER
 
 cbuffer PerTechnique : register(b0)
 {
 	float4 HighDetailRange : packoffset(c0);  // loaded cells center in xy, size in zw
+#	if !defined(DCLF_BINDLESS)
 	float4 FogParam : packoffset(c1);
 	float4 FogNearColor : packoffset(c2);
 	float4 FogFarColor : packoffset(c3);
+#	endif  // !DCLF_BINDLESS
 };
+
+#	if defined(DCLF_BINDLESS)
+// The fog: the frame's, the same in every technique and drifting with the time of day, so Drawcall Limit Fix keeps it in a block
+// of its own for the whole frame (SceneStore::Tables::frameFog) and no technique row changes with it. No other shader uses VS b13.
+cbuffer DCLFFrameFog : register(b13)
+{
+	float4 FogParam : packoffset(c0);
+	float4 FogNearColor : packoffset(c1);
+	float4 FogFarColor : packoffset(c2);
+	// The extras' frame inputs (LightingConstants.h, ExtrasFrame): the land blend's position in xy, and the ProjectedUV projection
+	// (row vectors; TextureProj is World x this, DCLFTextureProjOf). An object's extras rows hold only its static parts.
+	float4 DCLFExtrasLandBlend : packoffset(c3);
+	row_major float4x4 DCLFExtrasProjection : packoffset(c4);
+};
+#	endif  // DCLF_BINDLESS
 
 cbuffer PerMaterial : register(b1)
 {
@@ -126,13 +193,17 @@ cbuffer PerMaterial : register(b1)
 
 cbuffer PerGeometry : register(b2)
 {
+#	if !defined(DCLF_BINDLESS)
 	row_major float3x4 World : packoffset(c0);
 	row_major float3x4 PreviousWorld : packoffset(c3);
+#	endif  // !DCLF_BINDLESS
 	float4 EyePosition : packoffset(c6);
+#	if !defined(DCLF_BINDLESS)
 	float4 LandBlendParams : packoffset(c7);  // offset in xy, gridPosition in yw
 	float4 TreeParams : packoffset(c8);       // wind magnitude in y, amplitude in z, leaf frequency in w
 	float2 WindTimers : packoffset(c9);
 	row_major float3x4 TextureProj : packoffset(c10);
+#	endif  // !DCLF_BINDLESS
 	float IndexScale : packoffset(c13);
 	float4 WorldMapOverlayParameters : packoffset(c14);
 };
@@ -141,11 +212,92 @@ cbuffer VS_PerFrame : register(b12)
 {
 	row_major float3x3 ScreenProj : packoffset(c0);
 	row_major float4x4 ViewProj : packoffset(c8);
-#	if defined(SKINNED)
+#	if defined(SKINNED) || defined(DCLF_BINDLESS)
+	// posAdjust and its previous value (FrameBuffer's CameraPosAdjust and CameraPreviousPosAdjust): the
+	// skinning pivot, and under DCLF_BINDLESS also the eye the absolute object records are made relative to.
 	float3 BonesPivot : packoffset(c40);
 	float3 PreviousBonesPivot : packoffset(c41);
-#	endif  // SKINNED
+#	endif  // SKINNED || DCLF_BINDLESS
 };
+
+#	if defined(DCLF_BINDLESS)
+// The placement holds World and PreviousWorld absolute, so one row serves every epoch and every camera;
+// the vertex stage makes them relative to this epoch's eye and previous eye, the subtraction the engine
+// does on the CPU for its own draws. `precise` keeps it the same single float subtraction (so the depth
+// and colour epochs, and the native draws, agree to the bit) rather than something folded into the
+// transform that follows.
+#		define DCLF_VS_WORLD float3x4(                                               \
+			DCLFPlacements[DCLFObjectIndex].World[0] - float4(0, 0, 0, BonesPivot.x), \
+			DCLFPlacements[DCLFObjectIndex].World[1] - float4(0, 0, 0, BonesPivot.y), \
+			DCLFPlacements[DCLFObjectIndex].World[2] - float4(0, 0, 0, BonesPivot.z))
+#		define DCLF_VS_PREVIOUS_WORLD float3x4(                                                      \
+			DCLFPlacements[DCLFObjectIndex].PreviousWorld[0] - float4(0, 0, 0, PreviousBonesPivot.x), \
+			DCLFPlacements[DCLFObjectIndex].PreviousWorld[1] - float4(0, 0, 0, PreviousBonesPivot.y), \
+			DCLFPlacements[DCLFObjectIndex].PreviousWorld[2] - float4(0, 0, 0, PreviousBonesPivot.z))
+// Tree animation is per object for the same reason World is: with DCLF_BINDLESS the PerGeometry
+// buffer is one block for the whole pipeline, and a tree's wind amplitude and clock are its own.
+// Likewise the landscape blend parameters (MTLand) and the ProjectedUV texture matrix: the object's extras rows (its static parts)
+// completed from the frame's inputs (DCLFFrameFog c3-c7) and its placement, as the engine's SetupGeometry makes them (CPU:
+// LightingConstants.cpp, CompleteExtras). An object without extras points at row 0, which nothing reads for it.
+float4 DCLFLandBlendParamsOf(uint a_object)
+{
+	const float4 own = DCLFExtras[DCLFObjects[a_object].DCLFExtraOffset];
+	// The blend position less the object's translation (absolute).
+	return float4(own.xy, DCLFExtrasLandBlend.xy - float2(DCLFPlacements[a_object].World[0].w, DCLFPlacements[a_object].World[1].w));
+}
+float3x4 DCLFTextureProjOf(uint a_object)
+{
+	const uint extras = DCLFObjects[a_object].DCLFExtraOffset;
+	// How it is made, in the static land-blend row's x (kTextureProj*): the shape's own rows (2), the projection alone (1, the
+	// Envmap technique), or World x the projection (0); TextureProj's rows are the product's columns.
+	const float mode = DCLFExtras[extras].x;
+	if (mode == 2)
+		return float3x4(DCLFExtras[extras + 1], DCLFExtras[extras + 2], DCLFExtras[extras + 3]);
+	float4x4 product = DCLFExtrasProjection;
+	if (mode == 0) {
+		const float4 w0 = DCLFPlacements[a_object].World[0], w1 = DCLFPlacements[a_object].World[1], w2 = DCLFPlacements[a_object].World[2];
+		const float4x4 world = float4x4(float4(w0.x, w1.x, w2.x, 0), float4(w0.y, w1.y, w2.y, 0), float4(w0.z, w1.z, w2.z, 0), float4(w0.w, w1.w, w2.w, 1));
+		product = mul(world, DCLFExtrasProjection);
+	}
+	const float4x4 columns = transpose(product);
+	return float3x4(columns[0], columns[1], columns[2]);
+}
+#		define DCLF_VS_LAND_BLEND_PARAMS DCLFLandBlendParamsOf(DCLFObjectIndex)
+#		define DCLF_VS_TEXTURE_PROJ DCLFTextureProjOf(DCLFObjectIndex)
+#		if defined(DCLF_PULLED)
+// A pulled draw's object word is its sequence's, which main reads first: these are assigned there (DCLFVertexObjectStatics).
+static precise float3x4 World;
+static precise float3x4 PreviousWorld;
+static float4 TreeParams;
+static float2 WindTimers;
+static float4 LandBlendParams;
+static row_major float3x4 TextureProj;
+void DCLFVertexObjectStatics()
+{
+	World = DCLF_VS_WORLD;
+	PreviousWorld = DCLF_VS_PREVIOUS_WORLD;
+	TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
+	WindTimers = DCLFWindTimersOf(DCLFObjectIndex);
+	LandBlendParams = DCLF_VS_LAND_BLEND_PARAMS;
+	TextureProj = DCLF_VS_TEXTURE_PROJ;
+}
+#		else
+static precise float3x4 World = DCLF_VS_WORLD;
+static precise float3x4 PreviousWorld = DCLF_VS_PREVIOUS_WORLD;
+static float4 TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
+static float2 WindTimers = DCLFWindTimersOf(DCLFObjectIndex);
+static float4 LandBlendParams = DCLF_VS_LAND_BLEND_PARAMS;
+static row_major float3x4 TextureProj = DCLF_VS_TEXTURE_PROJ;
+#		endif
+#	endif  // DCLF_BINDLESS
+
+// Drawcall Limit Fix draws a pipeline's depth and colour from two vertex modules when the Z-prepass is pulled (DCLF_PULLED):
+// the colour pass tests EQUAL against that depth, so the clip position is precise in every DCLF build, to the bit the same.
+#	if defined(DCLF_BINDLESS)
+#		define DCLF_PRECISE precise
+#	else
+#		define DCLF_PRECISE
+#	endif
 
 #	if defined(TREE_ANIM)
 float2 GetTreeShiftVector(float4 position, float4 color)
@@ -158,14 +310,24 @@ float2 GetTreeShiftVector(float4 position, float4 color)
 }
 #	endif  // TREE_ANIM
 
+#	if defined(DCLF_PULLED) || defined(DCLF_PULLED_VERTICES)
+VS_OUTPUT DCLFShade(VS_INPUT input)
+#	else
 VS_OUTPUT main(VS_INPUT input)
+#	endif
 {
 	VS_OUTPUT vsout;
 
 	precise float4 inputPosition = float4(input.Position.xyz, 1.0);
 
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
+#		if defined(DCLF_BINDLESS)
+	// Drawcall Limit Fix keeps HighDetailRange's centre absolute (EvaluateTechnique): relative here to the draw's eye, as World is,
+	// so the Z-prepass and the colour pass lower the same vertices whichever frame's camera their rows were written with.
+	inputPosition = LodLandscape::AdjustLodLandscapeVertexPositionMS(inputPosition, float4x4(World, float4(0, 0, 0, 1)), HighDetailRange - float4(BonesPivot.xy, 0, 0));
+#		else
 	inputPosition = LodLandscape::AdjustLodLandscapeVertexPositionMS(inputPosition, float4x4(World, float4(0, 0, 0, 1)), HighDetailRange);
+#		endif
 #	endif  // defined(LODLANDNOISE) || defined(LODLANDSCAPE)                                                                   \
 
 	precise float4 previousInputPosition = inputPosition;
@@ -181,27 +343,45 @@ VS_OUTPUT main(VS_INPUT input)
 #	if defined(SKINNED)
 	precise int4 actualIndices = 765.01.xxxx * input.BoneIndices.xyzw;
 
+#		if defined(DCLF_BINDLESS)
+	float3x4 previousWorldMatrix =
+		Skinned::GetBoneTransformMatrixBindless(DCLFObjects[DCLFObjectIndex].DCLFPreviousBoneOffset, actualIndices, PreviousBonesPivot, input.BoneWeights);
+#		else
 	float3x4 previousWorldMatrix =
 		Skinned::GetBoneTransformMatrix(PreviousBones, actualIndices, PreviousBonesPivot, input.BoneWeights);
+#		endif
 	precise float4 previousWorldPosition =
 		float4(mul(inputPosition, transpose(previousWorldMatrix)), 1);
 
+#		if defined(DCLF_BINDLESS)
+	float3x4 worldMatrix = Skinned::GetBoneTransformMatrixBindless(DCLFObjects[DCLFObjectIndex].DCLFBoneOffset, actualIndices, BonesPivot, input.BoneWeights);
+#		else
 	float3x4 worldMatrix = Skinned::GetBoneTransformMatrix(Bones, actualIndices, BonesPivot, input.BoneWeights);
+#		endif
 	precise float4 worldPosition = float4(mul(inputPosition, transpose(worldMatrix)), 1);
 
-	float4 viewPos = mul(ViewProj, worldPosition);
+	DCLF_PRECISE float4 viewPos = mul(ViewProj, worldPosition);
 #	else   // !SKINNED
 	precise float4 previousWorldPosition = float4(mul(PreviousWorld, inputPosition), 1);
 	precise float4 worldPosition = float4(mul(World, inputPosition), 1);
 	precise float4x4 world4x4 = float4x4(World[0], World[1], World[2], float4(0, 0, 0, 1));
 	precise float4x4 modelView = mul(ViewProj, world4x4);
-	float4 viewPos = mul(modelView, inputPosition);
+	DCLF_PRECISE float4 viewPos = mul(modelView, inputPosition);
 #	endif  // SKINNED
 
 	vsout.Position = viewPos;
+#	if defined(DCLF_BINDLESS)
+	// A decal's depth toward the eye (DCLFObjects.hlsli, DCLFDecalNudged): the engine's decal bias, which DCLF's draws cannot carry.
+	vsout.Position = DCLFDecalNudged(vsout.Position, DCLFObjectIndex);
+#	endif
 
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
-	vsout.Position.z += min(1, 1e-4 * max(0, viewPos.z - 70000)) * 0.5;
+	// Precise like viewPos: Drawcall Limit Fix's Z-prepass and colour pass compile this from two modules, and the colour pass tests
+	// EQUAL against the prepass's depth. Contracted differently in one of them (a fused multiply-add), the distant LOD land's depth
+	// moved by an ulp and its pixels went unshaded.
+	DCLF_PRECISE float lodDepthOffset = min(1, 1e-4 * max(0, viewPos.z - 70000)) * 0.5;
+	DCLF_PRECISE float lodDepth = viewPos.z + lodDepthOffset;
+	vsout.Position.z = lodDepth;
 #	endif
 
 	float2 uv = input.TexCoord0.xy * TexcoordOffset.zw + TexcoordOffset.xy;
@@ -218,7 +398,11 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #	if defined(SKINNED)
+#		if defined(DCLF_BINDLESS)
+	float3x3 boneRSMatrix = Skinned::GetBoneRSMatrixBindless(DCLFObjects[DCLFObjectIndex].DCLFBoneOffset, actualIndices, input.BoneWeights);
+#		else
 	float3x3 boneRSMatrix = Skinned::GetBoneRSMatrix(Bones, actualIndices, input.BoneWeights);
+#		endif
 #	endif
 
 #	if !defined(MODELSPACENORMALS)
@@ -302,7 +486,128 @@ VS_OUTPUT main(VS_INPUT input)
 
 	return vsout;
 }
-#endif  // VSHADER
+
+#	if defined(DCLF_PULLED) || defined(DCLF_PULLED_VERTICES)
+// Drawcall Limit Fix's draws have no input assembly: every vertex stage loads its vertex's attributes itself, decoded as the
+// engine's input layout for the draw's vertex layout has them (VertexInput.cpp, BuildVertexElements; DCLFDrawVertexLayout, set
+// first), then shades them as the input assembler's (DCLFShade). One function for the Z-prepass's build and the colour pass's, so
+// the two compute the same positions (the colour pass tests EQUAL against the prepass's depth). The draw is indexed from the index
+// pool (IndexPool) with no vertex offset, so a_index is the geometry's own vertex index.
+// The attributes read here must match the mask the pipelines check the geometry's layout against (ShaderPrograms.cpp,
+// VertexAttributesOf: Lighting's), or a pipeline is built for a layout that lacks one and draws its defaults.
+VS_INPUT DCLFPulledInput(uint a_index, DCLFStream a_first, DCLFStream a_second)
+{
+	DCLFStreamsAt(a_index, a_first, a_second);
+	VS_INPUT input;
+	input.Position = DCLFPullFloat4(0, a_first, a_second);
+	input.TexCoord0 = DCLFPullHalf2(1, a_first, a_second);
+#		if !defined(MODELSPACENORMALS)
+	input.Normal = DCLFPullUnorm4(3, 0, a_first, a_second);
+	input.Bitangent = DCLFPullUnorm4(4, 0, a_first, a_second);
+#		endif
+#		if defined(VC)
+	input.Color = DCLFPullUnorm4(5, 0, a_first, a_second);
+#			if defined(LANDSCAPE)
+	input.LandBlendWeights1 = DCLFPullUnorm4(7, 0, a_first, a_second);
+	input.LandBlendWeights2 = DCLFPullUnorm4(7, 4, a_first, a_second);
+#			endif
+#		endif
+#		if defined(SKINNED)
+	input.BoneWeights = DCLFPullHalf4(6, a_first, a_second);
+	input.BoneIndices = DCLFPullUnorm4(6, 8, a_first, a_second);
+#		endif
+#		if defined(EYE)
+	input.EyeParameter = DCLFPullFloat(8, a_first, a_second);
+#		endif
+	return input;
+}
+#	endif  // DCLF_PULLED || DCLF_PULLED_VERTICES
+
+#	if defined(DCLF_PULLED)
+// Drawcall Limit Fix's Z-prepass draws with plain indirect draws (MainOpaquePass): one per pipeline, which cannot bind a vertex
+// buffer, or push data, per draw. So this stage reads its draw's sequence (BuildDrawsCS: DrawSequence, at DCLFSequencesAddress
+// plus its instance's stride), and through it the draw's object word, material row and geometry, whose attributes it pulls
+// (DCLFPulledInput).
+// The draw's rows (its sequence's: the pipeline row's address, then the material row's), and the blocks the pulled source reads
+// from them (ShaderPrograms.cpp, PulledLightingSource), before anything reads them.
+void DCLFRowStatics(uint4 a_rows)
+{
+	DCLFPipelineRowAddress = DCLFAddress(a_rows.xy);
+	DCLFMaterialRowAddress = DCLFAddress(a_rows.zw);
+	DCLFPerTechniqueStatics();
+	DCLFPerMaterialStatics();
+	DCLFPerGeometryStatics();
+	DCLFPermutationStatics();
+}
+
+VS_OUTPUT DCLFPulledVertex(uint index, uint a_instance)
+{
+	const uint64_t sequence = DCLFDrawSequence(a_instance);
+	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
+	DCLFRowStatics(DCLFSequenceRows(sequence));  // the pipeline row's address, the material row's
+	DCLFDrawVertexLayout = DCLFPipelineVertexLayout();
+	const uint4 vertexBuffer = vk::RawBufferLoad<uint4>(sequence + 24);  // address, size, stride
+	const uint4 streamBuffer = vk::RawBufferLoad<uint4>(sequence + 40);
+	DCLFStream first, second;
+	first.address = DCLFAddress(vertexBuffer.xy);
+	first.stride = vertexBuffer.w;
+	second.address = DCLFAddress(streamBuffer.xy);
+	second.stride = streamBuffer.w;
+	const VS_INPUT input = DCLFPulledInput(index, first, second);
+
+	DCLFVertexObjectStatics();
+	VS_OUTPUT vsout = DCLFShade(input);
+	// T7c1: Terrain Blending's depth offset (Utility.hlsl, OFFSET_DEPTH) for a near terrain block's draw into the main depth, pushed per
+	// call in the word a shadow view's vertex layout takes (DrawPipelines.h, kZDrawPushOffsetDepth): 0 for every other Z-prepass call.
+	if (DCLFVertexLayout.x != 0)
+		vsout.Position.z += 10.0;
+	vsout.DCLFDrawInstance = a_instance;
+	return vsout;
+}
+
+#		if defined(DCLF_DEPTH_ONLY)
+// The Z-prepass's build for a depth pipeline without a pixel stage (DCLF_DEPTH_ONLY): the clip position alone. It is
+// DCLFPulledVertex's, the colour pass's expression to the bit (the colour pass tests EQUAL against it); everything else that
+// computes is compiled away, PreviousWorld, the previous palette, the TBN and the fog with it.
+struct DCLF_DEPTH_VS_OUTPUT
+{
+	float4 Position: SV_POSITION0;
+};
+#			define DCLF_PULLED_VS_OUTPUT DCLF_DEPTH_VS_OUTPUT
+#		else
+#			define DCLF_PULLED_VS_OUTPUT VS_OUTPUT
+#		endif
+
+// The draw's lookups (its sequence, rows, statics, object and geometry) keyed on a wave-uniform instance, as the shadow views' stage
+// (Utility.hlsl): each pass of the loop takes the first active lane's draw and that draw's lanes, so everything DCLFPulledVertex reads
+// per draw is the draw's (scalar), not each lane's. One pass unless a wave mixes draws.
+DCLF_PULLED_VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+{
+	DCLF_PULLED_VS_OUTPUT vsout;
+#		if defined(DCLF_DEPTH_ONLY)
+	vsout.Position = DCLFPulledVertex(index, a_instance).Position;
+#		else
+	vsout = DCLFPulledVertex(index, a_instance);
+#		endif
+	return vsout;
+}
+#	elif defined(DCLF_PULLED_VERTICES)
+// Drawcall Limit Fix's device-generated draws (the colour pass, and the depth variants): one execution set's call switches
+// pipelines per draw, and so vertex layouts, which no input assembly can follow (an execution set's pipelines share their vertex
+// input state). The draw's push data carries its geometry's buffers (DCLFObjects.hlsli, DCLFPushData) and its pipeline row's
+// address, whose row holds the layout; the object statics above keep their initialisers (the object word is pushed too).
+VS_OUTPUT main(uint index : SV_VertexID)
+{
+	DCLFDrawVertexLayout = DCLFPushedVertexLayout();
+	DCLFStream first, second;
+	first.address = DCLFAddress(DCLFVertexBuffer.xy);
+	first.stride = DCLFVertexStride;
+	second.address = DCLFAddress(DCLFStreamBuffer.xy);
+	second.stride = DCLFStreamStride;
+	return DCLFShade(DCLFPulledInput(index, first, second));
+}
+#	endif  // DCLF_PULLED, DCLF_PULLED_VERTICES
+#endif      // VSHADER
 
 typedef VS_OUTPUT PS_INPUT;
 
@@ -520,6 +825,12 @@ Texture2D<float4> TexProjDetail : register(t10);
 #		endif
 
 Texture2D<float4> TexCharacterLightProjNoiseSampler : register(t11);
+#		if defined(DCLF_BINDLESS)
+// The character light's noise under DCLF (DrawPipelines.h: kCharacterLightRegister). The engine binds it at t11, but it is a
+// render target that alternates every frame: the frame record gives it, not the material row. A character-light pass reads it
+// here for both of t11's uses.
+Texture2D<float4> DCLFCharacterLightNoise : register(t125);
+#		endif
 Texture2D<float4> TexRimSoftLightWorldMapOverlaySampler : register(t12);
 
 #		if defined(WORLD_MAP) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE))
@@ -538,8 +849,6 @@ Texture2D<float4> TexLandLodNoiseSampler : register(t15);
 Texture2D<float4> TexShadowMaskSampler : register(t14);
 
 #	if defined(SKIN) && defined(CS_SKIN)
-Texture2D<float4> TexSkinExtraSampler : register(t71);
-Texture2D<float4> TexSkinWetnessSampler : register(t74);
 #	endif
 
 cbuffer PerTechnique : register(b0)
@@ -597,28 +906,118 @@ cbuffer PerMaterial : register(b1)
 
 cbuffer PerGeometry : register(b2)
 {
+#	if !defined(DCLF_BINDLESS)
 	float3 DirLightDirection : packoffset(c0);
 	float3 DirLightColor : packoffset(c1);
+#	endif  // !DCLF_BINDLESS
 	float4 ShadowLightMaskSelect : packoffset(c2);
+#	if !defined(DCLF_BINDLESS)
 	float4 MaterialData : packoffset(c3);  // envmapLODFade in x, specularLODFade in y, alpha in z
+#	endif                                 // !DCLF_BINDLESS
 	float AlphaTestRef : packoffset(c4);
+#	if !defined(DCLF_BINDLESS)
 	float3 EmitColor : packoffset(c4.y);
+#	endif  // !DCLF_BINDLESS
+#	if !defined(DCLF_BINDLESS)
 	float4 ProjectedUVParams : packoffset(c6);
+#	endif  // !DCLF_BINDLESS
 	float4 SSRParams : packoffset(c7);
 	float4 WorldMapOverlayParametersPS : packoffset(c8);
+#	if !defined(DCLF_BINDLESS)
 	float4 ProjectedUVParams2 : packoffset(c9);
 	float4 ProjectedUVParams3 : packoffset(c10);  // fProjectedUVDiffuseNormalTilingScale in x, fProjectedUVNormalDetailTilingScale in y, EnableProjectedNormals in w
+#	endif                                        // !DCLF_BINDLESS
+#	if !defined(DCLF_BINDLESS)
 	row_major float3x4 DirectionalAmbient : packoffset(c11);
 	float4 AmbientSpecularTintAndFresnelPower : packoffset(c14);  // Fresnel power in z, color in xyz
+#	endif                                                        // !DCLF_BINDLESS
 	float4 PointLightPosition[7] : packoffset(c15);               // point light radius in w
 	float4 PointLightColor[7] : packoffset(c22);
 	float2 NumLightNumShadowLight : packoffset(c29);
 };
 
+#	if defined(DCLF_BINDLESS)
+// The frame's lighting: the same in every pipeline's PerGeometry block, so Drawcall Limit Fix keeps it in one block
+// of its own for the whole frame (SceneStore::Tables::frameLighting), and a pipeline's block does not change with the
+// sun. No other shader uses b13.
+cbuffer DCLFFrameLighting : register(b13)
+{
+	float3 DirLightDirection : packoffset(c0);
+	float3 DirLightColor : packoffset(c1);
+	row_major float3x4 DirectionalAmbient : packoffset(c2);
+	float4 AmbientSpecularTintAndFresnelPower : packoffset(c5);  // Fresnel power in z, color in xyz
+	// The LOD fades' frame inputs (LodFadeFrame): what BSFadeNode::OnVisible's fade value and GetRenderPasses' fade read.
+	float4 DCLFLodFadeEye : packoffset(c6);          // the main camera's world position, its lodAdjust in w
+	float4 DCLFLodFadeThresholds : packoffset(c7);   // specular start and end, envmap start and end
+	float4 DCLFLodFadeMetric : packoffset(c8);       // metric scale, default scale, the override metric, 1 when overridden
+	float4 DCLFLodFadeDivisors[4] : packoffset(c9);  // per LOD type
+	float4 DCLFLodFadeState : packoffset(c13);       // x: 1 when the engine updates the metric at all (else the property's fades stand)
+// CS_DCLF_FOLIAGE_PARITY's draws: the alpha-tested ones, and terrain LOD (whose depth the Z-prepass and the colour pass each
+// compute from HighDetailRange); with CS_DCLF_FOLIAGE_PARITY=land every draw (DCLF_FOLIAGE_PARITY_ALL), so that a pixel no draw
+// shaded is told from one another object took at the same depth. Each records the pixels it owns in the Z-prepass (those with a
+// pixel stage there) and those the colour pass shaded.
+#		if defined(DCLF_FOLIAGE_PARITY) && (defined(DO_ALPHA_TEST) || defined(LODLANDNOISE) || defined(LODLANDSCAPE) || defined(DCLF_FOLIAGE_PARITY_ALL))
+#			define DCLF_OWNED_PARITY
+#		endif
+#		if defined(DCLF_FOLIAGE_PARITY)
+	// CS_DCLF_FOLIAGE_PARITY (IndirectDraws GpuLayouts.h, FoliageParityConstants): the frame's buffers' addresses (each pixel's
+	// object word; its albedo and diffuse), the render size, the frame's tag and the Z-prepass owners' UAV.
+	uint4 DCLFFoliageParityBuffers : packoffset(c14);
+	uint4 DCLFFoliageParityFrame : packoffset(c15);
+#		endif
+	// The extras' pixel input (LightingConstants.h, ExtrasFrame): ProjectedUVParams3, the frame's (the two tilings, 0, the
+	// projected-normals switch).
+	float4 DCLFExtrasProjectedGlobals : packoffset(c16);
+};
+#	endif  // DCLF_BINDLESS
+
+#	if defined(DCLF_BINDLESS)
+// The object's pixel-stage values are its row of the frame's DCLFPixelObjects (Common/DCLFObjects.hlsli, DCLFPixelObjectRow), written
+// once a frame (Features/Fades' PixelRowsCS) rather than computed per pixel from its records, LOD fade and fade root: they are the
+// draw's. A LOD cross-fade's copy (the object word's bit 30) takes the row's copy alpha.
+#		define DCLF_PS_CROSSFADE_COPY ((DCLFObjectWord & 0x40000000u) != 0)
+#		define DCLF_PIXEL_ROW DCLFPixelObjects[DCLFObjectIndex]
+float4 DCLFPixelMaterialData(DCLFPixelObjectRow a_row)
+{
+	return float4(a_row.MaterialData.xy, DCLF_PS_CROSSFADE_COPY ? a_row.CopyAlpha : a_row.MaterialData.z, a_row.MaterialData.w);
+}
+// ProjectedUV's three pixel parameters are per object too (the property's, plus two globals).
+#		if defined(DCLF_PULLED)
+// A pulled draw's object word is its vertex stage's, which main reads first: these are assigned there (DCLFPixelObjectStatics).
+static float4 MaterialData;
+static float3 EmitColor;
+static float DCLFSSRSpecular;
+static float4 ProjectedUVParams;
+static float4 ProjectedUVParams2;
+static float4 ProjectedUVParams3;
+#		else
+static const DCLFPixelObjectRow DCLFPixelRow = DCLF_PIXEL_ROW;
+static float4 MaterialData = DCLFPixelMaterialData(DCLFPixelRow);
+static float3 EmitColor = DCLFPixelRow.EmitColorSSR.xyz;
+static float DCLFSSRSpecular = DCLFPixelRow.EmitColorSSR.w;
+static float4 ProjectedUVParams = DCLFExtras[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 4];
+static float4 ProjectedUVParams2 = DCLFExtras[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 5];
+static float4 ProjectedUVParams3 = DCLFExtrasProjectedGlobals;
+#		endif
+#		define DCLF_SSR_SPECULAR DCLFSSRSpecular
+#	else
+#		define DCLF_SSR_SPECULAR SSRParams.w
+#	endif  // DCLF_BINDLESS
+
+#	if defined(DCLF_BINDLESS_DRAW)
+// The reference comes from the per-object record instead of a constant buffer of its own, so that b11
+// stops being part of what makes a draw's binding record unique. Same value, same single read below.
+#		if defined(DCLF_PULLED)
+static float AlphaTestRefRS;  // DCLFPixelObjectStatics
+#		else
+static const float AlphaTestRefRS = DCLFPixelRow.AlphaTestRef;
+#		endif
+#	else
 cbuffer AlphaTestRefBuffer : register(b11)
 {
 	float AlphaTestRefRS : packoffset(c0);
 }
+#	endif  // DCLF_BINDLESS_DRAW
 
 float GetSoftLightMultiplier(float angle)
 {
@@ -1027,7 +1426,16 @@ bool UseSkylightingShadowVisibility()
 
 #	include "Common/LightingEval.hlsli"
 
-PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+#	if defined(DCLF_PULLED)
+PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
+#	else
+#		if defined(DCLF_OWNED_PARITY)
+// The parity write below must be the visible fragment's: the colour pass tests EQUAL and writes no depth, so testing first
+// changes nothing else.
+[earlydepthstencil]
+#		endif
+	PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+#	endif
 {
 	PS_OUTPUT psout;
 #	if defined(ENVIRONMENT_PROBE)
@@ -1634,14 +2042,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 skinWetnessNormal = float4(0.5f, 0.5f, 1.f, 1.f);
 
 	if (hasSkinExtra && skinEnabled) {
-		skinExtra = TexSkinExtraSampler.Sample(SampColorSampler, uv);
+		skinExtra = Skin::SampleControls(SampColorSampler, uv);
 		skinRoughness = skinExtra.x;
 		skinFuzzMask = skinExtra.y;
 		skinAO = skinExtra.z;
 		skinSpecular = skinExtra.w;
 	}
 	if (hasSkinWetness && skinEnabled) {
-		skinWetnessSample = TexSkinWetnessSampler.Sample(SampColorSampler, uv);
+		skinWetnessSample = Skin::SampleWetness(SampColorSampler, uv);
 		skinWetnessNormal.xyz = skinWetnessSample.xyz;
 		skinWetMask = saturate(skinWetnessSample.w);
 	} else {
@@ -1914,11 +2322,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif  // MODELSPACENORMALS
 		float3 combinedTangentNormal = tangentNormal;
 		if (skinData.skinDetailParams.w > 0.0f) {
-			float3 detailNormal = Skin::TexSkinDetailNormal.SampleBias(Skin::DetailSampler, detailUV, SharedData::MipBias).rgb * 2.0f - 1.0f;
+			float3 detailNormal = Skin::SampleDetailNormal(detailUV, SharedData::MipBias).rgb * 2.0f - 1.0f;
 			bool normalOnly = Skin::skinMaterialFlags.z > 0.5f;
 			if (normalOnly)
 				detailNormal.z = sqrt(saturate(1.0f - dot(detailNormal.xy, detailNormal.xy)));
-			float detailMask = normalOnly ? 1.0f : saturate(Skin::TexSkinDetailNormal.SampleBias(SampNormalSampler, uv, SharedData::MipBias).a);
+			float detailMask = normalOnly ? 1.0f : saturate(Skin::SampleDetail(SampNormalSampler, uv, SharedData::MipBias).a);
 			float detailWeight = skinData.skinDetailParams.z * detailMask;
 			if (detailWeight != 0.0f) {
 				detailNormal = normalize(float3(detailNormal.xy * detailWeight, max(detailNormal.z, 1e-4f)));
@@ -1946,7 +2354,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float2 baseShadowUV = 1.0.xx;
 	float4 shadowColor = 1.0;
 #	if !defined(ENVIRONMENT_PROBE)
-	if ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) && ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir) || inWorld) || numShadowLights > 0) {
+	if ((PixelDescriptor() & Permutation::LightingFlags::DefShadow) && ((PixelDescriptor() & Permutation::LightingFlags::ShadowDir) || inWorld) || numShadowLights > 0) {
 		baseShadowUV = input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy;
 		float2 adjustedShadowUV = baseShadowUV * VPOSOffset.xy + VPOSOffset.zw;
 		float2 shadowUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(adjustedShadowUV);
@@ -1962,7 +2370,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 projWorldPos = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 	float3 triFaceNormal = normalize(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
 	float3 triWeights = Triplanar::GetWeights(tbnTr[2], triFaceNormal);
+#		if defined(DCLF_BINDLESS)
+	float projNoise = (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::CharacterLight) ?
+	                      Triplanar::Sample(DCLFCharacterLightNoise, SampCharacterLightProjNoiseSampler, projWorldPos, triWeights, ProjectedUVParams.z).x :
+	                      Triplanar::Sample(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, projWorldPos, triWeights, ProjectedUVParams.z).x;
+#		else
 	float projNoise = Triplanar::Sample(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, projWorldPos, triWeights, ProjectedUVParams.z).x;
+#		endif
 	float3 texProj = normalize(input.TexProj);
 #		if defined(TREE_ANIM) || defined(LODOBJECTSHD)
 	float vertexAlpha = 1;
@@ -2050,8 +2464,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	baseColor.xyz = GetWorldMapBaseColor(sampledBaseColor.xyz, baseColor.xyz, projWeight);
 #	endif  // WORLD_MAP
 
+#	if !defined(DCLF_DEPTH_ONLY)
+	// Drawcall Limit Fix's Z-prepass (DCLF_DEPTH_ONLY) needs only the alpha test, and nothing between here
+	// and it changes baseColor.w or discards. Compiling the lighting out here, rather than leaving it to the
+	// optimizer behind the depth-only return, keeps its reads of the per-frame pixel bindings out of the module
+	// even in debug builds (CS_DCLF_SHADER_DEBUG), where DXC keeps them alive for their debug values.
 	float3 localShadowPosition = input.WorldPosition.xyz;
-#	if defined(DEFERRED) && !defined(LANDSCAPE) && defined(TERRAIN_BLENDING_OBJECTS)
+#		if defined(DEFERRED) && !defined(LANDSCAPE) && defined(TERRAIN_BLENDING_OBJECTS)
 	// Terrain Blending fades terrain over the part of an object below the terrain surface, where the scene
 	// depth holds the terrain. Light that part like the terrain it fades into: bend its normal up, and take
 	// local shadows at the visible surface, since terrain occludes the buried point in the shadow maps.
@@ -2070,20 +2489,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			localShadowPosition *= 1.0 - buriedDepth / viewPosition.z;
 		}
 	}
-#	endif
+#		endif
 
-#	if defined(MODELSPACENORMALS)
+#		if defined(MODELSPACENORMALS)
 	float3 vertexNormal = worldNormal;
-#	endif
+#		endif
 
 	float3 screenSpaceNormal = normalize(FrameBuffer::WorldToView(worldNormal, false));
-#	if defined(TRUE_PBR)
+#		if defined(TRUE_PBR)
 	// Lighting uses the face-oriented normal. Deferred reflections need it facing the camera.
 	if (thinSurfaceNormals)
 		screenSpaceNormal = normalize(FrameBuffer::WorldToView(PBR::GetThinSurfaceNormal(worldNormal, viewDirection), false));
-#	endif
+#		endif
 
-#	if defined(CS_HAIR_SHADING)
+#		if defined(CS_HAIR_SHADING)
 	float3 Bitangent = normalize(float3(input.TBN0.y, input.TBN1.y, input.TBN2.y));
 	float3 hairT = 0;
 	hairT = useHairFlowMap ? normalize(mul(tbn, sampledHairFlow)) : Bitangent;
@@ -2095,14 +2514,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			screenSpaceNormal = normalize(FrameBuffer::WorldToView(shiftedNormal, false));
 		}
 	}
-#	endif
+#		endif
 
 	MaterialProperties material = (MaterialProperties)0;
 
 	material.F0 = 0;
 	material.Roughness = 1;
 
-#	if defined(TRUE_PBR)
+#		if defined(TRUE_PBR)
 	material.Noise = screenNoise;
 
 	material.Roughness = clamp(rawRMAOS.x, PBR::Constants::MinRoughness, PBR::Constants::MaxRoughness);
@@ -2121,10 +2540,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// neutralizing the source color so terrain vertex colors don't tint PBR;
 	// a white source yields VertexAO == 1, i.e. no AO darkening either.
 	float3 pbrVertexColorSrc = input.Color.xyz;
-#		if defined(LANDSCAPE)
+#			if defined(LANDSCAPE)
 	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
 		pbrVertexColorSrc = 1;
-#		endif
+#			endif
 	float3 pbrVertexColor = ColorManagement::PBRVertexColorToLinear(pbrVertexColorSrc);
 	float pbrVertexAO = max(max(pbrVertexColor.x, pbrVertexColor.y), pbrVertexColor.z);
 	pbrVertexColor = pbrVertexAO == 0.0f ? 1.0f : pbrVertexColor * lerp(1 / max(pbrVertexAO, 0.001), 1, SharedData::truePBRSettings.VertexAOStrength);
@@ -2139,10 +2558,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	material.GlintMicrofacetRoughness = clamp(glintParameters.z, PBR::Constants::MinGlintRoughness, PBR::Constants::MaxGlintRoughness);
 	material.GlintDensityRandomization = clamp(glintParameters.w, PBR::Constants::MinGlintDensityRandomization, PBR::Constants::MaxGlintDensityRandomization);
 
-#		if defined(GLINT)
+#			if defined(GLINT)
 	float glintNoise = Random::R1Modified(float(SharedData::FrameCount), (Random::pcg2d(uint2(input.Position.xy)) / 4294967296.0).x);
 	Glints::PrecomputeGlints(glintNoise, uvOriginal, ddx(uvOriginal), ddy(uvOriginal), material.GlintScreenSpaceScale, material.GlintCache);
-#		endif
+#			endif
 
 	baseColor.xyz *= 1 - material.Metallic;
 
@@ -2150,7 +2569,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 coatWorldNormal = worldNormal;
 
-#		if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+#			if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	[branch] if ((PBRFlags & PBR::Flags::Subsurface) != 0)
 	{
 		material.SubsurfaceColor = PBRParams2.xyz;
@@ -2205,8 +2624,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 		material.FuzzWeight = lerp(material.FuzzWeight, 0, projectedMaterialWeight);
 	}
-#		endif
-#	else
+#			endif
+#		else
 	material.BaseColor = baseColor.xyz;
 	const bool hasSpecular = HasSpecular();
 	material.Shininess = hasSpecular ? shininess : 0;
@@ -2215,7 +2634,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	material.rimSoftLightColor = ColorManagement::TextureToWorking(rimSoftLightColor.xyz);
 	material.backLightColor = ColorManagement::TextureToWorking(backLightColor.xyz);
 
-#		if defined(VANILLA_FRESNEL)
+#			if defined(VANILLA_FRESNEL)
 	const bool enableVanillaFresnel = SharedData::vanillaFresnelSettings.Enable;
 	const bool isEyeMaterial = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsEye) != 0;
 	material.F0 = enableVanillaFresnel ? SharedData::vanillaFresnelSettings.MinF0 : 0.0;
@@ -2231,10 +2650,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 	material.F0 = max((enableVanillaFresnel ? SharedData::vanillaFresnelSettings.MinF0 : 0.0), material.F0 * SharedData::vanillaFresnelSettings.BaseF0Multiplier);
 	const float3 baseF0 = material.F0;
-#		endif  // VANILLA_FRESNEL
-#	endif      // TRUE_PBR
+#			endif  // VANILLA_FRESNEL
+#		endif      // TRUE_PBR
 
-#	if defined(CS_SKIN_SHADING)
+#		if defined(CS_SKIN_SHADING)
 	if (skinEnabled) {
 		const float extraRoughness = BRDF::F_Schlick(0.04f, saturate(dot(worldNormal.xyz, viewDirection))) * skinData.fuzzParams.w;
 		material.Roughness = saturate(skinData.skinParams.x - skinData.skinParams.z * material.Glossiness);
@@ -2254,13 +2673,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		material.FuzzRoughness = skinData.fuzzParams.y;
 		material.FuzzColor = skinData.fuzzParams.zzz;
 	}
-#	endif  // CS_SKIN
+#		endif  // CS_SKIN
 
-#	if defined(SKIN)
+#		if defined(SKIN)
 	material.BaseColor = max(material.BaseColor, EPSILON_SKIN_ALBEDO);
-#	endif
+#		endif
 
-#	if defined(CS_HAIR_SHADING)
+#		if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		material.Shininess = SharedData::hairSpecularSettings.HairGlossiness;
 		material.F0 = Hair::HairF0();
@@ -2270,11 +2689,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			material.Roughness = ShininessToRoughness(material.Shininess * 0.75);
 		}
 	}
-#	endif
+#		endif
 
 	bool dynamicCubemap = false;
 
-#	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
+#		if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
 	float envMask = EnvmapData.x * MaterialData.x;
 
 	float viewNormalAngle = dot(worldNormal.xyz, viewDirection);
@@ -2291,43 +2710,43 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 envColor = 0.0;
 
 	if (envMask > 0.0) {
-#		if defined(DYNAMIC_CUBEMAPS)
+#			if defined(DYNAMIC_CUBEMAPS)
 		uint2 envSize;
 		TexEnvSampler.GetDimensions(envSize.x, envSize.y);
 
-#			if defined(EMAT) && !defined(VANILLA_FRESNEL)
+#				if defined(EMAT) && !defined(VANILLA_FRESNEL)
 		if (envSize.x == 1 && envSize.y == 1 || complexMaterial) {
-#			elif defined(VANILLA_FRESNEL)
+#				elif defined(VANILLA_FRESNEL)
 		bool vfStartDynamicCubemapTest = (enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableDynamicCubemapsConversion);
-#				if defined(EMAT)
+#					if defined(EMAT)
 		vfStartDynamicCubemapTest = complexMaterial || vfStartDynamicCubemapTest;
-#				endif
+#					endif
 		if (vfStartDynamicCubemapTest || (envSize.x == 1 && envSize.y == 1)) {
-#			else
+#				else
 		if (envSize.x == 1 && envSize.y == 1) {
-#			endif
+#				endif
 
 			dynamicCubemap = true;
 
-#			if defined(EMAT)
+#				if defined(EMAT)
 			if (!complexMaterial)
-#			endif
+#				endif
 			{
 				// Dynamic Cubemap Creator sets this value to black, if it is anything but black it is wrong
 				float3 envColorTest = TexEnvSampler.SampleLevel(SampEnvSampler, float3(0.0, 1.0, 0.0), 15).xyz;
 				dynamicCubemap = all(envColorTest == 0.0);
 			}
 
-#			if defined(CREATOR)
+#				if defined(CREATOR)
 			if (SharedData::cubemapCreatorSettings.Enabled) {
 				dynamicCubemap = true;
 			}
-#			endif
+#				endif
 
-#			if defined(VANILLA_FRESNEL)
+#				if defined(VANILLA_FRESNEL)
 			dynamicCubemap = dynamicCubemap || (SharedData::vanillaFresnelSettings.EnableDynamicCubemapsConversion && enableVanillaFresnel);
 			const float originRoughness = material.Roughness;
-#			endif
+#				endif
 
 			if (dynamicCubemap) {
 				float4 envColorBase = TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15);
@@ -2337,50 +2756,50 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					material.F0 = TransferFunctions::GameGammaToLinear(envColorBase.rgb);
 					material.Roughness = envColorBase.a;
 				} else {
-#			if defined(VANILLA_FRESNEL)
+#				if defined(VANILLA_FRESNEL)
 					material.F0 = saturate(TransferFunctions::GameGammaToLinear(envColorBase.rgb) * Math::PI * SharedData::vanillaFresnelSettings.CubemapToF0Multiplier);
 					material.Roughness = material.Roughness;
-#			else
+#				else
 					material.F0 = 1.0;
 					material.Roughness = 1.0 / 8.0;
-#			endif
+#				endif
 				}
 
-#			if defined(CREATOR)
+#				if defined(CREATOR)
 				if (SharedData::cubemapCreatorSettings.Enabled) {
 					material.F0 = SharedData::cubemapCreatorSettings.CubemapColor.rgb;
 					material.Roughness = SharedData::cubemapCreatorSettings.CubemapColor.a;
 				}
-#			endif
+#				endif
 
-#			if defined(EMAT)
+#				if defined(EMAT)
 				float complexMaterialRoughness = 1.0 - complexMaterialColor.y;
 				material.Roughness = lerp(material.Roughness, complexMaterialRoughness, complexMaterial);
 				material.F0 = lerp(material.F0, complexSpecular, complexMaterial);
-#			endif
+#				endif
 
 				envMask = saturate(envMask);
-#			if defined(VANILLA_FRESNEL)
+#				if defined(VANILLA_FRESNEL)
 				if (enableVanillaFresnel) {
 					material.F0 = max(lerp(hasSpecular ? baseF0 : 0, material.F0, envMask), SharedData::vanillaFresnelSettings.MinF0);
-#				if defined(EMAT)
+#					if defined(EMAT)
 					if (!complexMaterial) {
-#				endif
+#					endif
 						material.Roughness = lerp(originRoughness, material.Roughness, envMask);
 						if (!isEyeMaterial && !usingDynamicCubemap) {
 							material.F0 = saturate(material.F0 + envMask * material.BaseColor);
 							material.BaseColor = lerp(material.BaseColor, 0, envMask);
 						}
-#				if defined(EMAT)
+#					if defined(EMAT)
 					}
-#				endif
+#					endif
 				}
-#			endif
+#				endif
 			}
 		}
-#		endif
+#			endif
 
-#		if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
+#			if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
 		if (enableVanillaFresnel) {
 			if (isEyeMaterial && SharedData::vanillaFresnelSettings.EnableEyeSpecialHandling) {
 				material.F0 = 0.027;
@@ -2388,33 +2807,33 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			}
 			material.Roughness = clamp(material.Roughness * SharedData::vanillaFresnelSettings.RoughnessMultiplier, 0.04, 1.0);
 		}
-#		endif
+#			endif
 
 		if (!dynamicCubemap) {
 			float3 envColorBase = TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz;
-#		if defined(ENABLE_LL)
+#			if defined(ENABLE_LL)
 			envColorBase = ColorManagement::TextureToWorking(envColorBase);
-#		else
+#			else
 			envColorBase = TransferFunctions::GameGammaToLinear(envColorBase);
-#		endif
+#			endif
 			envColor = envColorBase.xyz * envMask;
 		}
 	}
 
-#	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
+#		endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
 
 	float porosity = 1.0;
 
-#	if defined(SKYLIGHTING)
+#		if defined(SKYLIGHTING)
 	float3 positionMSSkylight = input.WorldPosition.xyz;
-#		if defined(ENVIRONMENT_PROBE)
+#			if defined(ENVIRONMENT_PROBE)
 	positionMSSkylight += EnvironmentProbe::WorldOriginDelta;
-#		endif
-#		if defined(SKYLIGHTING_SHADOW_VIS)
-	float skylightingShadowVisibility = 1.0;
-#		endif
-#		if defined(DEFERRED)
+#			endif
 #			if defined(SKYLIGHTING_SHADOW_VIS)
+	float skylightingShadowVisibility = 1.0;
+#			endif
+#			if defined(DEFERRED)
+#				if defined(SKYLIGHTING_SHADOW_VIS)
 	// One probe pass serves both lookups when the height clamp leaves the position unchanged.
 	const bool skylightingWantsShadowVis = inWorld && UseSkylightingShadowVisibility();
 	const float3 positionMSShadowVis = Skylighting::ClampToArrayHeight(positionMSSkylight);
@@ -2422,85 +2841,85 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal, skylightingShadowVisibility, skylightingShadowVisShared);
 	[branch] if (skylightingWantsShadowVis && !skylightingShadowVisShared)
 		Skylighting::Sample(positionMSShadowVis, worldNormal, skylightingShadowVisibility);
-#			else
+#				else
 	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal);
-#			endif
-#		else
+#				endif
+#			else
 	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal
-#			if defined(SKYLIGHTING_SHADOW_VIS)
+#				if defined(SKYLIGHTING_SHADOW_VIS)
 									  ,
 									  skylightingShadowVisibility,
 									  false
-#			endif
+#				endif
 									  ) :
 	                              Skylighting::UNIT_SH;
-#		endif
-#		if defined(SKYLIGHTING_SHADOW_VIS) && !defined(DEFERRED)
+#			endif
+#			if defined(SKYLIGHTING_SHADOW_VIS) && !defined(DEFERRED)
 	// Height clamped so shadow visibility stays valid above the volume, unlike the diffuse SH fade
 	[branch] if (inWorld && UseSkylightingShadowVisibility())
 		Skylighting::Sample(Skylighting::ClampToArrayHeight(positionMSSkylight), worldNormal, skylightingShadowVisibility);
-#		endif
+#			endif
 	sh2 skylightingSpecularSH = inWorld ? Skylighting::SampleSpecular(skylightingSH, positionMSSkylight) : skylightingSH;
 	float skylightingSpecularFadeOut = Skylighting::GetHorizontalFadeOutFactor(positionMSSkylight);
-#	endif
+#		endif
 
 	float4 waterData = SharedData::GetWaterData(input.WorldPosition.xyz);
 	float waterHeight = waterData.w;
 
 	float waterRoughnessSpecular = 1;
 
-#	if defined(WETNESS_EFFECTS)
-#		if defined(SKYLIGHTING)
+#		if defined(WETNESS_EFFECTS)
+#			if defined(SKYLIGHTING)
 	float wetnessOcclusion = inWorld ? saturate(SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1))) : 0.0;
-#		else
+#			else
 	float wetnessOcclusion = inWorld;
-#		endif
+#			endif
 	float rainWetnessOverride = -1.0;
 	float rainWetnessAdd = 0.0;
 
-#		if defined(SKIN) || defined(HAIR)
+#			if defined(SKIN) || defined(HAIR)
 	rainWetnessOverride = SharedData::wetnessEffectsSettings.SkinWetness * SharedData::wetnessEffectsSettings.Wetness;
-#		endif
+#			endif
 
-#		if defined(CS_SKIN) && !defined(SKIN)
+#			if defined(CS_SKIN) && !defined(SKIN)
 	if (skinEnabled) {
 		float2 dynamicWetness = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust.z, worldNormal.xyz);
-#			if defined(TRUE_PBR)
+#				if defined(TRUE_PBR)
 		dynamicWetness.x = lerp(dynamicWetness.x, 0.0f, material.Metallic);
-#			endif
+#				endif
 		float dynamicWetnessValue = clamp(dynamicWetness.x + dynamicWetness.y, 0.f, 2.f);
-#			if defined(HAIR)
+#				if defined(HAIR)
 		dynamicWetnessValue = min(skinData.skinParams2.y + dynamicWetnessValue, 2.0f);
-#			endif
+#				endif
 		rainWetnessAdd = min(dynamicWetnessValue, 1.f);
 	}
-#		endif
+#			endif
 
 	bool wetnessSkinned = (Permutation::VertexShaderDescriptor & Permutation::LightingFlags::Skinned) != 0;
 	bool attachWetnessToModel = wetnessSkinned || ((Permutation::VertexShaderDescriptor >> 24) & 0x3F) == Permutation::LightingTechnique::TreeAnim;
-#		if defined(DEFERRED)
+#			if defined(DEFERRED)
 	float3 wetnessRipplePosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
-#		else
+#			else
 	float3 wetnessRipplePosition = !FrameBuffer::FrameParams.y ? input.ModelPosition.xyz : input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
-#		endif
+#			endif
 	if (attachWetnessToModel)
 		wetnessRipplePosition = input.ModelPosition.xyz;
-#		if !(defined(SKIN) && defined(CS_SKIN))
+#			if !(defined(SKIN) && defined(CS_SKIN))
 	bool enableWetnessPuddleEffects = !wetnessSkinned;
-#		else
+#			else
 	static const bool enableWetnessPuddleEffects = false;
-#		endif
+#			endif
 	static const bool enableWetnessRainFlowEffects = true;
 
 	float3 wetnessPuddlePosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 	float3 wetnessBaseNormal = worldNormal.xyz;
-#		if defined(CS_SKIN_SHADING)
+#			if defined(CS_SKIN_SHADING)
 	if (skinEnabled && skinWetness > 0.0f)
 		wetnessBaseNormal = skinWetNormal;
-#		endif
+#			endif
 	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessRipplePosition, wetnessPuddlePosition, wetnessBaseNormal, vertexNormal.xyz, waterHeight, wetnessOcclusion, nearFactor, rainWetnessOverride, rainWetnessAdd, enableWetnessPuddleEffects, enableWetnessRainFlowEffects, attachWetnessToModel, wetnessParallaxOffset, parallaxSurfaceHeight);
 
-#		if defined(CS_SKIN_SHADING)
+#			if defined(CS_SKIN_SHADING)
 	if (skinEnabled) {
 		float wetResponse = saturate(skinData.physicalParams.w * skinWetMask);
 		wetnessState.glossinessAlbedo *= wetResponse;
@@ -2511,31 +2930,31 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 		wetnessState.roughness = WetnessEffects::GetSurfaceWetnessRoughness(wetnessState.glossinessSpecular);
 	}
-#		endif
+#			endif
 
 	float3 wetnessNormal = wetnessState.normal;
 	waterRoughnessSpecular = wetnessState.roughness;
-#	endif
+#		endif
 
 	float3 dirLightColor = Color::DirectionalLight(DirLightColor.xyz);
 
-#	if defined(EXP_HEIGHT_FOG)
+#		if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
 		dirLightColor *= ExponentialHeightFog::GetSunlightFogAttenuation(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 	}
-#	endif
+#		endif
 
-#	if defined(PHYSICAL_SKY)
+#		if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
 		dirLightColor *= PhysSky::SampleTr(normalize(DirLightDirection.xyz), SampShadowMaskSampler);
 		dirLightColor *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, SampColorSampler, true);
 	}
-#	endif
+#		endif
 
-#	if defined(WATER_EFFECTS)
+#		if defined(WATER_EFFECTS)
 	if (inWorld || inReflection)
 		dirLightColor *= WaterEffects::ComputeCaustics(waterData, input.WorldPosition.xyz);
-#	endif
+#		endif
 
 	// Apply world shadow (terrain shadows, cloud shadows) directly to light color
 	if (inWorld || inReflection)
@@ -2544,68 +2963,68 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirLightAngle = dot(worldNormal.xyz, DirLightDirection.xyz);
 
 	float3 refractedDirLightDirection = DirLightDirection;
-#	if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+#		if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 	{
 		if (dot(DirLightDirection, coatWorldNormal) > 0)
 			refractedDirLightDirection = -refract(-DirLightDirection, coatWorldNormal, eta);
 	}
-#	endif
+#		endif
 
 	float dirSoftShadow = 1.0;
 	float dirVSMDetailedShadow = 1.0;
 
-#	if defined(ENVIRONMENT_PROBE)
+#		if defined(ENVIRONMENT_PROBE)
 	dirVSMDetailedShadow = EnvironmentProbe::GetSunShadow(input.WorldPosition.xyz);
 	dirSoftShadow = dirVSMDetailedShadow;
-#	elif defined(VOLUMETRIC_SHADOWS)
+#		elif defined(VOLUMETRIC_SHADOWS)
 	if (inWorld && !inReflection && ShadowSampling::HasDirectionalShadows()
-#		if defined(DEFERRED)
+#			if defined(DEFERRED)
 	    && !UseSkylightingShadowVisibility()
-#		endif
+#			endif
 	) {
 		const float lightingShadow = ShadowSampling::GetLightingShadow(input.WorldPosition.xyz
-#		if defined(ENVIRONMENT_PROBE)
-																		   + EnvironmentProbe::WorldOriginDelta
-#		endif
+#			if defined(ENVIRONMENT_PROBE)
+		                                                                   + EnvironmentProbe::WorldOriginDelta
+#			endif
 			,
 			dirVSMDetailedShadow);
 		if (!UseSkylightingShadowVisibility())
 			dirSoftShadow = lightingShadow;
 	}
-#	endif
+#		endif
 
 	float dirDetailedShadow = 1.0;
 	float dirTransmissionContactShadow = 1.0;
 
-#	if defined(ENVIRONMENT_PROBE)
+#		if defined(ENVIRONMENT_PROBE)
 	dirDetailedShadow = dirVSMDetailedShadow;
-#	else
-	if ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) && (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir)) {
+#		else
+	if ((PixelDescriptor() & Permutation::LightingFlags::DefShadow) && (PixelDescriptor() & Permutation::LightingFlags::ShadowDir)) {
 		dirDetailedShadow *= shadowColor.x;
 
-#		if !defined(VOLUMETRIC_SHADOWS)
+#			if !defined(VOLUMETRIC_SHADOWS)
 		if (!UseSkylightingShadowVisibility())
 			dirSoftShadow = dirDetailedShadow;
-#		endif
+#			endif
 	}
-#		if !defined(DEFERRED)
+#			if !defined(DEFERRED)
 	else {
 		dirDetailedShadow = dirVSMDetailedShadow;
 	}
+#			endif
 #		endif
-#	endif
 
-#	if defined(SCREEN_SPACE_SHADOWS) && defined(DEFERRED)
+#		if defined(SCREEN_SPACE_SHADOWS) && defined(DEFERRED)
 	if (!SharedData::InInterior) {
-#		if defined(TRUE_PBR)
+#			if defined(TRUE_PBR)
 		if (thinSurfaceNormals) {
 			float faceLightAngle = dot(thinSurfaceFaceNormal, DirLightDirection);
 			dirDetailedShadow *= ScreenSpaceShadows::GetThinSurfaceScreenSpaceShadow(input.Position.xyz, screenUV, screenNoise, faceLightAngle);
 			float2 screenSpaceShadows = ScreenSpaceShadows::GetScreenSpaceShadows(input.Position.xyz, screenUV, screenNoise);
 			dirTransmissionContactShadow = faceLightAngle >= 0.0 ? screenSpaceShadows.x : screenSpaceShadows.y;
 		} else
-#		endif
+#			endif
 		{
 			float2 screenSpaceShadows = ScreenSpaceShadows::GetScreenSpaceShadows(input.Position.xyz, screenUV, screenNoise);
 			if (dirLightAngle >= 0.0)
@@ -2613,13 +3032,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			dirTransmissionContactShadow = dirLightAngle >= 0.0 ? screenSpaceShadows.x : screenSpaceShadows.y;
 		}
 	}
-#	endif
+#		endif
 
-#	if defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
+#		if defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 	[branch] if (inWorld && SharedData::extendedMaterialSettings.EnableShadows)
 	{
 		float3 dirLightDirectionTS = mul(refractedDirLightDirection, tbn).xyz;
-#		if defined(LANDSCAPE)
+#			if defined(LANDSCAPE)
 		if (LANDSCAPE_PARALLAX_ENABLED && dirLightAngle > 0.0) {
 			if (hasCachedDirectionalTerrainParallaxShadow) {
 				dirDetailedShadow *= cachedDirectionalTerrainParallaxShadow;
@@ -2630,38 +3049,38 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					dirDetailedShadow *= EVAL_TERRAIN_DIR_SHADOW(sh0, dirLightDirectionTS);
 			}
 		}
-#		elif defined(PARALLAX)
+#			elif defined(PARALLAX)
 		[branch] if (SharedData::extendedMaterialSettings.EnableParallax)
 			dirDetailedShadow *= ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, parallaxShadowQuality, screenNoise, displacementParams, applyMeshTV, meshOffset);
-#		elif defined(EMAT_ENVMAP)
+#			elif defined(EMAT_ENVMAP)
 		[branch] if (complexMaterialParallax)
 			dirDetailedShadow *= ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, parallaxShadowQuality, screenNoise, displacementParams, applyMeshTV, meshOffset);
-#		elif defined(TRUE_PBR) && !defined(LODLANDSCAPE) && !defined(FACEGEN)
+#			elif defined(TRUE_PBR) && !defined(LODLANDSCAPE) && !defined(FACEGEN)
 		[branch] if (PBRParallax)
 			dirDetailedShadow *= ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, parallaxShadowQuality, screenNoise, displacementParams, applyMeshTV, meshOffset);
-#		endif  // LANDSCAPE
+#			endif  // LANDSCAPE
 	}
-#	endif  // defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
+#		endif  // defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 
-#	if defined(CS_HAIR_SHADING)
+#		if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		vertexNormal.xyz = worldNormal.xyz;
 		worldNormal.xyz = hairT;
 	}
-#	endif
+#		endif
 
-#	if defined(SKYLIGHTING_SHADOW_VIS)
+#		if defined(SKYLIGHTING_SHADOW_VIS)
 	if (UseSkylightingShadowVisibility())
 		dirSoftShadow = skylightingShadowVisibility;
-#	endif
+#		endif
 
-#	if defined(TRUE_PBR)
+#		if defined(TRUE_PBR)
 	[branch] if (isFoliage && (PBRFlags & PBR::Flags::Subsurface) != 0)
 	{
 		dirDetailedShadow = PBR::GetFoliageShadowVisibility(dirDetailedShadow, material.Thickness);
 		dirSoftShadow = PBR::GetFoliageShadowVisibility(dirSoftShadow, material.Thickness);
 	}
-#	endif
+#		endif
 
 	float3 diffuseColor = 0.0.xxx;
 	float3 specularColor = 0.0.xxx;
@@ -2676,41 +3095,41 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// Directiontal Lighting
 	DirectContext dirLightContext;
 	DirectLightingOutput dirLightOutput;
-#	if defined(TRUE_PBR)
+#		if defined(TRUE_PBR)
 	dirLightContext = CreateDirectLightingContext(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection, refractedDirLightDirection, DirLightDirection, dirLightColor, dirDetailedShadow, dirSoftShadow);
 	if (thinSurfaceNormals)
 		dirLightContext.backTransmissionVisibility = PBR::GetThinSurfaceBackTransmissionVisibility(thinSurfaceFaceNormal, DirLightDirection);
-#	else
+#		else
 	dirLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, DirLightDirection, dirLightColor, dirDetailedShadow, dirSoftShadow);
-#		if defined(CS_HAIR_SHADING)
+#			if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		float hairShadow = Hair::HairSelfShadow(input.WorldPosition.xyz, DirLightDirection, screenNoise);
 		dirLightContext.hairShadow = hairShadow;
 	}
+#			endif
 #		endif
-#	endif
 
 	float2 uvOriginal_ddx = ddx(uvOriginal);
 	float2 uvOriginal_ddy = ddy(uvOriginal);
 	EvaluateLighting(dirLightContext, material, tbnTr, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, dirLightOutput);
 	dirLightOutput.transmission *= dirTransmissionContactShadow;
-#	if defined(WETNESS_EFFECTS)
+#		if defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1)
 		EvaluateWetnessLighting(wetnessNormal, dirLightContext, waterRoughnessSpecular, dirLightOutput);
-#	endif
+#		endif
 
 	lightsDiffuseColor += dirLightOutput.diffuse;
 	lightsSpecularColor += dirLightOutput.specular;
-#	if defined(TRUE_PBR)
+#		if defined(TRUE_PBR)
 	coatLightsDiffuseColor += dirLightOutput.coatDiffuse;
-#		if defined(LOD_LAND_BLEND)
+#			if defined(LOD_LAND_BLEND)
 	lodLandDiffuseColor += dirLightColor / Math::PI * saturate(dirLightAngle) * dirDetailedShadow;
+#			endif
 #		endif
-#	endif
 	transmissionColor += dirLightOutput.transmission;
 
-#	if !defined(LOD)
-#		if !defined(LIGHT_LIMIT_FIX)
+#		if !defined(LOD)
+#			if !defined(LIGHT_LIMIT_FIX)
 	[loop] for (uint lightIndex = 0; lightIndex < numLights; lightIndex++)
 	{
 		float3 lightDirection = PointLightPosition[lightIndex].xyz - input.WorldPosition.xyz;
@@ -2720,12 +3139,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			continue;
 
 		float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#			if defined(ENABLE_LL)
+#				if defined(ENABLE_LL)
 		intensityMultiplier = pow(intensityMultiplier, TransferFunctions::GAME_GAMMA);
-#			endif
+#				endif
 		float3 lightColor = Color::PointLight(PointLightColor[lightIndex].xyz) * intensityMultiplier;
 		float lightShadow = 1.f;
-		if (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) {
+		if (PixelDescriptor() & Permutation::LightingFlags::DefShadow) {
 			if (lightIndex < numShadowLights) {
 				lightShadow *= shadowColor[ShadowLightMaskSelect[lightIndex]];
 			}
@@ -2735,75 +3154,75 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		DirectContext pointLightContext;
 		DirectLightingOutput pointLightOutput;
-#			if defined(TRUE_PBR)
+#				if defined(TRUE_PBR)
 		{
 			float3 refractedLightDirection = normalizedLightDirection;
-#				if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+#					if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 			[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 			{
 				if (dot(normalizedLightDirection, coatWorldNormal) > 0)
 					refractedLightDirection = -refract(-normalizedLightDirection, coatWorldNormal, eta);
 			}
-#				endif
+#					endif
 			pointLightContext = CreateDirectLightingContext(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection, refractedLightDirection, normalizedLightDirection, lightColor, lightShadow, lightShadow);
 			if (thinSurfaceNormals)
 				pointLightContext.backTransmissionVisibility = PBR::GetThinSurfaceBackTransmissionVisibility(thinSurfaceFaceNormal, normalizedLightDirection);
 		}
-#			else
+#				else
 		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, normalizedLightDirection, lightColor, lightShadow, lightShadow);
-#				if defined(CS_HAIR_SHADING)
+#					if defined(CS_HAIR_SHADING)
 		if (SharedData::hairSpecularSettings.Enabled) {
 			float hairShadow = Hair::HairSelfShadow(input.WorldPosition.xyz, normalizedLightDirection, screenNoise);
 			pointLightContext.hairShadow = hairShadow;
 		}
+#					endif
 #				endif
-#			endif
 		EvaluateLighting(pointLightContext, material, tbnTr, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, pointLightOutput);
-#			if defined(WETNESS_EFFECTS)
+#				if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1)
 			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, pointLightOutput);
-#			endif
+#				endif
 		lightsDiffuseColor += pointLightOutput.diffuse;
 		lightsSpecularColor += pointLightOutput.specular;
-#			if defined(TRUE_PBR)
+#				if defined(TRUE_PBR)
 		coatLightsDiffuseColor += pointLightOutput.coatDiffuse;
-#			endif
+#				endif
 		transmissionColor += pointLightOutput.transmission;
 	}
 
-#		else
+#			else
 
 	uint numClusteredLights = 0;
 	uint totalLightCount = LightLimitFix::NumStrictLights;
 	uint clusterIndex = 0;
 	uint lightOffset = 0;
-#			if defined(ENVIRONMENT_PROBE)
+#				if defined(ENVIRONMENT_PROBE)
 	uint probeCluster = EnvironmentProbe::LightClusterAddress(input.Position.xy, probeDistance);
 	uint probeWords = LightLimitFix::lightList[probeCluster];
 	uint probeLights = 0;
 	uint probeLightBase = 0;
-#			else
+#				else
 	if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		numClusteredLights = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		totalLightCount += numClusteredLights;
 		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
 	}
-#			endif
+#				endif
 
-#			if defined(SKINNED)
+#				if defined(SKINNED)
 	const bool localShadowSkinned = true;
-#			else
+#				else
 	const bool localShadowSkinned = false;
-#			endif
+#				endif
 
-#			if defined(ENVIRONMENT_PROBE)
+#				if defined(ENVIRONMENT_PROBE)
 	[loop] while ((probeWords | probeLights) != 0)
-#			else
+#				else
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
-#			endif
+#				endif
 	{
 		LightLimitFix::Light light;
-#			if defined(ENVIRONMENT_PROBE)
+#				if defined(ENVIRONMENT_PROBE)
 		if (probeLights == 0) {
 			uint word = firstbitlow(probeWords);
 			probeWords &= probeWords - 1;
@@ -2818,7 +3237,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		light.lightFlags &= ~LightLimitFix::LightFlags::Shadow;
 		if (LightLimitFix::IsLightIgnored(light))
 			continue;
-#			else
+#				else
 		if (lightIndex < LightLimitFix::NumStrictLights) {
 			light = LightLimitFix::StrictLights[lightIndex];
 		} else {
@@ -2828,7 +3247,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			if (LightLimitFix::IsLightIgnored(light))
 				continue;
 		}
-#			endif
+#				endif
 
 		float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
 		float lightDist = length(lightDirection);
@@ -2841,10 +3260,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float lightShadow = 1.0;
 		float3 normalizedLightDirection = normalize(lightDirection);
 
-#			if defined(SKYLIGHTING)
+#				if defined(SKYLIGHTING)
 		if (light.lightFlags & LightLimitFix::LightFlags::Lightning)
 			lightColor *= Skylighting::EvaluateDiffuse(skylightingSH, normalizedLightDirection, Skylighting::GetFadeOutFactor(positionMSSkylight));
-#			endif
+#				endif
 
 		float shadowComponent = 1.0;
 		[branch] if (light.lightFlags & LightLimitFix::LightFlags::LocalShadow)
@@ -2853,7 +3272,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			shadowComponent = LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, localShadowPosition, localShadowEye, normalizedLightDirection, localShadowSkinned, screenNoise);
 			lightShadow *= shadowComponent;
 		}
-		else if (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)
+		else if (PixelDescriptor() & Permutation::LightingFlags::DefShadow)
 		{
 			if (light.lightFlags & LightLimitFix::LightFlags::Shadow) {
 				shadowComponent = shadowColor[light.shadowLightIndex];
@@ -2863,7 +3282,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
 
-#			if defined(SSPLS)
+#				if defined(SSPLS)
 		uint ssplsSteps = round(SharedData::ssplsSettings.StepLimit * (1.0 - saturate(viewPosition.z / SharedData::ssplsSettings.MaxDistance)));
 		[branch] if (
 			SharedData::ssplsSettings.Enable && inWorld &&
@@ -2875,20 +3294,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float SSPLSShadow = lerp(1.0, ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition, screenNoise, lightDirectionVS, ssplsSteps, light.radius, light.lightFlags & LightLimitFix::LightFlags::Shadow), SharedData::ssplsSettings.Strength);
 			lightShadow *= SSPLSShadow;
 		}
-#			endif
+#				endif
 
 		float3 refractedLightDirection = normalizedLightDirection;
-#			if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+#				if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 		[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 		{
 			if (dot(normalizedLightDirection, coatWorldNormal) > 0)
 				refractedLightDirection = -refract(-normalizedLightDirection, coatWorldNormal, eta);
 		}
-#			endif
+#				endif
 
 		float parallaxShadow = 1;
 
-#			if defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
+#				if defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 		[branch] if (
 			SharedData::extendedMaterialSettings.EnableShadows &&
 			!(light.lightFlags & LightLimitFix::LightFlags::Simple) &&
@@ -2896,101 +3315,105 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			shadowComponent != 0.0)
 		{
 			float3 lightDirectionTS = normalize(mul(refractedLightDirection, tbn).xyz);
-#				if defined(PARALLAX)
+#					if defined(PARALLAX)
 			[branch] if (SharedData::extendedMaterialSettings.EnableParallax)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, parallaxShadowQuality, screenNoise, displacementParams, applyMeshTV, meshOffset);
-#				elif defined(LANDSCAPE)
+#					elif defined(LANDSCAPE)
 			[branch] if (hasTerrainParallaxShadow)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplierTerrain(input, uv, terrainShadowMipLevels, lightDirectionTS, sh0, terrainDirectionalShadowQuality, screenNoise, displacementParams, sharedOffset);
-#				elif defined(EMAT_ENVMAP)
+#					elif defined(EMAT_ENVMAP)
 			[branch] if (complexMaterialParallax)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, parallaxShadowQuality, screenNoise, displacementParams, applyMeshTV, meshOffset);
-#				elif defined(TRUE_PBR) && !defined(LODLANDSCAPE) && !defined(FACEGEN)
+#					elif defined(TRUE_PBR) && !defined(LODLANDSCAPE) && !defined(FACEGEN)
 			[branch] if (PBRParallax)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, parallaxShadowQuality, screenNoise, displacementParams, applyMeshTV, meshOffset);
-#				endif
+#					endif
 		}
-#			endif  // defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
+#				endif  // defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 
 		DirectContext pointLightContext;
 		DirectLightingOutput pointLightOutput;
 		float pointLightShadow = lightShadow * parallaxShadow;
-#			if defined(TRUE_PBR)
+#				if defined(TRUE_PBR)
 		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection, refractedLightDirection, normalizedLightDirection, lightColor, pointLightShadow, pointLightShadow);
 		if (thinSurfaceNormals)
 			pointLightContext.backTransmissionVisibility = PBR::GetThinSurfaceBackTransmissionVisibility(thinSurfaceFaceNormal, normalizedLightDirection);
-#			else
+#				else
 		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, normalizedLightDirection, lightColor, pointLightShadow, pointLightShadow);
-#				if defined(CS_HAIR_SHADING)
+#					if defined(CS_HAIR_SHADING)
 		if (SharedData::hairSpecularSettings.Enabled) {
 			float hairShadow = Hair::HairSelfShadow(input.WorldPosition.xyz, normalizedLightDirection, screenNoise);
 			pointLightContext.hairShadow = hairShadow;
 		}
+#					endif
 #				endif
-#			endif
 		EvaluateLighting(pointLightContext, material, tbnTr, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, pointLightOutput);
-#			if defined(WETNESS_EFFECTS)
+#				if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1)
 			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, pointLightOutput);
-#			endif
+#				endif
 
 		lightsDiffuseColor += pointLightOutput.diffuse;
 		lightsSpecularColor += pointLightOutput.specular;
-#			if defined(TRUE_PBR)
+#				if defined(TRUE_PBR)
 		coatLightsDiffuseColor += pointLightOutput.coatDiffuse;
-#			endif
+#				endif
 		transmissionColor += pointLightOutput.transmission;
 	}
+#			endif
 #		endif
-#	endif
 
 	diffuseColor += lightsDiffuseColor;
 	specularColor += lightsSpecularColor;
 
-#	if !defined(LANDSCAPE)
+#		if !defined(LANDSCAPE)
 	if (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::CharacterLight) {
 		float charLightMul = saturate(dot(viewDirection, worldNormal.xyz)) * CharacterLightParams.x + CharacterLightParams.y * saturate(dot(float2(0.164398998, -0.986393988), worldNormal.yz));
+#			if defined(DCLF_BINDLESS)
+		float charLightColor = min(CharacterLightParams.w, max(0, CharacterLightParams.z * DCLFCharacterLightNoise.Sample(SampCharacterLightProjNoiseSampler, baseShadowUV).x));
+#			else
 		float charLightColor = min(CharacterLightParams.w, max(0, CharacterLightParams.z * TexCharacterLightProjNoiseSampler.Sample(SampCharacterLightProjNoiseSampler, baseShadowUV).x));
+#			endif
 		diffuseColor += (charLightMul * charLightColor).xxx;
 	}
-#	endif
+#		endif
 
-#	if defined(EYE) && defined(VANILLA_EYE_NORMAL)
+#		if defined(EYE) && defined(VANILLA_EYE_NORMAL)
 	worldNormal.xyz = input.EyeNormal;
-#	endif  // EYE
+#		endif  // EYE
 
 	// sRGB by default, linear if LL on
 	float3 emitColor = EmitColor;
-#	if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+#		if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	bool hasEmissive = (0x3F & (Permutation::PixelShaderDescriptor >> 24)) == Permutation::LightingTechnique::Glowmap;
-#		if defined(TRUE_PBR)
+#			if defined(TRUE_PBR)
 	hasEmissive = hasEmissive || ((PBRFlags & PBR::Flags::HasEmissive) != 0);
-#		endif
+#			endif
 	[branch] if (hasEmissive)
 	{
 		float3 glowColor = ColorManagement::TextureToWorking(TexGlowSampler.Sample(SampGlowSampler, uv).xyz, PBRTextures) * SharedData::linearLightingSettings.glowmapMult;
 
-#		if defined(TRUE_PBR)
+#			if defined(TRUE_PBR)
 		float3 emitVertexColor = ColorManagement::PBRVertexColorToLinear(input.Color.xyz);
 		float emitVertexAO = max(max(emitVertexColor.r, emitVertexColor.g), emitVertexColor.b);
 		emitVertexColor = emitVertexAO == 0.0f ? 1.0f : emitVertexColor * lerp(1 / max(emitVertexAO, 1e-4), 1, SharedData::truePBRSettings.VertexAOStrength);
 		emitVertexColor = Color::LinearSRGBToWorking(emitVertexColor);
 
 		emitColor = emitColor * Color::LinearToPBRMaterial(glowColor) * Color::LinearToPBRMaterial(emitVertexColor);
-#		else
+#			else
 		emitColor *= glowColor;
-#		endif  // TRUE_PBR
+#			endif  // TRUE_PBR
 	}
-#	endif
+#		endif
 
-#	if !defined(TRUE_PBR)
+#		if !defined(TRUE_PBR)
 	diffuseColor += emitColor.xyz;
-#	endif
+#		endif
 
 	IndirectContext indirectContext = (IndirectContext)0;
 	IndirectLobeWeights indirectLobeWeights;
 
-#	if defined(MULTI_LAYER_PARALLAX)
+#		if defined(MULTI_LAYER_PARALLAX)
 	float layerValue = MultiLayerParallaxData.x * TexLayerSampler.Sample(SampLayerSampler, uv).w;
 	float3 tangentViewDirection = mul(viewDirection, tbn);
 	float3 layerNormal = MultiLayerParallaxData.yyy * (normalColor.xyz * 2.0.xxx + float3(-1, -1, -2)) + float3(0, 0, 1);
@@ -3003,10 +3426,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float mlpBlendFactor = saturate(viewNormalAngle) * (1.0 - baseColor.w);
 
 	material.BaseColor = lerp(material.BaseColor, layerColor, mlpBlendFactor);
-#	endif  // MULTI_LAYER_PARALLAX
+#		endif  // MULTI_LAYER_PARALLAX
 
 	float3 ambientNormal = worldNormal.xyz;
-#	if defined(CS_HAIR_SHADING)
+#		if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		if (SharedData::hairSpecularSettings.HairMode == 1)
 			ambientNormal = normalize(viewDirection - hairT * dot(viewDirection, hairT));
@@ -3014,93 +3437,93 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			ambientNormal = vertexNormal.xyz;
 		screenSpaceNormal = normalize(FrameBuffer::WorldToView(ambientNormal, false));
 	}
-#	endif
+#		endif
 
 	float3 directionalAmbientColor = Color::Ambient(max(0, mul(DirectionalAmbient, float4(ambientNormal, 1.0))));
 
-#	if defined(IBL) && !defined(ENVIRONMENT_PROBE)
+#		if defined(IBL) && !defined(ENVIRONMENT_PROBE)
 	if (SharedData::iblSettings.EnableIBL) {
 		if (SharedData::iblSettings.UseStaticIBL && !inWorld && !inReflection) {
 			directionalAmbientColor = ImageBasedLighting::GetStaticDiffuseIBL(ambientNormal, SampColorSampler);
 		}
 	}
-#	endif
+#		endif
 
-#	if defined(LANDSCAPE)
+#		if defined(LANDSCAPE)
 	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
 		input.Color.xyz = 1;
 	else
 		input.Color.xyz /= max(max(max(input.Color.x, input.Color.y), input.Color.z), EPSILON_DIVISION);
-#	endif
+#		endif
 
-#	if defined(HAIR)
+#		if defined(HAIR)
 	float3 vertexColor = ColorManagement::SRGBToWorking(lerp(1, TintColor.xyz, input.Color.y));
 	float vertexAO = 1;
-#		if defined(CS_HAIR_SHADING)
+#			if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled)
 		vertexColor = 1;
-#		endif
-#		if defined(SKYLIGHTING)
-	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, ambientNormal);
-#		endif
-#	else
-	float encodedVertexAO = max(max(input.Color.r, input.Color.g), input.Color.b);
-#		if defined(TRUE_PBR)
-	float3 vertexColor = 1;
-#		else
-	float3 vertexColor = ColorManagement::SRGBToWorking(input.Color.xyz);
-#		endif
-#		if defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)
-	float vertexAO = 1;
-#		else
-	float vertexAO = ColorManagement::SRGBToWorking(encodedVertexAO);
-#		endif
-#		if defined(SKYLIGHTING)
-#			if defined(TRUE_PBR)
-	vertexAO = lerp(1, vertexAO, SharedData::truePBRSettings.VertexAOStrength);
 #			endif
-	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, ambientNormal, vertexAO);
+#			if defined(SKYLIGHTING)
+	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, ambientNormal);
+#			endif
+#		else
+	float encodedVertexAO = max(max(input.Color.r, input.Color.g), input.Color.b);
 #			if defined(TRUE_PBR)
+	float3 vertexColor = 1;
+#			else
+	float3 vertexColor = ColorManagement::SRGBToWorking(input.Color.xyz);
+#			endif
+#			if defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)
+	float vertexAO = 1;
+#			else
+	float vertexAO = ColorManagement::SRGBToWorking(encodedVertexAO);
+#			endif
+#			if defined(SKYLIGHTING)
+#				if defined(TRUE_PBR)
+	vertexAO = lerp(1, vertexAO, SharedData::truePBRSettings.VertexAOStrength);
+#				endif
+	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, ambientNormal, vertexAO);
+#				if defined(TRUE_PBR)
 	[branch] if (isFoliage && (PBRFlags & PBR::Flags::Subsurface) != 0)
 		skylightingDiffuse = PBR::GetFoliageShadowVisibility(skylightingDiffuse, material.Thickness);
+#				endif
 #			endif
-#		endif
-#	endif  // defined (HAIR)
+#		endif  // defined (HAIR)
 
-#	if !defined(ENVIRONMENT_PROBE)
-#		if defined(IBL)
+#		if !defined(ENVIRONMENT_PROBE)
+#			if defined(IBL)
 	float3 skyIBLColor = 0;
 	if (SharedData::iblSettings.EnableIBL) {
 		if (!(SharedData::iblSettings.UseStaticIBL && !inWorld && !inReflection)) {
 			directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -ambientNormal, input.WorldPosition.xyz);
 		}
 	}
-#		endif
+#			endif
 
-#	else  // ENVIRONMENT_PROBE: only externally supplied sky ambient
+#		else  // ENVIRONMENT_PROBE: only externally supplied sky ambient
 	directionalAmbientColor = 0;
-#		if defined(IBL)
+#			if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL)
 		directionalAmbientColor = ImageBasedLighting::GetSkyIBLColor(-ambientNormal);
-#		endif
-#		if defined(SKYLIGHTING)
+#			endif
+#			if defined(SKYLIGHTING)
 	directionalAmbientColor = ColorManagement::SceneColor::ScaleByLinear(directionalAmbientColor, skylightingDiffuse);
+#			endif
 #		endif
-#	endif
 
-#	if defined(DEFERRED)
+#		if defined(DEFERRED)
 	if (SharedData::ssgiSettings.EnableIL != 0 && !inReflection)
 		directionalAmbientColor = 0;
-#	endif
+#		endif
 
-#	if defined(PSEUDO_SUN_BOUNCE)
+#		if defined(PSEUDO_SUN_BOUNCE)
 	float3 specularBounce = 0;
-#		if !defined(ENVIRONMENT_PROBE)
+#			if !defined(ENVIRONMENT_PROBE)
 	if (!SharedData::InInterior && inWorld && SharedData::pseudoSunBounceSettings.intensity > 0.0) {
 		float cloudShadows = 1;
-#			if defined(CLOUD_SHADOWS)
+#				if defined(CLOUD_SHADOWS)
 		cloudShadows = CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, LinearSampler);
-#			endif
+#				endif
 		SunBounce::SH2_RGB sunBounceSH = SunBounce::CalcSunBounceSH(SharedData::DirLightDirection.xyz, dirLightColor * cloudShadows,
 			SharedData::pseudoSunBounceSettings.groundAlbedo, SharedData::pseudoSunBounceSettings.wallAlbedo);
 
@@ -3116,44 +3539,44 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		bounceLighting.b = SphericalHarmonics::Unproject(sunBounceSH.B, -ambientNormal);
 
 		bounceLighting = max(0, bounceLighting);
-#			if defined(SKYLIGHTING)
+#				if defined(SKYLIGHTING)
 		float3 bouncedSkylighting = saturate(MultiBounceAO(SharedData::pseudoSunBounceSettings.groundAlbedo, skylightingDiffuse) * skylightingDiffuse);
 		bounceLighting *= bouncedSkylighting;
 		specularBounce *= bouncedSkylighting;
-#			endif
+#				endif
 
 		directionalAmbientColor += bounceLighting * SharedData::pseudoSunBounceSettings.intensity;
 	}
+#			endif
 #		endif
-#	endif
 
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
 
-#	if defined(TRUE_PBR) && defined(LOD_LAND_BLEND) && !defined(DEFERRED)
+#		if defined(TRUE_PBR) && defined(LOD_LAND_BLEND) && !defined(DEFERRED)
 	lodLandDiffuseColor += directionalAmbientColor;
-#	endif
+#		endif
 
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition);
 
-#	if defined(WETNESS_EFFECTS)
-#		if !(defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)) || defined(TREE_ANIM)
-#			if defined(TRUE_PBR)
-#				if !defined(LANDSCAPE)
+#		if defined(WETNESS_EFFECTS)
+#			if !(defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)) || defined(TREE_ANIM)
+#				if defined(TRUE_PBR)
+#					if !defined(LANDSCAPE)
 	[branch] if ((PBRFlags & PBR::Flags::TwoLayer) != 0)
 	{
 		porosity = 0;
 	}
 	else
-#				endif
+#					endif
 	{
 		porosity = lerp(porosity, 0.0, saturate(sqrt(material.Metallic)));
 	}
-#			elif defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
+#				elif defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
 	porosity = lerp(porosity, 0.0, saturate(sqrt(envMask)));
-#			endif
+#				endif
 	WetnessEffects::ApplySurfaceWetnessAlbedo(material.BaseColor, wetnessState, porosity);
+#			endif
 #		endif
-#	endif
 
 	float4 color = 0;
 
@@ -3161,28 +3584,28 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	GetIndirectLobeWeights(indirectLobeWeights, indirectContext, material, uvOriginal);
 
-#	if defined(WETNESS_EFFECTS)
-#		if defined(DYNAMIC_CUBEMAPS)
+#		if defined(WETNESS_EFFECTS)
+#			if defined(DYNAMIC_CUBEMAPS)
 	float3 wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext);
-#		else
+#			else
 	float3 wetnessReflectance = 0.0;
+#			endif
 #		endif
-#	endif
-#	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
-#		if defined(VANILLA_FRESNEL)
+#		if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
+#			if defined(VANILLA_FRESNEL)
 	if (!enableVanillaFresnel)
-#		endif
+#			endif
 		indirectLobeWeights.specular *= envMask;
-#	endif
+#		endif
 
-#	if !defined(TRUE_PBR)
+#		if !defined(TRUE_PBR)
 	if (HasSpecular()) {
 		indirectLobeWeights.specular *= MaterialData.yyy;
 		specularColor *= MaterialData.yyy;
 	}
-#	endif
+#		endif
 
-#	if defined(TRUE_PBR)
+#		if defined(TRUE_PBR)
 	{
 		float3 directLightsDiffuseInput = diffuseColor * material.BaseColor;
 		[branch] if ((PBRFlags & PBR::Flags::ColoredCoat) != 0)
@@ -3197,14 +3620,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	{
 		color.xyz += emitColor.xyz;
 	}
-#	else
+#		else
 	color.xyz += diffuseColor * material.BaseColor;
-#	endif
+#		endif
 
 	color.xyz += indirectLobeWeights.diffuse * directionalAmbientColor;
 	color.xyz += transmissionColor;
 
-#	if defined(TRUE_PBR)
+#		if defined(TRUE_PBR)
 	float3 transmittedAmbientColor = 0.0f;
 	[unroll] for (uint side = 0; side < 2; ++side)
 	{
@@ -3216,49 +3639,49 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float3 transmittedAmbient;
 			float3 indirectTransmissionColor = GetThinSurfaceTransmissionLighting(ambientColor, transmissionWeight, transmissionNormal,
 				input.WorldPosition.xyz, vertexAO, isFoliage ? material.Thickness : 1.0f, transmittedAmbient
-#		if defined(IBL)
+#			if defined(IBL)
 				,
 				SampColorSampler, SharedData::iblSettings.UseStaticIBL && !inWorld && !inReflection
-#		endif
-#		if defined(SKYLIGHTING)
+#			endif
+#			if defined(SKYLIGHTING)
 				,
 				skylightingSH
-#		endif
+#			endif
 			);
 			color.xyz += indirectTransmissionColor;
 			transmittedAmbientColor += transmittedAmbient;
 		}
 	}
-#	endif
+#		endif
 
 	color.xyz *= vertexColor;
 
-#	if defined(SNOW)
+#		if defined(SNOW)
 	if (useSnowSpecular)
 		specularColor = 0;
-#	endif
+#		endif
 
 	diffuseColor = reflectionDiffuseColor;
 
-#	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
-#		if defined(DYNAMIC_CUBEMAPS)
+#		if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
+#			if defined(DYNAMIC_CUBEMAPS)
 	if (!dynamicCubemap)
-#		endif
-#		if defined(VANILLA_FRESNEL)
+#			endif
+#			if defined(VANILLA_FRESNEL)
 		if (!(enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableDynamicCubemapsConversion))
-#		endif
+#			endif
 			specularColor += envColor * ColorManagement::SceneToLinear(diffuseColor);
 	indirectLobeWeights.diffuse += envColor;
-#	endif
-
-#	if defined(EMAT_ENVMAP)
-#		if defined(VANILLA_FRESNEL)
-	if (!(enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableGGX))
 #		endif
-		specularColor *= complexSpecular;
-#	endif  // defined (EMAT) && defined(ENVMAP)
 
-#	if defined(LOD_LAND_BLEND) && defined(TRUE_PBR)
+#		if defined(EMAT_ENVMAP)
+#			if defined(VANILLA_FRESNEL)
+	if (!(enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableGGX))
+#			endif
+		specularColor *= complexSpecular;
+#		endif  // defined (EMAT) && defined(ENVMAP)
+
+#		if defined(LOD_LAND_BLEND) && defined(TRUE_PBR)
 	{
 		lodLandDiffuseColor += directionalAmbientColor;
 		float3 litLodLandColor = vertexColor * lodLandColor.xyz * lodLandFadeFactor * lodLandDiffuseColor;
@@ -3269,70 +3692,73 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		indirectLobeWeights.specular = lerp(indirectLobeWeights.specular, 0, lodLandBlendFactor);
 		material.Roughness = lerp(material.Roughness, 1, lodLandBlendFactor);
 	}
-#	elif defined(TRUE_PBR)
+#		elif defined(TRUE_PBR)
 	color.xyz *= Color::PBRLightingScale;
 	specularColor *= Color::PBRLightingScale;
 	indirectLobeWeights.diffuse *= Color::PBRLightingScale;
-#	endif
+#		endif
 
 	float3 outputAlbedo = indirectLobeWeights.diffuse * vertexColor.xyz;
 
 	directionalAmbientColor *= outputAlbedo;
 
-#	if defined(SKYLIGHTING)
+#		if defined(DCLF_SHADOW_DEBUG)
+	float dbgBeforeSky = dot(color.xyz, float3(0.2126, 0.7152, 0.0722));
+#		endif
+#		if defined(SKYLIGHTING)
 	float3 skylightingAlbedo = outputAlbedo;
-#		if defined(TRUE_PBR)
+#			if defined(TRUE_PBR)
 	skylightingAlbedo /= Color::PBRLightingScale;
-#		endif
-#		if !defined(ENVIRONMENT_PROBE)
+#			endif
+#			if !defined(ENVIRONMENT_PROBE)
 	Skylighting::ApplySkylighting(color.xyz, directionalAmbientColor, skylightingAlbedo, skylightingDiffuse);
+#			endif
 #		endif
-#	endif
 
-#	if !defined(DEFERRED)
+#		if !defined(DEFERRED)
 	color.xyz = ColorManagement::SceneToLinear(color.xyz);
 	color.xyz += specularColor;
 	float3 specularNormal = worldNormal;
-#		if defined(TRUE_PBR)
+#			if defined(TRUE_PBR)
 	if (thinSurfaceNormals)
 		specularNormal = PBR::GetThinSurfaceNormal(specularNormal, viewDirection);
-#		endif
+#			endif
 
 	if (any(indirectLobeWeights.specular > 0)
-#		if defined(WETNESS_EFFECTS)
+#			if defined(WETNESS_EFFECTS)
 	    || any(wetnessReflectance > 0)
-#		endif
+#			endif
 	)
-#		if defined(DYNAMIC_CUBEMAPS)
-#			if defined(SKYLIGHTING)
+#			if defined(DYNAMIC_CUBEMAPS)
+#				if defined(SKYLIGHTING)
 		color.xyz += indirectLobeWeights.specular * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(specularNormal, viewDirection, material.Roughness, skylightingSpecularSH, skylightingSpecularFadeOut);
-#				if defined(WETNESS_EFFECTS)
+#					if defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1)
 		color.xyz += wetnessReflectance * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(wetnessNormal, viewDirection, waterRoughnessSpecular, skylightingSpecularSH, skylightingSpecularFadeOut);
-#				endif
-#			else
+#					endif
+#				else
 		color.xyz += indirectLobeWeights.specular * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(specularNormal, viewDirection, material.Roughness);
-#				if defined(WETNESS_EFFECTS)
+#					if defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1)
 		color.xyz += wetnessReflectance * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(wetnessNormal, viewDirection, waterRoughnessSpecular);
+#					endif
 #				endif
-#			endif
-#		else
+#			else
 		color.xyz += indirectLobeWeights.specular * directionalAmbientColor;
-#		endif
-#		if defined(PSEUDO_SUN_BOUNCE)
+#			endif
+#			if defined(PSEUDO_SUN_BOUNCE)
 	if (any(specularBounce > 0)) {
 		color.xyz += indirectLobeWeights.specular * specularBounce;
-#			if defined(WETNESS_EFFECTS)
+#				if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1)
 			color.xyz += wetnessReflectance * specularBounce;
-#			endif
+#				endif
 	}
-#		endif
+#			endif
 
-#		if !defined(ENVIRONMENT_PROBE)
+#			if !defined(ENVIRONMENT_PROBE)
 	color.xyz = ColorManagement::LinearToScene(color.xyz);
-#		if defined(PHYSICAL_SKY)
+#				if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled && (inWorld || inReflection)) {
 		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
 		if (inReflection && ViewAtmosphere::ReflectionEnabled() && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting)) {
@@ -3343,24 +3769,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		else
 			color.xyz = PhysSky::CompositeAerialPerspective(color.xyz, physSkyViewDir, input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampColorSampler);
 	}
-#		endif
+#				endif
 
-#		if defined(PHYSICAL_SKY) || defined(EXP_HEIGHT_FOG)
+#				if defined(PHYSICAL_SKY) || defined(EXP_HEIGHT_FOG)
 	if (SharedData::PostWaterComposite && inWorld && !inReflection) {
 		const ViewAtmosphere::Medium medium = ViewMedium::SampleViewMedium(input.WorldPosition.xyz, screenUV, SampColorSampler);
 		const bool additive = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting) != 0;
 		color.xyz = ColorManagement::SceneColor::ScaleAndAddLinear(color.xyz, medium.transmittance, additive ? 0.0.xxx : medium.luminance);
 	} else
-#		endif
+#				endif
 	{
 		float3 fogColor = input.FogParam.xyz;
 		float fogFactor = input.FogParam.w;
-#		if defined(IBL)
+#				if defined(IBL)
 		if (SharedData::iblSettings.EnableIBL) {
 			fogColor = ImageBasedLighting::GetFogIBLColor(fogColor, input.WorldPosition.xyz);
 		}
-#		endif
-#		if defined(EXP_HEIGHT_FOG)
+#				endif
+#				if defined(EXP_HEIGHT_FOG)
 		float3 vanillaFogColor = fogColor;
 		float vanillaFogFactor = fogFactor;
 		if (SharedData::exponentialHeightFogSettings.enabled) {
@@ -3368,15 +3794,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			fogColor = exponentialHeightFog.xyz;
 			fogFactor = exponentialHeightFog.w;
 		}
-#		endif
+#				endif
 		if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting) != 0) {
-#		if defined(EXP_HEIGHT_FOG)
+#				if defined(EXP_HEIGHT_FOG)
 			vanillaFogColor = 0.0;
-#		endif
+#				endif
 			fogColor = 0.0;
 		}
 		if ((FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z) || inReflection) {
-#		if defined(EXP_HEIGHT_FOG)
+#				if defined(EXP_HEIGHT_FOG)
 			if (SharedData::exponentialHeightFogSettings.enabled) {
 				if (!ExponentialHeightFog::ShouldDisableVanillaFog()) {
 					color.xyz = lerp(color.xyz, vanillaFogColor, vanillaFogFactor);
@@ -3385,15 +3811,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			} else {
 				color.xyz = lerp(color.xyz, fogColor, fogFactor);
 			}
-#		else
+#				else
 			color.xyz = lerp(color.xyz, fogColor, fogFactor);
-#		endif
+#				endif
 		}
 	}
-#		endif  // !ENVIRONMENT_PROBE: surface radiance without fog or scene encoding
-#	endif      // !DEFERRED
+#			endif  // !ENVIRONMENT_PROBE: surface radiance without fog or scene encoding
+#		endif      // !DEFERRED
 
-#	if defined(TESTCUBEMAP) && defined(ENVMAP) && defined(DYNAMIC_CUBEMAPS)
+#		if defined(TESTCUBEMAP) && defined(ENVMAP) && defined(DYNAMIC_CUBEMAPS)
 	baseColor.xyz = 0.0;
 	specularColor = 0.0;
 	diffuseColor = 0.0;
@@ -3401,7 +3827,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	envColor = 1.0;
 	material.Roughness = 0.0;
 	color.xyz = 0;
-#	endif
+#		endif
+
+#	endif  // !DCLF_DEPTH_ONLY
 
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
 	psout.Diffuse.w = 0;
@@ -3410,7 +3838,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			include "Common/LightingAlpha.hlsli"
 #		endif
 
-#		if defined(ANISOTROPIC_ALPHA)
+#		if !defined(DCLF_DEPTH_ONLY)
+#			if defined(ANISOTROPIC_ALPHA)
 	// Uniform alpha material settings
 	uint AlphaMaterialModel = ExtendedTranslucency::GetMaterialModelFromDescriptor(Permutation::ExtraFeatureDescriptor);
 	float AlphaMaterialReduction = 0.f;
@@ -3431,11 +3860,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			alpha = alpha * (1.0 - AlphaMaterialReduction);
 			[branch] if (AlphaMaterialModel == ExtendedTranslucency::MaterialModel::AnisotropicFabric)
 			{
-#			if defined(SKINNED) || !defined(MODELSPACENORMALS)
+#				if defined(SKINNED) || !defined(MODELSPACENORMALS)
 				alpha = ExtendedTranslucency::GetViewDependentAlphaFabric2D(alpha, viewDirection, tbnTr);
-#			else
+#				else
 				alpha = ExtendedTranslucency::GetViewDependentAlphaFabric1D(alpha, viewDirection, worldNormal.xyz);
-#			endif
+#				endif
 			}
 			else if (AlphaMaterialModel == ExtendedTranslucency::MaterialModel::IsotropicFabric)
 			{
@@ -3449,12 +3878,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			alpha = lerp(alpha, originalAlpha, AlphaMaterialStrength);
 		}
 	}
-#		endif  // ANISOTROPIC_ALPHA
+#			endif  // ANISOTROPIC_ALPHA
 
 	psout.Diffuse.w = alpha;
+#		endif      // !DCLF_DEPTH_ONLY
 #	endif
 
-#	if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
+#	if !defined(DCLF_DEPTH_ONLY)
+
+#		if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (SharedData::lightLimitFixSettings.EnableLightsVisualisation) {
 		if (SharedData::lightLimitFixSettings.LightsVisualisationMode == 0) {
 			psout.Diffuse.xyz = Color::TurboColormap(LightLimitFix::NumStrictLights >= 7.0);
@@ -3469,69 +3901,75 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	} else {
 		psout.Diffuse.xyz = color.xyz;
 	}
-#	else
+#		else
 	psout.Diffuse.xyz = color.xyz;
-#	endif  // defined(LIGHT_LIMIT_FIX)
+#		endif  // defined(LIGHT_LIMIT_FIX)
 
-#	if defined(DEFERRED)
+#		if defined(DEFERRED)
 	psout.MotionVectors.xy = screenMotionVector.xy;
 	psout.MotionVectors.zw = float2(0, psout.Diffuse.w);
 
-#		if defined(TERRAIN_BLENDING)
+#			if defined(TERRAIN_BLENDING)
 	[flatten] if (SharedData::terrainBlendingSettings.Enabled)
 	{
 		psout.Diffuse.w = blendFactorTerrain;
 	}
-#		endif
+#			endif
 
 	psout.MotionVectors.zw = float2(0.0, psout.Diffuse.w);
 	psout.Specular = float4(specularColor, psout.Diffuse.w);
 	psout.Albedo = float4(outputAlbedo, psout.Diffuse.w);
 
-#		if defined(WETNESS_EFFECTS)
+#			if defined(WETNESS_EFFECTS)
 	indirectLobeWeights.specular += wetnessReflectance;
 	if (waterRoughnessSpecular < 1) {
 		// Reflection is from the water film surface; wetnessReflectance scales intensity by wetness amount.
 		screenSpaceNormal = normalize(FrameBuffer::WorldToView(wetnessNormal, false));
 		material.Roughness = waterRoughnessSpecular;
 	}
-#		endif
+#			endif
 
-#		if defined(PSEUDO_SUN_BOUNCE)
+#			if defined(PSEUDO_SUN_BOUNCE)
 	if (any(specularBounce > 0)) {
 		psout.Diffuse.xyz += indirectLobeWeights.specular * specularBounce;
 	}
-#		endif
+#			endif
 
 	psout.Reflectance = float4(indirectLobeWeights.specular, psout.Diffuse.w);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - material.Roughness), psout.Diffuse.w);
 
-#		if defined(SNOW)
-#			if defined(TRUE_PBR)
+#			if defined(SNOW)
+#				if defined(TRUE_PBR)
 	psout.Parameters.x = Color::RGBToLuminanceAlternative(specularColor);
 	psout.Parameters.y = 0;
-#			else
+#				else
 	psout.Parameters.x = Color::RGBToLuminanceAlternative(lightsSpecularColor);
-#			endif
+#				endif
 	psout.Parameters.w = psout.Diffuse.w;
-#		endif
+#			endif
 
-#		if defined(TRUE_PBR)
+#			if defined(TRUE_PBR)
 	float masksZ = Color::RGBToYCoCg(directionalAmbientColor + transmittedAmbientColor * Color::PBRLightingScale * vertexColor).x;
-#		else
+#			else
 	float masksZ = Color::RGBToYCoCg(directionalAmbientColor).x;
-#		endif
+#			endif
 
-#		if defined(SSS) && defined(SKIN)
+#			if defined(SSS) && defined(SKIN)
 	float skinSSSAmount = baseColor.a;
-#			if defined(CS_SKIN_SHADING)
+#				if defined(CS_SKIN_SHADING)
 	if (skinEnabled)
 		skinSSSAmount *= skinData.sssParams.z;
-#			endif
-	psout.Masks = float4(saturate(skinSSSAmount), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), masksZ, psout.Diffuse.w);
-#		else
+#				endif
+#				if defined(DCLF_BINDLESS)
+	// Drawcall Limit Fix: per actor, from the object record (the permutation is the pipeline's).
+	const bool beastRace = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & 1u) != 0;
+#				else
+	const bool beastRace = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace) != 0;
+#				endif
+	psout.Masks = float4(saturate(skinSSSAmount), !beastRace, masksZ, psout.Diffuse.w);
+#			else
 	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
-#		endif
+#			endif
 
 	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion
 	// for pixels that do not write to this RT (sky, water, grass, effects).
@@ -3541,14 +3979,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	const bool additiveLighting = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting;
 	float stochasticBlend = !additiveLighting && (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
 	psout.NormalGlossiness.w = stochasticBlend;
-#	endif
+#		endif
 
-#	if defined(ENABLE_LL) && !defined(ENVIRONMENT_PROBE)
+#		if defined(ENABLE_LL) && !defined(ENVIRONMENT_PROBE)
 	if (Permutation::RenderToUI && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection))
 		psout.Diffuse.xyz = ColorManagement::WorkingToUI(psout.Diffuse.xyz);
-#	endif
+#		endif
 
-#	if !defined(DEFERRED) && !defined(ENVIRONMENT_PROBE)
+#		if !defined(DEFERRED) && !defined(ENVIRONMENT_PROBE)
 	float3 ssrNormal = screenSpaceNormal;
 	ssrNormal.z = max(0.001, sqrt(8.0 - 8.0 * ssrNormal.z));
 	ssrNormal.xy /= ssrNormal.zz;
@@ -3556,12 +3994,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 normalAndSSR;
 	normalAndSSR.xy = ssrNormal.xy + 0.5.xx;
 	normalAndSSR.z = 0.0;
-	normalAndSSR.w = SSRParams.w * smoothstep(SSRParams.x - 1e-5, SSRParams.y, normal.w);
+	normalAndSSR.w = DCLF_SSR_SPECULAR * smoothstep(SSRParams.x - 1e-5, SSRParams.y, normal.w);
 
 	const bool outputColorToAuxiliaryTarget = SSRParams.z > 1e-5;
 	psout.NormalGlossiness = outputColorToAuxiliaryTarget ? psout.Diffuse : normalAndSSR;
 	psout.MotionVectors = outputColorToAuxiliaryTarget ? float4(1, 0, 0, 1) : float4(screenMotionVector, 0, 1);
-#	endif
+#		endif
+
+#		if defined(DCLF_SHADOW_DEBUG) && defined(DEFERRED)
+	// [TEMP] Native and DCLF alike: the sun's shadow terms in place of the colour, read back with CS_DCLF_TARGET_PROBE
+	// (dclf-validation.md, "Shader debug output (`CS_DCLF_SHADOW_DEBUG_OUTPUT`)"): x the VSM soft shadow, y its detailed term, z the detailed
+	// shadow the lighting uses.
+	psout.Diffuse = float4(dirSoftShadow, dirVSMDetailedShadow, dirDetailedShadow, 1);
+#		endif
+#	endif  // !DCLF_DEPTH_ONLY
 
 #	if defined(EMAT)
 #		undef COMPUTE_TERRAIN_SHADOW_BASE
@@ -3569,20 +4015,127 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		undef LANDSCAPE_PARALLAX_ENABLED
 #	endif
 
-#	if defined(ENVIRONMENT_PROBE)
+#	if defined(DCLF_DEPTH_ONLY) && defined(DCLF_OWNED_PARITY)
+	// CS_DCLF_FOLIAGE_PARITY: the fragment the alpha test kept, as its pixel's owner if it is the closest (its depth inverted
+	// above its object): the compare pass checks that the colour pass shaded the owner of each pixel whose depth it is.
+	{
+		const uint2 pixel = uint2(input.Position.xy);
+		if (pixel.x < DCLFFoliageParityFrame.x && pixel.y < DCLFFoliageParityFrame.y) {
+			RWStructuredBuffer<uint64_t> owners = ResourceDescriptorHeap[DCLFFoliageParityFrame.w];
+			// Bit 31: terrain LOD's, counted on its own by the compare pass.
+#		if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
+			const uint ownerTag = 0x80000000u;
+#		else
+			const uint ownerTag = 0;
+#		endif
+			const uint64_t owner = (uint64_t(0xFFFFFFFFu - asuint(input.Position.z)) << 32) | uint64_t(((DCLFObjectIndex + 1) & 0x00FFFFFFu) | ownerTag);
+			InterlockedMax(owners[pixel.y * DCLFFoliageParityFrame.x + pixel.x], owner);
+		}
+	}
+#	endif
+#	if defined(DCLF_DEPTH_ONLY)
+	// Drawcall Limit Fix's Z-prepass builds this permutation with DCLF_DEPTH_ONLY: the pass has no render
+	// targets and only needs the depth, so it keeps the alpha test and nothing else - the lighting before it
+	// and the outputs after it are compiled out (see above). That makes the prepass cheap and, more
+	// importantly, keeps the shader from reading the per-frame pixel-stage bindings: they are not bound
+	// while the native depth pass runs.
+	return (PS_OUTPUT)0;
+#	else
+#		if defined(DCLF_OWNED_PARITY)
+	// CS_DCLF_FOLIAGE_PARITY: what this pixel shows of the object, for the compare pass (FoliageParityCS.hlsl).
+	{
+		const uint2 pixel = uint2(input.Position.xy);
+		if (pixel.x < DCLFFoliageParityFrame.x && pixel.y < DCLFFoliageParityFrame.y) {
+			const uint index = pixel.y * DCLFFoliageParityFrame.x + pixel.x;
+			const uint64_t ids = (uint64_t(DCLFFoliageParityBuffers.y) << 32) | uint64_t(DCLFFoliageParityBuffers.x);
+			const uint64_t colours = (uint64_t(DCLFFoliageParityBuffers.w) << 32) | uint64_t(DCLFFoliageParityBuffers.z);
+#			if defined(DEFERRED)
+			const uint4 albedo = uint4(round(saturate(psout.Albedo) * 255.0));
+#			else
+			const uint4 albedo = uint4(round(saturate(psout.Diffuse) * 255.0));
+#			endif
+			const uint4 diffuse = uint4(round(saturate(psout.Diffuse) * 255.0));
+			vk::RawBufferStore<uint>(ids + uint64_t(index) * 4, (DCLFFoliageParityFrame.z << 24) | ((DCLFObjectIndex + 1) & 0x00FFFFFFu));
+			// The motion vector against a static object's: the same point where the camera saw it the frame before (its absolute
+			// position, from this frame's eye, made relative to the frame before's). In pixels, with the motion vector itself.
+			float2 motionError = 0;
+#			if !defined(SKINNED)
+			const float4 staticPrevious = float4(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz - FrameBuffer::CameraPreviousPosAdjust.xyz, 1);
+			const float2 renderSize = float2(DCLFFoliageParityFrame.xy);
+			motionError = (psout.MotionVectors.xy - MotionBlur::GetSSMotionVector(input.WorldPosition, staticPrevious)) * renderSize;
+#			endif
+			const float2 motion = psout.MotionVectors.xy * float2(DCLFFoliageParityFrame.xy);
+			// The albedo's alpha byte carries the motion error's length (tenths of a pixel); the specular is the pass's.
+			const uint error = uint(min(round(length(motionError) * 10.0), 255.0));
+#			if defined(DEFERRED)
+			const uint4 specular = uint4(round(saturate(psout.Specular) * 255.0));
+#			else
+			const uint4 specular = 0;
+#			endif
+			vk::RawBufferStore<uint4>(colours + uint64_t(index) * 16,
+				uint4(albedo.x | (albedo.y << 8) | (albedo.z << 16) | (error << 24), diffuse.x | (diffuse.y << 8) | (diffuse.z << 16) | (diffuse.w << 24),
+					specular.x | (specular.y << 8) | (specular.z << 16) | (specular.w << 24), f32tof16(motion.x) | (f32tof16(motion.y) << 16)));
+		}
+	}
+#		endif
+#		if defined(ENVIRONMENT_PROBE)
 	psout.Distance = probeDistance;
 	// Match screen SSGI's source-facing convention, including two-sided materials.
 	float3 probeNormal = dot(worldNormal, input.WorldPosition.xyz) > 0 ? -worldNormal : worldNormal;
 	psout.ProbeNormal = GBuffer::EncodeNormal(normalize(probeNormal));
-#	else
+#		else
 	psout.Diffuse.rgb = PreExposure::EncodeScene(psout.Diffuse.rgb);
-#	if defined(DEFERRED)
+#			if defined(DEFERRED)
 	psout.Specular.rgb = PreExposure::EncodeScene(psout.Specular.rgb);
-#	else
+#			else
 	if (outputColorToAuxiliaryTarget)
 		psout.NormalGlossiness.rgb = PreExposure::EncodeScene(psout.NormalGlossiness.rgb);
-#	endif
-#	endif
+#			endif
+#		endif
 	return psout;
+#	endif
 }
-#endif  // PSHADER
+#	if defined(DCLF_PULLED)
+// The draw's rows (its sequence's: the pipeline row's address, then the material row's), and the blocks the pulled source reads
+// from them (ShaderPrograms.cpp, PulledLightingSource), before anything reads them.
+void DCLFRowStatics(uint4 a_rows)
+{
+	DCLFPipelineRowAddress = DCLFAddress(a_rows.xy);
+	DCLFMaterialRowAddress = DCLFAddress(a_rows.zw);
+	DCLFPerTechniqueStatics();
+	DCLFPerMaterialStatics();
+	DCLFPerGeometryStatics();
+	DCLFPermutationStatics();
+}
+
+// The object's values the DCLF_BINDLESS build's statics hold, assigned once this draw's object word is known.
+void DCLFPixelObjectStatics()
+{
+#		if defined(DCLF_BINDLESS)
+	const DCLFPixelObjectRow row = DCLF_PIXEL_ROW;
+	MaterialData = DCLFPixelMaterialData(row);
+	EmitColor = row.EmitColorSSR.xyz;
+	DCLFSSRSpecular = row.EmitColorSSR.w;
+	ProjectedUVParams = DCLFExtras[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 4];
+	ProjectedUVParams2 = DCLFExtras[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 5];
+	ProjectedUVParams3 = DCLFExtrasProjectedGlobals;
+#			if defined(DCLF_BINDLESS_DRAW)
+	AlphaTestRefRS = row.AlphaTestRef;
+#			endif
+#		endif
+}
+
+// Drawcall Limit Fix's plain draws (DCLF_PULLED): the draw's object word and rows are its sequence's, as its vertex stage read them.
+// Keyed on a wave-uniform instance as the vertex stage's main is, so the rows, the statics and every texture's and sampler's descriptor
+// index (the material row's, read where used) are the draw's. A quad's four lanes are one primitive's, so one draw's: they take the
+// same pass, helper lanes with them, and their derivatives hold.
+PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+{
+	const uint64_t sequence = DCLFDrawSequence(input.DCLFDrawInstance);
+	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
+	DCLFRowStatics(DCLFSequenceRows(sequence));
+	DCLFPixelObjectStatics();
+	return DCLFShadePS(input, frontFace);
+}
+#	endif  // DCLF_PULLED
+#endif      // PSHADER

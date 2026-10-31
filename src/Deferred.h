@@ -109,10 +109,10 @@ public:
 	ID3D11ShaderResourceView* GetDirectionalShadowMap() const;
 	ID3D11Buffer* GetDirectionalShadowParameters() const;
 
-	/** @brief Returns a snapshot of this frame's native shadow-mask receiver parameters. */
-
-	ID3D11BlendState* deferredBlendStates[7][2][13][2];
-	ID3D11BlendState* forwardBlendStates[7][2][13][2];
+	// The engine's blend states as the deferred pass draws with them (OverrideBlendStates, made once on its first call; null
+	// until then), and the forward ones they replace for its duration.
+	ID3D11BlendState* deferredBlendStates[7][2][13][2]{};
+	ID3D11BlendState* forwardBlendStates[7][2][13][2]{};
 
 	RE::RENDER_TARGET forwardRenderTargets[4];
 

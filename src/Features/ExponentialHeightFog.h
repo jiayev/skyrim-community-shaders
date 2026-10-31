@@ -85,6 +85,9 @@ public:
 	/** @brief Reports whether height fog contributes in the current scene. */
 	bool IsActive() const { return loaded && settings.enabled && !IsSuppressed(); }
 
+	/** @brief The view Prepass binds at t19 (null before the volumetric resources exist). Render thread. */
+	ID3D11ShaderResourceView* IntegratedLightScatteringView() const { return integratedLightScattering ? integratedLightScattering->srv.get() : nullptr; }
+
 private:
 	struct VolumetricFogCB
 	{

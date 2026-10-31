@@ -566,8 +566,8 @@ void ExponentialHeightFog::Prepass()
 	const bool hasLocalLightData =
 		lightLimitFix.loaded &&
 		lightLimitFix.lights &&
-		lightLimitFix.lightIndexList &&
-		lightLimitFix.lightGrid;
+		lightLimitFix.GetLightIndexListSRV() &&
+		lightLimitFix.GetLightGridSRV();
 	const bool hasLocalShadowData = hasLocalLightData && lightLimitFix.IsLocalShadowCacheActive() && lightLimitFix.localShadowBuffer;
 	auto [engineLocalShadowMap, localShadowBuffer] = globals::features::viewAtmosphere.PrepareLocalShadows(hasLocalLightData);
 	auto* depthSrv = Util::GetCurrentSceneDepthSRV(true);
@@ -784,8 +784,8 @@ void ExponentialHeightFog::Prepass()
 			};
 			ID3D11ShaderResourceView* localLightSrvs[3]{
 				hasLocalLightData ? lightLimitFix.lights->srv.get() : nullptr,
-				hasLocalLightData ? lightLimitFix.lightIndexList->srv.get() : nullptr,
-				hasLocalLightData ? lightLimitFix.lightGrid->srv.get() : nullptr
+				hasLocalLightData ? lightLimitFix.GetLightIndexListSRV() : nullptr,
+				hasLocalLightData ? lightLimitFix.GetLightGridSRV() : nullptr
 			};
 			ID3D11UnorderedAccessView* uavs[1]{ p.scattering->uav.get() };
 			context->CSSetShaderResources(0, 5, srvs);

@@ -1,0 +1,22 @@
+info:  Game: OrgDxvkInteropTest.exe
+info:  DXVK: 3.1.0
+info:  Build: x86_64 msvc 19.51.36248
+info:  Vulkan: Found vkGetInstanceProcAddr in vulkan-1.dll @ 0x7ffb9549f3f0
+info:  Extension providers:
+info:    Platform WSI
+info:    OpenVR
+info:  OpenVR: could not open registry key, status 2
+info:  OpenVR: Failed to locate module
+info:    OpenXR
+info:  Enabled instance extensions:
+info:    VK_EXT_swapchain_colorspace
+info:    VK_KHR_get_surface_capabilities2
+info:    VK_KHR_surface
+info:    VK_KHR_surface_maintenance1
+info:    VK_KHR_win32_surface
+info:  DxvkInstance: Reporting engine name 'DXVK' (HDR disabled)
+info:  Found device: NVIDIA GeForce RTX 3090 Ti (NVIDIA 616.56.0)
+info:  Found device: AMD Radeon(TM) Graphics (AMD proprietary driver 2.0.353)
+info:  DXGI: Hiding actual GPU, reporting:
+info:    vendor ID: 0x1002
+info:    device ID: 0x73df

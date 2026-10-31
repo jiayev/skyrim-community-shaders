@@ -304,14 +304,6 @@ namespace
 	// ApplyHDR has encoded the back buffer before the actual Present.
 	ID3D11Texture2D* ResolveDisplayedBackBuffer(winrt::com_ptr<ID3D11Texture2D>& holder)
 	{
-		auto& upscaling = globals::features::upscaling;
-		if (upscaling.d3d12SwapChainActive &&
-			upscaling.dx12SwapChain.swapChainBufferWrapped &&
-			upscaling.dx12SwapChain.swapChainBufferWrapped->resource11) {
-			holder.copy_from(upscaling.dx12SwapChain.swapChainBufferWrapped->resource11);
-			return holder.get();
-		}
-
 		if (!globals::d3d::swapChain) {
 			return nullptr;
 		}
@@ -327,7 +319,7 @@ namespace
 	bool IsFlatHdrScreenshotCapture()
 	{
 		return globals::features::hdrDisplay.loaded &&
-		       globals::features::hdrDisplay.settings.enableHDR;
+		       globals::features::hdrDisplay.IsHDREnabledForFrame();
 	}
 
 	// Picks the capture source:
@@ -365,15 +357,9 @@ namespace
 			}
 		}
 
-		auto& upscaling = globals::features::upscaling;
-		if (IsFlatHdrScreenshotCapture() || upscaling.d3d12SwapChainActive) {
+		// Frame generation runs on DXVK's Vulkan presenter, after the D3D11 back buffer: the back buffer is the composite.
+		if (IsFlatHdrScreenshotCapture()) {
 			src.texture = ResolveDisplayedBackBuffer(holder);
-			if (upscaling.d3d12SwapChainActive && upscaling.ShouldUseFrameGenerationThisFrame()) {
-				if (!upscaling.dx12SwapChain.swapChainBufferWrapped || !upscaling.dx12SwapChain.uiBufferWrapped)
-					return {};
-				src.srv = upscaling.dx12SwapChain.swapChainBufferWrapped->srv;
-				src.uiSRV = upscaling.dx12SwapChain.uiBufferWrapped->srv;
-			}
 			src.needsPreviewCache = true;
 			src.description = "Swap chain back buffer (display composite)";
 			return src;
@@ -635,7 +621,7 @@ void ScreenshotFeature::DrawSettings()
 	ImGui::TextWrapped("%s", T(TKEY("async_note"), "Capture and save run asynchronously without stalling the game."));
 
 	const bool hdrCaptureAvailable = globals::features::hdrDisplay.loaded &&
-	                                 globals::features::hdrDisplay.settings.enableHDR;
+	                                 globals::features::hdrDisplay.IsHDREnabledForFrame();
 
 	if (hdrCaptureAvailable) {
 		int hdrFormat = hdrUseAvif ? 1 : 0;
@@ -874,6 +860,15 @@ void ScreenshotFeature::Reset()
 void ScreenshotFeature::ProcessCaptureRequest()
 {
 	ProcessPendingReadbacks();
+	captureOutputPath.clear();
+	{
+		std::lock_guard lock(requestedPathsMutex);
+		if (!requestedPaths.empty()) {
+			captureOutputPath = std::move(requestedPaths.front());
+			requestedPaths.pop();
+			captureRequested = true;
+		}
+	}
 	if (captureRequested.exchange(false)) {
 		try {
 			Capture();
@@ -989,8 +984,10 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
 		} else {
 			logger::info("Saved screenshot to {}", screenshot.outputPath.string());
-			ShowInGameNotification(std::format("Screenshot saved: {}",
-				screenshot.outputPath.filename().string()));
+			// A scripted capture's notification would show in the next one.
+			if (screenshot.notify)
+				ShowInGameNotification(std::format("Screenshot saved: {}",
+					screenshot.outputPath.filename().string()));
 		}
 	}
 	CoUninitialize();
@@ -1092,8 +1089,16 @@ void ScreenshotFeature::Capture()
 	screenshot.saveAsHdrAvif = saveAsHdrAvif;
 	screenshot.saveAsSdrPng = saveAsSdrPng;
 	screenshot.hdrPngBitDepth = static_cast<int>(hdrPngBitDepth);
-	screenshot.outputPath = BuildScreenshotPath(screenshotPath, saveAsHdrAvif ? ".avif" : (saveAsHdrPng || saveAsSdrPng ? ".png" : ".bmp"));
-	screenshot.copyToClipboard = copyToClipboard;
+	const char* extension = saveAsHdrAvif ? ".avif" : (saveAsHdrPng || saveAsSdrPng ? ".png" : ".bmp");
+	screenshot.outputPath = captureOutputPath.empty() ? BuildScreenshotPath(screenshotPath, extension) : std::filesystem::path(captureOutputPath).replace_extension(extension);
+	screenshot.copyToClipboard = copyToClipboard && captureOutputPath.empty();
+	screenshot.notify = captureOutputPath.empty();
 	pendingReadbacks.push_back(std::move(screenshot));
+}
+
+void ScreenshotFeature::RequestCapture(std::filesystem::path a_outputPath)
+{
+	std::lock_guard lock(requestedPathsMutex);
+	requestedPaths.push(std::move(a_outputPath));
 }
 #undef I18N_KEY_PREFIX

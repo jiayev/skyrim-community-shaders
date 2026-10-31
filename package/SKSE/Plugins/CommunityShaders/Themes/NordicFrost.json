@@ -45,7 +45,6 @@
         "ShowFooter": true,
         "CenterHeader": true,
         "TooltipHoverDelay": 0.5,
-        "BackgroundBlurEnabled": true,
         "Palette": {
             "Background": [0.055, 0.08, 0.105, 0.76],
             "Text": [0.92, 0.96, 0.99, 1.0],

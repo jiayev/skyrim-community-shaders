@@ -29,6 +29,10 @@
 #include "Features/Upscaling.h"
 #include "I18n/I18n.h"
 #include "Menu/BackgroundBlur.h"
+#if defined(CS_HAS_RENDER_GRAPH)
+#	include "RenderGraph/MemoryWindow.h"
+#	include "RenderGraph/ScheduleWindow.h"
+#endif
 #include "Menu/CursorLoader.h"
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
@@ -918,6 +922,7 @@ void Menu::DrawSettings()
 	ImGui::End();
 
 	// After every watched feature has drawn; records the change an interaction that ended this frame made
+	DrawRenderGraphWindows();
 	undoHistory.EndFrame();
 	// The overlay also hosts the toasts; Draw() only draws once per frame
 	Util::Notifications::Draw();
@@ -1532,4 +1537,12 @@ void Menu::DrawWeatherDetailsWindow()
 	if (!csEditor.WeatherDetailsWindow.Enabled || !csEditor.loaded)
 		return;
 	csEditor.RenderWeatherDetailsWindow(&csEditor.WeatherDetailsWindow.Enabled, !globals::features::performanceOverlay.settings.ShowWeatherPicker);
+}
+
+void Menu::DrawRenderGraphWindows()
+{
+#if defined(CS_HAS_RENDER_GRAPH)
+	RenderGraphSchedule::DrawWindow();
+	RenderGraphMemory::DrawWindow();
+#endif
 }

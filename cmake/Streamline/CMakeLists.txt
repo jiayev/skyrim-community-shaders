@@ -4,7 +4,7 @@ add_library(Streamline INTERFACE)
 
 target_include_directories(
     Streamline
-    INTERFACE ${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/include
+    INTERFACE ${CMAKE_SOURCE_DIR}/extern/Streamline/include
 )
 
 if(MSVC)

@@ -41,6 +41,7 @@ public:
 	// Downsampled shadow texture with 2 mip levels
 	ID3D11Texture2D* shadowCopyTexture = nullptr;
 	ID3D11ShaderResourceView* shadowCopySRV = nullptr;
+	static inline ID3D11ShaderResourceView* boundSharedShadowMap = nullptr;  // the view last bound at t18, null included (DCLF names it to its views)
 	ID3D11ShaderResourceView* shadowCopyMip0SRV = nullptr;
 	ID3D11ShaderResourceView* shadowCopyMip1SRV = nullptr;
 	ID3D11UnorderedAccessView* shadowCopyMip0UAV = nullptr;

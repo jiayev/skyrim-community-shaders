@@ -6,6 +6,7 @@
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/DeveloperTools.h"
+#include "Features/DrawcallLimitFix.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/Effects11.h"
 #include "Features/EnvironmentProbeFeature.h"
@@ -44,6 +45,7 @@
 #include "Features/TerrainVariation.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
+#include "Features/VRAMBudget.h"
 #include "Features/VanillaFresnel.h"
 #include "Features/ViewAtmosphere.h"
 #include "Features/VolumetricLighting.h"
@@ -53,6 +55,7 @@
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Utils/Format.h"
+#include "Vram/Attribution.h"
 
 #include "State.h"
 #include "TruePBR.h"
@@ -255,6 +258,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::extendedMaterials,
 		&globals::features::wetnessEffects,
 		&globals::features::lightLimitFix,
+		&globals::features::drawcallLimitFix,
 		&globals::features::dynamicCubemaps,
 		&globals::features::environmentProbe,
 		&globals::features::cloudShadows,
@@ -289,6 +293,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::rainRefraction,
 		&globals::features::unifiedWater,
 		&globals::features::horizonFix,
+		&globals::features::vramBudget,
 		&globals::features::exponentialHeightFog,
 		&globals::features::hdrDisplay,
 		&globals::features::physicalSky,
@@ -336,6 +341,21 @@ bool Feature::ToggleAtBootSetting()
 	state->CheckCoreSettingsChanged();
 
 	return state->IsFeatureDisabled(featureName);  // Return the new state
+}
+
+const char* Feature::GetVramOwner()
+{
+	// Cached outside the class: a member would change every feature's layout (and padding). Read on every feature callback.
+	static std::shared_mutex mutex;
+	static std::unordered_map<const Feature*, const char*> owners;
+	{
+		std::shared_lock lock(mutex);
+		if (const auto it = owners.find(this); it != owners.end())
+			return it->second;
+	}
+	const char* owner = Vram::FeatureOwner(GetShortName());
+	std::unique_lock lock(mutex);
+	return owners.emplace(this, owner).first->second;
 }
 
 std::string Feature::GetDisplayCategory() const

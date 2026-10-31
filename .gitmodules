@@ -1,13 +1,37 @@
 [submodule "extern/CommonLibSSE-NG"]
 	path = extern/CommonLibSSE-NG
 	url = https://github.com/alandtse/CommonLibVR.git
-[submodule "extern/Streamline-DX12"]
-	path = extern/Streamline-DX12
-	url = https://github.com/NVIDIAGameWorks/Streamline.git
-[submodule "extern/FidelityFX-SDK"]
-	path = extern/FidelityFX-SDK
-	url = https://github.com/alandtse/FidelityFX-SDK-DX11
-	branch = optiscaler-build
+[submodule "extern/Streamline"]
+	path = extern/Streamline
+	url = https://github.com/community-shaders/Streamline.git
+	branch = extra-plugins
+[submodule "extern/dxvk"]
+	path = extern/dxvk
+	url = https://github.com/community-shaders/dxvk.git
+	branch = org_integration
+[submodule "extern/OpenRenderGraph"]
+	path = extern/OpenRenderGraph
+	url = https://github.com/panthuncia/OpenRenderGraph.git
+	branch = backend_interop
+[submodule "extern/BasicRHI"]
+	path = extern/BasicRHI
+	url = https://github.com/panthuncia/BasicRHI.git
+	branch = main
+[submodule "extern/BasicTelemetry"]
+	path = extern/BasicTelemetry
+	url = https://github.com/panthuncia/BasicTelemetry.git
+	branch = main
+[submodule "extern/volk"]
+	path = extern/volk
+	url = https://github.com/zeux/volk.git
+	branch = master
+[submodule "extern/ORGModuleServices"]
+	path = extern/ORGModuleServices
+	url = https://github.com/panthuncia/ORGModuleServices.git
+[submodule "extern/SceneWriterFramework"]
+	path = extern/SceneWriterFramework
+	url = https://github.com/panthuncia/SSESceneWriterFramework
+
 [submodule "extern/NRD"]
 	path = extern/NRD
 	url = https://github.com/NVIDIA-RTX/NRD.git

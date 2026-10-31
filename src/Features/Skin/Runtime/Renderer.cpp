@@ -32,6 +32,7 @@ void Skin::SetupResources()
 	sampler.ComparisonFunc = D3D11_COMPARISON_NEVER;
 	sampler.MaxLOD = D3D11_FLOAT32_MAX;
 	DX::ThrowIfFailed(globals::d3d::device->CreateSamplerState(&sampler, detailSampler.put()));
+	Util::SetResourceName(detailSampler.get(), "Skin::DetailSampler");
 	Invalidate(true);
 }
 
@@ -263,6 +264,48 @@ void Skin::RestoreSampler()
 	}
 }
 
+void Skin::PrepareCapture(std::span<RE::BSGeometry* const> a_geometries)
+{
+	std::lock_guard lock(mutex);
+	for (auto* geometry : a_geometries) {
+		auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
+		if (SkinMaterials::IsCompatible(property))
+			Observe(geometry, property);
+	}
+	Prepass();
+}
+
+Skin::GeometrySnapshot Skin::CaptureGeometry(RE::BSGeometry* a_geometry, RE::BSShaderProperty* a_property)
+{
+	std::lock_guard lock(mutex);
+	GeometrySnapshot snapshot{};
+	auto& data = snapshot.data;
+	data.profile = MakeData(Resolve({}, settings.DefaultProfile), false);
+	data.profile.skinParams.w = 0;
+	if (a_geometry) {
+		data.skinPerGeometry = GetWetness(a_geometry);
+		if (SkinMaterials::IsCompatible(a_property)) {
+			auto& entry = Observe(a_geometry, a_property);
+			data.profile = MakeData(Resolve({}, settings.DefaultProfile), entry.head);
+			data.profile.skinDetailParams.w = 0;
+			if (entry.ready && entry.revision == revision && entry.characterRevision == characterRevision) {
+				data.profile = MakeData(entry.effective, entry.head);
+				for (size_t i = 0; i < entry.textures.size(); ++i) {
+					if (entry.textures[i] && (i == 2 || !entry.textures[i]->resource.reconstructNormal))
+						snapshot.textures[i] = entry.textures[i]->resource.view;
+				}
+				data.materialFlags = { float(bool(snapshot.textures[0])), float(bool(snapshot.textures[1])),
+					float(entry.textures[2] && entry.textures[2]->resource.reconstructNormal), float(entry.thickness) };
+				if (!snapshot.textures[2])
+					data.profile.skinDetailParams.w = 0;
+				if (editor.open && editor.previewWetness >= 0 && ((!entry.key.empty() && entry.key == editor.draftKey) || (!entry.target.empty() && entry.target == editor.draftTarget.key)))
+					data.skinPerGeometry = { editor.previewWetness, 0, 0, 0 };
+			}
+		}
+	}
+	return snapshot;
+}
+
 void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	std::lock_guard lock(mutex);
@@ -271,31 +314,10 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	texturesDirty = true;
 	if (!PerGeometryCB)
 		return;
-	PerGeometryData data{};
-	data.profile = MakeData(Resolve({}, settings.DefaultProfile), false);
-	data.profile.skinParams.w = 0;
-	if (a_pass && a_pass->geometry) {
-		data.skinPerGeometry = GetWetness(a_pass->geometry);
-		if (SkinMaterials::IsCompatible(a_pass->shaderProperty)) {
-			auto& entry = Observe(a_pass->geometry, a_pass->shaderProperty);
-			data.profile = MakeData(Resolve({}, settings.DefaultProfile), entry.head);
-			data.profile.skinDetailParams.w = 0;
-			if (entry.ready && entry.revision == revision && entry.characterRevision == characterRevision) {
-				data.profile = MakeData(entry.effective, entry.head);
-				for (size_t i = 0; i < entry.textures.size(); ++i) {
-					if (entry.textures[i] && (i == 2 || !entry.textures[i]->resource.reconstructNormal))
-						pendingViews[i] = entry.textures[i]->resource.view;
-				}
-				data.materialFlags = { float(bool(pendingViews[0])), float(bool(pendingViews[1])),
-					float(entry.textures[2] && entry.textures[2]->resource.reconstructNormal), float(entry.thickness) };
-				if (!pendingViews[2])
-					data.profile.skinDetailParams.w = 0;
-				if (editor.open && editor.previewWetness >= 0 && ((!entry.key.empty() && entry.key == editor.draftKey) || (!entry.target.empty() && entry.target == editor.draftTarget.key)))
-					data.skinPerGeometry = { editor.previewWetness, 0, 0, 0 };
-			}
-		}
-	}
-	PerGeometryCB->Update(data);
+	auto snapshot = CaptureGeometry(a_pass ? a_pass->geometry : nullptr, a_pass ? a_pass->shaderProperty : nullptr);
+	pendingViews = std::move(snapshot.textures);
+	lastNativeData = snapshot.data;
+	PerGeometryCB->Update(snapshot.data);
 	ID3D11Buffer* buffer = PerGeometryCB->CB();
 	globals::d3d::context->PSSetConstantBuffers(7, 1, &buffer);
 }

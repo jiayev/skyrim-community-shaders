@@ -3,10 +3,31 @@
 #include "Common/LodLandscape.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/DCLFObjects.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 #if defined(RENDER_SHADOWMASK) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB) || defined(RENDER_SHADOWMASKDPB)
 #	define RENDER_SHADOWMASK_ANY
+#endif
+// Drawcall Limit Fix's depth-only draws of a technique without an alpha test: the pixel stage is compiled empty (main, below), so
+// the vertex stage passes it nothing either. Both stages are built from one technique (ShaderPrograms::FindShadow), so both see this.
+#if defined(DCLF_BINDLESS) && (defined(RENDER_SHADOWMAP) || defined(RENDER_DEPTH)) && !defined(ALPHA_TEST) && !defined(ADDITIONAL_ALPHA_MASK) && \
+	!defined(RENDER_SHADOWMAP_PB) && !defined(RENDER_SHADOWMASK_ANY) && !defined(DEBUG_SHADOWSPLIT) && !defined(DEBUG_COLOR) && \
+	!defined(DEPTH_WRITE_DECALS) && !defined(STENCIL_ABOVE_WATER) && !(defined(DCLF_PULLED) && defined(RENDER_NORMAL))
+#	define DCLF_EMPTY_PIXEL
+#endif
+// Drawcall Limit Fix's refraction draw (T7d; DrawPipelines::RequestRefraction, kRefractionTechnique): the pulled RENDER_NORMAL build,
+// whose stages below replace the shadow views' pulled ones. One pipeline draws every refraction object: the technique's other variants
+// (VC, SKINNED, RENDER_NORMAL_FALLOFF, RENDER_NORMAL_CLAMP, model-space normals, two-sidedness) are each draw's, from its object record
+// (LightingConstants.h, kRecordRefraction*), and its inputs come from its own rows (the material row's diffuse, the refraction normal
+// map, and TexcoordOffset; the shading row's refraction power and held fade) and the frame's LodFadeFrame.
+#if defined(DCLF_PULLED) && defined(RENDER_NORMAL)
+#	define DCLF_REFRACTION
+static const uint kDCLFRefractionFalloff = 1u << 3;
+static const uint kDCLFRefractionClamp = 1u << 4;
+static const uint kDCLFRefractionNoNormals = 1u << 5;
+static const uint kDCLFRefractionVertexColors = 1u << 6;
+static const uint kDCLFRefractionTwoSided = 1u << 7;
 #endif
 
 #if defined(VSHADER)
@@ -71,6 +92,16 @@ struct VS_OUTPUT
 	float Depth: TEXCOORD2;
 #	endif
 #endif
+#if defined(DCLF_PULLED)
+	// The draw's diffuse descriptor and object word, for the pixel stage of a pulled draw (DCLF_PULLED, below).
+	nointerpolation uint2 DCLFDraw: TEXCOORD7;
+	// The view's depth clipping, as its viewport's depth range would have it (DCLFDepthRange, below).
+	float2 DCLFClip: SV_ClipDistance0;
+#endif
+#if defined(DCLF_REFRACTION)
+	// The draw's diffuse's sampler, from its material row (DCLFMaterialSamplerIndex).
+	nointerpolation uint DCLFRefractionSampler: TEXCOORD6;
+#endif
 };
 
 #ifdef VSHADER
@@ -78,28 +109,71 @@ cbuffer PerTechnique : register(b0)
 {
 	float4 HighDetailRange : packoffset(c0);  // loaded cells center in xy, size in zw
 	float2 ParabolaParam : packoffset(c1);    // inverse radius in x, y is 1 for forward hemisphere or -1 for backward hemisphere
+#	if defined(DCLF_BINDLESS)
+	// Drawcall Limit Fix, per shadow view: the main camera's eye minus this view's, which turns the
+	// records' eye-relative transforms into this camera's (engine notes: shadow maps).
+	float4 DCLFEyeDelta : packoffset(c2);
+#	endif
+#	if defined(DCLF_PULLED)
+	// The view's viewport depth range (min, max - min): the engine's, which changes from frame to frame for some views. The
+	// pulled stage applies it, and the draw's viewport is [0, 1], so the view's recording does not change with it.
+	float4 DCLFDepthRange : packoffset(c3);
+#	endif
 };
 
+#	if defined(DCLF_PULLED)
+static float4 TexcoordOffset;  // the draw's material row's (DCLF_PULLED, below)
+#	else
 cbuffer PerMaterial : register(b1)
 {
 	float4 TexcoordOffset : packoffset(c0);
 };
+#	endif
 
 cbuffer PerGeometry : register(b2)
 {
 	float4 ShadowFadeParam : packoffset(c0);
+#	if !defined(DCLF_BINDLESS)
 	row_major float4x4 World : packoffset(c1);
+#	endif
 	float4 EyePos : packoffset(c5);
 	float4 WaterParams : packoffset(c6);
+#	if !defined(DCLF_BINDLESS)
 	float4 TreeParams : packoffset(c7);
+#	endif
 };
+
+#if defined(DCLF_PULLED)
+// Set by main from the draw's object (DCLF_PULLED, below), as the DCLF_BINDLESS build's statics.
+static precise row_major float4x4 World;
+static float4 TreeParams;
+// A shadow view's draw: whether it is skinned, which a SKINNED build decides per draw (CanonicalShadowTechnique compiles every
+// shadow caster's with SKINNED, the draw's technique in its sequence: DCLFShadowVertex). True elsewhere: the build's define decides.
+static bool DCLFDrawSkinned = true;
+#elif defined(DCLF_BINDLESS)
+// Drawcall Limit Fix draws the shadow views indirectly: every object of a view shares one pipeline and
+// one PerGeometry block, so the values that differ between them come from the per-object record instead
+// (Common/DCLFObjects.hlsli). World is absolute in the record and made relative here to the drawing
+// view's own eye, the view's VS_PerFrame CameraPosAdjust - the engine's own Utility World is relative to
+// whichever camera is drawing (engine notes: shadow maps).
+static precise row_major float4x4 World = float4x4(
+	DCLFPlacements[DCLFObjectIndex].World[0] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.x),
+	DCLFPlacements[DCLFObjectIndex].World[1] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.y),
+	DCLFPlacements[DCLFObjectIndex].World[2] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.z),
+	float4(0, 0, 0, 1));
+static float4 TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
+#endif
 
 float2 SmoothSaturate(float2 value)
 {
 	return value * value * (3 - 2 * value);
 }
 
+#	if defined(DCLF_PULLED)
+VS_OUTPUT DCLFShade(VS_INPUT input)
+#	else
 VS_OUTPUT main(VS_INPUT input)
+#	endif
 {
 	VS_OUTPUT vsout;
 
@@ -135,12 +209,28 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 
 #		if defined(SKINNED)
+	precise float4 positionWS = 0;
 	precise int4 boneIndices = 765.01.xxxx * input.BoneIndices.xyzw;
+#			if defined(DCLF_PULLED)
+	[branch] if (!DCLFDrawSkinned) {
+		precise float4x4 modelViewProj = mul(FrameBuffer::CameraViewProj, World);
+		positionCS = mul(modelViewProj, positionMS);
+		positionWS = mul(World, positionMS);
+	} else {
+#			endif
 
+#			if defined(DCLF_BINDLESS)
+	// The rows are absolute: the pivot is this view's eye.
+	float3x4 worldMatrix = Skinned::GetBoneTransformMatrixBindless(DCLFObjects[DCLFObjectIndex].DCLFBoneOffset, boneIndices, FrameBuffer::CameraPosAdjust.xyz, input.BoneWeights);
+#			else
 	float3x4 worldMatrix = Skinned::GetBoneTransformMatrix(Bones, boneIndices, FrameBuffer::CameraPosAdjust.xyz, input.BoneWeights);
-	precise float4 positionWS = float4(mul(positionMS, transpose(worldMatrix)), 1);
+#			endif
+	positionWS = float4(mul(positionMS, transpose(worldMatrix)), 1);
 
 	positionCS = mul(FrameBuffer::CameraViewProj, positionWS);
+#			if defined(DCLF_PULLED)
+	}
+#			endif
 #		else
 	precise float4x4 modelViewProj = mul(FrameBuffer::CameraViewProj, World);
 	positionCS = mul(modelViewProj, positionMS);
@@ -165,7 +255,11 @@ VS_OUTPUT main(VS_INPUT input)
 #		if defined(RENDER_NORMAL)
 	float3 normalVS = float3(1, 1, 1);
 #			if defined(SKINNED)
+#				if defined(DCLF_BINDLESS)
+	float3x3 boneRSMatrix = Skinned::GetBoneRSMatrixBindless(DCLFObjects[DCLFObjectIndex].DCLFBoneOffset, boneIndices, input.BoneWeights);
+#				else
 	float3x3 boneRSMatrix = Skinned::GetBoneRSMatrix(Bones, boneIndices, input.BoneWeights);
+#				endif
 	normalMS = normalize(mul(normalMS, transpose(boneRSMatrix)));
 	normalVS = mul(FrameBuffer::CameraView, float4(normalMS, 0)).xyz;
 #			else
@@ -249,6 +343,238 @@ VS_OUTPUT main(VS_INPUT input)
 
 	return vsout;
 }
+
+#	if defined(DCLF_PULLED) && !defined(DCLF_REFRACTION)
+// Drawcall Limit Fix's shadow views draw with plain indirect draws (ShadowViewPass): one per pipeline, which cannot bind a
+// vertex buffer, or push data, per draw. So this stage reads its draw's sequence (BuildDrawsCS: DrawSequence, at
+// DCLFSequencesAddress + its instance's stride), and through it the draw's object word, material row and geometry. The draw
+// is indexed from the index pool (IndexPool), with no vertex offset, so the stage's vertex index is the geometry's own,
+// and the stage loads the attributes at it, decoded as the engine's input layout for the pipeline's vertex layout has them
+// (VertexInput.cpp, BuildVertexElements), with Common/DCLFObjects.hlsli's DCLFAttribute.
+
+VS_OUTPUT DCLFShadowVertex(uint index, uint a_instance)
+{
+	const uint64_t sequence = DCLFDrawSequence(a_instance);
+	const uint4 rows = DCLFSequenceShadowRows(sequence);  // the draw's key slot's vertex layout, the material row's address
+	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
+	// The draw's own (BuildDrawsCS: a shadow view's slot layouts), so a bucket draws casters of every layout; the call's pushed one
+	// for a slot the latch's table did not hold yet.
+	DCLFDrawVertexLayout = any(rows.xy != 0) ? rows.xy : DCLFVertexLayout;
+	// The draw's caster technique (bit 31: present; BuildDrawsCS's slot table), which decides what the canonical build's SKINNED and
+	// VC take per draw; absent, the build's defines.
+	const uint drawTechnique = vk::RawBufferLoad<uint>(sequence);
+	const bool known = (drawTechnique & 0x80000000u) != 0;
+	DCLFDrawSkinned = !known || (drawTechnique & 0x4u) != 0;
+	const uint4 vertexBuffer = vk::RawBufferLoad<uint4>(sequence + 24);  // address, size, stride
+	const uint4 streamBuffer = vk::RawBufferLoad<uint4>(sequence + 40);
+	const uint64_t materialRow = DCLFAddress(rows.zw);
+
+	DCLFStream first, second;
+	first.address = DCLFAddress(vertexBuffer.xy);
+	first.stride = vertexBuffer.w;
+	second.address = DCLFAddress(streamBuffer.xy);
+	second.stride = streamBuffer.w;
+	DCLFStreamsAt(index, first, second);
+
+	VS_INPUT input;
+#		if defined(STENCIL_ABOVE_WATER)
+	input.PositionMS = asfloat(vk::RawBufferLoad<uint4>(DCLFAttribute(0, first, second)));
+#		else
+	// Only xyz is read (DCLFShade makes w 1).
+	input.PositionMS = float4(asfloat(vk::RawBufferLoad<uint3>(DCLFAttribute(0, first, second))), 1);
+#		endif
+#		if defined(TEXTURE)
+	input.TexCoord = DCLFHalf2(vk::RawBufferLoad<uint>(DCLFAttribute(1, first, second)));
+#		endif
+#		if defined(NORMALS)
+	input.Normal = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(3, first, second)));
+	input.Bitangent = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(4, first, second)));
+#		endif
+#		if defined(VC)
+	// A draw without vertex colours: alpha 1, which the alpha test's multiply leaves as it is.
+	input.Color = float4(1, 1, 1, 1);
+	[branch] if (!known || (drawTechnique & 0x1u) != 0)
+		input.Color = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(5, first, second)));
+#		endif
+#		if defined(SKINNED)
+	input.BoneWeights = 0;
+	input.BoneIndices = 0;
+	[branch] if (DCLFDrawSkinned) {
+		const uint64_t skinning = DCLFAttribute(6, first, second);
+		const uint2 weights = vk::RawBufferLoad<uint2>(skinning);
+		input.BoneWeights = float4(DCLFHalf2(weights.x), DCLFHalf2(weights.y));
+		input.BoneIndices = DCLFUnorm4(vk::RawBufferLoad<uint>(skinning + 8));
+	}
+#		endif
+
+	// What the DCLF_BINDLESS build's statics hold, from this draw's object and material row.
+	World = float4x4(
+		DCLFPlacements[DCLFObjectIndex].World[0] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.x),
+		DCLFPlacements[DCLFObjectIndex].World[1] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.y),
+		DCLFPlacements[DCLFObjectIndex].World[2] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.z),
+		float4(0, 0, 0, 1));
+	TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
+	TexcoordOffset = asfloat(vk::RawBufferLoad<uint4>(materialRow));
+
+	VS_OUTPUT vsout = DCLFShade(input);
+	// The viewport's depth transform, here: z' = min * w + z * (max - min) under a [0, 1] viewport is the window depth the view's
+	// own viewport gives (depth bias applies after it either way), and the clip distances keep its clipping, z in [0, w]
+	// before the transform (the views' rasterizer states clip depth, never clamp it: DrawPipelines::ShadowRasterStateId).
+	const float clipZ = vsout.PositionCS.z;
+	vsout.DCLFClip = float2(clipZ, vsout.PositionCS.w - clipZ);
+	vsout.PositionCS.z = DCLFDepthRange.x * vsout.PositionCS.w + clipZ * DCLFDepthRange.y;
+	// The pixel stage's: the diffuse's descriptor (the shadow material row's, kShadowRowDiffuseOffset) and the object word; nothing for
+	// an empty one (DCLF_EMPTY_PIXEL).
+#		if defined(DCLF_EMPTY_PIXEL)
+	vsout.DCLFDraw = uint2(0, 0);
+#		else
+	vsout.DCLFDraw = uint2(vk::RawBufferLoad<uint>(materialRow + 16), DCLFObjectWord);
+#		endif
+	return vsout;
+}
+
+// The draw's lookups (its sequence, rows, object, geometry) keyed on a wave-uniform instance: each pass of the loop takes the first
+// active lane's draw and the lanes of that draw, so the loads are the draw's, not each lane's (one pass unless a wave mixes draws).
+VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+{
+	VS_OUTPUT vsout;
+	[loop] for (;;) {
+		const uint drawInstance = WaveReadLaneFirst(a_instance);
+		[branch] if (drawInstance == a_instance) {
+			vsout = DCLFShadowVertex(index, drawInstance);
+			break;
+		}
+	}
+	return vsout;
+}
+#	elif defined(DCLF_REFRACTION)
+// T7d's refraction draw (RefractionDrawPass): a plain indexed indirect draw over the refraction range, each draw a pooled sequence its
+// instance names (BuildDrawsCS: StoreShadowSequence's), whose rows are a main draw's: the pipeline row's vertex layout, the material
+// row's TexcoordOffset (Lighting's PerMaterial c2, the same texCoordOffset and texCoordScale BSUtilityShader::SetupMaterial writes) and
+// its diffuse (t0), which is the refraction normal map BSUtilityShader binds as TexNormalSampler for RENDER_NORMAL. The draw's push
+// data names the frame's LodFadeFrame (DCLFMaterialRowsAddress) in place of the shadow views' material rows.
+//
+// The engine's stage (above), per draw: EyePos.w is the property's refraction LOD fade (+0x104, which GetRenderPasses writes from
+// fRefractionLODFadeStart/End and the fade node's metric, and past whose end it registers nothing), here computed from the frame's
+// camera as the Lighting draws compute their envmap fade (Lighting.hlsl, DCLFLodMetric); with RENDER_NORMAL_FALLOFF, EyePos.xyz is the
+// camera in the geometry's model space (BSUtilityShader::SetupGeometry: its world transform inverted). RefractionPower, a pixel
+// constant multiplying TexCoord0.w, is folded into TexCoord0.w here.
+float DCLFRefractionFloat(uint64_t a_frame, uint a_float) { return asfloat(vk::RawBufferLoad<uint>(a_frame + 4u * a_float, 4)); }
+
+VS_OUTPUT DCLFRefractionVertex(uint index, uint a_instance)
+{
+	const uint64_t sequence = DCLFDrawSequence(a_instance);
+	const uint4 rows = DCLFSequenceRows(sequence);  // the pipeline row's address, the material row's
+	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
+	DCLFPipelineRowAddress = DCLFAddress(rows.xy);
+	DCLFMaterialRowAddress = DCLFAddress(rows.zw);
+	DCLFDrawVertexLayout = DCLFPipelineVertexLayout();  // the draw's slot's (one pipeline draws every layout)
+	const uint4 vertexBuffer = vk::RawBufferLoad<uint4>(sequence + 24);  // address, size, stride
+	const uint4 streamBuffer = vk::RawBufferLoad<uint4>(sequence + 40);
+	DCLFStream first, second;
+	first.address = DCLFAddress(vertexBuffer.xy);
+	first.stride = vertexBuffer.w;
+	second.address = DCLFAddress(streamBuffer.xy);
+	second.stride = streamBuffer.w;
+	DCLFStreamsAt(index, first, second);
+
+	const uint object = DCLFObjectIndex;
+	const uint flags = DCLFObjects[object].DCLFRecordFlags;
+	VS_OUTPUT vsout = (VS_OUTPUT)0;
+	vsout.DCLFClip = float2(1, 1);
+
+	// The refraction LOD fade (EyePos.w): FUN_14147c470 at the fade node's metric, while the node's LOD fades apply (LodFadeNodeOf);
+	// else the property's, as it holds it (the shading row's MaterialData.x). Past the end the engine registers no pass: no draw.
+	const uint64_t lodFrame = DCLFAddress(DCLFMaterialRowsAddress);  // LodFadeFrame (LightingDescriptors.h)
+	const float4 fadeNode = DCLFPlacements[object].LodFadeNode;
+	float fade = DCLFShading[object].MaterialData.x;
+	const float3 eye = float3(DCLFRefractionFloat(lodFrame, 0), DCLFRefractionFloat(lodFrame, 1), DCLFRefractionFloat(lodFrame, 2));
+	if (DCLFRefractionFloat(lodFrame, 28) != 0 && fadeNode.w >= 0.0 && fadeNode.w < 16.0) {
+		const uint type = uint(fadeNode.w) & 0xFu;
+		float metric = DCLFRefractionFloat(lodFrame, 10);  // the override
+		if (DCLFRefractionFloat(lodFrame, 11) == 0) {
+			const float divisor = DCLFRefractionFloat(lodFrame, 12 + type);
+			const float scale = divisor > 0 ? DCLFRefractionFloat(lodFrame, 3) / divisor : DCLFRefractionFloat(lodFrame, 9);
+			metric = length(fadeNode.xyz - eye) * scale * DCLFRefractionFloat(lodFrame, 8);
+		}
+		const float start = DCLFRefractionFloat(lodFrame, 29), end = DCLFRefractionFloat(lodFrame, 30);
+		if (end < metric) {
+			vsout.PositionCS = float4(0, 0, -1, 1);  // outside the clip volume: no draw, as the engine's no pass
+			return vsout;
+		}
+		fade = metric <= start ? 1 : saturate((metric - end) / (start - end));
+	}
+
+	precise float4 positionMS = float4(asfloat(vk::RawBufferLoad<uint3>(DCLFAttribute(0, first, second))), 1.0);
+	const float2 texCoord = DCLFHalf2(vk::RawBufferLoad<uint>(DCLFAttribute(1, first, second)));
+	// Normals unless model-space normals (the technique's Normals | BinormalTangent), whose stage reads (1, 1, 1).
+	float3 normalMS = float3(1, 1, 1);
+	if ((flags & kDCLFRefractionNoNormals) == 0)
+		normalMS = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(3, first, second))).xyz * 2 - 1;
+	const float vertexAlpha = (flags & kDCLFRefractionVertexColors) != 0 ? DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(5, first, second))).w : 1;
+
+	World = float4x4(
+		DCLFPlacements[object].World[0] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.x),
+		DCLFPlacements[object].World[1] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.y),
+		DCLFPlacements[object].World[2] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.z),
+		float4(0, 0, 0, 1));
+	// EyePos.xyz with RENDER_NORMAL_FALLOFF: the camera in model space (the world transform's inverse; NiTransform's scale is uniform).
+	const float3x3 rotateScale = (float3x3)World;
+	const float3 eyeRelative = eye - FrameBuffer::CameraPosAdjust.xyz - float3(World[0].w, World[1].w, World[2].w);
+	const float3 eyeMS = mul(eyeRelative, rotateScale) / max(dot(rotateScale[0], rotateScale[0]), 1e-12);
+
+	float4 positionCS;
+	float3 normalVS;
+	float falloff = 1;
+	if (DCLFObjects[object].DCLFBoneRows != 0) {
+		const uint64_t skinning = DCLFAttribute(6, first, second);
+		const uint2 weightWords = vk::RawBufferLoad<uint2>(skinning);
+		const float4 boneWeights = float4(DCLFHalf2(weightWords.x), DCLFHalf2(weightWords.y));
+		precise int4 boneIndices = 765.01.xxxx * DCLFUnorm4(vk::RawBufferLoad<uint>(skinning + 8));
+		const uint boneOffset = DCLFObjects[object].DCLFBoneOffset;
+		// The rows are absolute: the pivot is the camera's posAdjust.
+		float3x4 worldMatrix = Skinned::GetBoneTransformMatrixBindless(boneOffset, boneIndices, FrameBuffer::CameraPosAdjust.xyz, boneWeights);
+		precise float4 positionWS = float4(mul(positionMS, transpose(worldMatrix)), 1);
+		positionCS = mul(FrameBuffer::CameraViewProj, positionWS);
+		const float3x3 boneRSMatrix = Skinned::GetBoneRSMatrixBindless(boneOffset, boneIndices, boneWeights);
+		normalMS = normalize(mul(normalMS, transpose(boneRSMatrix)));
+		normalVS = mul(FrameBuffer::CameraView, float4(normalMS, 0)).xyz;
+		if ((flags & kDCLFRefractionFalloff) != 0)
+			falloff = dot(normalMS, normalize(eyeMS - positionWS.xyz));
+	} else {
+		precise float4x4 modelViewProj = mul(FrameBuffer::CameraViewProj, World);
+		positionCS = mul(modelViewProj, positionMS);
+		normalVS = mul(mul(FrameBuffer::CameraView, World), float4(normalMS, 0)).xyz;
+		if ((flags & kDCLFRefractionFalloff) != 0)
+			falloff = dot(normalMS, normalize(eyeMS - positionMS.xyz));
+	}
+	if ((flags & kDCLFRefractionClamp) != 0)
+		normalVS = max(min(normalVS, 0.1), -0.1);
+	vsout.PositionCS = positionCS;
+	vsout.Normal = float4(normalVS, vertexAlpha);
+	const float4 texcoordOffset = DCLFRowFloat4(DCLFMaterialRowAddress, 32);  // Lighting's PerMaterial TexcoordOffset (c2)
+	vsout.TexCoord0 = float4(texCoord * texcoordOffset.zw + texcoordOffset.xy, max(1, 0.0013333333 * positionCS.z + 0.8),
+		fade * falloff * DCLFShading[object].MaterialData.w);
+	// The pixel stage's: the diffuse's descriptor and sampler (the material row's t0, s0) and the object word.
+	vsout.DCLFDraw = uint2(DCLFMaterialTextureIndex(0), DCLFObjectWord);
+	vsout.DCLFRefractionSampler = DCLFMaterialSamplerIndex(0);
+	return vsout;
+}
+
+// Keyed on a wave-uniform instance, as the shadow views' main is.
+VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+{
+	VS_OUTPUT vsout;
+	[loop] for (;;) {
+		const uint drawInstance = WaveReadLaneFirst(a_instance);
+		[branch] if (drawInstance == a_instance) {
+			vsout = DCLFRefractionVertex(index, drawInstance);
+			break;
+		}
+	}
+	return vsout;
+}
+#	endif
 #endif
 
 typedef VS_OUTPUT PS_INPUT;
@@ -269,7 +595,16 @@ SamplerState SampStencilSampler : register(s5);
 SamplerComparisonState SampFocusShadowMapSamplerComp : register(s6);
 SamplerState SampGrayscaleSampler : register(s7);
 
+#	if defined(DCLF_PULLED)
+// A pulled draw's diffuse, by the descriptor its vertex stage passes (DCLFDraw.x): the draw has no binding record of its own.
+Texture2D<float4> DCLFDiffuse(uint a_index)
+{
+	return ResourceDescriptorHeap[NonUniformResourceIndex(a_index)];
+}
+#		define TexBaseSampler DCLFDiffuse(input.DCLFDraw.x)
+#	else
 Texture2D<float4> TexBaseSampler : register(t0);
+#	endif
 Texture2D<float4> TexNormalSampler : register(t1);
 Texture2D<float4> TexDepthUtilitySampler : register(t2);
 Texture2DArray<float4> TexShadowMapSampler : register(t3);
@@ -327,6 +662,36 @@ float2 GetShadowPCFOffset(uint index)
 #	endif
 }
 
+#	if defined(DCLF_PULLED)
+// One pipeline draws every threshold, so the reference is the object's own (its word set by main, below).
+#		define AlphaTestRefRS (DCLFObjects[DCLFObjectIndex].AlphaTestRef)
+#	elif defined(DCLF_BINDLESS)
+// One pipeline draws every threshold, so the reference is the object's own.
+static float DCLFAlphaTestRef = DCLFObjects[DCLFObjectIndex].AlphaTestRef;
+#		define AlphaTestRefRS DCLFAlphaTestRef
+#	endif
+
+#	if defined(DCLF_BINDLESS) && defined(RENDER_DEPTH) && defined(ALPHA_TEST)
+// The depth pass's own reference (PerGeometry AlphaTestRef.x), which DCLF's PerGeometry block does not hold: what
+// BSUtilityShader::SetupGeometry writes for a Lighting property's alpha property, from the object's threshold (AlphaTestRefRS
+// is threshold / 255): 0x3F7EFEFF while it blends, else threshold * (1 / 255) + 0x3B80802C, and 1 / 255 more for a threshold
+// of 4. The shadow maps (RENDER_SHADOWMAP) do not test it.
+float DCLFDepthAlphaTestRef()
+{
+	if (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & 2u)
+		return asfloat(0x3F7EFEFFu);
+	const uint threshold = (uint)round(AlphaTestRefRS * 255.0);
+	precise float reference = (float)threshold * asfloat(0x3B808081u);
+	reference += asfloat(0x3B80802Cu);
+	if (threshold == 4u)
+		reference += asfloat(0x3B808081u);
+	return reference;
+}
+#		define DepthAlphaTestRef DCLFDepthAlphaTestRef()
+#	else
+#		define DepthAlphaTestRef AlphaTestRef.x
+#	endif
+
 float SampleShadowPCF(Texture2DArray<float4> tex, SamplerComparisonState samp, float2 baseUV, float layerIndex, float compareValue, float2x2 rotationMatrix, float radius)
 {
 	float visibility = 0.0;
@@ -365,9 +730,42 @@ float SampleDualParaboloidShadowPCF(Texture2DArray<float4> tex, SamplerCompariso
 	return visibility / ShadowPCFSampleCount;
 }
 
+// Drawcall Limit Fix's depth-only draws of a technique without an alpha test: the stage has no output and no effect, so it is
+// compiled empty, so its pipeline tests depth before it shades and the empty stage is skipped (DrawPipelines::ShadowDiscards).
+// (The engine's build writes a constant colour to no target.) A TEXTURE technique's test below cannot discard here: its alpha
+// is 1 and the reference at most 1. Left in, it put every textured opaque caster on late depth testing.
+#	if defined(DCLF_REFRACTION)
+// T7d's refraction draw: the engine's RENDER_NORMAL output (below), its variants the draw's (the vertex stage's notes). A one-sided
+// object's back faces are discarded here, as the engine's rasterizer state culls them (the pipeline draws both: DrawPipelines.cpp,
+// BuildRefraction).
+PS_OUTPUT main(PS_INPUT input, bool a_frontFace : SV_IsFrontFace)
+{
+	PS_OUTPUT psout;
+	DCLFObjectWord = input.DCLFDraw.y;
+	const uint flags = DCLFObjects[DCLFObjectIndex].DCLFRecordFlags;
+	if (!a_frontFace && (flags & kDCLFRefractionTwoSided) == 0)
+		discard;
+	Texture2D<float4> normalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(input.DCLFDraw.x)];
+	SamplerState normalSampler = SamplerDescriptorHeap[NonUniformResourceIndex(input.DCLFRefractionSampler)];
+	float2 normal = 2 * (-0.5 + normalTexture.Sample(normalSampler, input.TexCoord0.xy).xy);
+	if ((flags & kDCLFRefractionClamp) != 0)
+		normal = clamp(normal, -0.1, 0.1);
+	psout.Color.xy = ((normal * 0.9 + input.Normal.xy) / input.TexCoord0.z) * 0.5 + 0.5;
+	psout.Color.z = input.Normal.w * input.TexCoord0.w;  // RefractionPower is in TexCoord0.w (the vertex stage's)
+	psout.Color.w = 1;
+	return psout;
+}
+#	elif defined(DCLF_EMPTY_PIXEL)
+void main(PS_INPUT input)
+{
+}
+#	else
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
+#	if defined(DCLF_PULLED)
+	DCLFObjectWord = input.DCLFDraw.y;  // what AlphaTestRefRS reads
+#	endif
 
 #	if defined(ADDITIONAL_ALPHA_MASK)
 	uint2 alphaMask = input.PositionCS.xy;
@@ -438,7 +836,7 @@ PS_OUTPUT main(PS_INPUT input)
 		discard;
 	}
 #		elif !defined(RENDER_SHADOWMAP)
-	if (alpha - AlphaTestRef.x < 0) {
+	if (alpha - DepthAlphaTestRef < 0) {
 		discard;
 	}
 #		endif
@@ -740,5 +1138,6 @@ PS_OUTPUT main(PS_INPUT input)
 
 	return psout;
 }
+#	endif
 
 #endif

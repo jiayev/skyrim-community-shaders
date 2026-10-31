@@ -23,7 +23,13 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/Format.h"
+#include "Utils/SwitchFile.h"
 #include "Utils/UI.h"
+#include "Vram/Debug.h"
+#include "Vram/VramLedger.h"
+#if defined(CS_HAS_RENDER_GRAPH)
+#	include "RenderGraph/MemoryWindow.h"
+#endif
 
 namespace
 {
@@ -736,6 +742,31 @@ void AdvancedSettingsRenderer::RenderTestingSection()
 		ImGui::Separator();
 		ImGui::Spacing();
 		globals::deferred->DrawSettings();
+
+#if defined(CS_HAS_RENDER_GRAPH)
+		if (Util::Button(T("menu.advanced.vram_attribution", "VRAM Attribution")))
+			RenderGraphMemory::OpenWindow();
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T("menu.advanced.vram_attribution_tooltip",
+				"Every D3D11 and render graph resource with its owner and size, by owner, source or heap, reconciled against the driver's "
+				"heap usage."));
+		ImGui::SameLine();
+#endif
+		if (Util::Button(T("menu.advanced.vram_dump", "Dump VRAM Attribution"))) {
+			const auto path = Vram::WriteJson(Util::SwitchFile::Directory());
+			if (path.empty())
+				logger::warn("[VRAM] Could not write the VRAM attribution dump");
+			else
+				logger::info("[VRAM] Wrote VRAM attribution to {}", path.string());
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T("menu.advanced.vram_dump_tooltip",
+				"Writes every resource, heap and reconciliation line as JSON next to the Community Shaders log, for comparing runs."));
+		ImGui::SameLine();
+		if (Vram::Debug::Enabled())
+			ImGui::TextUnformatted(T("menu.advanced.vram_debug_on", "VRAM debug mode is on"));
+		else
+			ImGui::TextDisabled("%s", T("menu.advanced.vram_debug_off", "Set CS_VRAM_DEBUG=1 and restart to list the render graph's device memory by call site"));
 
 		ImGui::Spacing();
 		ImGui::Separator();

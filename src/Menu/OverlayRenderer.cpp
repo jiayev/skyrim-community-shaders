@@ -28,6 +28,7 @@
 #include "Util.h"
 #include "Utils/Notifications.h"
 #include "Utils/UISurface.h"
+#include "Vram/DxvkMemory.h"
 
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
@@ -369,11 +370,17 @@ void OverlayRenderer::HandleFontReload(Menu& menu, float& cachedFontSize, float 
 void OverlayRenderer::InitializeImGuiFrame(Menu& menu)
 {
 	// Start the Dear ImGui frame
-	ImGui_ImplDX11_NewFrame();
-	ImGui_ImplWin32_NewFrame();
+	{
+		ZoneScopedN("CS.Present.Overlay.ImplNewFrame");
+		ImGui_ImplDX11_NewFrame();
+		ImGui_ImplWin32_NewFrame();
+	}
 
 	DXGI_SWAP_CHAIN_DESC desc{};
-	globals::d3d::swapChain->GetDesc(&desc);
+	{
+		ZoneScopedN("CS.Present.Overlay.SwapChainDesc");
+		globals::d3d::swapChain->GetDesc(&desc);
+	}
 
 	const float displayW = static_cast<float>(desc.BufferDesc.Width);
 	const float displayH = static_cast<float>(desc.BufferDesc.Height);
@@ -526,7 +533,12 @@ void OverlayRenderer::FinalizeImGuiFrame()
 	// Apply background blur behind ImGui windows before rendering them
 	BackgroundBlur::RenderBackgroundBlur();
 
-	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+	{
+		ZoneScopedN("CS.Present.Overlay.RenderDrawData");
+		// The backend grows its vertex and index buffers, and uploads font atlas pages, here.
+		Vram::OwnerScope vramScope("CS/Menu");
+		ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+	}
 }
 
 void OverlayRenderer::RenderFirstTimeSetupOverlay()

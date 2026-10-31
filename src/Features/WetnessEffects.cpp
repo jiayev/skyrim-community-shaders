@@ -1,5 +1,7 @@
 #include "WetnessEffects.h"
+#include "CSEditor.h"
 #include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
+#include "Features/DrawcallLimitFix.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
 
@@ -377,7 +379,7 @@ namespace Ripples
 			for (auto& waterObject : a_waterSystem->waterObjects) {
 				if (waterObject) {
 					if (const auto& rippleObject = waterObject->waterRippleObject; rippleObject) {
-						rippleObject->SetAppCulled(!a_enabled);
+						DrawcallLimitFix::WriteHidden(rippleObject.get(), !a_enabled);
 					}
 				}
 			}

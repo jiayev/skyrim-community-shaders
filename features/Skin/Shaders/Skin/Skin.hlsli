@@ -8,6 +8,9 @@
 #include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
 
+#include "Common/DCLFObjects.hlsli"
+#include "Common/NamespacedCBuffer.hlsli"
+
 namespace Skin
 {
 	float CalculateCurvature(float3 N)
@@ -18,26 +21,79 @@ namespace Skin
 	}
 
 #if defined(PSHADER)
+#	if defined(DCLF_BINDLESS_DRAW)
+#		define skinPerGeometry (DCLFShading[DCLFObjectIndex].SkinPerGeometry)
+#		define skinMaterialFlags (DCLFShading[DCLFObjectIndex].SkinMaterialFlags)
+	SharedData::SkinData GetSkinData()
+	{
+		SharedData::SkinData data;
+		data.skinParams = DCLFShading[DCLFObjectIndex].SkinProfile[0];
+		data.skinParams2 = DCLFShading[DCLFObjectIndex].SkinProfile[1];
+		data.skinDetailParams = DCLFShading[DCLFObjectIndex].SkinProfile[2];
+		data.sssParams = DCLFShading[DCLFObjectIndex].SkinProfile[3];
+		data.fuzzParams = DCLFShading[DCLFObjectIndex].SkinProfile[4];
+		data.physicalParams = DCLFShading[DCLFObjectIndex].SkinProfile[5];
+		data.wetParams = DCLFShading[DCLFObjectIndex].SkinProfile[6];
+		return data;
+	}
+#	else
 	cbuffer SkinPerGeometry : register(b7)
 	{
-		float4 skinPerGeometry;
-		float4 skinMaterialFlags;
-		SharedData::SkinData skinPerGeometryProfile;
+		float4 NSCB(Skin, skinPerGeometry);
+		float4 NSCB(Skin, skinMaterialFlags);
+		SharedData::SkinData NSCB(Skin, skinPerGeometryProfile);
 	};
-
-	SharedData::SkinData GetSkinData()
-	{
-		return skinPerGeometryProfile;
-	}
+	NSCB_ALIAS(Skin, float4, skinPerGeometry)
+	NSCB_ALIAS(Skin, float4, skinMaterialFlags)
+	NSCB_ALIAS(Skin, SharedData::SkinData, skinPerGeometryProfile)
+	SharedData::SkinData GetSkinData() { return skinPerGeometryProfile; }
+#	endif
 #else
-	SharedData::SkinData GetSkinData()
-	{
-		return SharedData::skinData;
-	}
+	SharedData::SkinData GetSkinData() { return SharedData::skinData; }
 #endif
 #if defined(CS_SKIN_SHADING)
+#	if !defined(DCLF_BINDLESS_DRAW)
+	Texture2D<float4> TexSkinExtraSampler : register(t71);
+	Texture2D<float4> TexSkinWetnessSampler : register(t74);
 	Texture2D<float4> TexSkinDetailNormal : register(t72);
 	SamplerState DetailSampler : register(s15);
+#	endif
+	float4 SampleControls(SamplerState a_sampler, float2 a_uv)
+	{
+#	if defined(DCLF_BINDLESS_DRAW)
+		Texture2D<float4> texture = ResourceDescriptorHeap[DCLFShading[DCLFObjectIndex].SkinTextures.x];
+		return texture.Sample(a_sampler, a_uv);
+#	else
+		return TexSkinExtraSampler.Sample(a_sampler, a_uv);
+#	endif
+	}
+	float4 SampleWetness(SamplerState a_sampler, float2 a_uv)
+	{
+#	if defined(DCLF_BINDLESS_DRAW)
+		Texture2D<float4> texture = ResourceDescriptorHeap[DCLFShading[DCLFObjectIndex].SkinTextures.y];
+		return texture.Sample(a_sampler, a_uv);
+#	else
+		return TexSkinWetnessSampler.Sample(a_sampler, a_uv);
+#	endif
+	}
+	float4 SampleDetail(SamplerState a_sampler, float2 a_uv, float a_bias)
+	{
+#	if defined(DCLF_BINDLESS_DRAW)
+		Texture2D<float4> texture = ResourceDescriptorHeap[DCLFShading[DCLFObjectIndex].SkinTextures.z];
+		return texture.SampleBias(a_sampler, a_uv, a_bias);
+#	else
+		return TexSkinDetailNormal.SampleBias(a_sampler, a_uv, a_bias);
+#	endif
+	}
+	float4 SampleDetailNormal(float2 a_uv, float a_bias)
+	{
+#	if defined(DCLF_BINDLESS_DRAW)
+		SamplerState detailSampler = SamplerDescriptorHeap[DCLFShading[DCLFObjectIndex].SkinTextures.w];
+		return SampleDetail(detailSampler, a_uv, a_bias);
+#	else
+		return SampleDetail(DetailSampler, a_uv, a_bias);
+#	endif
+	}
 
 	float3x3 SurfaceBasis(float3 position, float3 normal, float2 uv)
 	{

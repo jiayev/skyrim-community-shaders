@@ -22,6 +22,9 @@ using json = nlohmann::json;
 
 struct Feature;
 
+// lastSharedData (an alignas(16) block) pads the class.
+#pragma warning(push)
+#pragma warning(disable: 4324)
 class State
 {
 public:
@@ -325,6 +328,7 @@ public:
 	 * @param a_forceDeferred If true, forces the Deferred flag regardless of current pass.
 	 */
 	void ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred = false);
+	void ModifyShaderLookup(RE::BSShader::Type a_shaderType, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred = false);
 
 	/**
 	 * @brief Pixel descriptor bits a shader type reads at runtime although they also take part in the lookup.
@@ -347,6 +351,10 @@ public:
 	void SetAdapterDescription(const std::wstring& description);
 
 	bool frameAnnotations = false;
+	// The saved "Frame Annotations" value while CS_GPU_IDLE_TRACE forces annotations on.
+	std::optional<bool> frameAnnotationsSetting;
+	/** @brief Debugger events are being emitted (Frame Annotations, or a capture tool is attached). */
+	bool debuggerEvents = false;
 
 	// Pass D3DCOMPILE_PARTIAL_PRECISION to fxc. With explicit min16float types this is
 	// mostly belt-and-braces in SM5, but it lets the compiler downgrade unmarked float
@@ -512,6 +520,20 @@ public:
 	inline static SharedDataCB sharedDataSnapshot{};  ///< Last world lighting upload, reused by offscreen material captures.
 	std::unique_ptr<ConstantBuffer> featureDataCB;
 
+	/**
+	 * @brief The last SharedData uploaded to sharedDataCB.
+	 *
+	 * Drawcall Limit Fix packs this buffer's contents into its own per-draw constants, and it cannot read
+	 * them back from the GPU buffer: the constant mirror only sees writes made through the hooked device
+	 * context, which this one is not. Keeping the struct is exact and costs a copy per frame.
+	 */
+	SharedDataCB lastSharedData{};
+
+	/** @brief The last FeatureData uploaded to featureDataCB, for the same reason as lastSharedData. */
+	std::vector<std::byte> lastFeatureData;
+	/** @brief featureDataCB's size (FeatureBuffer.cpp's packed size, fixed at build time): where Drawcall Limit Fix lays the block out. */
+	std::uint32_t featureDataBytes = 0;
+
 	PermutationCB permutationData{};
 	PermutationCB permutationDataPrevious{};
 
@@ -651,4 +673,21 @@ private:
 	uint historyResetFrame = UINT_MAX;
 	winrt::com_ptr<ID3DUserDefinedAnnotation> pPerf;
 	std::mutex statsMutex;
+};
+#pragma warning(pop)
+
+/**
+ * @brief A debugger event (Nsight, RenderDoc, PIX) around one scope of GPU work, emitted only while
+ * State::debuggerEvents is on, so the name costs nothing otherwise.
+ */
+class ScopedPerfEvent
+{
+public:
+	explicit ScopedPerfEvent(std::string_view a_name);
+	~ScopedPerfEvent();
+	ScopedPerfEvent(const ScopedPerfEvent&) = delete;
+	ScopedPerfEvent& operator=(const ScopedPerfEvent&) = delete;
+
+private:
+	bool active = false;
 };
