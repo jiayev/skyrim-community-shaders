@@ -23,6 +23,7 @@ public:
 	void SaveSettings(json& value) override;
 	/** @brief Restores shared volume quality defaults. */
 	void RestoreDefaultSettings() override;
+	void SetupResources() override;
 	struct alignas(16) Settings
 	{
 		uint enabled = 1;
@@ -59,7 +60,7 @@ public:
 	void RenderReflection();
 	/** @brief Binds the integrated medium to a shader stage. */
 	void Bind(bool compute = false);
-	/** @brief Removes shared medium bindings from both shader stages. */
+	/** @brief Removes volume textures and marks the medium inactive in both shader stages. */
 	void Unbind();
 	/** @brief Invalidates shared medium shaders and history. */
 	void ClearShaderCache() override;
@@ -91,6 +92,7 @@ private:
 	TexturePreview preview;
 	Parameters data{};
 	std::unique_ptr<StructuredBuffer> parameters;
+	std::unique_ptr<StructuredBuffer> inactiveParameters;
 	std::unique_ptr<ConstantBuffer> dispatchCB;
 	std::unique_ptr<ConstantBuffer> engineLocalShadowCB;
 	std::unique_ptr<Texture3D> source, history, integratedLum, integratedTr;

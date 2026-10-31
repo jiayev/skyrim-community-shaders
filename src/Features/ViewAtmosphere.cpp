@@ -135,6 +135,16 @@ void ViewAtmosphere::DrawSettings()
 
 #undef I18N_KEY_PREFIX
 
+void ViewAtmosphere::SetupResources()
+{
+	// The inactive medium has the same t108 layout as the main and reflection views.
+	// Removing this CPU-written buffer changes DCLF's frame-buffer set mid-frame.
+	inactiveParameters = std::make_unique<StructuredBuffer>(StructuredBufferDesc<Parameters>(uint64_t(1), false, true), 1u, "ViewAtmosphere::InactiveParameters");
+	inactiveParameters->CreateSRV();
+	const Parameters inactive{};
+	inactiveParameters->Update(&inactive, sizeof(inactive));
+}
+
 bool ViewAtmosphere::Prepare()
 {
 	prepared = ready = false;
@@ -523,9 +533,9 @@ void ViewAtmosphere::RenderReflection()
 
 void ViewAtmosphere::Unbind()
 {
-	ID3D11ShaderResourceView* nullSrvs[3]{};
-	globals::d3d::context->PSSetShaderResources(106, 3, nullSrvs);
-	globals::d3d::context->CSSetShaderResources(106, 3, nullSrvs);
+	ID3D11ShaderResourceView* inactive[] = { nullptr, nullptr, inactiveParameters ? inactiveParameters->SRV() : nullptr };
+	globals::d3d::context->PSSetShaderResources(106, 3, inactive);
+	globals::d3d::context->CSSetShaderResources(106, 3, inactive);
 }
 
 void ViewAtmosphere::ClearShaderCache()
