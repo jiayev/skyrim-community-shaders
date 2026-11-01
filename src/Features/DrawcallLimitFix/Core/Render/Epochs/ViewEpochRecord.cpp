@@ -78,7 +78,7 @@ namespace DCLF
 					prepared.program = resources->buildDraws;
 					prepared.latch = frame->latch;
 					prepared.signature = resources->dispatchSignature->GetHandle();
-					prepared.faces = resources->traits->faces;
+					prepared.faces = static_cast<std::uint32_t>(frame->push.size());
 					auto& constants = prepared.constants;
 					constants.latchIndex = frame->latch->SrvIndex();
 					constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
@@ -233,7 +233,7 @@ namespace DCLF
 					auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
 					if (!frame || !frame->indirect.valid || !frame->width || !frame->height || (mode != DrawMode::Faces && frame->buckets.empty()))
 						return prepared;
-					prepared.faces = resources->traits->faces;
+					prepared.faces = static_cast<std::uint32_t>(frame->push.size());
 					const std::uint32_t colours = mode == DrawMode::Faces ? prepared.faces : (mode == DrawMode::Octants || mode == DrawMode::DirectOctants) ? 3u :
 					                                                                     mode == DrawMode::Colour                                           ? 2u :
 					                                                                                                                                          0u;

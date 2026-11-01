@@ -21,6 +21,7 @@ namespace EnvironmentProbe
 		ID3D11DepthStencilView* DepthView();
 		RE::NiCamera* PrepareDclf();
 		void DclfSubmitted();
+		bool UseDclf(const Request& request);
 		void BeforeDraw();
 		void AfterDraw();
 		bool RejectGeometry(RE::BSCullingProcess* process, RE::BSGeometry& geometry);

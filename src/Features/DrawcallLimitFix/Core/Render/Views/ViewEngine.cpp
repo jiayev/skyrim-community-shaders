@@ -334,7 +334,7 @@ namespace DCLF
 		std::shared_ptr<const ViewFrame> shape;
 		if (!a_faces.empty())
 			shape = revision.shape->Value<ViewFrame>();
-		if (a_view == Api::EngineView::EnvironmentProbe && (!shape || shape->buckets.empty() || !shape->indirect.valid))
+		if (a_view == Api::EngineView::EnvironmentProbe && (!shape || shape->push.size() != a_faces.size() || shape->buckets.empty() || !shape->indirect.valid))
 			return ViewSubmit::NoRevision;
 		// A view with frame constants of its own holds its commit's frame textures, not the colour segment's.
 		auto& state = impl->View(a_view);

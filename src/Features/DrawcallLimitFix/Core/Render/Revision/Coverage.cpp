@@ -1,11 +1,11 @@
 // The frame's side of the scene revisions, render thread: the build point, the revision inputs it posts (latest wins) and the coverage
 // it decides at FrameDriver::BeginFrame, before the engine draws: which epochs the adopted snapshot's revision covers.
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
@@ -120,7 +120,8 @@ namespace DCLF
 			const bool target = Extensions::ViewEntryOf(slot.view).area == Api::ViewArea::Target;
 			next.views[ViewIndex(slot.view)] = { view.resources, view.targets,
 				target ? (view.resources ? view.resources->width : 0u) : mainEpochInputs.viewport[kColourShape].width,
-				target ? (view.resources ? view.resources->height : 0u) : mainEpochInputs.viewport[kColourShape].height, DepthRangeOf(slot.view) };
+				target ? (view.resources ? view.resources->height : 0u) : mainEpochInputs.viewport[kColourShape].height, DepthRangeOf(slot.view),
+				slot.view == Api::EngineView::EnvironmentProbe && view.resources ? view.resources->probeFaceCount : TraitsOf(slot.view).faces };
 		}
 		Extensions::PostSceneResourceInputs(next.resourceInputs);
 		const auto& previous = postedInputs;
@@ -174,11 +175,13 @@ namespace DCLF
 		std::string epochs;
 		for (std::uint32_t e = 0, count = EpochCount(); e < count; ++e)
 			epochs += fmt::format("{}{} {}{}", e ? ", " : "", EpochTraitsOf(e).name, s.revisions.covered[e] ? "covered" : "UNCOVERED", EpochTraitsOf(e).claims ? " (claims)" : "");
-		return fmt::format("adopted snapshot serial {} (revision {}, draws complete {}, stale kind {} of {}, build generation {} against {}, main generation {} against {}), "
-						   "newest taken stale {}, payload {}, adopted set {}; epochs: {}",
+		return fmt::format(
+			"adopted snapshot serial {} (revision {}, draws complete {}, stale kind {} of {}, build generation {} against {}, main generation {} against {}), "
+			"newest taken stale {}, payload {}, adopted set {}; epochs: {}",
 			adopted ? adopted->serial : 0, adopted && adopted->revision, adopted && adopted->drawsComplete, adopted ? s.StaleKindOf(*adopted) : static_cast<std::size_t>(Impl::kStaleKinds),
 			static_cast<std::size_t>(Impl::kStaleKinds), adopted ? adopted->buildGeneration : 0, host ? host->BuildGeneration() : 0,
-			adopted ? adopted->mainGeneration : 0, s.postedInputs.mainGeneration, s.snapshotStale, !payload ? "none" : FrameValues::Get().Available() ? "installed" : "installed, NO FRAME VALUES",
+			adopted ? adopted->mainGeneration : 0, s.postedInputs.mainGeneration, s.snapshotStale, !payload ? "none" : FrameValues::Get().Available() ? "installed" :
+																																						"installed, NO FRAME VALUES",
 			s.adoptedSet ? "named" : "none", epochs);
 	}
 
@@ -230,7 +233,7 @@ namespace DCLF
 			const bool batches = Direct::FrameBatches() != nullptr;
 			for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e) {
 				const auto& traits = EpochTraitsOf(e);
-				const bool live = traits.shape == ShapeKind::Main     ? true :
+				const bool live = traits.shape == ShapeKind::Main   ? true :
 				                  traits.shape == ShapeKind::Shadow ? Direct::ShadowSiteLive() :
 				                                                      Direct::ViewSiteLive(traits.index);
 				bool recorded = true;

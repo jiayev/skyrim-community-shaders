@@ -41,6 +41,8 @@ namespace EnvironmentProbe
 	 * Call on Skyrim's render thread after main world rendering, before first-person/post-processing,
 	 * between techniques (not from a draw hook). The caller retains ownership of the RTVs.
 	 * Targets must be square, single-sample Texture2D RTVs of equal size; at least one output is required.
+	 * While DCLF owns the view, captures require all three base-mip outputs, RGBA16_FLOAT radiance,
+	 * and cullDynamic=false. Requests outside that layout return Unavailable.
 	 * Selected faces are cleared and redrawn; other texels are untouched. Depth and normals follow depth-writing Lighting geometry.
 	 * Uses the loaded world, its current lights/shadow maps, and Lighting material features; no sky, other shader classes,
 	 * screen-space effects, fog, or post processing. No cubemap or reprojection is used. First use compiles permutations

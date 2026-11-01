@@ -8,6 +8,7 @@ groupshared float3 coneAxis;
 groupshared float2 coneAngle;  // cos, sin
 groupshared float2 radialRange;
 groupshared uint activeWords;
+groupshared uint wordMasks[32];
 
 // Exact distance to a circular cone sector with inner/outer radii. The cone
 // conservatively encloses the octahedral tile, including tiles crossing a fold.
@@ -28,6 +29,7 @@ bool Intersects(float3 p, float radius)
 }
 
 [numthreads(32, 1, 1)] void main(uint3 cluster : SV_GroupID, uint lane : SV_GroupIndex) {
+	wordMasks[lane] = 0;
 	if (lane == 0) {
 		float2 lo = float2(cluster.xy) / EnvironmentProbe::AngularBins;
 		float2 hi = float2(cluster.xy + 1) / EnvironmentProbe::AngularBins;
@@ -45,14 +47,17 @@ bool Intersects(float3 p, float radius)
 		activeWords = 0;
 	}
 	GroupMemoryBarrierWithGroupSync();
-	uint mask = 0;
-	[loop] for (uint bit = 0; bit < 32 && lane * 32 + bit < EnvironmentProbe::LightCount; ++bit)
+	// Adjacent lanes test adjacent lights. With only a few lights the old word-per-lane
+	// loop serialized all tests on lane zero while the other 31 lanes were idle.
+	[loop] for (uint index = lane; index < min(EnvironmentProbe::LightCount, 1024u); index += 32)
 	{
-		Light light = sourceLights[lane * 32 + bit];
+		Light light = sourceLights[index];
 		if (!(light.lightFlags & LightFlags::Disabled) &&
 			Intersects(light.positionWS.xyz - EnvironmentProbe::LightOriginDelta, light.radius))
-			mask |= 1u << bit;
+			InterlockedOr(wordMasks[index >> 5], 1u << lane);
 	}
+	GroupMemoryBarrierWithGroupSync();
+	uint mask = wordMasks[lane];
 	uint address = (cluster.x + EnvironmentProbe::AngularBins * (cluster.y + EnvironmentProbe::AngularBins * cluster.z)) * EnvironmentProbe::ClusterStride;
 	lightMasks[address + 1 + lane] = mask;
 	if (mask != 0)

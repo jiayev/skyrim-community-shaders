@@ -210,6 +210,7 @@ namespace DCLF::Draws
 	 */
 	struct ViewResources
 	{
+		std::uint32_t probeFaceCount = 1;  // render thread, published in ViewInputs
 		const ViewTraits* traits = nullptr;
 		// The main pass's (its depth inputs, targets, rows, visibility, and the frame constants of a view without its own) and, through it,
 		// the scene's.
@@ -298,6 +299,7 @@ namespace DCLF::Draws
 	/** @brief What a view's shape is made from (MakeViewShape): the plan, its sequences' named range and the latches. */
 	struct ViewShapeInputs
 	{
+		std::uint32_t faceCount = 0;
 		rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 		IndirectState indirect{};
 		ViewPlan plan;
@@ -378,6 +380,7 @@ namespace DCLF::Draws
 		ForwardTargets targets;
 		std::uint32_t width = 0, height = 0;
 		float depthRange = 1.0f;
+		std::uint32_t faceCount = 0;
 		bool operator==(const ViewInputs&) const = default;
 	};
 }

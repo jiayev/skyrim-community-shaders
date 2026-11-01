@@ -1,5 +1,7 @@
 #include "Features/DrawcallLimitFix/Features/EnvironmentProbe/EnvironmentProbe.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/ConstantMirror.h"
+#include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ViewEpoch.h"
@@ -16,6 +18,7 @@ namespace DCLF::Features::EnvironmentProbe
 	namespace
 	{
 		constexpr auto kView = Api::EngineView::EnvironmentProbe;
+		Api::TriggerId captureTrigger;
 		std::array<std::byte, 64> shadowParameters{};
 		std::uint32_t shadowFrame = UINT32_MAX;
 		std::uint32_t submittedFrame = UINT32_MAX;
@@ -75,6 +78,7 @@ namespace DCLF::Features::EnvironmentProbe
 
 		void Install(Api::InstallContext& context)
 		{
+			captureTrigger = context.FindTrigger("environment-probe.capture");
 			const auto seed = context.RegisterSwitch({ .name = "CS_DCLF_ENVIRONMENT_PROBE", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne, .description = "0: capture the environment probe with the engine" });
 			const auto toggle = context.RegisterToggle({ .name = "environment probe", .label = "Draw environment probe geometry", .tooltip = "Draw world Lighting geometry into the octahedral environment probe from the installed scene.", .section = "Reflections", .seed = seed, .entersClassification = true });
 			context.RegisterView({ .view = Api::EngineView::EnvironmentProbe, .toggle = toggle, .phase = kPhase, .membership = Api::ViewMembership::WorldLighting, .keys = { .keyFlags = 8, .cullBackFaces = true }, .shape = { .faces = kOctants, .viewBits = kViewBit, .name = "environment probe", .prefix = "cs.dclf.environment-probe", .blocks = "octant-blocks", .target = "radiance", .labels = { "probe bucket map", "probe bucket tables", "probe culling latches", "probe octant data", {} } }, .life = Api::ViewShapeLife::DropWhenOff, .covered = &Covered });
@@ -82,10 +86,15 @@ namespace DCLF::Features::EnvironmentProbe
 		}
 	}
 
+	bool OwnsCameraCapture()
+	{
+		return ShellState::Running() && Extensions::ViewOn(ActiveToggles(), kView);
+	}
+
 	bool SupportsPipeline(std::uint32_t flags)
 	{
 		return KeyFamily(flags) == Api::ProgramFamily::Count && !RasterForward(flags) && !RasterRefraction(flags) &&
-		       !RasterDecalGroup(flags) && !RasterTerrainGroup(flags);
+		       !RasterDecalGroup(flags);
 	}
 
 	void CaptureShadowParameters(ID3D11Buffer* buffer, std::uint32_t frame)
@@ -102,11 +111,13 @@ namespace DCLF::Features::EnvironmentProbe
 
 	std::shared_ptr<const SetSnapshot> Draw(const Capture& capture)
 	{
+		Extensions::TriggerScope trigger(captureTrigger);
 		auto& draws = IndirectDraws::Get();
 		const auto frame = globals::state->frameCount;
 		if (submittedFrame == frame || importPendingFrame == frame || !Extensions::ViewOn(ActiveToggles(), kView))
 			return {};
-		if (!draws.ImportProbeTargets(capture.targets)) {
+		const auto faceCount = static_cast<std::uint32_t>(std::ranges::count_if(capture.cameras, [](auto* camera) { return camera != nullptr; }));
+		if (!faceCount || !draws.ImportProbeTargets(capture.targets, faceCount)) {
 			importPendingFrame = frame;
 			NotePending(Pending::Targets);
 			return {};
@@ -132,7 +143,9 @@ namespace DCLF::Features::EnvironmentProbe
 		listed.probeTextures = capture.textures;
 		std::array<Draws::ProbeBlock, kOctants> blocks{};
 		std::array<Draws::ViewFace, kOctants> faces{};
+		// The atlas sign and mask travel with each camera. Pack selected octants into the recorded draw slots.
 		faces.front().shared = capture.shared;
+		std::uint32_t packed = 0;
 		for (std::uint32_t f = 0; f < kOctants; ++f) {
 			if (!capture.cameras[f])
 				continue;
@@ -144,7 +157,7 @@ namespace DCLF::Features::EnvironmentProbe
 			ShadowCameras::Camera camera;
 			ShadowCameras::CameraMatrices(*capture.cameras[f], camera);
 			Draws::PerFrameBlock(camera, Draws::FrameBlockNow(), false, nullptr, block.camera.data());
-			auto& face = faces[f];
+			auto& face = faces[packed++];
 			face.drawn = true;
 			face.block = std::as_bytes(std::span(&block, 1)).first(offsetof(Draws::ProbeBlock, record));
 			std::memcpy(face.viewProj.data(), block.camera.data() + 32 * sizeof(float), sizeof(face.viewProj));
@@ -155,7 +168,7 @@ namespace DCLF::Features::EnvironmentProbe
 		static bool attempted[2]{};
 		if (!std::exchange(attempted[direct], true))
 			logger::info("[DCLF] submitting first {} environment probe epoch, frame {}, {} scene inputs", direct ? "CPU" : "GPU", frame, listed.inputs);
-		if (draws.SubmitViewEpoch(kView, 0, listed, faces, &submitted, nullptr) != IndirectDraws::ViewSubmit::Submitted || !submitted) {
+		if (draws.SubmitViewEpoch(kView, 0, listed, std::span(faces).first(packed), &submitted, nullptr) != IndirectDraws::ViewSubmit::Submitted || !submitted) {
 			NotePending(Pending::Submit);
 			return {};
 		}

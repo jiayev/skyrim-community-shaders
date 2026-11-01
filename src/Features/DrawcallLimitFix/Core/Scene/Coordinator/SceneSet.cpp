@@ -57,10 +57,9 @@ namespace DCLF::Scene
 				!(flags & (kObjectDecal | kObjectForward)) && a_slot < tables.objectGeometry.size()) {
 				const auto leaf = mirror.Leaf(tables.objectGeometry[a_slot]);
 				const auto* property = leaf ? SceneCapture::LeafView::Lighting(leaf.property) : nullptr;
-				// The opaque capture pipeline tests and writes Z, and takes the probe's sun shadows.
-				// Other states are drawn by the capture accumulator with their own state.
+				// The opaque capture pipeline tests and writes Z. Sun shadow reception is per object.
 				using F = RE::BSShaderProperty::EShaderPropertyFlag;
-				constexpr auto required = std::uint64_t(F::kZBufferWrite) | std::uint64_t(F::kZBufferTest) | std::uint64_t(F::kReceiveShadows);
+				constexpr auto required = std::uint64_t(F::kZBufferWrite) | std::uint64_t(F::kZBufferTest);
 				if (property && (property->flags & required) == required)
 					phases |= probe;
 			}
@@ -389,8 +388,8 @@ namespace DCLF::Scene
 				phases &= ~phase;
 			}
 		}
-		// The probe has its own residual accumulator. A pending probe pipeline
-		// must not revoke a ready main or shadow draw for the same object.
+		// Probe pipeline readiness is independent of the main and shadow pipelines.
+		// A pending probe permutation must not revoke their ready draws.
 		if (((phases ^ participation) & ~views.worldLightingPhases) == 0) {
 			d.phases = phases;
 			return d;

@@ -381,7 +381,7 @@ namespace DCLF
 		 * @brief The view's target imported into the graph, as its entry says (Api::ViewTargetImport): kPOST_ZPREPASS_COPY for a
 		 * DepthTarget view, a_texture (the engine's) with DCLF's own depth for a ColourWithOwnDepth one; true when it is.
 		 */
-		bool ImportProbeTargets(const std::array<ID3D11Texture2D*, 4>& a_textures);
+		bool ImportProbeTargets(const std::array<ID3D11Texture2D*, 4>& a_textures, std::uint32_t a_faceCount);
 		bool ImportViewTarget(Api::EngineView a_view, ID3D11Texture2D* a_texture = nullptr);
 		/** @brief What a view's epoch draws from (TakeViewInputs): the installed payloads it holds, and its scene list's inputs. */
 		struct ViewListed

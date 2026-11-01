@@ -48,7 +48,8 @@ struct DCLFShadingRow
 	// DCLF_BINDLESS_DRAW is also defined (Skin.hlsli).
 	float4 SkinPerGeometry;
 	uint DCLFShadingWritten;  // the CPU's (which components the pass writes)
-	uint3 DCLFShadingPadding;
+	uint ReceiveSunShadows;
+	uint2 DCLFShadingPadding;
 	// T6b1a: TreeParams and WindTimers (xy) for a TreeAnim property, from its tree node as the frame has it: what a member draws with
 	// until TreeWindCS's entry of its tree's listing (DCLFTreeParamsOf).
 	float4 DCLFShadingTreeParams;

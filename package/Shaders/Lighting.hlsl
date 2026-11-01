@@ -2984,7 +2984,10 @@ PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
 	float dirVSMDetailedShadow = 1.0;
 
 #		if defined(ENVIRONMENT_PROBE)
-	dirVSMDetailedShadow = EnvironmentProbe::GetSunShadow(input.WorldPosition.xyz);
+#			if defined(DCLF_BINDLESS_DRAW)
+	if (DCLFShading[DCLFObjectIndex].ReceiveSunShadows != 0)
+#			endif
+		dirVSMDetailedShadow = EnvironmentProbe::GetSunShadow(input.WorldPosition.xyz);
 	dirSoftShadow = dirVSMDetailedShadow;
 #		elif defined(VOLUMETRIC_SHADOWS)
 	if (inWorld && !inReflection && ShadowSampling::HasDirectionalShadows()

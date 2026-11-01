@@ -99,7 +99,7 @@ namespace EnvironmentProbe
 			std::vector<ReversedState<ID3D11RasterizerState>> rasterStates;
 			uint32_t size = 0;
 
-			bool Ensure(uint32_t a_size)
+			bool Ensure(uint32_t a_size, bool a_native)
 			{
 				auto* device = globals::d3d::device;
 				if (!captureCB) {
@@ -147,7 +147,7 @@ namespace EnvironmentProbe
 					Util::SetResourceName(dsv.get(), "EnvironmentProbe::Reversed Projective Z DSV");
 					size = a_size;
 				}
-				if (!accumulator) {
+				if (a_native && !accumulator) {
 					// Verified constructors: SE 1.5.97 / AE 1.6.1170. CommonLib's cross-runtime
 					// base sizes omit the runtime tail; allocate the verified flat object sizes.
 					static REL::Relocation<RE::BSShaderAccumulator*(void*, uint32_t)> ctor{ REL::RelocationID(99920, 106564) };
@@ -215,10 +215,6 @@ namespace EnvironmentProbe
 			uint32_t geometryMask = 0;
 			uint32_t cullBackface = 0;
 			uint32_t reusedPasses = 0;
-#if defined(CS_HAS_DCLF)
-			std::shared_ptr<const DCLF::SetSnapshot> probeClaims;
-			uint32_t dclfGeometry = 0;
-#endif
 			uint32_t nativeDirty = UINT32_MAX;
 			bool bindingsReady = false;
 			bool writesDepth = true;
@@ -360,12 +356,6 @@ namespace EnvironmentProbe
 					return;
 				auto* capture = active.load();
 				if (capture && a_process->camera == capture->camera) {
-#if defined(CS_HAS_DCLF)
-					if (capture->probeClaims && (capture->probeClaims->PhasesOf(&a_geometry) & DCLF::Features::EnvironmentProbe::kPhase)) {
-						++capture->dclfGeometry;
-						return;
-					}
-#endif
 					const auto& request = capture->request;
 					const auto& bound = a_geometry.worldBound;
 					const float distance = (bound.center - request.position).Length();
@@ -666,7 +656,7 @@ namespace EnvironmentProbe
 			context->PSSetShaderResources(105, 1, &coarseMap);
 			context->PSSetConstantBuffers(13, 1, &state.sunShadowParameters);
 			// The probe runs outside the world Lighting pass. Bind its sunlight inputs
-			// for the native residual draws as well as the draws in the DCLF view.
+			// for standalone engine captures.
 			const auto& sky = globals::features::physicalSky;
 			if (sky.loaded && sky.cbData.enabled) {
 				auto* transmittance = sky.texTrLut ? sky.texTrLut->srv.get() : nullptr;
@@ -825,6 +815,10 @@ namespace EnvironmentProbe
 		const auto* worldCamera = RE::Main::WorldRootCamera();
 		if (!scene || !worldCamera || globals::features::terrainBlending.renderDepth)
 			return Result::Unavailable;
+		bool dclf = false;
+#if defined(CS_HAS_DCLF)
+		dclf = DCLF::Features::EnvironmentProbe::OwnsCameraCapture();
+#endif
 
 		try {
 			if (invalidateShaders.exchange(false)) {
@@ -844,7 +838,7 @@ namespace EnvironmentProbe
 					globals::profiler->BeginPass(name);
 				}
 			} timing;
-			if (!resources.Ensure(size))
+			if (!resources.Ensure(size, !dclf))
 				return Result::ShaderUnavailable;
 			SavedPipeline pipeline;
 			auto& state = *globals::state;
@@ -899,12 +893,18 @@ namespace EnvironmentProbe
 			graphics->projectionPosScaleX = graphics->projectionPosScaleY = 0;
 			if (a_request.supplementalSunShadows) {
 				timing.Next("EnvironmentProbe::CoarseSunShadow");
-				Shadows::Render(a_request);
+				if (dclf) {
+					if (!Shadows::UseDclf(a_request))
+						return Result::Unavailable;
+				} else {
+					Shadows::Render(a_request);
+				}
 				timing.Next("EnvironmentProbe::Setup");
 			} else {
 				Shadows::Reset();
 			}
-			Scene::RequestCapture();
+			if (!dclf)
+				Scene::RequestCapture();
 			CaptureState capture{ a_request };
 			struct ActiveScope
 			{
@@ -970,6 +970,7 @@ namespace EnvironmentProbe
 				timing.Next("EnvironmentProbe::LightCull");
 				if (!llf.BuildProbeLightGrid(resources.captureCB->CB()))
 					return Result::ShaderUnavailable;
+				timing.Next("EnvironmentProbe::CaptureBindings");
 			}
 			// The clear pass changed raw D3D state. Rebind the original feature resources and
 			// mark engine state dirty before drawing any material.
@@ -994,9 +995,7 @@ namespace EnvironmentProbe
 					shared.WaterData[(x + 2) + (y + 2) * 5] = Util::TryGetWaterData(float(x) * 4096, float(y) * 4096);
 
 #if defined(CS_HAS_DCLF)
-			// The camera pass owns base-mip atlases. Other public API requests keep
-			// their native view semantics until the graph supports their formats.
-			if (DCLF::ShellState::Running() && !a_request.cullDynamic && a_request.radiance && a_request.depth && a_request.normals) {
+			if (dclf && !a_request.cullDynamic && a_request.radiance && a_request.depth && a_request.normals) {
 				D3D11_RENDER_TARGET_VIEW_DESC colour{}, distance{}, normal{};
 				a_request.radiance->GetDesc(&colour);
 				a_request.depth->GetDesc(&distance);
@@ -1019,10 +1018,16 @@ namespace EnvironmentProbe
 						octants[f].faceSign = { f & 1 ? -1.f : 1.f, f & 2 ? -1.f : 1.f, f & 4 ? -1.f : 1.f };
 						inputs.parameters[f] = std::as_bytes(std::span(&octants[f], 1));
 					}
-					capture.probeClaims = Port::Draw(inputs);
+					timing.Next("EnvironmentProbe::DCLFDraw");
+					const auto claims = Port::Draw(inputs);
+					timing.Next("EnvironmentProbe::Restore");
+					return claims ? Result::Success : Result::Unavailable;
 				}
 			}
 #endif
+			// An unsupported request or pending epoch cannot switch an owned view to engine draws.
+			if (dclf)
+				return Result::Unavailable;
 			// Reuse the engine's cull -> accumulate -> opaque/alpha/decal Forward dispatch.
 			// These are the same SE/AE functions used by BSCubeMapCamera, without its cameras,
 			// cubemap render targets, reflection flags, or face loop.
@@ -1079,14 +1084,6 @@ namespace EnvironmentProbe
 			resources.sharedCB->Update(shared);
 			draw->FinishAccumulatingPreResolveDepth(8);
 			draw->FinishAccumulatingPostResolveDepth(8);
-#if defined(CS_HAS_DCLF)
-			static bool reportedProbeDraw = false;
-			if (capture.probeClaims && capture.dclfGeometry && (!reportedProbeDraw || (state.IsDeveloperMode() && state.frameCount % 127 == 0))) {
-				reportedProbeDraw = true;
-				logger::info("[DCLF] environment probe frame {} octants {:#04x}: {} claimed geometry registrations skipped, {} residual native draws",
-					state.frameCount, a_request.faces, capture.dclfGeometry, capture.draws);
-			}
-#endif
 			if (state.IsDeveloperMode() && state.frameCount % 127 == 0)
 				logger::info("[EnvironmentProbeReuse] roots={} geometry={} materials={} draws={}", roots.size(), capture.geometryFaces.size(), capture.reusedPasses, capture.draws);
 

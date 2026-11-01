@@ -1200,6 +1200,7 @@ namespace DCLF
 				if (LatchedBytes(in.frameCopies) > viewLatches.layout.Bytes())
 					in.frameCopies.clear();  // laid out for smaller blocks: the commit stages them
 			}
+			in.faceCount = view.faceCount;
 			in.width = view.width;
 			in.height = view.height;
 			in.depthRange = view.depthRange;
@@ -1339,6 +1340,7 @@ namespace DCLF
 			a_mixer.Mix(latches.viewsLaidOut[v]);
 			a_mixer.Raw(latches.views[v]);
 			a_mixer.Raw(view.targets);
+			a_mixer.Mix(view.faceCount);
 			a_mixer.Mix(view.width);
 			a_mixer.Mix(view.height);
 			a_mixer.Raw(view.depthRange);

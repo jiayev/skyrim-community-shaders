@@ -228,7 +228,8 @@ namespace DCLF
 		float skinPerGeometry[4];
 		// A bit per ObjectShading float SetupGeometry writes (kShadingWritten*), for CPU comparisons; the shader reads none.
 		std::uint32_t written;
-		std::uint32_t padding[3];
+		std::uint32_t receiveSunShadows;
+		std::uint32_t padding[2];
 		// The feature block (DCLFShadingTreeParams, DCLFShadingWindTimers): the shading contribution claiming it derives its first blockWords
 		// (Extensions::ShadingBlockRule: Features/TreeWind's SetupGeometry TreeParams and WindTimers.xy for a TreeAnim property, what a
 		// member draws with until TreeWindCS has an entry for its tree: DCLFTreeParamsOf); the rest zero.

@@ -2,10 +2,10 @@
 // property and its material, into the PropertyRecord) and its shading row (PropertyColor, EmitColor). Pure but for the engine reads, made
 // where Core holds the property (the capture's read window, FrameValues' shading items).
 
-#include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
+#include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
 
 #include <algorithm>
 
@@ -47,7 +47,8 @@ namespace DCLF::Features::Effects
 		shading.emitColor[2] = emittance ? emittance->blue : 1.0f;
 		shading.ssrSpecular = 0.0f;
 		row.written = 4u | 0x70u;
-		row.padding[0] = row.padding[1] = row.padding[2] = 0u;
+		row.receiveSunShadows = 0;
+		row.padding[0] = row.padding[1] = 0u;
 		std::fill(std::begin(row.featureBlock), std::end(row.featureBlock), 0.0f);
 	}
 }

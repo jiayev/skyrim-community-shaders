@@ -272,15 +272,25 @@ namespace EnvironmentProbe::Shadows
 
 	void DclfSubmitted() { drawnFrame = globals::state->frameCount; }
 
-	void Render(const Request& request)
+	bool UseDclf(const Request& request)
 	{
 		if (drawnFrame == globals::state->frameCount && planned.position == request.position && planned.faces == request.faces && planned.farDistance == request.farDistance) {
 			parameters = plannedParameters;
 			static bool logged = false;
 			if (!std::exchange(logged, true))
 				logger::info("[DCLF] environment probe used its shadow epoch depth map, frame {}, octants {:#04x}", drawnFrame, request.faces);
-			return;
+			return true;
 		}
+		Reset();
+		const auto* scene = globals::game::smState->shadowSceneNode[0];
+		const auto* sun = scene ? scene->GetRuntimeData().sunShadowDirLight : nullptr;
+		// Indoors, or without a directional caster, the capture needs no supplemental map.
+		return !sun || !globals::state->HasDirectionalShadows() || sun->GetShadowDirectionalLightRuntimeData().sunVector.SqrLength() < 0.5f;
+	}
+
+	void Render(const Request& request)
+	{
+		// A standalone capture will overwrite the same depth texture.
 		drawnFrame = UINT32_MAX;
 		if (!Prepare(request))
 			return;

@@ -848,7 +848,7 @@ namespace DCLF
 		return true;
 	}
 
-	bool IndirectDraws::ImportProbeTargets(const std::array<ID3D11Texture2D*, 4>& a_textures)
+	bool IndirectDraws::ImportProbeTargets(const std::array<ID3D11Texture2D*, 4>& a_textures, std::uint32_t a_faceCount)
 	{
 		constexpr auto kind = Api::EngineView::EnvironmentProbe;
 		const auto* slot = ViewState(kind);
@@ -856,6 +856,8 @@ namespace DCLF
 		if (!slot || !slot->resources || !host)
 			return false;
 		auto& r = *slot->resources;
+		if (std::exchange(r.probeFaceCount, a_faceCount) != a_faceCount)
+			PostViewInputs();
 		if (!r.rebuildPending && r.probeTextures && std::ranges::equal(a_textures, *r.probeTextures, {}, std::identity{}, [](auto& texture) { return texture.get(); }))
 			return true;
 		constexpr DXGI_FORMAT formats[]{ DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_UNORM, DXGI_FORMAT_D32_FLOAT };

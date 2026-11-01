@@ -12,6 +12,7 @@ namespace DCLF::Features::EnvironmentProbe
 	inline constexpr std::uint32_t kViewBit = 1u << 12;
 	inline constexpr std::uint32_t kOctants = 8;
 	Api::Feature Feature();
+	bool OwnsCameraCapture();
 	bool SupportsPipeline(std::uint32_t rasterFlags);
 	// Captured on the render thread alongside Deferred's native shadow parameter copy.
 	void CaptureShadowParameters(ID3D11Buffer* buffer, std::uint32_t frame);

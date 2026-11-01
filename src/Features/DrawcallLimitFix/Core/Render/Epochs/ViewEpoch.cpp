@@ -209,8 +209,8 @@ namespace DCLF
 			// Per face, the view's frame constants (its own or the colour segment's: the frame lighting at PS b13, the frame record) with VS and
 			// PS b12 its block.
 			const auto base = FramePushWords(a_in.frameConstantsAddress);
-			frame->push.assign(traits.faces, base);
-			for (std::uint32_t f = 0; f < traits.faces; ++f) {
+			frame->push.assign(a_in.faceCount, base);
+			for (std::uint32_t f = 0; f < a_in.faceCount; ++f) {
 				const std::uint64_t block = a_resources.blocksAddress + std::uint64_t(f) * ViewBlockBytes(traits.kind);
 				if (traits.kind == ViewKind::EnvironmentProbe) {
 					const auto record = block + offsetof(ProbeBlock, record);
@@ -231,7 +231,7 @@ namespace DCLF
 			fromZeros.fixed = true;
 			fromZeros.copies.push_back({ a_resources.count.get(), 0, static_cast<std::uint32_t>(sizeof(kZeroCounts)), 0 });
 			const auto bucketBytes = static_cast<std::uint32_t>(std::max<std::size_t>(frame->buckets.size() + frame->forwardRanges.size(), 1) * sizeof(std::uint32_t));
-			for (std::uint32_t f = 0; f < traits.faces; ++f) {
+			for (std::uint32_t f = 0; f < a_in.faceCount; ++f) {
 				const std::uint32_t face = latches.layout.FaceOffset(f);
 				fromZeros.copies.push_back({ a_resources.bucketCounts[f]->Key(), 0, bucketBytes, 0 });
 				fromLatch.copies.push_back({ a_resources.blocks.get(), face, ViewBlockBytes(traits.kind), std::uint64_t(f) * ViewBlockBytes(traits.kind) });
