@@ -8,6 +8,7 @@
 
 #include "Features/DrawcallLimitFix/Api/ShadingFields.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -34,9 +35,15 @@ namespace DCLF::Api
 		ShadingRowField field = ShadingRowField::Count;
 		std::span<RE::BSGeometry* const> objectGeometry;  // empty without a publication
 		std::vector<ShadingFieldValue>& values;
+		std::span<const std::uint32_t> changedObjects;  // slots whose shading was published since the last frame
 
 		/** @brief a_slot's value of the field (applied after the frame's shading sample). */
-		void Put(std::uint32_t a_slot, const std::array<float, kShadingFieldValueFloats>& a_value) const { values.push_back({ a_slot, field, a_value }); }
+		void Put(std::uint32_t a_slot, std::span<const float> a_value, std::shared_ptr<const void> a_resources = {}) const
+		{
+			ShadingFieldValue value{ .slot = a_slot, .field = field, .resources = std::move(a_resources) };
+			std::copy_n(a_value.begin(), std::min(a_value.size(), value.value.size()), value.value.begin());
+			values.push_back(std::move(value));
+		}
 	};
 }
 

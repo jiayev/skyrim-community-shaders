@@ -233,8 +233,9 @@ namespace DCLF
 		// (Extensions::ShadingBlockRule: Features/TreeWind's SetupGeometry TreeParams and WindTimers.xy for a TreeAnim property, what a
 		// member draws with until TreeWindCS has an entry for its tree: DCLFTreeParamsOf); the rest zero.
 		float featureBlock[8];
+		std::uint32_t landscapeSeams[8];  // Descriptor index + 1; zero disables seam resources for this quad.
 	};
-	static_assert(sizeof(BindlessShading) == 96);
+	static_assert(sizeof(BindlessShading) == 128);
 
 	/**
 	 * @brief An object's shading from its property now (SetupGeometry's MaterialData, EmitColor, SSRParams.w for a_pass); wetness left

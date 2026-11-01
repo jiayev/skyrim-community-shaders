@@ -78,7 +78,7 @@ namespace DCLF::Extensions
 		}
 		const Api::ShadingFieldMembership membership{ a_changes };
 		for (const auto& entry : State().fields)
-			if (entry.contribution.members == a_class)
+			if (entry.contribution.members == a_class && entry.contribution.membership)
 				entry.contribution.membership(membership);
 	}
 
@@ -87,12 +87,17 @@ namespace DCLF::Extensions
 		std::vector<Api::ShadingFieldValue> values;
 		// Their geometries the newest publication's (held by it), never the coordinator's tables.
 		const auto geometry = a_view.NewestObjectGeometry();
+		std::vector<std::uint32_t> changedObjects;
+		changedObjects.reserve(a_view.ShadingChanges().size());
+		for (const auto& item : a_view.ShadingChanges())
+			changedObjects.push_back(item.slot);
 		for (const auto& entry : State().fields) {
-			Api::ShadingFieldCapture capture{ entry.contribution.field, geometry, values };
+			Api::ShadingFieldCapture capture{ entry.contribution.field, geometry, values, changedObjects };
 			// A slot that left the field's class first: its value zero (a member's own value follows: a slot that left and joined again
 			// takes its new owner's, which its capture puts as a joined member's).
-			for (const auto slot : members[static_cast<std::size_t>(entry.contribution.members)].left)
-				capture.Put(slot, {});
+			if (entry.contribution.members != Api::EntryClass::None)
+				for (const auto slot : members[static_cast<std::size_t>(entry.contribution.members)].left)
+					capture.Put(slot, {});
 			entry.contribution.capture(capture);
 		}
 		for (auto& mine : members)

@@ -53,6 +53,7 @@ struct DCLFShadingRow
 	// until TreeWindCS's entry of its tree's listing (DCLFTreeParamsOf).
 	float4 DCLFShadingTreeParams;
 	float4 DCLFShadingWindTimers;
+	uint4 LandscapeSeamsTextures[2];  // Weight/data views and six borrowed layer views, each descriptor index + 1.
 };
 
 // The object's placement (LightingConstants.h, BindlessPlacement), by the same index: what a move changes.

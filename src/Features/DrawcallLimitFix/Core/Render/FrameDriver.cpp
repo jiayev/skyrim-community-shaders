@@ -186,7 +186,9 @@ namespace DCLF
 		// slots the installed publications carried, and waited for by the GPU; the shading fields captured here (Integrations/AdvancedSkin's
 		// wetness: Skin's cache is the render thread's). Then the scene payload: the installed snapshot's parts' versions (PayloadPools,
 		// built and GPU ready before it was posted), named for the frame's epochs (MakeFramePayload).
-		(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), Extensions::CaptureShadingFields(view), view.FrameGlobalsOfFrame());
+		// The capture reads the shading changes the take empties.
+		auto fields = Extensions::CaptureShadingFields(view);
+		(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), std::move(fields), view.FrameGlobalsOfFrame());
 		(void)draws.MakeFramePayload();
 		// Under the parities the scene pass runs here, inline, so the render thread's observers keep their placement; the normal path
 		// never waits for a pass.

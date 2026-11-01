@@ -278,6 +278,8 @@ namespace DCLF::Scene
 		const std::shared_ptr<const FrameGlobals>& FrameGlobalsOfFrame() const { return frameGlobals; }
 		/** @brief Render thread, frame start: the slots named since the last take, once (from the publication log). */
 		std::vector<ShadingItem> TakeShadingItems() { return std::exchange(frameShading, {}); }
+		/** @brief Render thread, frame start: the shading changes TakeShadingItems will hand over, for a field's capture. */
+		std::span<const ShadingItem> ShadingChanges() const { return frameShading; }
 		/**
 		 * @brief Render thread: the newest publication's geometry by object slot (empty without one), held by it until the next install
 		 * (the shading fields' captures: Extensions::CaptureShadingFields).

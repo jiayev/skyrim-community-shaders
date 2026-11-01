@@ -604,6 +604,13 @@ void Skylighting::RenderSkyOcclusionMap(RE::Precipitation* a_precip, bool a_dclf
 	const bool engine = !a_dclf || reference;
 	{
 		ZoneScopedN("Skylighting - Setup Projection");
+		// The engine positions the precipitation camera using its previous world
+		// forward, then publishes the new rotation. At the early shadow hook that
+		// forward can belong to a different pass. Prime it with this sample's
+		// direction before snapping the map; otherwise the probe grid can lie
+		// several map widths outside the rendered quarter.
+		if (a_dclf)
+			_computeProjection(a_precip, a_precip->occlusionData.camera);
 		_computeProjection(a_precip, a_precip->occlusionData.camera);
 		if (engine)
 			a_precip->SetupMask();
@@ -622,6 +629,11 @@ void Skylighting::RenderSkyOcclusionMap(RE::Precipitation* a_precip, bool a_dclf
 			dclf.OcclusionReferenceRendered(DrawcallLimitFix::kSkyOcclusion);
 			a_precip->RenderMask((RE::BSParticleShaderRainEmitter*)rain);
 		}
+		// RenderMask defers its clear until the first engine draw. The DCLF
+		// accumulator may be empty, so explicitly discard the previous sky
+		// direction's depths before the shadow epoch draws into this map.
+		if (a_dclf)
+			globals::d3d::context->ClearDepthStencilView(texOcclusion->dsv.get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
 		globals::profiler->EndPass();
 	}
 	inOcclusion = false;

@@ -1122,8 +1122,8 @@ namespace DCLF::Extensions
 
 			Api::ShadingFieldId RegisterShadingField(const Api::ShadingFieldContribution& a_field) override
 			{
-				if (a_field.field >= Api::ShadingRowField::Count || a_field.name.empty() || !a_field.membership || !a_field.capture ||
-					a_field.members == Api::EntryClass::None || a_field.members >= Api::EntryClass::Count)
+				if (a_field.field >= Api::ShadingRowField::Count || a_field.name.empty() || !a_field.capture ||
+					(a_field.members != Api::EntryClass::None && !a_field.membership) || a_field.members >= Api::EntryClass::Count)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete shading field", feature));
 				if (std::exchange(lists.shadingFieldTaken[static_cast<std::size_t>(a_field.field)], true))
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} contributes shading field {} ({}), which another registration has", feature,

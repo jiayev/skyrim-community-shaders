@@ -3,6 +3,11 @@
 
 #define LIGHTING
 
+#if defined(LANDSCAPE) && defined(DCLF_BINDLESS_DRAW) && !defined(LANDSCAPE_SEAMS)
+// Seam resources vary per quad; a zero descriptor row preserves ordinary terrain without splitting batches.
+#	define LANDSCAPE_SEAMS
+#endif
+
 #include "Common/ColorManagement.hlsli"
 #include "Common/DCLFObjects.hlsli"
 #include "Common/FrameBuffer.hlsli"

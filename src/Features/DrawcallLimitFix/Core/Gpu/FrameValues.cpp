@@ -29,6 +29,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <unordered_map>
 
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
@@ -367,6 +368,30 @@ namespace DCLF
 		std::array<Pool, kBuiltInPools> pools;
 		FrameLeases frameLeases;  // the kicked frame's backings, bound at EndFrame
 		BoundPoints boundPoints;  // BindFrameLeases' GPU points
+		using ResourceOwners = std::vector<std::shared_ptr<const void>>;
+		std::shared_ptr<ResourceOwners> frameFieldOwners;
+		std::deque<std::pair<std::uint64_t, std::shared_ptr<ResourceOwners>>> retiredFieldOwners;
+
+		void RetireFieldOwners()
+		{
+			if (frameFieldOwners)
+				retiredFieldOwners.emplace_back(SubmittedRetirementPoint(), std::move(frameFieldOwners));
+			const auto completed = FrameRetirement()->Completed();
+			while (!retiredFieldOwners.empty() && retiredFieldOwners.front().first <= completed)
+				retiredFieldOwners.pop_front();
+		}
+
+		// Producer-owned: references follow the CPU rows and each backing's last successful upload.
+		// A failed upload can draw the old backing, so its descriptors must remain alive as well.
+		std::unordered_map<std::uint64_t, std::shared_ptr<const void>> fieldOwners;
+		std::vector<ShadingFieldValue> pendingFieldValues;
+		struct BackingOwners
+		{
+			std::weak_ptr<org::services::Backing> backing;
+			std::shared_ptr<const ResourceOwners> resources;
+		};
+		std::unordered_map<std::uint64_t, BackingOwners> backingFieldOwners;
+
 		std::unique_ptr<Registered[]> registered;                        // made once (MakeRegistered)
 		std::atomic<std::size_t> registeredMade{ 0 };                     // their count, published once made (TakePoolStats reads it)
 		std::vector<org::services::BackingLease> registeredFrameLeases;  // the kicked frame's, by registered pool, bound at EndFrame
@@ -559,6 +584,7 @@ namespace DCLF
 			std::vector<const Plan*> written;  // plans whose written slots it also samples (oldest first)
 			std::vector<ShadingItem> shadingItems;  // newest last
 			std::vector<ShadingFieldValue> fieldValues;  // in capture order
+			std::shared_ptr<ResourceOwners> fieldResources;
 			// The shading rows the producer leaves: the plan's slots, or past them to the newest slot an item or field value names. A slot
 			// binds (and is named, once: the accumulate patch's NameShading) before a placement plan covers it, and a dropped item is never
 			// named again; its row would stay zero (MaterialData.z 0: a blended decal draws nothing).
@@ -735,6 +761,10 @@ namespace DCLF
 		// One producer at a time, in order: each builds on the previous one's rows, and signals rise monotonically.
 		for (auto finished = done.load(std::memory_order_acquire); finished + 1 < a_job.seq; finished = done.load(std::memory_order_acquire))
 			done.wait(finished, std::memory_order_acquire);
+		pendingFieldValues.insert(pendingFieldValues.end(), a_job.fieldValues.begin(), a_job.fieldValues.end());
+		std::erase_if(backingFieldOwners, [](const auto& entry) { return entry.second.backing.expired(); });
+		if (const auto previous = backingFieldOwners.find(a_job.leases[kShading]->generation); previous != backingFieldOwners.end())
+			a_job.fieldResources->push_back(previous->second.resources);
 		const auto start = std::chrono::steady_clock::now();
 		bool marked = false;
 		try {
@@ -1416,6 +1446,17 @@ namespace DCLF
 	{
 		if ((a_item.firstPerson && a_item.itemClass == Api::FrameValueItemClass::None) || a_item.slot >= a_rows || !a_item.geometry || listed[a_item.slot])
 			return;
+		// Skins are kept movers. An older write or settling item can outlive its skin's membership, while its
+		// palette block is already reused by another actor. Validate against the applied plans before marking
+		// either the slot or the block: different block starts can still overlap a recycled allocation.
+		if (a_settles && a_item.boneRows && a_item.itemClass == Api::FrameValueItemClass::None) {
+			const auto owner = moverAt.find(a_item.geometry.get());
+			if (owner == moverAt.end())
+				return;
+			const auto& current = keptMovers[owner->second].item;
+			if (Plan::Key::Of(current) != Plan::Key::Of(a_item))
+				return;
+		}
 		listed[a_item.slot] = 1;
 		listedSlots.push_back(a_item.slot);
 		if (rowOwner.size() <= a_item.slot)
@@ -1979,6 +2020,7 @@ namespace DCLF
 		};
 		constexpr std::array<ShadingFieldRange, Extensions::kShadingRowFields> kShadingFieldRanges{ {
 			{ offsetof(BindlessShading, skinPerGeometry), sizeof(BindlessShading::skinPerGeometry) },
+			{ offsetof(BindlessShading, landscapeSeams), sizeof(BindlessShading::landscapeSeams) },
 		} };
 		static_assert(sizeof(BindlessShading::skinPerGeometry) <= sizeof(ShadingFieldValue::value));
 	}
@@ -2038,9 +2080,14 @@ namespace DCLF
 				shading.Mark(slot);
 			marked += slots.size();
 		}
-		for (const auto& [slot, field, value] : a_job.fieldValues) {
+		for (const auto& [slot, field, value, resources] : pendingFieldValues) {
 			if (slot >= out.size())
 				continue;
+			const auto ownerKey = std::uint64_t(slot) * Extensions::kShadingRowFields + static_cast<std::size_t>(field);
+			if (resources)
+				fieldOwners[ownerKey] = resources;
+			else
+				fieldOwners.erase(ownerKey);
 			const auto& range = kShadingFieldRanges[static_cast<std::size_t>(field)];
 			auto* fieldBytes = reinterpret_cast<std::byte*>(&out[slot]) + range.offset;
 			if (std::memcmp(fieldBytes, value.data(), range.bytes) == 0)
@@ -2049,6 +2096,7 @@ namespace DCLF
 			shading.Mark(slot);
 			++wetMarked;
 		}
+		pendingFieldValues.clear();
 		for (const auto& chunk : refusedItems)
 			a_job.refusedShading.insert(a_job.refusedShading.end(), chunk.begin(), chunk.end());
 		shadingSampled += items.size();
@@ -2155,7 +2203,13 @@ namespace DCLF
 		}
 		{
 			ZoneScopedN("CS.DCLF.FrameValues.Send.shading");
+			auto owners = std::make_shared<ResourceOwners>();
+			owners->reserve(fieldOwners.size());
+			for (const auto& [key, owner] : fieldOwners)
+				owners->push_back(owner);
+			a_job.fieldResources->push_back(owners);
 			Send(a_job, kShading, shading);
+			backingFieldOwners[a_job.leases[kShading]->generation] = { a_job.leases[kShading].Get(), std::move(owners) };
 		}
 		// A registered pool's send: one zone name (Tracy's are static), the pool's name its text.
 		ForEachRegistered(a_job, [](const Extensions::FrameValuePoolEntry& a_entry, Api::FrameValuePoolProducer& a_producer) {
@@ -2349,6 +2403,7 @@ namespace DCLF
 		s.kicked = false;
 		// A frame whose EndFrame did not come: its backings are bound to what was submitted so far.
 		BindFrameLeases(s.frameLeases, s.registeredFrameLeases, s.boundPoints);
+		s.RetireFieldOwners();
 		// The registered pools' frame-start reads (Api::FrameValuePool::frameStart), whether or not the frame has a producer: Features/Fades'
 		// seeds' the last.
 		Impl::FrameStartRegistered(a_globals);
@@ -2397,6 +2452,7 @@ namespace DCLF
 		s.unsampled.clear();
 		job.shadingItems = std::exchange(s.unsampledShading, {});
 		job.fieldValues = std::exchange(s.unsampledFieldValues, {});
+		job.fieldResources = s.frameFieldOwners = std::make_shared<Impl::ResourceOwners>();
 		job.shadingSlots = job.plan->slots;
 		for (const auto& item : job.shadingItems)
 			if (item.slot != kNoObjectSlot)
@@ -2461,6 +2517,7 @@ namespace DCLF
 	{
 		impl->kicked = false;
 		BindFrameLeases(impl->frameLeases, impl->registeredFrameLeases, impl->boundPoints);
+		impl->RetireFieldOwners();
 		if (auto* host = RenderGraphRuntime::Get().Host())
 			host->SetFrameWaitValue(0);
 	}
@@ -2506,6 +2563,7 @@ namespace DCLF
 			}
 		}
 		BindFrameLeases(s.frameLeases, s.registeredFrameLeases, s.boundPoints);
+		s.RetireFieldOwners();
 	}
 
 	bool FrameValues::ProducerDone(bool a_wait) const

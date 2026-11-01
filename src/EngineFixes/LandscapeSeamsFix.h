@@ -99,6 +99,8 @@ struct LandscapeSeamsFix : EngineFix
 	void Reset();
 	/** @brief True when this land quad geometry has blend resources and should draw with the seams permutation. */
 	bool IsBlended(RE::BSGeometry* a_geometry);
+	/** @brief Holds a quad's immutable seam resources for a batched renderer's frame capture. */
+	std::shared_ptr<const Resources> CaptureResources(RE::BSGeometry* a_geometry);
 	/** @brief Binds the quad's weights, quad data and borrowed textures to t104-t111. Render thread only, before the draw. */
 	void Bind(RE::BSGeometry* a_geometry);
 	/** @brief Reads a newly set up land record's quads and rebuilds them and their neighbours. */

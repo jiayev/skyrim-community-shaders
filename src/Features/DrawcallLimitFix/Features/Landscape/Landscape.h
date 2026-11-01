@@ -17,6 +17,8 @@ namespace DCLF::Features::Landscape
 {
 	// LandscapeFeature.cpp: the feature's entry (Features/FeatureList.cpp).
 	Api::Feature Feature();
+	/** @brief Registers per-quad landscape seam resources for the batched terrain shaders. */
+	void InstallSeams(Api::InstallContext& a_context);
 
 	// Diagnostics/LandTrace.cpp: CS_DCLF_LAND_TRACE=1, main thread at the scene frame's start (FrameBegin), with or without DCLF: every
 	// loaded land quad's engine state (node, geometry, property, material, texture paths), logged when first seen and when it changes.

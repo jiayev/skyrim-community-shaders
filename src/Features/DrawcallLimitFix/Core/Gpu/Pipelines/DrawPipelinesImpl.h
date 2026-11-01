@@ -271,12 +271,14 @@ namespace DCLF
 		/*
 		 * No DCLF pipeline has input assembly: every vertex stage pulls its attributes (DCLF_PULLED_VERTICES, DCLF_PULLED), so the
 		 * pipelines have no vertex input state, which an execution set's pipelines would otherwise have to share. A key's vertex layout
-		 * must still hold every attribute its vertex stage reads (ShaderPrograms::Program::vertexAttributes), as the input layout the
-		 * engine builds for it had to: else the build fails and its objects stay native.
+		 * must hold the required inputs of its vertex stage (ShaderPrograms::Program::vertexAttributes).
 		 */
 		inline void CheckVertexAttributes(std::uint32_t a_attributes, std::uint64_t a_vertexLayout)
 		{
-			if (const std::uint32_t missing = a_attributes & ~VertexLayoutAttributes(a_vertexLayout))
+			// Some skinned eye meshes omit TEXCOORD2. The native input assembler supplies
+			// zero for that scalar; DCLFPullFloat does the same without reading a stream.
+			constexpr std::uint32_t optionalEyeParameter = 1u << 8;
+			if (const std::uint32_t missing = a_attributes & ~optionalEyeParameter & ~VertexLayoutAttributes(a_vertexLayout))
 				throw std::runtime_error(fmt::format("vertex attributes {:03X} (BSGraphics::Vertex::Attribute bits) are not in the geometry's layout {:016X}", missing,
 					a_vertexLayout));
 		}

@@ -15,6 +15,7 @@ namespace DCLF::Features::Landscape
 
 		void Install(Api::InstallContext& a_context)
 		{
+			InstallSeams(a_context);
 			// Where Core's was listed: right before the forward epoch's (after Features/Decals' and the other object classes' switches, which
 			// follow the skin partitions'); Integrations/TerrainBlending's CS_DCLF_TB_TERRAIN after it.
 			const auto terrainSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_MTLAND", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,

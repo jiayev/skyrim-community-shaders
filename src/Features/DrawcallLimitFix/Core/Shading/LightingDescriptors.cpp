@@ -367,7 +367,9 @@ namespace DCLF
 				// The refraction draw's forward state (above): alpha property not applied.
 			} else if (translucent && a_out.decalGroup == 0 && !a_layer && a_out.terrainGroup == 0 &&
 			           Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward)) {
-				const std::uint32_t blendMode = blending ? AlphaBlendModeOf(*alpha) : 0u;
+				// SetupAlphaBlend (FUN_14150bc80) uses source-alpha blending for material fades even without
+				// NiAlphaProperty blending. Mode 0 makes hidden outfit meshes with alpha 0 draw opaque.
+				const std::uint32_t blendMode = blending ? AlphaBlendModeOf(*alpha) : 1u;
 				if (blending && blendMode == 0)
 					return Ineligible::AlphaBlend;
 				a_out.forward = true;
