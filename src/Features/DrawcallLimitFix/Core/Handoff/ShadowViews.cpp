@@ -4,8 +4,8 @@
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 
 #include <bit>
 #include <cstring>
@@ -71,7 +71,9 @@ namespace DCLF
 		if (!lighting || !a_leaf.geometry)
 			return ShadowReject::NotLighting;
 		const std::uint64_t flags = lighting->flags;
-		if (IsLodObject(flags, a_leaf.Type()) || IsLodLand(flags, a_leaf.Type()))
+		// The segmented LOD shapes include passthrough materials without the LOD flags.
+		// The engine's shadow culls do not visit their LOD root.
+		if (a_leaf.Type() == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape) || IsLodLand(flags, a_leaf.Type()))
 			return ShadowReject::Lod;
 		const bool blended = a_leaf.AlphaBlending();
 		const bool decal = (flags & (Bit(26) | Bit(27))) != 0;
@@ -104,7 +106,7 @@ namespace DCLF
 		if (!lighting || !a_leaf.geometry)
 			return false;
 		const std::uint64_t flags = lighting->flags;
-		if (IsLodObject(flags, a_leaf.Type()) || IsLodLand(flags, a_leaf.Type()))
+		if (a_leaf.Type() == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape) || IsLodLand(flags, a_leaf.Type()))
 			return true;  // Lod
 		const bool blended = a_leaf.AlphaBlending();
 		const bool decal = (flags & (Bit(26) | Bit(27))) != 0;
@@ -137,10 +139,14 @@ namespace DCLF
 	std::uint32_t ShadowModeBits(std::uint32_t a_renderMode)
 	{
 		switch (a_renderMode) {
-		case 0xC: return 0x2000;   // RenderDepth, the main Z-prepass
-		case 0xE: return 0xC000;   // ShadowMapClamped
-		case 0xF: return 0x14000;  // ShadowMapPb
-		default: return 0x4000;    // ShadowMapPlain
+		case 0xC:
+			return 0x2000;  // RenderDepth, the main Z-prepass
+		case 0xE:
+			return 0xC000;  // ShadowMapClamped
+		case 0xF:
+			return 0x14000;  // ShadowMapPb
+		default:
+			return 0x4000;  // ShadowMapPlain
 		}
 	}
 
@@ -152,10 +158,14 @@ namespace DCLF
 	const char* ShadowViews::KindName(Kind a_kind)
 	{
 		switch (a_kind) {
-		case Kind::Directional: return "dir";
-		case Kind::Frustum: return "spot";
-		case Kind::Parabolic: return "point";
-		default: return "other";
+		case Kind::Directional:
+			return "dir";
+		case Kind::Frustum:
+			return "spot";
+		case Kind::Parabolic:
+			return "point";
+		default:
+			return "other";
 		}
 	}
 

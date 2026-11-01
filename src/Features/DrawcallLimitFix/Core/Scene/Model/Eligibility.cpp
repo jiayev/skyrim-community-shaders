@@ -101,14 +101,13 @@ namespace DCLF::Eligibility
 		// register the main property's passes alone (FUN_1414b2a60), so it casts as a tri-shape. One whose layer DCLF cannot
 		// draw is MultiIndex, a shadow-only caster (ShadowOnlyReason): its two main passes stay the engine's, together.
 		const bool multiIndex = type == RE::BSGeometry::Type::kMultiIndexTriShape;
-		// A geometry type a contribution takes by its Lighting property's flags (Api::GeometryTypeContribution::propertyFlags: Features/Lod's
-		// object LOD, a BSSubIndexTriShape with the LOD object flags, drawn by the segment runs the engine leaves visible, FUN_1414f2ad0
-		// type 8): a tri-shape over the ranges LodSegments mirrors, Lod while its toggle is off. Any other shape of the type is not one DCLF
-		// draws.
+		// A contributed segmented shape draws the ranges the engine leaves visible. A material flag
+		// constraint applies only when the contribution supplies one, so passthrough LOD can use its
+		// ordinary Lighting material without losing the segment masks.
 		bool flaggedShape = false;
-		if (const auto& flagged = Extensions::GeometryTypeContributionOf(g.type); flagged.propertyFlags) {
+		if (const auto& flagged = Extensions::GeometryTypeContributionOf(g.type); flagged.propertyFlags || flagged.ranges) {
 			const auto* flaggedProperty = SceneCapture::LeafView::Lighting(a_leaf.property);
-			if (flaggedProperty && (flaggedProperty->flags & flagged.propertyFlags)) {
+			if (flaggedProperty && (!flagged.propertyFlags || (flaggedProperty->flags & flagged.propertyFlags))) {
 				if (!ActiveToggles().On(flagged.toggle))
 					return Ineligible::Lod;
 				flaggedShape = true;

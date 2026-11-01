@@ -3,15 +3,15 @@
 // parity: LodGates.h, LodGateComponent.h), and object LOD's segment events (their writers' hooks at the early hooks, their engine channel
 // and its component, report line and parity: LodSegmentEvents.h).
 
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Features/Lod/Lod.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodGateComponent.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodGates.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodSegmentEvents.h"
 #include "Features/DrawcallLimitFix/Features/Lod/LodSegments.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 #include "ShaderCache.h"
 
@@ -69,37 +69,27 @@ namespace DCLF::Features::Lod
 		{
 			// Where Core's were listed: the switches before the LOD gates' (Features/TreeLod's follow them there), the toggles after the
 			// refraction's, behind Features/Particles', Features/Billboards' and Features/SwitchNodes' (which register before this feature).
-			const auto objectsSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_LOD_OBJECTS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
-				.description = "0: object LOD stays native and untracked (live toggle's seed)", .before = "CS_DCLF_LOD_GATES" });
-			const auto terrainSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_LOD_TERRAIN", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
-				.description = "0: terrain LOD stays native (live toggle's seed)", .before = "CS_DCLF_LOD_GATES" });
+			const auto objectsSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_LOD_OBJECTS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne, .description = "0: object LOD stays native and untracked (live toggle's seed)", .before = "CS_DCLF_LOD_GATES" });
+			const auto terrainSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_LOD_TERRAIN", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne, .description = "0: terrain LOD stays native (live toggle's seed)", .before = "CS_DCLF_LOD_GATES" });
 			// The LOD gates', where Core's was listed: before the shadows' (after the switch nodes', listed after the projected UVs'), behind
 			// this feature's two and Features/TreeLod's, which name it.
-			const auto gatesSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_LOD_GATES", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::Zero,
-				.description = "0: the engine's LOD swaps ungated (T6b5: by default an object or terrain LOD swap keeps the outgoing level shown, and the incoming hidden, until DCLF's claims cover the incoming)",
-				.before = "CS_DCLF_SHADOWS" });
-			const auto objects = a_context.RegisterToggle({ .name = "object LOD", .label = "Object LOD: distant objects", .seed = objectsSwitch,
-				.entersClassification = true, .after = "refraction" });
-			const auto terrain = a_context.RegisterToggle({ .name = "terrain LOD", .label = "Terrain LOD: distant land", .seed = terrainSwitch,
-				.entersClassification = true, .after = "refraction" });
+			const auto gatesSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_LOD_GATES", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::Zero, .description = "0: the engine's LOD swaps ungated (T6b5: by default an object or terrain LOD swap keeps the outgoing level shown, and the incoming hidden, until DCLF's claims cover the incoming)", .before = "CS_DCLF_SHADOWS" });
+			const auto objects = a_context.RegisterToggle({ .name = "object LOD", .label = "Object LOD: distant objects", .seed = objectsSwitch, .entersClassification = true, .after = "refraction" });
+			const auto terrain = a_context.RegisterToggle({ .name = "terrain LOD", .label = "Terrain LOD: distant land", .seed = terrainSwitch, .entersClassification = true, .after = "refraction" });
 			// Object LOD (the sub-index shapes' eligibility, the LOD object techniques and flags) and terrain LOD (the LOD land techniques and
 			// flags), each an object class; either lists the LOD root as a category node, and both (with the swaps gated) let a view's faces
 			// draw the LOD land and objects roots in the engine's place.
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::LodObjects, .toggle = objects, .categoryRoot = &LodLandRoot });
 			a_context.RegisterObjectClass({ .objectClass = Api::ObjectClass::LodTerrain, .toggle = terrain, .categoryRoot = &LodLandRoot });
 			a_context.RegisterViewRoot({ .root = kOwnedRoot, .owned = &LodRootsOwned });
-			// Object LOD, drawn by visible segment ranges: its techniques, only for a BSSubIndexTriShape with the LOD object flags; and the
-			// sub-index shapes with those flags, drawn as tri-shapes over the ranges LodSegments mirrors (Ineligible::Lod while the toggle is
-			// off; the ranges captured whatever it). Any other sub-index shape is not one DCLF draws.
+			// LOD techniques require the LOD flags. Segment geometry does not: DynDOLOD passthrough
+			// shapes use ordinary Lighting materials with the same BSSubIndexTriShape segment lists.
 			for (const auto technique : { Technique::LODObjects, Technique::LODObjectHD })
-				a_context.RegisterTechnique({ .technique = static_cast<std::uint32_t>(technique), .toggle = objects, .propertyFlags = kObjectLodFlags,
-					.geometryType = kSubIndexTriShape });
-			a_context.RegisterGeometryType({ .geometryType = kSubIndexTriShape, .toggle = objects, .propertyFlags = kObjectLodFlags,
-				.ranges = &CaptureDrawnRanges });
+				a_context.RegisterTechnique({ .technique = static_cast<std::uint32_t>(technique), .toggle = objects, .propertyFlags = kObjectLodFlags, .geometryType = kSubIndexTriShape });
+			a_context.RegisterGeometryType({ .geometryType = kSubIndexTriShape, .toggle = objects, .ranges = &CaptureDrawnRanges });
 			// Terrain LOD: its techniques, only for a land block's shape under the LOD root (a BSTriShape with the LOD landscape flag).
 			for (const auto technique : { Technique::LODLand, Technique::LODLandNoise })
-				a_context.RegisterTechnique({ .technique = static_cast<std::uint32_t>(technique), .toggle = terrain, .propertyFlags = kTerrainLodFlags,
-					.geometryType = kTriShape });
+				a_context.RegisterTechnique({ .technique = static_cast<std::uint32_t>(technique), .toggle = terrain, .propertyFlags = kTerrainLodFlags, .geometryType = kTriShape });
 			// The LOD gates (CS_DCLF_LOD_GATES): their engine hooks, then, while installed, their registrations, first of the feature's (where
 			// Core registered them, before every feature: their channel and adoption guard the first, their hidden site the first reserved,
 			// their component before the segments' and every later feature's; no earlier feature's component shares a hook with theirs).
