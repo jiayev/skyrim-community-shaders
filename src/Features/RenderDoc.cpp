@@ -1,4 +1,4 @@
-// RenderDoc feature implementation providing in-application graphics debugging capabilities
+// RenderDoc component of the Developer Tools feature providing in-application graphics debugging capabilities
 #include "Features/RenderDoc.h"
 
 #include "DxvkLoader.h"
@@ -6,6 +6,7 @@
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 // Include additional core headers required by the feature implementation
+#include "Feature.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Plugin.h"
@@ -637,11 +638,6 @@ std::filesystem::path RenderDoc::GetRenderDocDllPath() const
 	return Util::PathHelpers::GetDataPath() / "SKSE" / "Plugins" / "CommunityShaders" / "bin" / "renderdoc.dll";
 }
 
-void RenderDoc::SetupResources()
-{
-	// RenderDoc doesn't need any D3D resources
-}
-
 void RenderDoc::SaveSettings(json& o_json)
 {
 	o_json["Enable RenderDoc Capture"] = enableRenderDocCapture;
@@ -674,11 +670,6 @@ void RenderDoc::RestoreDefaultSettings()
 {
 	enableRenderDocCapture = false;
 	SetCaptureFrameCount(1);
-}
-
-void RenderDoc::ClearShaderCache()
-{
-	// RenderDoc doesn't have shaders to clear
 }
 
 void RenderDoc::RefreshCaptureFileCache()
@@ -969,6 +960,8 @@ std::string RenderDoc::BuildAutomaticCaptureComments(const std::string& userComm
 
 	// Plugin version
 	auto pluginVersion = Util::GetFormattedVersion(Plugin::VERSION);
+	if (Plugin::BUILD_DESCRIBE != std::format("v{}", pluginVersion))
+		pluginVersion += " " + Util::GetBuildLabel();
 	comments += std::format("Community Shaders {}\n", pluginVersion);
 
 	// Enabled features

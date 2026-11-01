@@ -6,6 +6,7 @@
 
 #include <Buffer.h>
 #include <atomic>
+#include <d3d11_1.h>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -86,6 +87,9 @@ public:
 	void Debug();
 	/** @brief Per-frame reset: advances timer, caches menu state, resets descriptors and frame counters. */
 	void Reset();
+
+	/** @brief Selects sphere-normal grass lighting for the next grass draw. */
+	void SetGrassSphereNormal(bool sphereNormal);
 	/** @brief One-time post-D3D setup: creates resources, probes GPU caps, initializes features. */
 	void Setup();
 
@@ -305,6 +309,10 @@ public:
 	 */
 	[[nodiscard]] static uint32_t GetRuntimePixelBits(const RE::BSShader& a_shader);
 
+	/** @brief Whether perf events reach a consumer: an attached capture tool, Tracy, or an Nsight Perf pass. */
+	[[nodiscard]] bool PerfEventsConsumed() const;
+	/** @brief Whether Frame Annotations' per-draw events are worth building: the setting is on and consumed. */
+	[[nodiscard]] bool AnnotateDraws() const { return frameAnnotations && PerfEventsConsumed(); }
 	/** @brief Opens a named GPU performance event (D3D annotation + Tracy zone). */
 	void BeginPerfEvent(std::string_view title);
 	/** @brief Closes the most recent GPU performance event. */
@@ -335,9 +343,9 @@ public:
 	// Keep compiled shaders in Data/ShaderCache/ContentStore, keyed by their preprocessed source and
 	// compile inputs, so a cache wipe or plugin update restores unchanged shaders instead of recompiling.
 	// Atomic: written from the UI thread, read from compilation pool workers.
-	std::atomic_bool enableContentStore{ false };
+	std::atomic_bool enableContentStore{ true };
 	/// Size limit of the persistent shader store in MB; least recently used shaders beyond it are evicted.
-	std::atomic<uint32_t> contentStoreMaxMB{ 4096 };
+	std::atomic<uint32_t> contentStoreMaxMB{ 1024 };
 	static constexpr uint32_t kContentStoreMinMB = 512;
 	static constexpr uint32_t kContentStoreMaxMB = 32768;
 
@@ -457,7 +465,8 @@ public:
 		float EffectRadius;
 		uint BaseTextureIsWorking;
 		uint RenderToUI;
-		uint pad;
+		// Model-space height of the grass mesh being drawn, for root-to-tip canopy occlusion.
+		float GrassCanopyHeight;
 
 		bool operator==(const PermutationCB& other) const
 		{
@@ -465,7 +474,8 @@ public:
 			       PixelShaderDescriptor == other.PixelShaderDescriptor &&
 			       ExtraShaderDescriptor == other.ExtraShaderDescriptor &&
 			       ExtraFeatureDescriptor == other.ExtraFeatureDescriptor &&
-			       EffectRadius == other.EffectRadius && BaseTextureIsWorking == other.BaseTextureIsWorking && RenderToUI == other.RenderToUI;
+			       EffectRadius == other.EffectRadius && BaseTextureIsWorking == other.BaseTextureIsWorking && RenderToUI == other.RenderToUI &&
+			       GrassCanopyHeight == other.GrassCanopyHeight;
 		}
 	};
 	STATIC_ASSERT_ALIGNAS_16(PermutationCB);
@@ -604,6 +614,6 @@ private:
 
 	std::optional<TonemapOwner> tonemapOwner;
 	uint historyResetFrame = UINT_MAX;
-	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
+	winrt::com_ptr<ID3DUserDefinedAnnotation> pPerf;
 	std::mutex statsMutex;
 };

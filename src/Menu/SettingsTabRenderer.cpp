@@ -548,6 +548,11 @@ void SettingsTabRenderer::RenderBehaviorTab()
 
 		SeparatorTextWithFont(T("menu.settings.visual_effects", "Visual Effects"), Menu::FontRole::Subheading);
 
+		ImGui::Checkbox(T("menu.settings.menu_fade", "Menu Fade"), &themeSettings.MenuFadeEnabled);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T("menu.settings.menu_fade_tooltip", "Fades the menu in and out when it is opened or closed."));
+		}
+
 		MenuFonts::EndTabItem();
 	}
 }

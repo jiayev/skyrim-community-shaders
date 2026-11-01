@@ -1,6 +1,6 @@
 # Nsight Perf GPU counters
 
-Remote Control can measure NVIDIA GPU hardware counters per render pass with the
+Developer Tools can measure NVIDIA GPU hardware counters per render pass with the
 [Nsight Perf SDK](https://developer.nvidia.com/nsight-perf-sdk) range profiler. A capture records
 metrics such as `gpu__time_duration`, `sm__throughput` and the warp stall reasons over the
 frame's perf events (`State::BeginPerfEvent` / `EndPerfEvent`). These are the same named ranges
@@ -73,7 +73,7 @@ A metric the chip lacks is reported as unavailable, and the rest of the capture 
 
 ## In game
 
-Open **Remote Control → Nsight Perf (DX11)**:
+Open **Developer Tools → Nsight Perf**:
 
 1. Pick metrics and range filters, and set samples, nesting levels and delay.
 2. Press **Capture**. The status line shows the sample and pass while it runs.
@@ -103,8 +103,11 @@ capture ends. For example:
     -   It configures the metrics (metrics evaluator → raw counters → config image), runs the D3D11
         session and passes, decodes and evaluates the ranges, and publishes the result.
     -   Every profiler call runs on the render thread. Requests and results cross threads under a mutex.
+-   `src/Features/RemoteControl/NvPerfHost.{h,cpp}`: what the profiler needs from the plugin (device, frame
+    counter, annotations, paths). Beyond these, `NvPerf.cpp` needs only the precompiled header's
+    `logger` namespace, which another host must also provide.
 -   `src/Hooks.cpp` (`IDXGISwapChain_Present`): `NvPerf::OnPresentBegin` / `OnPresentEnd`.
 -   `src/State.cpp` (`BeginPerfEvent` / `EndPerfEvent`): `NvPerf::PushRange` / `PopRange`, behind
     one atomic check when no pass is open.
--   `src/Features/RemoteControl.cpp`: the panel.
+-   `src/Features/RemoteControl.cpp`: the panel, shown as a tab of `src/Features/DeveloperTools.cpp`.
 -   `src/Features/RemoteControl/DevBenchBridge.cpp`: the tool.

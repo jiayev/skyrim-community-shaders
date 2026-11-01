@@ -59,7 +59,7 @@ option(
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
 option(
     NVPERF_SUPPORT
-    "Enable the Nsight Perf range profiler in Remote Control (requires NVPERF_SDK_ROOT)"
+    "Enable the Nsight Perf range profiler in Developer Tools (requires NVPERF_SDK_ROOT)"
     OFF
 )
 set(NVPERF_SDK_ROOT
@@ -90,10 +90,28 @@ if(GIT_FOUND)
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
     )
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} branch --show-current
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE GIT_BRANCH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    # CI PR checkouts are detached, so use the PR's source branch
+    if(GIT_BRANCH STREQUAL "" AND NOT "$ENV{GITHUB_HEAD_REF}" STREQUAL "")
+        set(GIT_BRANCH "$ENV{GITHUB_HEAD_REF}")
+    endif()
+    # Untrusted (PR authors pick it) and lands in a C++ string literal
+    string(REGEX REPLACE "[^A-Za-z0-9._/-]" "_" GIT_BRANCH "${GIT_BRANCH}")
+    # Only CI artifacts are official builds
+    if(NOT GIT_BRANCH STREQUAL "" AND NOT "$ENV{CI}" STREQUAL "true")
+        string(APPEND GIT_BRANCH "*")
+    endif()
 else()
     set(GIT_DESCRIBE "unknown")
 endif()
 message("\tBuild version: ${GIT_DESCRIBE}")
+message("\tBuild branch: ${GIT_BRANCH}")
 
 # #######################################################################################################################
 # # Add CMake features
@@ -517,7 +535,7 @@ add_custom_command(
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_scene_settings_catalog.py"
         --source-dir "${CMAKE_CURRENT_SOURCE_DIR}" --out-dir
         "${SCENE_SETTINGS_CATALOG_DIR}" --min-entries 645 --min-controllable 538
-        --min-controllable-features 31 --feature-floors
+        --min-controllable-features 32 --feature-floors
         "${SCENE_SETTINGS_CATALOG_FLOORS}" --stamp
         "${SCENE_SETTINGS_CATALOG_STAMP}"
     DEPENDS

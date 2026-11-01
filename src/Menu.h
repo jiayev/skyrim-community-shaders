@@ -119,6 +119,10 @@ public:
 
 	bool initialized = false;
 	bool IsEnabled = false;
+	float openFade = 0.0f;  // 0 = closed, 1 = fully open; eased toward IsEnabled each frame
+
+	/** @brief Eases openFade toward IsEnabled, or snaps to it when the menu fade setting is off. */
+	void UpdateOpenFade(float deltaTime);
 
 	/** @brief Loads menu settings from JSON, including legacy migration */
 	void Load(json& o_json);
@@ -239,6 +243,7 @@ public:
 		bool ShowFooter = true;             // whether to show the footer with game version/GPU info
 		bool CenterHeader = false;          // whether to center the header title and logo
 		float TooltipHoverDelay = 0.5f;     // tooltip hover delay in seconds
+		bool MenuFadeEnabled = true;        // fade the menu in and out when it is toggled
 		bool UseCustomCursor = false;       // use theme cursor images instead of default ImGui cursors
 		struct CursorImageSettings
 		{
