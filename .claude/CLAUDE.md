@@ -16,6 +16,7 @@ One-click wrappers (configure CMake automatically on first run):
 ./BuildDevFast.bat   # Fastest iteration: Ninja, /Od, incremental link, DLL only
 ./BuildPR.bat        # CI parity: /O2 no LTO, public-symbols PDB, AIO package
 ./BuildDebug.bat     # Debug-config DLL + AIO folder (ALL-DEBUG preset)
+./BuildReleaseProfile.bat  # Release candidates: as BuildRelease, with Aftermath, DevBench, NvPerf, SPIR-V debug info and pass timestamps off, and Tracy on demand
 ```
 
 Generic form: `./BuildRelease.bat [BUILD_PRESET] [CONFIGURE_PRESET]` (configure preset defaults to the build preset). Presets are in `CMakePresets.json`; local overrides go in `CMakeUserPresets.json` (copy from `CMakeUserPresets.json.template`).
