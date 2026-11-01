@@ -144,7 +144,8 @@ namespace DCLF::Features::Faces
 			float* out = a_record.storage.PrepareWrite(a_record.writeSlot, a_record.floats).data();
 			for (const auto& shape : a_record.shapes) {
 				auto* geometry = shape.shape.get();
-				const auto& dynamic = geometry->GetDynamicTrishapeRuntimeData();
+				auto& dynamic = geometry->GetDynamicTrishapeRuntimeData();
+				RE::BSSpinLockGuard guard(dynamic.lock);
 				const std::uint32_t count = geometry->GetTrishapeRuntimeData().vertexCount;
 				if (!dynamic.dynamicData || count != shape.vertexCount || dynamic.dataSize < count * 16u) {
 					mismatches.fetch_add(1, std::memory_order_relaxed);

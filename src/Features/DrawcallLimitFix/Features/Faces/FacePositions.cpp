@@ -32,7 +32,14 @@ namespace DCLF::Features::Faces
 		struct FaceUploads
 		{
 			org::services::FilledVersion version;
-			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> regions;
+			struct Range
+			{
+				std::uint64_t generation;
+				std::ptrdiff_t offset;
+				std::uint32_t count;
+				bool operator==(const Range&) const = default;
+			};
+			ankerl::unordered_dense::map<std::uint32_t, Range> regions;
 		};
 
 		/**
@@ -112,21 +119,23 @@ namespace DCLF::Features::Faces
 			for (const auto& stream : a_upload.rows) {
 				if (stream.object == Api::VertexStreamRow::kNoObject || std::uint64_t(stream.first) + stream.count > version.units)
 					continue;
+				const auto offset = stream.vertices - stream.owner->data();
 				auto generation = stream.generation;
 				const float* vertices = stream.vertices;
 				if (const auto* group = static_cast<const FaceSnapshots::HeadStream*>(stream.group.get())) {
 					const auto& pose = group->ForFrame(frame);
 					if (pose.owner) {
 						// This registration keeps each shape at the same offset for its lifetime.
-						vertices = pose.owner->data() + (stream.vertices - stream.owner->data());
+						vertices = pose.owner->data() + offset;
 						generation = pose.generation;
 					}
 				}
 				auto& region = uploaded.regions[stream.first];
-				if (region == generation)
+				const FaceUploads::Range range{ generation, offset, stream.count };
+				if (region == range)
 					continue;
 				a_upload.uploads(a_upload.buffer, vertices, std::size_t(stream.count) * Draws::kStreamVertexBytes, std::uint64_t(stream.first) * Draws::kStreamVertexBytes);
-				region = generation;
+				region = range;
 				++count;
 			}
 			return count;

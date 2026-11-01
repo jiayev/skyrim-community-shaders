@@ -1,7 +1,9 @@
 // Per-mesh skin materials, sampled at frame start. Characters may share a material yet override
 // its profile and textures independently, so these belong to the object shading row.
+#include "Features/DrawcallLimitFix/Api/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
+#include "Features/DrawcallLimitFix/Core/Shading/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/AdvancedSkin.h"
 #include "Features/Skin.h"
 #include "Globals.h"
@@ -30,6 +32,17 @@ namespace DCLF::Integrations::AdvancedSkin
 		};
 		std::unordered_map<std::uint32_t, Captured> captured;
 		std::unordered_set<std::uint32_t> reset;
+		// RaceMenu and CommonLib's UpdateBodyTint can write RGB directly, without a material virtual call.
+		// FaceGen also replaces the baked texture view after the mesh is attached.
+		struct TintInputs
+		{
+			const RE::BSShaderMaterial* material = nullptr;
+			std::array<float, 3> rgb{};
+			ID3D11ShaderResourceView* diffuse = nullptr;
+			ID3D11ShaderResourceView* tint = nullptr;
+			bool operator==(const TintInputs&) const = default;
+		};
+		std::unordered_map<std::uint32_t, TintInputs> observedTints;
 		std::unordered_set<std::uint32_t> candidates;
 		GpuTextures::Binding sampler;
 		winrt::com_ptr<ID3D11SamplerState> samplerSource;
@@ -39,6 +52,7 @@ namespace DCLF::Integrations::AdvancedSkin
 		{
 			for (const auto& change : a_membership.changes) {
 				if (change.clear) {
+					observedTints.clear();
 					for (const auto& [slot, value] : captured)
 						reset.insert(slot);
 				} else {
@@ -68,8 +82,31 @@ namespace DCLF::Integrations::AdvancedSkin
 				auto* geometry = *it < a_capture.objectGeometry.size() ? a_capture.objectGeometry[*it] : nullptr;
 				auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
 				if (!SkinMaterials::IsCompatible(property)) {
+					observedTints.erase(*it);
 					it = candidates.erase(it);
 					continue;
+				}
+				auto* material = property->material;
+				const auto vtable = *reinterpret_cast<const std::uintptr_t*>(material);
+				static const auto bodyClass = RE::VTABLE_BSLightingShaderMaterialFacegenTint[0].address();
+				static const auto faceClass = RE::VTABLE_BSLightingShaderMaterialFacegen[0].address();
+				if (vtable == bodyClass || vtable == faceClass) {
+					const auto* base = static_cast<const RE::BSLightingShaderMaterialBase*>(material);
+					TintInputs value{ .material = material };
+					value.diffuse = MaterialPort::ViewOf(base->diffuseTexture.get());
+					if (vtable == bodyClass) {
+						const auto& rgb = static_cast<const RE::BSLightingShaderMaterialFacegenTint*>(base)->tintColor;
+						value.rgb = { rgb.red, rgb.green, rgb.blue };
+					} else {
+						value.tint = MaterialPort::ViewOf(static_cast<const RE::BSLightingShaderMaterialFacegen*>(base)->tintTexture.get());
+					}
+					auto& prior = observedTints[*it];
+					if (prior != value) {
+						Api::NoteMaterialWritten(material);
+						prior = value;
+					}
+				} else {
+					observedTints.erase(*it);
 				}
 				slots.push_back(*it++);
 				meshes.push_back(geometry);

@@ -298,11 +298,13 @@ namespace DCLF::Features::Faces
 			if (!head)
 				return;
 			auto& state = a_context.State<FaceShapes>();
-			auto& listed = state.listedHeads[&a_write.geometry];
-			if (listed)
-				return;
+			if (const auto it = state.listedHeads.find(&a_write.geometry); it != state.listedHeads.end()) {
+				if (it->second == head)
+					return;
+				UnlistFaceShape(state, &a_write.geometry);
+			}
 			state.faceHeads[head].push_back(&a_write.geometry);
-			listed = head;
+			state.listedHeads.emplace(&a_write.geometry, head);
 		}
 
 		// A face shape's snapshot and region this walk; false without one.
