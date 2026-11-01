@@ -48,9 +48,14 @@ namespace DCLF::Features::Grass
 			a_row.scaleMask[0] = uniform;
 			a_row.scaleMask[1] = uniform;
 			a_row.scaleMask[2] = 1.0f;
-			a_row.pbrParams1[0] = a_source.roughnessScale;
-			a_row.pbrParams1[1] = a_source.specularLevel;
-			std::copy_n(a_source.subsurface, 4, a_row.pbrParams2);
+			std::copy_n(a_source.pbrParams1, 3, a_row.pbrParams1);
+			std::copy_n(a_source.pbrParams2, 4, a_row.pbrParams2);
+			std::copy_n(a_source.pbrParams3, 4, a_row.pbrParams3);
+			std::copy_n(a_source.pbrParams4, 4, a_row.pbrParams4);
+			// BSGrassShader's GrassCanopyHeight (Hooks.cpp): grass meshes are rooted at the model origin, so the bound's centre sits about
+			// halfway up. The LOD tiers' are their meshes' (LayOutVisible).
+			const float canopy = a_source.boundCenter[2] > 1.0f ? 2.0f * a_source.boundCenter[2] : std::max(a_source.boundCenter[2] + a_source.modelRadius, 1.0f);
+			std::fill_n(a_row.canopyHeight, kTiers, canopy);
 		}
 	}
 
@@ -365,7 +370,7 @@ namespace DCLF::Features::Grass
 				const auto* lod = ::GrassMeshLibrary::GetLODMesh(record, tier == 1 ? Tier::kMiddle : Tier::kFar);
 				if (!lod)
 					continue;
-				MeshSource source{ .key = lod, .vertexDesc = lod->descVal, .indexCount = lod->indexCount };
+				MeshSource source{ .key = lod, .vertexDesc = lod->descVal, .indexCount = lod->indexCount, .canopyHeight = lod->canopyHeight };
 				source.vertexBuffer.copy_from(lod->vertexBuffer);
 				source.indexBuffer.copy_from(lod->indexBuffer);
 				bucket.meshes[tier] = AddMeshUser(std::move(source));
@@ -442,8 +447,10 @@ namespace DCLF::Features::Grass
 					row.flags |= tier == 1 ? GrassInstances::kBucketTierOne : tier == 2 ? GrassInstances::kBucketTierTwo : 0u;
 				}
 				// A LOD tier's own mesh cost (Grass Optimizations' UploadCullBucketConstants: sqrt(triangles / 8)), tier 0's without a mesh.
-				if (tier > 0)
+				if (tier > 0) {
 					row.lodMeshCost[tier - 1] = drawn ? std::sqrt(std::max(1.0f, static_cast<float>(it->second.source.indexCount) / 24.0f)) : row.minPixelScale;
+					row.canopyHeight[tier] = drawn ? it->second.source.canopyHeight : row.canopyHeight[0];
+				}
 			}
 			row.instanceCount = row.mesh[0] != kNoMesh ? bucket.total : 0;
 			MarkBucket(bucket.slot);

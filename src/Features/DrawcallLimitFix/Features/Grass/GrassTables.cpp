@@ -198,7 +198,8 @@ namespace DCLF::Features::Grass
 					return view ? view : DefaultView(a_normal);
 				};
 				bound = Bind(row, &BucketRow::normalIndex, viewOr(source.normal, true)) && Bind(row, &BucketRow::rmaosIndex, viewOr(source.rmaos, false)) &&
-				        Bind(row, &BucketRow::featuresIndex, viewOr(source.features0, false)) && BindSampler(row, &BucketRow::pbrSampler, address, 3);
+				        Bind(row, &BucketRow::featuresIndex, viewOr(source.features0, false)) && Bind(row, &BucketRow::fuzzIndex, viewOr(source.features1, false)) &&
+				        Bind(row, &BucketRow::emissiveIndex, viewOr(source.emissive, false)) && BindSampler(row, &BucketRow::pbrSampler, address, 3);
 			}
 			if (!bound)
 				return false;

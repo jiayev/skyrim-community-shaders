@@ -39,7 +39,7 @@ cbuffer GrassCullConstants : register(b0)
 // GrassLayout.h.
 static const uint kInstanceBytes = 32;
 static const uint kShapeRowBytes = 32;
-static const uint kBucketRowBytes = 160;
+static const uint kBucketRowBytes = 224;
 static const uint kFrameBytes = 8;  // GrassInstances::InstanceFrame: the wind halfs, then the fade (unorm16) and flags (high 16)
 static const uint kTiers = 3;
 static const uint kBucketTierOne = 4;

@@ -1,6 +1,7 @@
 #include "GrassCapture.h"
 
 #include "GrassMeshLibrary.h"
+#include "TruePBR.h"
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "Utils/VersionedRelocation.h"
 
@@ -66,26 +67,22 @@ namespace GrassShared
 		void ReadPbr(AddEvent::Pbr& out, RE::BSShaderMaterial* material)
 		{
 			const auto* pbr = static_cast<const BSLightingShaderMaterialPBR*>(material);
-			const RE::NiSourceTexture* white = globals::game::graphicsState->GetRuntimeData().defaultTextureWhite.get();
+			const auto& defaults = globals::game::graphicsState->GetRuntimeData();
+			const RE::NiSourceTexture* white = defaults.defaultTextureWhite.get();
+			const RE::NiSourceTexture* black = defaults.defaultTextureBlack.get();
 
 			out.normal = pbr->normalTexture.get();
 			out.rmaos = pbr->rmaosTexture.get();
 			out.features0 = (pbr->featuresTexture0 && pbr->featuresTexture0.get() != white) ? pbr->featuresTexture0.get() : nullptr;
+			out.features1 = (pbr->featuresTexture1 && pbr->featuresTexture1.get() != white) ? pbr->featuresTexture1.get() : nullptr;
+			out.emissive = (pbr->emissiveTexture && pbr->emissiveTexture.get() != black) ? pbr->emissiveTexture.get() : nullptr;
 
-			stl::enumeration<PBRShaderFlags> shaderFlags;
-			if (pbr->pbrFlags.any(PBRFlags::Subsurface))
-				shaderFlags.set(PBRShaderFlags::Subsurface);
-			if (out.features0)
-				shaderFlags.set(PBRShaderFlags::HasFeaturesTexture0);
-			out.flags = shaderFlags.underlying();
-
-			out.roughnessScale = pbr->GetRoughnessScale();
-			out.specularLevel = pbr->GetSpecularLevel();
-			const auto& subsurface = pbr->GetSubsurfaceColor();
-			out.subsurface[0] = subsurface.red;
-			out.subsurface[1] = subsurface.green;
-			out.subsurface[2] = subsurface.blue;
-			out.subsurface[3] = pbr->GetSubsurfaceOpacity();
+			const auto constants = TruePBR::GetGrassPBRConstants(pbr);
+			out.flags = constants.flags;
+			std::copy_n(constants.params1, 3, out.params1);
+			std::copy_n(constants.params2, 4, out.params2);
+			std::copy_n(constants.params3, 4, out.params3);
+			std::copy_n(constants.params4, 4, out.params4);
 		}
 
 		/**

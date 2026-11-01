@@ -36,10 +36,13 @@ namespace DCLF::Features::Grass
 				source.normal.reset(pbr.normal);
 				source.rmaos.reset(pbr.rmaos);
 				source.features0.reset(pbr.features0);
+				source.features1.reset(pbr.features1);
+				source.emissive.reset(pbr.emissive);
 				source.pbrFlags = pbr.flags;
-				source.roughnessScale = pbr.roughnessScale;
-				source.specularLevel = pbr.specularLevel;
-				std::memcpy(source.subsurface, pbr.subsurface, sizeof(source.subsurface));
+				std::memcpy(source.pbrParams1, pbr.params1, sizeof(source.pbrParams1));
+				std::memcpy(source.pbrParams2, pbr.params2, sizeof(source.pbrParams2));
+				std::memcpy(source.pbrParams3, pbr.params3, sizeof(source.pbrParams3));
+				std::memcpy(source.pbrParams4, pbr.params4, sizeof(source.pbrParams4));
 			}
 			return source;
 		}
