@@ -382,8 +382,10 @@ namespace DCLF::Diagnostics
 			std::static_pointer_cast<org::RenderPass>(std::make_shared<FoliageParityPass>(resources)))
 				.PreferQueue(org::QueueKind::Graphics)
 				.Epoch(colour));
+		// After the parity pass, on its queue (see CullCounters' readback).
 		a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.foliage-readback",
 			std::static_pointer_cast<org::RenderPass>(std::make_shared<FoliageReadbackPass>(resources)))
+				.PreferQueue(org::QueueKind::Graphics)
 				.Epoch(colour));
 	}
 }

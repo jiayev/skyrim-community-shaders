@@ -33,12 +33,14 @@ light culling is the first feature that does this. Its D3D11 path stays in place
         `dxvk.enableDescriptorBuffer = False` turns it off too.
     -   **The grant.** DXVK then grants `descriptorBuffer` + `mutableDescriptorType`, and `Initialize` logs
         the model or disables the graph with the reason (RenderDoc's capture config forces legacy sets).
--   **Persistent graph.** A `org::PersistentGraphHost` drives the graph in persistent mode: it is compiled
-    once and each frame runs `PrepareFrame` + record + submit. Resizes and pass-set changes rebuild it.
+-   **Persistent graphs.** An `org::GraphHost` drives a graph per epoch (segment) in persistent mode: each is compiled
+    once and each frame runs prepare + record + submit. A resize or a pass-set change rebuilds only the epochs whose
+    graph conditions changed (`RequestRebuild(epoch)`), with no device wait. Embedding ORG is described in
+    `extern/OpenRenderGraph/docs/persistent-epochs.md`.
 -   **Epoch.** `RenderGraphRuntime::ExecuteEpoch` runs the graph once, on the thread that drives the
     D3D11 immediate context (LLF calls it from `UpdateLights`). CPU data for a frame, such as the light
     list, is uploaded by the graph's own `BUFFER_UPLOAD` path inside the epoch.
--   **Frames in flight.** `PersistentGraphHost::Desc::framesInFlight` is game frames: whole frames of the epoch order
+-   **Frames in flight.** `GraphHost::Desc::framesInFlight` is game frames: whole frames of the epoch order
     (4, `kGameFramesInFlight`). The host's frame slots are that many frames of every epoch (`FrameSlots`, 24 with six
     segments), one ring that every execution takes the next slot of. A slot's next execution waits for its last one's GPU
     work: the "ticket wait" in `CS_ORG_EPOCH_STATS`, on the host's thread, which the render thread sees only when the ring
@@ -48,7 +50,63 @@ light culling is the first feature that does this. Its D3D11 path stays in place
 
 ## Ordering against D3D11
 
-The graph's batches go into DXVK's own command stream (`dxvkEnqueueInteropSubmission`):
+### In-stream epochs (the default)
+
+With DXVK's external commands (`dxvkEmitExternalCommands`), the async epochs are external epochs
+(`GraphHost::SetExternalEpochs`, `CS_ORG_IN_STREAM`). Their graphics work runs inside DXVK's own command list, and only a
+wait on another queue splits that list:
+
+1.  At the epoch's point, `ExecuteEpoch` submits the ticket (`SubmitEpoch`). ORG submits the batches on the compute queue
+    itself; the graphics batches come back as an `ExternalEpochExecution` of ordered segments.
+2.  `Impl::EmitExecution` emits each segment as an external command. DXVK calls back on its CS thread, the callback executes
+    the segment's secondaries into DXVK's command buffer (`ExternalEpochExecution::Execute`), and the segment's waits and
+    signals go on the DXVK submission it lands in.
+3.  A segment marked `split` is preceded by a D3D11 `Flush`, which ends DXVK's command list: one of its waits is for compute
+    work that waits for an earlier segment.
+4.  `CloseComputeEpoch` adds the stream's wait for the epoch's compute and copy work (`computeTail`) as a wait-only external
+    command, after a flush when the execution's `exitSplit` says so.
+5.  DXVK's images are imported in GENERAL (`commonLayoutOnly`) and stay there. With external home states
+    (`CS_ORG_EXTERNAL_HOME`, on), every epoch leaves them on the graphics queue, where DXVK uses them between the epochs.
+    Memory dependencies against D3D11 are the queue-boundary barriers (below).
+
+In the tours (2026-11-01), DXVK's command list is split 1.3 times a frame by the epochs (the Z-prepass's compute entry),
+against 6 when every epoch enqueued its batches.
+
+### The compute and copy queues
+
+DXVK creates queues it never submits to, for ORG's off-stream kinds:
+
+-   `DxvkOrgInteropDeviceInfo::computeQueue` is ORG's compute queue, the graph's alone.
+-   `DxvkOrgInteropDeviceInfo::copyQueue` (interop version 5), a spare queue of the transfer-only family, is ORG's copy queue.
+    Without one, ORG's copy queue shares the uploader's (`uploadQueue`). `CS_ORG_COPY_QUEUE=0`, or neither queue, leaves it
+    aliasing the graphics one.
+
+A pass that touches a resource only DXVK's families may use (an exclusive import) stays on the graphics queue.
+
+-   **Entry.** Before an epoch's first submission to either, DXVK's stream signals `streamPoint` where it stands (one
+    enqueued submission). Each queue's first submission of the epoch waits for it.
+-   **Exit.** Every submission also signals its queue's exit timeline (`computeExit`, `copyExit`). The stream waits for both
+    at the epoch's end.
+-   **Submission.** Each queue's submissions go through one thread of its own (`ComputeSubmitter`), under DXVK's submission
+    lock.
+-   **Sharing the uploader's queue.** Nothing on a shared queue may block it:
+    -   Graph copies wait for DXVK's stream, the uploader's batches wait for frames in flight, and the stream waits for both.
+    -   A batch blocked on the queue holds back whatever is behind it. A graph copy ahead of the frame values' signal
+        deadlocked the GPU (seen on 2026-11-01).
+    -   So both threads wait for a submission's points on the CPU (`WaitForPoints`), and it reaches the queue with nothing left
+        to wait for. Only a shared queue does this.
+-   **Which queues can be the copy queue.** The RTX 5080's transfer family has two queues, DXVK's and the uploader's.
+    -   DXVK's cannot be shared: its relocation barrier (`setSubmissionBarrier`) blocks that queue on the graphics queue.
+    -   Never a compute family: a 256 MB upload took 144 ms during a 150 ms dispatch there, and 4.8 ms on the transfer family.
+    -   Never a video family: a driver need not support copies there correctly. Visual corruption was seen with one.
+-   **Kept on graphics.** The small copies inside an epoch's graphics work (LLF's `cs.llf.latch-lights`, the cull counter
+    and foliage readbacks) prefer the graphics queue. On the copy queue they would only add a stream entry or a split.
+    `ORG_PERSISTENT_COPIES_ON_COPY_QUEUE=1` moves every copy pass to the copy queue whatever it prefers, to exercise it.
+
+### Enqueued epochs
+
+Without DXVK's external commands (or with `CS_ORG_IN_STREAM=0`), the graph's batches go into DXVK's own command stream
+(`dxvkEnqueueInteropSubmission`):
 
 1.  BasicRHI hands each queue submission to the host through `QueueSubmissionHooks::submit` instead of
     calling `vkQueueSubmit`.
@@ -169,7 +227,7 @@ stream order, on its own command buffer, outside any render pass. DCLF's CPU-dri
 -   **Lifetime.** DXVK tracks nothing the callback uses: every D3D11 object, view and buffer it reads or writes is held until its
     signal completes. ORG's staged uploads a callback depends on are recorded on the render thread into a secondary
     (`RenderGraph::RecordPendingUploads`) and executed at the callback's start, so DXVK's list is not ended for them. ORG's latch
-    regions a callback's work reads are written at an external frame slot (`PersistentGraphHost::BeginExternalFrameSlot`), reused only
+    regions a callback's work reads are written at an external frame slot (`GraphHost::BeginExternalFrameSlot`), reused only
     after its last frame's signal.
 -   Once the path has been used, DXVK no longer reorders transfers or layout transitions on interop images, or on buffers with a
     stable address, ahead of the command buffer.
@@ -248,7 +306,14 @@ To see what the persistent graph executes (batches per queue, the barriers befor
 | `CS_ORG_SUBMIT=flush` | Use the flush-and-lock submission path even when DXVK supports the stream path. |
 | `CS_ORG_LLF_PARITY=1` | Every 300 frames, also run LLF's D3D11 culling and compare each cluster's light set with the graph's (logs `LLF parity OK` / `MISMATCH`). |
 | `CS_ORG_EPOCH_STATS=1` | Log render-thread CPU time per epoch (average and maximum every 600 epochs). |
-| `CS_ORG_ASYNC_EPOCHS=0` | Run the epochs synchronously. By default each epoch is prepared and recorded ahead on the graph host's thread, and the render thread only submits ("Revisions and recordings" in `dclf-architecture.md`). |
+| `CS_ORG_ASYNC_EPOCHS=0` | Run the epochs synchronously. By default each epoch is prepared and recorded ahead on the graph host's thread, and the render thread only admits and submits ("Revisions and recordings" in `dclf-architecture.md`). |
+| `CS_ORG_IN_STREAM=0` | Enqueue the async epochs' batches behind DXVK's command list (`dxvkEnqueueInteropSubmission`) instead of running their graphics work inside it. A list such as `0,3` keeps only those epochs in the stream. |
+| `CS_ORG_EXTERNAL_HOME=0` | Epochs no longer give DXVK's images back on the graphics queue in their home state (unsafe: DXVK expects them there). |
+| `CS_ORG_CLOSED=1` | Closed executions: every epoch returns every resource to its home state and starts with a full barrier. An interop fallback; by default the epochs' resources flow between them through ORG's ledgers. |
+| `CS_ORG_COMPUTE_QUEUE=0` | The graph's compute queue aliases the graphics one (no DXVK compute queue). |
+| `CS_ORG_COPY_QUEUE=0` | The graph's copy queue aliases the graphics one instead of a transfer-family queue. |
+| `ORG_PERSISTENT_COPIES_ON_COPY_QUEUE=1` | Every copy pass on the copy queue whatever it prefers (a test of that queue). Set it in the launching process's environment: ORG reads it with `getenv`, which does not see the switches file. |
+| `CS_ORG_QUEUE_UPLOADS=0` | Every upload of an epoch on the graphics queue, and every compute batch waits for them. |
 | `CS_GPU_IDLE_TRACE=<frames>` | Every that many frames, log one complete frame's GPU idle gaps and what the render thread was doing during each (`[GpuIdle]`). DXVK timestamps every submission on its queue (`dxvkSetSubmissionTrace`, two extra timestamp-only submissions per submission), the Streamline ring's buffers add their own spans, and the render thread's perf events are the CPU markers. Forces Frame Annotations on for the session (without saving it) but leaves out the per-draw geometry events, whose formatting would dominate the timeline. Diagnostics only: the trace's own overhead makes gaps somewhat longer than in a normal run. |
 | `CS_PROFILER_LOG=<frames>` | Log the profiling window's rolling averages every that many collected frames, sorted by cost, with `[split N%]` on timers that straddle DXVK submissions. For comparing two configurations from their logs. |
 

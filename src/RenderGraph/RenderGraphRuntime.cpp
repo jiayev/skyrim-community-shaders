@@ -291,34 +291,70 @@ struct RenderGraphRuntime::Impl
 	// address 0 on the first frames that used the compute queue, no shader running), and none in 39 once serialized.
 	// Vulkan asks only that each queue be synchronized, so something below DXVK does not take two queues at once.
 	VkQueue computeQueue = VK_NULL_HANDLE;
-	// DXVK's upload queue for interop clients (DxvkOrgInteropDeviceInfo::uploadQueue), adopted as BasicRHI's copy queue: the
+	// BasicRHI's copy queue: DXVK's spare queue of the transfer-only family (DxvkOrgInteropDeviceInfo::copyQueue), else the upload
+	// queue, shared. It is ordered against the stream as the compute queue is.
+	//
+	// Shared, no submission to it may block the queue. Graph copies wait for DXVK's stream, the uploader's batches wait for frames in
+	// flight, and the stream waits for both: a batch blocked on the queue would hold back a signal its own wait depends on (a graph
+	// copy ahead of the frame values' signal deadlocked the GPU on 2026-11-01). So each submission waits for its points on the CPU,
+	// on its own thread (WaitForPoints), and reaches the queue with nothing left to wait for. DXVK's own transfer queue cannot be
+	// shared at all: DXVK's relocation barrier (setSubmissionBarrier) blocks it on the graphics queue.
+	VkQueue copyQueue = VK_NULL_HANDLE;
+	// DXVK's upload queue for interop clients (DxvkOrgInteropDeviceInfo::uploadQueue), offered to BasicRHI as a spare queue: the
 	// dedicated uploader of graph work (ORG's CopyQueueUploadService - a new version's contents, made by a producer on a worker).
 	// Its submissions come from that service's thread and need no order against DXVK's stream: what they write is a resource no
 	// queue has used, which becomes current only once its copies have completed (the uploader's timeline, seen on the CPU). They
 	// are made under DXVK's submission lock, as every queue of its device.
 	VkQueue uploadQueue = VK_NULL_HANDLE;
 	// ORG orders an execution against DXVK's work on the queue they share with barriers (ExternalQueueBoundary); the
-	// compute queue is the host's to order. Before an epoch's first compute submission DXVK's stream signals streamPoint
-	// where it stands, after all the D3D11 work so far, and that submission waits for it; when the epoch ends the stream
-	// waits for the compute queue's last submission (computeTail), before any later D3D11 work.
+	// compute and copy queues are the host's to order. Before an epoch's first submission to either DXVK's stream signals
+	// streamPoint where it stands, after all the D3D11 work so far, and each queue's first submission waits for it; when the
+	// epoch ends the stream waits for each queue's last submission (computeTail), before any later D3D11 work.
 	//
-	// That wait is on computeExit, which every compute submission also signals, never on the graph's own timelines: the
-	// stream's wait is a submission nothing after it signals, so no host wait covers it. A graph rebuild (new passes) waits
-	// for its timelines' values and destroys them, while DXVK's queue may still hold that wait, executed or not even
-	// submitted; vkDestroySemaphore requires every batch that refers to the semaphore to have completed. computeExit lives
-	// as long as the device.
+	// That wait is on computeExit or copyExit, which every submission to that queue also signals, never on the graph's own
+	// timelines: the stream's wait is a submission nothing after it signals, so no host wait covers it. A graph rebuild (new
+	// passes) waits for its timelines' values and destroys them, while DXVK's queue may still hold that wait, executed or not
+	// even submitted; vkDestroySemaphore requires every batch that refers to the semaphore to have completed. Both live as long
+	// as the device.
 	VkDevice vkDevice = VK_NULL_HANDLE;
 	VkSemaphore streamPoint = VK_NULL_HANDLE;
 	uint64_t streamPointValue = 0;
 	VkSemaphore computeExit = VK_NULL_HANDLE;
 	uint64_t computeExitValue = 0;
+	VkSemaphore copyExit = VK_NULL_HANDLE;
+	uint64_t copyExitValue = 0;
+	bool streamPointEnqueued = false;  // this epoch's
 	bool computeEntered = false;
+	bool copyEntered = false;
 	std::vector<VkSemaphoreSubmitInfo> computeTail;
 	std::vector<VkSemaphoreSubmitInfo> computeWaits;  // scratch for the entry submission's waits
 
 	/**
-	 * The compute queue's submissions, made on a thread of their own. The compute queue is the graph's alone, so only its own
-	 * order matters, which one thread taking them first in, first out keeps; vkQueueSubmit2 costs the render thread several
+	 * Waits on the CPU until every point has been reached (see copyQueue). Bounded: a device that stops making progress is left to
+	 * the submission that follows to report.
+	 */
+	void WaitForPoints(const VkSemaphoreSubmitInfo* a_points, std::uint32_t a_count)
+	{
+		if (a_count == 0)
+			return;
+		ZoneScopedN("CS.ORG.WaitForPoints");
+		std::vector<VkSemaphore> semaphores(a_count);
+		std::vector<std::uint64_t> values(a_count);
+		for (std::uint32_t i = 0; i < a_count; ++i) {
+			semaphores[i] = a_points[i].semaphore;
+			values[i] = a_points[i].value;
+		}
+		VkSemaphoreWaitInfo wait{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+		wait.semaphoreCount = a_count;
+		wait.pSemaphores = semaphores.data();
+		wait.pValues = values.data();
+		if (waitSemaphores(vkDevice, &wait, 10'000'000'000ull) != VK_SUCCESS)
+			logger::warn("[ORG] A shared copy queue submission went ahead after 10 s without its waits");
+	}
+
+	/**
+	 * A queue's submissions, made on a thread of their own: one submitter for the compute queue, one for the copy queue. Those queues
+	 * are the graph's, so only their own order matters, which one thread taking them first in, first out keeps; vkQueueSubmit2 costs the render thread several
 	 * microseconds a call (the Z-prepass makes three). Whatever waits on a compute value - the stream (computeTail), a host
 	 * wait - may do so before the submission is made: a timeline wait may precede its signal. A failed submission is
 	 * reported to the next epoch, which disables the graph.
@@ -330,6 +366,7 @@ struct RenderGraphRuntime::Impl
 	{
 		struct Batch
 		{
+			VkQueue queue = VK_NULL_HANDLE;
 			std::vector<VkSemaphoreSubmitInfo> waits, signals;
 			std::vector<VkCommandBufferSubmitInfo> commandBuffers;
 			bool stop = false;
@@ -340,10 +377,11 @@ struct RenderGraphRuntime::Impl
 		std::atomic<VkResult> failure{ VK_SUCCESS };
 		std::thread thread;
 
-		void Start(Impl& a_impl)
+		// a_waitOnCpu: each batch's waits are reached before it is submitted (a shared queue, see copyQueue).
+		void Start(Impl& a_impl, const wchar_t* a_name, bool a_waitOnCpu)
 		{
-			thread = std::thread([this, &a_impl] {
-				SetThreadDescription(GetCurrentThread(), L"CS ORG compute submit");
+			thread = std::thread([this, &a_impl, a_name, a_waitOnCpu] {
+				SetThreadDescription(GetCurrentThread(), a_name);
 				SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 				for (;;) {
 					available.acquire();
@@ -352,6 +390,8 @@ struct RenderGraphRuntime::Impl
 						continue;
 					if (batch.stop)
 						return;
+					if (a_waitOnCpu)
+						a_impl.WaitForPoints(batch.waits.data(), static_cast<std::uint32_t>(batch.waits.size()));
 					VkSubmitInfo2 submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO_2 };
 					submit.waitSemaphoreInfoCount = static_cast<uint32_t>(batch.waits.size());
 					submit.pWaitSemaphoreInfos = batch.waits.data();
@@ -364,7 +404,7 @@ struct RenderGraphRuntime::Impl
 						ZoneScopedN("CS.ORG.ComputeSubmit");
 						// DXVK's submission lock (see computeQueue), taken here rather than on the render thread.
 						a_impl.interop->LockSubmissionQueue();
-						result = a_impl.queueSubmit2(a_impl.computeQueue, 1, &submit, VK_NULL_HANDLE);
+						result = a_impl.queueSubmit2(batch.queue, 1, &submit, VK_NULL_HANDLE);
 						a_impl.interop->ReleaseSubmissionQueue();
 					}
 					if (result != VK_SUCCESS) {
@@ -403,6 +443,7 @@ struct RenderGraphRuntime::Impl
 		}
 	};
 	ComputeSubmitter computeSubmitter;
+	ComputeSubmitter copySubmitter;
 	PFN_vkDestroySemaphore destroySemaphore = nullptr;
 	PFN_vkWaitSemaphores waitSemaphores = nullptr;
 	// SignalFramePace / WaitFramePace: a timeline DXVK's stream signals with each paced frame's number. Lives as long as the
@@ -435,6 +476,8 @@ struct RenderGraphRuntime::Impl
 	bool epochStats = false;
 	// CS_ORG_EARLY_FLUSH (default on, =0 off): hand DXVK's pending D3D11 work to the GPU when an epoch starts.
 	bool earlyFlush = false;
+	// RenderGraphRuntime::InStreamEpochs: the async epochs executed in DXVK's own command stream.
+	std::vector<std::uint32_t> inStreamEpochs;
 	uint32_t epochCount = 0;
 	// Queue submissions the graph hands to the hook during the current epoch (each is one DXVK enqueue).
 	uint32_t epochHookCalls = 0;
@@ -469,6 +512,8 @@ struct RenderGraphRuntime::Impl
 				return "streamPoint";
 			if (a_semaphore == computeExit)
 				return "computeExit";
+			if (a_semaphore == copyExit)
+				return "copyExit";
 			return fmt::format("{:x}", reinterpret_cast<std::uintptr_t>(a_semaphore));
 		};
 		std::string text;
@@ -942,16 +987,99 @@ struct RenderGraphRuntime::Impl
 		return true;
 	}
 
-	// The epoch's end: the stream waits for the compute queue's last signals, in the epoch's batch when it has one.
-	bool CloseComputeEpoch(const char* a_label)
+	static void NoCommands(void*, VkCommandBuffer) {}
+
+	// One segment of an in-stream epoch's execution, for its callback on DXVK's CS thread (which frees it).
+	struct StreamSegment
 	{
+		std::shared_ptr<org::ExternalEpochExecution> execution;
+		std::size_t index = 0;
+		rhi::Device device;
+	};
+	static void StreamSegmentCallback(void* a_user, VkCommandBuffer a_commandBuffer)
+	{
+		std::unique_ptr<StreamSegment> segment(static_cast<StreamSegment*>(a_user));
+		ZoneScopedN("CS.ORG.StreamSegment");
+		// A segment that cannot run leaves its batches undone; the later ones' run in order only after it, so they are left as well.
+		if (segment->execution->ExecutedSegments() != segment->index) {
+			static std::atomic_flag logged;
+			if (!logged.test_and_set())
+				logger::error("[ORG] an in-stream epoch's segment ran out of order: it and the ones after it draw nothing");
+			return;
+		}
+		auto adopted = rhi::vulkan::AdoptCommandBuffer(segment->device, a_commandBuffer, rhi::QueueKind::Graphics);
+		if (!adopted) {
+			static std::atomic_flag logged;
+			if (!logged.test_and_set())
+				logger::error("[ORG] DXVK's command buffer could not be adopted: an in-stream epoch's segment draws nothing");
+			return;
+		}
+		try {
+			segment->execution->Execute(segment->index, adopted.Get());
+		} catch (const std::exception& e) {
+			static std::atomic_flag logged;
+			if (!logged.test_and_set())
+				logger::error("[ORG] an in-stream epoch's segment failed: {}", e.what());
+		}
+	}
+	// Render thread: an in-stream epoch's execution into DXVK's command stream, a segment per external command with its waits and
+	// signals, DXVK's command list ended (flushed) before a segment marked split. Not taken: the rest signalled unexecuted.
+	bool EmitExecution(const std::shared_ptr<org::ExternalEpochExecution>& a_execution, const char* a_label)
+	{
+		ZoneScopedN("CS.ORG.EmitExecution");
+		thread_local std::vector<RenderGraphRuntime::ExternalCommandsWait> waits, signals;
+		const auto streamDevice = host->Device();
+		for (std::size_t index = 0; index < a_execution->segments.size(); ++index) {
+			const auto& streamSegment = a_execution->segments[index];
+			if (streamSegment.split && index) {
+				globals::d3d::context->Flush();
+				++epochEnqueues;
+			}
+			waits.clear();
+			signals.clear();
+			for (const auto& point : streamSegment.waits)
+				if (const auto converted = RenderGraphRuntime::NativeTimelinePoint(point); converted.semaphore)
+					waits.push_back(converted);
+			bool resolved = true;
+			for (const auto& point : streamSegment.signals) {
+				const auto converted = RenderGraphRuntime::NativeTimelinePoint(point);
+				resolved = resolved && converted.semaphore;
+				signals.push_back(converted);
+			}
+			auto user = std::make_unique<StreamSegment>(StreamSegment{ a_execution, index, streamDevice });
+			if (!resolved || !RenderGraphRuntime::Get().EmitExternalCommands(&StreamSegmentCallback, user.get(), waits, signals, true, a_label, true)) {
+				host->SignalExternalExecutionUnexecuted(*a_execution, index);
+				return false;
+			}
+			(void)user.release();  // the callback's
+		}
+		return true;
+	}
+
+	// The epoch's end: the stream waits for the compute queue's last signals, in the epoch's batch when it has one. An in-stream
+	// epoch's (a_inStream) joins DXVK's command list as an external command's wait, after a flush when its compute batches wait for
+	// one of its segments (a_split: the list holding those segments must be submitted first).
+	bool CloseComputeEpoch(const char* a_label, bool a_inStream = false, bool a_split = false)
+	{
+		streamPointEnqueued = false;
 		computeEntered = false;
+		copyEntered = false;
 		if (computeTail.empty())
 			return true;
 		for (auto& wait : computeTail)
 			wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 		bool result = true;
-		if (batching) {
+		if (a_inStream) {
+			if (a_split) {
+				globals::d3d::context->Flush();
+				++epochEnqueues;
+			}
+			std::vector<RenderGraphRuntime::ExternalCommandsWait> waits;
+			waits.reserve(computeTail.size());
+			for (const auto& wait : computeTail)
+				waits.push_back({ wait.semaphore, wait.value, wait.stageMask });
+			result = RenderGraphRuntime::Get().EmitExternalCommands(&NoCommands, nullptr, waits, {}, false, a_label);
+		} else if (batching) {
 			if (pendingCount == pendingSubmits.size())
 				pendingSubmits.emplace_back();
 			auto& pending = pendingSubmits[pendingCount++];
@@ -978,7 +1106,7 @@ struct RenderGraphRuntime::Impl
 		return result;
 	}
 
-	// Every queue of DXVK's device, the compute one included, is used under DXVK's submission lock (see computeQueue).
+	// Every queue of DXVK's device, the compute and copy ones included, is used under DXVK's submission lock (see computeQueue).
 	static void LockQueue(void* a_user, VkQueue)
 	{
 		static_cast<Impl*>(a_user)->interop->LockSubmissionQueue();
@@ -1150,42 +1278,56 @@ struct RenderGraphRuntime::Impl
 	{
 		auto* self = static_cast<Impl*>(a_user);
 		++self->epochHookCalls;
-		// The compute queue is the graph's alone: no D3D11 stream to keep order with. Its waits on graphics values still in
-		// DXVK's stream are legal (a timeline wait may be submitted before its signal), and the stream's waits on its values
-		// the same.
-		if (a_queue == self->computeQueue) {
+		// The compute and copy queues are the graph's alone: no D3D11 stream to keep order with. Their waits on graphics values
+		// still in DXVK's stream are legal (a timeline wait may be submitted before its signal), and the stream's waits on their
+		// values the same.
+		// A copy queue shared with the uploader: the render thread's submissions to it are the graph's, the others the uploader's (below).
+		const bool copy = a_queue == self->copyQueue && (a_queue != self->uploadQueue || ::GetCurrentThreadId() == self->streamThread.load(std::memory_order_relaxed));
+		if (copy || a_queue == self->computeQueue) {
 			if (::GetCurrentThreadId() != self->streamThread.load(std::memory_order_relaxed)) {
 				// Its entry point is a position in DXVK's stream, which only the D3D11 thread can take.
-				logger::error("[ORG] A compute-queue submission came from a thread other than the render thread");
+				logger::error("[ORG] A {}-queue submission came from a thread other than the render thread", copy ? "copy" : "compute");
 				return VK_ERROR_UNKNOWN;
 			}
 			VkSubmitInfo2 submit = a_submit;
-			if (!self->computeEntered) {
-				if (!self->EnqueueStreamPoint())
-					return VK_ERROR_UNKNOWN;
-				self->computeEntered = true;
+			bool& entered = copy ? self->copyEntered : self->computeEntered;
+			if (!entered) {
+				if (!self->streamPointEnqueued) {
+					if (!self->EnqueueStreamPoint())
+						return VK_ERROR_UNKNOWN;
+					self->streamPointEnqueued = true;
+				}
+				entered = true;
 				self->computeWaits.assign(a_submit.pWaitSemaphoreInfos, a_submit.pWaitSemaphoreInfos + a_submit.waitSemaphoreInfoCount);
 				self->computeWaits.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, self->streamPoint, self->streamPointValue,
 					VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0 });
 				submit.waitSemaphoreInfoCount = static_cast<uint32_t>(self->computeWaits.size());
 				submit.pWaitSemaphoreInfos = self->computeWaits.data();
 			}
-			// Handed to the compute submitter, in order, with computeExit's next value besides the graph's own signals: the
+			// Handed to the submitter, in order, with the queue's exit timeline's next value besides the graph's own signals: the
 			// stream's exit wait takes that (computeTail).
-			if (const VkResult failed = self->computeSubmitter.failure.load(std::memory_order_acquire); failed != VK_SUCCESS)
+			auto& submitter = copy ? self->copySubmitter : self->computeSubmitter;
+			if (const VkResult failed = submitter.failure.load(std::memory_order_acquire); failed != VK_SUCCESS)
 				return failed;
-			const VkSemaphoreSubmitInfo exit{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, self->computeExit, ++self->computeExitValue,
-				VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0 };
+			const VkSemaphoreSubmitInfo exit{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, copy ? self->copyExit : self->computeExit,
+				copy ? ++self->copyExitValue : ++self->computeExitValue, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0 };
 			ComputeSubmitter::Batch batch;
+			batch.queue = a_queue;
 			batch.waits.assign(submit.pWaitSemaphoreInfos, submit.pWaitSemaphoreInfos + submit.waitSemaphoreInfoCount);
 			batch.commandBuffers.assign(submit.pCommandBufferInfos, submit.pCommandBufferInfos + submit.commandBufferInfoCount);
 			batch.signals.assign(submit.pSignalSemaphoreInfos, submit.pSignalSemaphoreInfos + submit.signalSemaphoreInfoCount);
 			batch.signals.push_back(exit);
-			self->computeSubmitter.Push(std::move(batch));
-			self->computeTail.assign(1, exit);
+			submitter.Push(std::move(batch));
+			const auto tail = std::ranges::find(self->computeTail, exit.semaphore, &VkSemaphoreSubmitInfo::semaphore);
+			if (tail != self->computeTail.end())
+				*tail = exit;
+			else
+				self->computeTail.push_back(exit);
 			return VK_SUCCESS;
 		}
 		if (a_queue == self->uploadQueue) {
+			if (a_queue == self->copyQueue)
+				self->WaitForPoints(a_submit.pWaitSemaphoreInfos, a_submit.waitSemaphoreInfoCount);
 			{
 				// DXVK's submission lock covers every queue of its device: a long hold by DXVK shows here, on the upload thread only.
 				ZoneScopedN("CS.ORG.UploadQueue.LockSubmissionQueue");
@@ -1434,14 +1576,26 @@ bool RenderGraphRuntime::Initialize()
 				createSemaphore(info.device, &create, nullptr, &state->computeExit) == VK_SUCCESS) {
 				state->vkDevice = info.device;
 				state->computeQueue = info.computeQueue;
-				state->computeSubmitter.Start(*state);
+				state->computeSubmitter.Start(*state, L"CS ORG compute submit", false);
 				adopt.queues[1] = { info.computeQueue, info.computeQueueFamily, info.computeQueueIndex };
+				// CS_ORG_COPY_QUEUE (default on, =0 off): a queue of the transfer-only family, so the graph's copy passes leave DXVK's
+				// stream as its compute passes do (a pass that touches a resource only DXVK's families may use stays there): DXVK's spare
+				// one, else the uploader's, shared (see copyQueue). Off, or with neither: the copy queue aliases the graphics one. Never
+				// the compute queue: a copy there waits behind a running dispatch.
+				const bool uploadOffered = adopt.submissionHooks.submit && info.uploadQueue && !EnvEquals("CS_ORG_UPLOAD_QUEUE", "0");
+				const bool shared = !info.copyQueue && uploadOffered;
+				if ((info.copyQueue || shared) && !EnvEquals("CS_ORG_COPY_QUEUE", "0") &&
+					createSemaphore(info.device, &create, nullptr, &state->copyExit) == VK_SUCCESS) {
+					state->copyQueue = shared ? info.uploadQueue : info.copyQueue;
+					adopt.queues[2] = shared ? rhi::vulkan::AdoptedQueue{ info.uploadQueue, info.uploadQueueFamily, info.uploadQueueIndex } :
+					                           rhi::vulkan::AdoptedQueue{ info.copyQueue, info.copyQueueFamily, info.copyQueueIndex };
+					state->copySubmitter.Start(*state, L"CS ORG copy submit", shared);
+				}
 			}
 		}
 	}
-	// The upload queue, offered to BasicRHI as a spare queue (CreateQueue hands it to ORG's copy-queue uploader), not as the graph's
-	// copy queue: the graph's own copy passes stay in DXVK's stream. Its submissions are direct, under the lock (Submit).
-	// CS_ORG_UPLOAD_QUEUE=0 offers none.
+	// The upload queue, offered to BasicRHI as a spare queue (CreateQueue hands it to ORG's copy-queue uploader). Its submissions are
+	// direct, under the lock (Submit). CS_ORG_UPLOAD_QUEUE=0 offers none.
 	rhi::vulkan::AdoptedQueue uploadSpare{};
 	if (adopt.submissionHooks.submit && info.uploadQueue && !EnvEquals("CS_ORG_UPLOAD_QUEUE", "0")) {
 		state->uploadQueue = info.uploadQueue;
@@ -1449,9 +1603,10 @@ bool RenderGraphRuntime::Initialize()
 		adopt.spareQueues = &uploadSpare;
 		adopt.spareQueueCount = 1;
 	}
-	logger::info("[ORG] Queues: graphics {}:{}, compute {}, upload {}", info.graphicsQueueFamily, info.graphicsQueueIndex,
+	logger::info("[ORG] Queues: graphics {}:{}, compute {}, upload {}, copy {}", info.graphicsQueueFamily, info.graphicsQueueIndex,
 		state->computeQueue ? fmt::format("{}:{}", info.computeQueueFamily, info.computeQueueIndex) : std::string("shared with graphics"),
-		state->uploadQueue ? fmt::format("{}:{}", info.uploadQueueFamily, info.uploadQueueIndex) : std::string("none"));
+		state->uploadQueue ? fmt::format("{}:{}", info.uploadQueueFamily, info.uploadQueueIndex) : std::string("none"),
+		!state->copyQueue ? std::string("shared with graphics") : state->copyQueue == state->uploadQueue ? std::string("shared with upload") : fmt::format("{}:{}", info.copyQueueFamily, info.copyQueueIndex));
 	if (rhi::vulkan::AdoptVulkanDevice(adopt, *state->device) != rhi::Result::Ok || !*state->device)
 		return disable("BasicRHI could not adopt DXVK's Vulkan device");
 
@@ -1463,9 +1618,13 @@ bool RenderGraphRuntime::Initialize()
 		// Game frames in flight: the host's frame slots are this many frames of every epoch in the order (FrameSlots), so a new
 		// segment keeps the same lead over the GPU, and a slot's wait is backpressure from that many frames back.
 		desc.framesInFlight = kGameFramesInFlight;
-		// CS_ORG_CLOSED (default on with epochs, =0 off): each epoch leaves every resource in its home state
-		// and starts with a full barrier, so its admission is independent of the epochs before it and cached.
-		desc.closedExecutions = EpochsEnabled() && !EnvEquals("CS_ORG_CLOSED", "0");
+		// CS_ORG_CLOSED (default off, =1 on): each epoch leaves every resource in its home state and starts with a full barrier, so
+		// its admission is independent of the epochs before it. An interop fallback: the epochs' resources otherwise flow between them
+		// through ORG's ledgers.
+		desc.closedExecutions = EpochsEnabled() && EnvEquals("CS_ORG_CLOSED", "1");
+		// CS_ORG_EXTERNAL_HOME (default on, =0 off): each epoch gives DXVK's images (the imports) back in their home state on the
+		// graphics queue, where DXVK uses them between the epochs (GENERAL, the external-commands contract).
+		desc.externalHomeStates = !EnvEquals("CS_ORG_EXTERNAL_HOME", "0");
 		// CS_ORG_REUSE_RECORDINGS (default on, =0 off): each epoch's recordings are kept per frame slot and submitted again
 		// while what they were recorded for holds; a ticket an epoch's commit made stale takes the kept recording of its new
 		// shape instead of being prepared again (a render-thread wait). Kept recordings carry no Tracy GPU zones: turn it off
@@ -1486,7 +1645,6 @@ bool RenderGraphRuntime::Initialize()
 				EpochOf(Segment::SkyOcclusion), EpochOf(Segment::LightCulling), EpochOf(Segment::MainOpaque), EpochOf(Segment::Forward), EpochOf(Segment::FirstPerson) };
 		if (!desc.epochOrder.empty())
 			logger::info("[ORG] epoch order: {}", fmt::join(desc.epochOrder, ","));
-		const bool closed = desc.closedExecutions;
 		// The runtime's slots: the host's frame slots (frames in flight times epochs), which its upload pages and statistics follow.
 		state->orgRuntime = org::Runtime::Create({ .device = state->device->Get(), .backend = rhi::Backend::Vulkan,
 			.slots = desc.framesInFlight * (std::max)(static_cast<uint32_t>(desc.epochOrder.size()), 1u) });
@@ -1505,8 +1663,8 @@ bool RenderGraphRuntime::Initialize()
 		}
 		// CS_ORG_ASYNC_EPOCHS (default on, =0 off): each epoch's work is prepared, admitted and recorded ahead of
 		// its epoch point on the host's own thread; at the point the render thread only writes the epoch's
-		// latches, records the queued uploads and submits. Needs epochs and closed executions.
-		state->asyncEpochs = !EnvEquals("CS_ORG_ASYNC_EPOCHS", "0") && EpochsEnabled() && closed;
+		// latches, records the queued uploads and submits. Needs epochs.
+		state->asyncEpochs = !EnvEquals("CS_ORG_ASYNC_EPOCHS", "0") && EpochsEnabled();
 	} catch (const std::exception& e) {
 		return disable(std::string("graph host creation failed: ") + e.what());
 	}
@@ -1554,6 +1712,27 @@ bool RenderGraphRuntime::Initialize()
 				revisionEpochs = EpochsOf(frameConfig.revisionEpochs);
 			}
 			logger::info("[ORG] async epochs: {}; revision-driven: {}", fmt::join(epochs, ","), fmt::join(revisionEpochs, ","));
+			// In DXVK's own command stream unless CS_ORG_IN_STREAM=0 (or DXVK takes no external commands); a list of epochs (3,1) puts only
+			// those there.
+			if (state->emitExternalCommands && !EnvEquals("CS_ORG_IN_STREAM", "0")) {
+				state->inStreamEpochs = epochs;
+				char list[128]{};
+				if (GetEnvironmentVariableA("CS_ORG_IN_STREAM", list, sizeof(list)) && std::strchr(list, ',')) {
+					std::vector<std::uint32_t> chosen;
+					for (const char* at = list; *at;) {
+						chosen.push_back(static_cast<std::uint32_t>(std::strtoul(at, nullptr, 10)));
+						const char* comma = std::strchr(at, ',');
+						if (!comma)
+							break;
+						at = comma + 1;
+					}
+					std::erase_if(state->inStreamEpochs, [&](std::uint32_t epoch) { return std::ranges::find(chosen, epoch) == chosen.end(); });
+				}
+				std::ranges::sort(state->inStreamEpochs);
+				logger::info("[ORG] in-stream epochs: {} (their graphics work in DXVK's command list, split only where a wait needs it)",
+					fmt::join(state->inStreamEpochs, ","));
+			}
+			state->host->SetExternalEpochs(state->inStreamEpochs);
 			state->host->SetAsyncEpochs(std::move(epochs), std::move(revisionEpochs));
 			logger::info("[ORG] Async epochs: each epoch is prepared and recorded ahead on the graph host's thread; the render thread submits (DCLF's from its scene revisions)");
 		} catch (const std::exception& e) {
@@ -1613,8 +1792,9 @@ void RenderGraphRuntime::Shutdown()
 		disabledReason = "shut down";
 		return;
 	}
-	// The compute queue's last submissions, before the host waits on their timelines.
+	// The compute and copy queues' last submissions, before the host waits on their timelines.
 	state->computeSubmitter.Stop();
+	state->copySubmitter.Stop();
 	try {
 		// Waits only for the graph's own timelines, then releases every graph object; the contributors after it.
 		state->host.reset();
@@ -1643,6 +1823,15 @@ void RenderGraphRuntime::Shutdown()
 		wait.pValues = &state->computeExitValue;
 		(void)state->waitSemaphores(state->vkDevice, &wait, UINT64_MAX);
 		state->destroySemaphore(state->vkDevice, state->computeExit, nullptr);
+	}
+	if (state->copyExit) {
+		// The same for the copy queue.
+		VkSemaphoreWaitInfo wait{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+		wait.semaphoreCount = 1;
+		wait.pSemaphores = &state->copyExit;
+		wait.pValues = &state->copyExitValue;
+		(void)state->waitSemaphores(state->vkDevice, &wait, UINT64_MAX);
+		state->destroySemaphore(state->vkDevice, state->copyExit, nullptr);
 	}
 	if (state->framePace) {
 		// Its last signal reaches the queue with DXVK's next flush; bounded, since a teardown may never flush again.
@@ -1975,13 +2164,18 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<voi
 				a_beforePrepare(a_graph);
 			};
 		}
+		std::shared_ptr<org::ExternalEpochExecution> execution;
 		if (async) {
 			impl->host->SubmitEpoch(EpochOf(a_segment), beforePrepare, a_resourceOwner);
 			impl->MarkEpoch(impl->host->LastHostFrame(), a_segment);
+			// An in-stream epoch: its graphics work into DXVK's own command stream, here.
+			execution = impl->host->TakeExternalExecution();
+			if (execution && !impl->EmitExecution(execution, Impl::SegmentLabel(a_segment)))
+				throw std::runtime_error("DXVK took no external commands for an in-stream epoch");
 		} else {
 			impl->host->ExecuteFrame(nullptr, beforePrepare, EpochOf(a_segment), a_resourceOwner);
 		}
-		if (!impl->CloseComputeEpoch(Impl::SegmentLabel(a_segment)))
+		if (!impl->CloseComputeEpoch(Impl::SegmentLabel(a_segment), execution != nullptr, execution && execution->exitSplit))
 			throw std::runtime_error("DXVK rejected the compute queue's exit wait");
 		if (impl->batching && (heldSegments.load(std::memory_order_relaxed) >> static_cast<std::uint32_t>(a_segment) & 1u)) {
 			impl->batching = false;
@@ -2306,6 +2500,25 @@ bool RenderGraphRuntime::EmitExternalCommands(void (*a_record)(void* a_user, VkC
 	return SUCCEEDED(impl->emitExternalCommands(globals::d3d::device, &commands));
 }
 
+RenderGraphRuntime::ExternalCommandsWait RenderGraphRuntime::NativeTimelinePoint(const rhi::TimelinePoint& a_point)
+{
+	const auto timeline = Get().FrameWaitTimeline();
+	rhi::Timeline object(a_point.t);
+	if (timeline && *timeline) {
+		object.impl = timeline->Get().impl;
+		object.vt = timeline->Get().vt;
+	}
+	rhi::VulkanTimelineInfo info{};
+	if (!object || !rhi::QueryNativeTimeline(object, rhi::RHI_IID_VK_TIMELINE, &info, sizeof(info)))
+		return {};
+	return { static_cast<VkSemaphore_T*>(info.timeline), a_point.value, 0 };
+}
+
+std::vector<std::uint32_t> RenderGraphRuntime::InStreamEpochs() const
+{
+	return impl ? impl->inStreamEpochs : std::vector<std::uint32_t>{};
+}
+
 winrt::com_ptr<ID3D11Buffer> RenderGraphRuntime::WrapBuffer(org::Resource& a_buffer, const D3D11_BUFFER_DESC& a_desc)
 {
 	winrt::com_ptr<ID3D11Buffer> result;
@@ -2370,6 +2583,8 @@ std::uint32_t RenderGraphRuntime::PollRelocations(std::span<DxvkOrgInteropReloca
 void RenderGraphRuntime::ReleaseStorage(std::span<void* const>) {}
 bool RenderGraphRuntime::EmitExternalCommands(void (*)(void*, VkCommandBuffer), void*, std::span<const ExternalCommandsWait>,
 	std::span<const ExternalCommandsWait>, bool, const char*, bool) { return false; }
+RenderGraphRuntime::ExternalCommandsWait RenderGraphRuntime::NativeTimelinePoint(const rhi::TimelinePoint&) { return {}; }
+std::vector<std::uint32_t> RenderGraphRuntime::InStreamEpochs() const { return {}; }
 org::services::ShaderCompiler* RenderGraphRuntime::ShaderCompiler() { return nullptr; }
 const std::vector<std::filesystem::path>& RenderGraphRuntime::ShaderSourceFiles()
 {

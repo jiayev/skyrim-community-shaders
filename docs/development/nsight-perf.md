@@ -170,7 +170,7 @@ sample of every graph pass and barrier batch (`cs.org.barrier.<where>.<pass>`), 
 including the async compute queue NvPerf cannot see. The NVIDIA SDK is not needed.
 
 -   **Recordings.** DCLF's epochs replay recordings kept across frames, which carry no shared-pool
-    queries. The trace turns on `PersistentGraphHost::SetRecordingTimestamps`, which rebuilds the
+    queries. The trace turns on `GraphHost::SetRecordingTimestamps`, which rebuilds the
     graph: each kept list is recorded again with queries of its own (a pool and readback buffer per
     list), resolved by every submission and read when its frame slot completes
     (`extern/OpenRenderGraph/docs/persistent-epochs.md`, "Timestamps of their own"). The trace turns

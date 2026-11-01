@@ -44,6 +44,7 @@ namespace DCLF
 		OrgEpochs,
 		OrgAsyncEpochs,
 		OrgClosed,
+		OrgExternalHome,
 		OrgBatchSubmit,
 		OrgEarlyFlush,
 

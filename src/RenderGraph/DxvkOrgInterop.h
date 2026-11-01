@@ -14,7 +14,7 @@
 #	include <vulkan/vulkan.h>
 #endif
 
-#define DXVK_ORG_INTEROP_VERSION 4u
+#define DXVK_ORG_INTEROP_VERSION 5u
 
 extern "C" {
 
@@ -59,6 +59,11 @@ struct DxvkOrgInteropDeviceInfo
 	VkQueue uploadQueue;
 	uint32_t uploadQueueFamily;
 	uint32_t uploadQueueIndex;
+	// Version 5: a queue of the transfer-only family for the client's graph copies, which no other queue here uses, or null. The
+	// client submits to it itself, under DXVK's submission lock.
+	VkQueue copyQueue;
+	uint32_t copyQueueFamily;
+	uint32_t copyQueueIndex;
 };
 
 enum DxvkOrgInteropResourceKind : uint32_t
