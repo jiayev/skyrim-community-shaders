@@ -10,6 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string_view>
 
@@ -22,6 +23,7 @@ namespace DCLF::Api
 	enum class ShadingRowField : std::uint8_t
 	{
 		SkinPerGeometry,  // Advanced Skin's SkinPerGeometry (PS b7): float4
+		LandscapeSeams,   // Per-quad weight, data and borrowed layer descriptors (index + 1; zero: inactive).
 		Count,
 	};
 
@@ -52,7 +54,7 @@ namespace DCLF::Api
 	};
 
 	/** @brief The floats a captured value holds (a field's bytes are at most these). */
-	inline constexpr std::size_t kShadingFieldValueFloats = 4;
+	inline constexpr std::size_t kShadingFieldValueFloats = 8;
 
 	/** @brief One member slot's value of a field, as the frame's start captured it. */
 	struct ShadingFieldValue
@@ -60,6 +62,7 @@ namespace DCLF::Api
 		std::uint32_t slot = ~0u;
 		ShadingRowField field = ShadingRowField::Count;
 		std::array<float, kShadingFieldValueFloats> value{};
+		std::shared_ptr<const void> resources;  // Descriptors referenced by this value, retained through the frame's GPU completion.
 	};
 
 	/**
@@ -68,7 +71,8 @@ namespace DCLF::Api
 	 *
 	 * - name: what the registration's failures call it.
 	 * - field: the row's field (one contribution's).
-	 * - members: the entry class (not None) whose members are the field's slots (Core zeroes a slot's value when it leaves the class).
+	 * - members: the entry class whose members are the field's slots (Core zeroes a slot's value when it leaves the class).
+	 *   None: the capture tracks geometry through changedObjects and clears its own retired slots; membership is unused.
 	 * - membership: render thread, at the frame's start as it takes each publication's deltas (FrameView::HandOverAtFrameStart), in the
 	 *   publications' order: the class's membership writes, for the feature's own index of owners (none: a publication without writes).
 	 * - capture: render thread, at the frame's start (FrameDriver, before FrameValues::Kick), in registration order: the members' values

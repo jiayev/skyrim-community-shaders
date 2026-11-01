@@ -2,9 +2,12 @@
 // capturing thread, the flag on the join pool.
 
 #include "Features/DrawcallLimitFix/Integrations/SubsurfaceScattering/SubsurfaceScattering.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 
 #include "Features/SubsurfaceScattering.h"
+#include "ShaderCache.h"
 
 #include <cstdint>
 
@@ -41,11 +44,30 @@ namespace DCLF::Integrations::SubsurfaceScattering
 			return a_view.Fact(beastFact);
 		}
 
+		void Commit(const Api::CommitContext& a_commit)
+		{
+			auto& sss = globals::features::subsurfaceScattering;
+			if (a_commit.kind != Api::CommitKind::Colour || !sss.loaded || sss.validMaterials)
+				return;
+			// Indirect skin draws bypass SetupSkin, which normally enables the post-process.
+			// Inspect the small used pipeline set, not every actor or scene object. The mask
+			// still restricts scattering to skin pixels that survived the GPU's visibility tests.
+			using Technique = SIE::ShaderCache::LightingShaderTechniques;
+			SceneTables::ForEachBit(a_commit.tables.usedPipelineBits, [&](std::uint32_t slot) {
+				const auto descriptor = a_commit.tables.pipelines[slot].pixelDescriptor;
+				const auto technique = static_cast<Technique>((descriptor >> 24) & 0x3fu);
+				if ((descriptor & static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred)) &&
+					(technique == Technique::Facegen || technique == Technique::FacegenRGBTint))
+					sss.validMaterials = true;
+			});
+		}
+
 		void Install(Api::InstallContext& a_context)
 		{
 			// True for a node without a reference, as the record's default was.
 			beastFact = a_context.RegisterReferenceFact({ .name = "beast race", .none = true, .sample = &BeastOf });
 			a_context.RegisterLightingObjectFlag({ .objectFlag = kObjectBeastRace, .recordFlag = kRecordBeastRace, .applies = &BeastRaceFace });
+			a_context.RegisterCommitHook({ .name = "subsurface scattering materials", .commit = &Commit });
 		}
 	}
 

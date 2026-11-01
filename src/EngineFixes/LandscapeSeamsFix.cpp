@@ -119,12 +119,17 @@ namespace
 
 bool LandscapeSeamsFix::IsBlended(RE::BSGeometry* a_geometry)
 {
+	return CaptureResources(a_geometry) != nullptr;
+}
+
+std::shared_ptr<const LandscapeSeamsFix::Resources> LandscapeSeamsFix::CaptureResources(RE::BSGeometry* a_geometry)
+{
 	const std::shared_lock lock(mutex);
 	const auto loadedIt = loadedQuads.find(a_geometry);
 	if (loadedIt == loadedQuads.end())
-		return false;
+		return nullptr;
 	const auto quadIt = quads.find(loadedIt->second);
-	return quadIt != quads.end() && quadIt->second.resources;
+	return quadIt != quads.end() ? quadIt->second.resources : nullptr;
 }
 
 void LandscapeSeamsFix::Bind(RE::BSGeometry* a_geometry)

@@ -245,6 +245,7 @@ namespace DCLF::SceneCapture
 			rendererData = a_o.rendererData;
 			vertexBuffer = a_o.vertexBuffer;
 			indexBuffer = a_o.indexBuffer;
+			buffersHeld = a_o.buffersHeld;
 			vertexDesc = a_o.vertexDesc;
 			vertexCount = a_o.vertexCount;
 			triangleCount = a_o.triangleCount;
@@ -268,6 +269,7 @@ namespace DCLF::SceneCapture
 			layerProperty = a_o.layerProperty;
 			altIndexList = a_o.altIndexList;
 			altIndexBuffer = a_o.altIndexBuffer;
+			altIndexHeld = a_o.altIndexHeld;
 			altPrimCount = a_o.altPrimCount;
 		}
 		if (a_f & kExtra)
@@ -463,6 +465,8 @@ namespace DCLF::SceneCapture
 			r.rendererData = triShape;
 			r.vertexBuffer = reinterpret_cast<ID3D11Buffer*>(triShape->vertexBuffer);
 			r.indexBuffer = reinterpret_cast<ID3D11Buffer*>(triShape->indexBuffer);
+			r.buffersHeld[0].copy_from(r.vertexBuffer);
+			r.buffersHeld[1].copy_from(r.indexBuffer);
 			r.vertexDesc = std::bit_cast<std::uint64_t>(triShape->vertexDesc);
 		}
 		if (TriShapeType(r.type)) {
@@ -506,6 +510,8 @@ namespace DCLF::SceneCapture
 						out.rendererData = p.buffData;
 						out.vertexBuffer = reinterpret_cast<ID3D11Buffer*>(p.buffData->vertexBuffer);
 						out.indexBuffer = reinterpret_cast<ID3D11Buffer*>(p.buffData->indexBuffer);
+						out.buffersHeld[0].copy_from(out.vertexBuffer);
+						out.buffersHeld[1].copy_from(out.indexBuffer);
 						out.vertexDesc = std::bit_cast<std::uint64_t>(p.buffData->vertexDesc);
 					}
 					out.vertices = p.vertices;
@@ -528,6 +534,7 @@ namespace DCLF::SceneCapture
 			const auto& multi = static_cast<const RE::BSMultiIndexTriShape&>(a_geometry).GetMultiIndexTrishapeRuntimeData();
 			r.altIndexList = multi.altIndexBuffer;
 			r.altIndexBuffer = multi.altIndexBuffer ? *reinterpret_cast<ID3D11Buffer* const*>(multi.altIndexBuffer) : nullptr;
+			r.altIndexHeld.copy_from(r.altIndexBuffer);
 			r.altPrimCount = multi.altPrimCount;
 			r.layerProperty = multi.additionalShaderProperty.get();
 			std::memcpy(r.multiParams.data(), &multi.materialProjection, 16 * sizeof(float));

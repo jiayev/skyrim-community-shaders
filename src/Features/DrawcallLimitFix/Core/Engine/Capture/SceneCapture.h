@@ -153,6 +153,7 @@ namespace DCLF::SceneCapture
 			const void* rendererData = nullptr;  // its buffData (a geometry slot's key)
 			ID3D11Buffer* vertexBuffer = nullptr;
 			ID3D11Buffer* indexBuffer = nullptr;
+			std::array<winrt::com_ptr<ID3D11Buffer>, 2> buffersHeld;
 			std::uint64_t vertexDesc = 0;
 			std::uint16_t vertices = 0, triangles = 0;
 			std::uint8_t lodByte = 0;
@@ -164,6 +165,9 @@ namespace DCLF::SceneCapture
 		const void* rendererData = nullptr;
 		ID3D11Buffer* vertexBuffer = nullptr;
 		ID3D11Buffer* indexBuffer = nullptr;
+		// Hold the captured buffers before handing their addresses to the scene worker. A dynamic shape can replace
+		// its renderer data while the worker still resolves the previous capture (before GpuResources takes its lease).
+		std::array<winrt::com_ptr<ID3D11Buffer>, 2> buffersHeld;
 		std::uint64_t vertexDesc = 0;
 		std::uint32_t vertexCount = 0, triangleCount = 0;
 		const void* skin = nullptr;
@@ -178,6 +182,7 @@ namespace DCLF::SceneCapture
 		const void* layerProperty = nullptr;
 		const void* altIndexList = nullptr;  // the second index list (its first qword is the buffer: the layer's slot key)
 		ID3D11Buffer* altIndexBuffer = nullptr;
+		winrt::com_ptr<ID3D11Buffer> altIndexHeld;
 		std::uint32_t altPrimCount = 0;
 		// kExtra: the extra data's value (an NiIntegerExtraData's), kNoExtra none, kWrongExtra another type.
 		static constexpr std::int64_t kNoExtra = -1, kWrongExtra = -2;
