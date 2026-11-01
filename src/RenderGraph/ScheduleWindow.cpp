@@ -47,16 +47,14 @@ namespace RenderGraphSchedule
 			return g_windowWants.load(std::memory_order_acquire) || g_devBenchWants.load(std::memory_order_acquire);
 		}
 
-		// The graph's switch to what the requesters want; again whenever they read, so a graph made again (a device reset) follows.
+		// The graphs' switch to what the requesters want (every epoch's graph, and those built later); again whenever they read, so a
+		// graph made again (a device reset) follows. The inspector shows the first epoch's graph.
 		org::RenderGraph* Apply()
 		{
-			auto* graph = Graph();
-			if (graph) {
-				const bool wanted = Wanted();
-				if (graph->ScheduleTraceEnabled() != wanted)
-					graph->SetScheduleTraceEnabled(wanted);
-			}
-			return graph;
+			auto* host = RenderGraphRuntime::Get().Host();
+			if (host && host->ScheduleTraceEnabled() != Wanted())
+				host->SetScheduleTraceEnabled(Wanted());
+			return Graph();
 		}
 	}
 

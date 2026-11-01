@@ -911,11 +911,10 @@ struct RenderGraphRuntime::Impl
 			const auto async = host->TakeAsyncStats();
 			logger::info("[ORG] Async epochs: {} submitted, {} waited for their ticket, {} prepared again after the feature's inputs changed, {} carried uploads ({} lists recorded ahead by their producers; "
 						 "{} copies recorded on the queue that first uses them, {} other-queue batches spared the graphics uploads' wait); "
-						 "{} completions left to the host's next GPU wake-up instead of a signal; {} backing changes, {} of them waited out a ticket preparation, {} preparations held off for one, {} tickets stale only by a changed backing; "
-						 "recordings: {} made ({} kept), {} tickets took a kept one, {} stale tickets adopted one",
+						 "{} completions left to the host's next GPU wake-up instead of a signal; {} tickets stale only by a new version; {} epoch graphs built again; "
+						 "recordings: {} made ({} kept), {} tickets took a kept one, {} stale tickets adopted one; admissions: {} predicted, {} planned",
 				async.submitted, async.waited, async.stale, async.uploads, async.recordedUploadLists, async.queueUploadCopies, async.sparedUploadWaits,
-				async.wakesSkipped, async.backingMutations, async.backingWaits,
-				async.preparationWaits, async.staleBacking, async.recorded, async.kept, async.reused, async.adopted);
+				async.wakesSkipped, async.staleBacking, async.rebuilds, async.recorded, async.kept, async.reused, async.adopted, async.predicted, async.planned);
 		}
 		epochCount = 0;
 	}
