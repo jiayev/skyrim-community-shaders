@@ -5,8 +5,11 @@
 // cull state are the pipeline's).
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
+
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+
 #include "Features/DrawcallLimitFix/Core/Render/Direct/ShadowSite.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
@@ -17,12 +20,12 @@
 #include <Resources/ExternalTextureResource.h>
 #include <rhi.h>
 
+#include <Tracy/Tracy.hpp>
 #include <algorithm>
 #include <array>
 #include <deque>
 #include <memory>
 #include <vector>
-#include <Tracy/Tracy.hpp>
 
 namespace DCLF::Direct::detail
 {
@@ -166,7 +169,8 @@ namespace DCLF::Direct::detail
 			begin.height = pass.height;
 			begin.minDepth = pass.minDepth;
 			begin.maxDepth = pass.maxDepth;
-			begin.debugName = pass.occlusion ? "DCLF direct occlusion map" : "DCLF direct shadow view";
+			begin.debugName = pass.view->type == ViewType::ProbeSunCaster ? "DCLF direct probe sun shadow" : pass.occlusion ? "DCLF direct occlusion map" :
+			                                                                                                                  "DCLF direct shadow view";
 			RecordViewPass(a_out, a_run, *pass.view, begin, *pass.view->bindings);
 		}
 	}

@@ -1,6 +1,7 @@
 // IndirectDraws' GPU resources: the main, scene, shadow and view resources created on the render thread (Setup, EnsureSceneBuffers,
 // SetupShadow, SetupView), each versioned buffer registered with the scene's set (its extent, growth policy and contents), the
 // scene's draw bound and the main latch the revision code keeps.
+
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/DepthPyramid.h"
@@ -1024,7 +1025,8 @@ namespace DCLF
 		desc.srvFormat = DepthReadFormat(desc.format);
 		// The shadow maps', then each occlusion map's (its entry's target label).
 		static constexpr const char* kNames[kFirstOcclusionTarget] = { "DCLF shadow maps (ESRAM)", "DCLF shadow maps", "DCLF volumetric shadow maps (ESRAM)" };
-		const char* name = IsOcclusionTarget(a_index) ? Extensions::OcclusionMapOf(a_index - kFirstOcclusionTarget).targetName.c_str() : kNames[a_index];
+		const char* name = a_index == kProbeSunTarget ? "DCLF probe sun shadow" : IsOcclusionTarget(a_index) ? Extensions::OcclusionMapOf(a_index - kFirstOcclusionTarget).targetName.c_str() :
+		                                                                                                       kNames[a_index];
 		auto imported = ImportImage(host->GetDesc().device, info.image, desc, name);
 		if (!imported)
 			return ShadowNotReady(5, "the shadow map could not be imported (not in the general layout?)");

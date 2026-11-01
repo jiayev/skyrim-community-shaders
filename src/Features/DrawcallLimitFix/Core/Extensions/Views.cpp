@@ -1,9 +1,11 @@
 // The views' entries (see the header): the features' contributions and work, and what the per-object paths read of them.
 
 // Internal.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
-#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 
 namespace DCLF::Extensions
 {

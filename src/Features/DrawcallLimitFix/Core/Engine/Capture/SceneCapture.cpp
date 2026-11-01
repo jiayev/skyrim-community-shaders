@@ -47,10 +47,12 @@ namespace DCLF::SceneCapture
 		}
 
 		// The records' extras, read on the capturing thread (a hook's or the probe's), never the scene work's.
-		std::int32_t BsxOf(const RE::NiNode& a_node)
+		std::int32_t BsxOf(const RE::NiAVObject& a_node)
 		{
+			if (!a_node.extraDataSize)
+				return -1;
 			static const RE::BSFixedString name{ "BSX" };
-			const auto* extra = const_cast<RE::NiNode&>(a_node).GetExtraData(name);
+			const auto* extra = const_cast<RE::NiAVObject&>(a_node).GetExtraData(name);
 			return extra ? static_cast<std::int32_t>(static_cast<const RE::BSXFlags*>(extra)->value) : -1;
 		}
 
@@ -113,7 +115,7 @@ namespace DCLF::SceneCapture
 		d |= kind != a_o.kind ? kKind : 0u;
 		d |= ((flags ^ a_o.flags) & 1u) ? kHidden : 0u;
 		d |= ((flags ^ a_o.flags) & RecordFlags(kind)) ? kFlags : 0u;
-		d |= (userData != a_o.userData || formType != a_o.formType || actor != a_o.actor) ? kUserData : 0u;
+		d |= (userData != a_o.userData || formType != a_o.formType || baseFormType != a_o.baseFormType || actor != a_o.actor) ? kUserData : 0u;
 		d |= controllers != a_o.controllers ? kControllers : 0u;
 		d |= body != a_o.body ? kBody : 0u;
 		d |= children != a_o.children ? kChildren : 0u;
@@ -193,6 +195,7 @@ namespace DCLF::SceneCapture
 		if (a_f & kUserData) {
 			userData = a_o.userData;
 			formType = a_o.formType;
+			baseFormType = a_o.baseFormType;
 			actor = a_o.actor;
 		}
 		if (a_f & kControllers)
@@ -406,10 +409,13 @@ namespace DCLF::SceneCapture
 		r.body = NonFixedBody(a_object);
 		if (const auto* reference = a_object.GetUserData()) {
 			r.userData = reference;
+			if (const auto* base = reference->GetBaseObject())
+				r.baseFormType = static_cast<std::uint8_t>(base->GetFormType());
 			r.formType = static_cast<std::uint8_t>(reference->GetFormType());
 			r.actor = const_cast<RE::TESObjectREFR*>(reference)->IsActor();
 			r.emittance = EmittanceOf(*reference);
 		}
+		r.bsx = BsxOf(object);
 		r.facts = Extensions::ReferenceFactsOf(a_object.GetUserData());  // without a reference, each fact's none
 		if (object.AsGeometry()) {
 			r.kind |= kKindGeometry;
@@ -446,7 +452,6 @@ namespace DCLF::SceneCapture
 			r.fade109 = At<std::uint8_t>(node, 0x109) & ~kFade109FrameBits;
 			r.fadeType = At<std::uint8_t>(node, 0x153) & 0xF;
 			r.treeLodSwitch = Engine::TreeLodSwitch(*node);
-			r.bsx = BsxOf(*node);
 			CaptureFadeState(*node, r);
 			r.fadeAmount = At<float>(node, 0x100);
 		}

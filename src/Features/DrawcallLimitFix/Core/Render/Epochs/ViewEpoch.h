@@ -5,13 +5,14 @@
 // their shapes are the revision producer's. Self-contained (features include it); Internal.h includes it in its order.
 
 // volk must precede every Vulkan header in this translation unit (Main/Resources.h first).
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+
 #include "Features/DrawcallLimitFix/Api/Passes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
 #include "Features/DrawcallLimitFix/Core/Render/Main/FrameLayout.h"
-#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
@@ -188,7 +189,7 @@ namespace DCLF::Draws
 		// zeroed apart from the faces' values).
 		static constexpr std::size_t kFrameList = 2;
 		std::array<LatchedList, 3> latched;
-		// Not compared (implied by the latch block and the buckets): its layout, and each pipeline slot's bucket.
+		// The latch layout and each pipeline slot's bucket for the capture.
 		ViewLatchLayout latchLayout;
 		std::shared_ptr<const std::vector<std::uint32_t>> map;
 
@@ -197,7 +198,8 @@ namespace DCLF::Draws
 			return latch == o.latch && latched == o.latched && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) &&
 			       SameIndirect(indirect, o.indirect) && width == o.width && height == o.height && depthRange == o.depthRange &&
 			       sequenceDraws == o.sequenceDraws && buckets == o.buckets && push == o.push && forwardRanges == o.forwardRanges &&
-			       forwardEntry == o.forwardEntry && faces == o.faces;
+			       forwardEntry == o.forwardEntry && faces == o.faces &&
+			       (map == o.map || (map && o.map && *map == *o.map));
 		}
 	};
 

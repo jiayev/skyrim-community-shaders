@@ -8,6 +8,18 @@ namespace DCLF
 {
 	namespace Draws
 	{
+		bool ShadowFrame::SameShape(const ShadowFrame& o) const
+		{
+			// A new caster key may share an existing pipeline and fit its bucket. The
+			// commit still needs the new key's vertex layout, technique and bucket.
+			return latch == o.latch && latchLayout == o.latchLayout && latched == o.latched &&
+			       SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) &&
+			       indirect.valid == o.indirect.valid && SameHandle(indirect.layout, o.indirect.layout) &&
+			       indirect.version == o.indirect.version && activeViews == o.activeViews && views == o.views &&
+			       (slotLayouts == o.slotLayouts || (slotLayouts && o.slotLayouts && *slotLayouts == *o.slotLayouts)) &&
+			       (rows == o.rows || (rows && o.rows && *rows == *o.rows));
+		}
+
 		/**
 		 * @brief a_row within a_words buckets (the named count words): the buckets a_draws (the claims, by key slot) need first,
 		 * then as many others as fit. The set the claims were made under holds their pipelines, so a dropped bucket with claimed

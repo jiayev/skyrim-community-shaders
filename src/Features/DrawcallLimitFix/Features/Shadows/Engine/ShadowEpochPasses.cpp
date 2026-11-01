@@ -4,8 +4,9 @@
 // extension's resources (Api::PassContext::Shadow; Core registers them with the graph).
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
+
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
-#include "Features/DrawcallLimitFix/Features/Shadows/Engine/Engine.h"
+
 #include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
@@ -20,6 +21,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowFrame.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+#include "Features/DrawcallLimitFix/Features/Shadows/Engine/Engine.h"
 
 #include "Features/RemoteControl/NvPerf.h"
 #include "RenderGraph/RenderGraphRuntime.h"
@@ -182,7 +184,7 @@ namespace DCLF::Draws
 	{
 		std::array<std::vector<org::DeclaredViewToken>, kShadowDepthTargets> depthViews{};
 		std::vector<org::ResourceBindingToken> sequences, bucketCounts;  // per view slot
-		org::ResourceBindingToken pool;  // the index pool (IndexPool)
+		org::ResourceBindingToken pool;                                  // the index pool (IndexPool)
 		org::ResourceBindingToken constants, viewBlocks;
 	};
 
@@ -292,7 +294,8 @@ namespace DCLF::Draws
 				depth.stencilLoad = rhi::LoadOp::Load;
 				depth.stencilStore = rhi::StoreOp::Store;
 				begin.depth = &depth;
-				begin.debugName = IsOcclusionTarget(view.target) ? "DCLF occlusion map" : "DCLF shadow view";
+				begin.debugName = view.target == kProbeSunTarget ? "DCLF probe sun shadow" : IsOcclusionTarget(view.target) ? "DCLF occlusion map" :
+				                                                                                                              "DCLF shadow view";
 			}
 			// Per view: a plain indexed indirect draw per bucket over its range of the slot's sequences, counted by its count word.
 			// A plain draw cannot bind its own vertex buffer, so the vertex stage fetches through the sequence (Utility.hlsl, DCLF_PULLED).
@@ -309,7 +312,8 @@ namespace DCLF::Draws
 				"cs.dclf.shadow.view-4", "cs.dclf.shadow.view-5", "cs.dclf.shadow.view-6", "cs.dclf.shadow.view-7+" };
 			for (std::size_t i = 0; i < a_prepared.views.size(); ++i) {
 				const auto& view = frame.views[a_prepared.views[i].index];
-				const char* range = IsOcclusionTarget(view.target) ? "cs.dclf.shadow.occlusion-map" : kViewRanges[std::min<std::size_t>(i, std::size(kViewRanges) - 1)];
+				const char* range = view.target == kProbeSunTarget ? "cs.dclf.shadow.probe-sun" : IsOcclusionTarget(view.target) ? "cs.dclf.shadow.occlusion-map" :
+				                                                                                                                   kViewRanges[std::min<std::size_t>(i, std::size(kViewRanges) - 1)];
 				const bool viewRange = nvCommands && NvPerf::PushCommandBufferRange(nvCommands, range);
 				commands.BeginPass(begins[i]);
 				commands.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
@@ -373,8 +377,7 @@ namespace DCLF::Features::Shadows::Engine
 		{
 			return Draws::MakeLatchedCopiesPass([shadow = a_context.Shadow()] { return LatchedTargets(*shadow); }, [](const org::PassPrepareContext& a_preparation) {
 				const auto frame = Draws::CurrentShadowFrame(a_preparation);
-				return frame ? Draws::LatchedSource{ frame->generation, frame, frame->latched } : Draws::LatchedSource{};
-			});
+				return frame ? Draws::LatchedSource{ frame->generation, frame, frame->latched } : Draws::LatchedSource{}; });
 		}
 
 		// Core's IndexPoolPass (the depth epoch's too), from the shadow shape's latch.

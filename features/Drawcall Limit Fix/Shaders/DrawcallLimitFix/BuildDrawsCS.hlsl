@@ -211,6 +211,7 @@ static float4 CullPlanes[6];
 // A shadow view's pipeline map row (latch bytes): its inputs name key slots, the row gives each slot's pipeline under the view's
 // rasterizer state. 0 when inputs name pipelines themselves (main camera).
 static uint PipelineMapOffset;
+static uint ShadowKeyCount;
 static uint SlotLayoutsOffset;  // a shadow view's key slots' vertex layouts (BuildDrawsLatch::slotLayoutsOffset), 0: none
 // Main colour pass: kSunTestOn when the sun test applies, and the cascades' latch offset (a count, then per cascade two plane
 // masks and 12 planes: GpuLayouts.h, GpuCascade).
@@ -295,6 +296,7 @@ void LoadViewLatch()
 		asfloat(latch.Load4(LatchOffset + 64)), asfloat(latch.Load4(LatchOffset + 80)));
 	PipelineMapOffset = latch.Load(LatchOffset + 192);
 	SlotLayoutsOffset = latch.Load(LatchOffset + 336);
+	ShadowKeyCount = latch.Load(LatchOffset + 344);
 	MinCasterRadius = asfloat(latch.Load(LatchOffset + 340));
 	SunState = latch.Load(LatchOffset + 196);
 	TreeHeight = asfloat(latch.Load2(LatchOffset + 200));
@@ -618,7 +620,7 @@ static const uint kClassRangeMain = 0;
 static const uint kClassRangeForward = 6;
 static const uint kClassRanges = 7;
 static const uint kClassHeaderBytes = 32;  // GpuLayouts.h, kClassHeaderWords
-static const uint kClassBytes = 64;  // kClassWords words
+static const uint kClassBytes = 64;        // kClassWords words
 
 // A set index's state class and index in it, from the latch's class map; false without a map or a word for it (a pipeline the
 // revision's set version did not hold), whose draw is dropped (counted), never drawn with another class's state.
@@ -683,7 +685,7 @@ bool TakeClassSlot(uint a_class, uint a_range, out uint a_slot)
 // how many of a section (0: the classes' sub-ranges take its draws), and a set index's bucket with its (first, capacity), false for none (the
 // draw is dropped, counted). The forward section follows the class words, the main one the forward one; a bucket's count word follows the
 // classes' (SetClassPlan::ForwardCountWord, MainCountWord).
-static const uint kNoPlainBucket = 0xFFFFFFFFu;  // GpuLayouts.h, kNoBucket
+static const uint kNoPlainBucket = 0xFFFFFFFFu;                                                   // GpuLayouts.h, kNoBucket
 static const uint kForwardSection = 1, kMainSection = 2, kTerrainSection = 3, kDecalSection = 4;  // their header words
 uint PlainBuckets(uint a_section)
 {
@@ -699,7 +701,8 @@ bool PlainBucketOf(uint a_section, uint a_set, out uint a_bucket, out uint2 a_ra
 	// Past the earlier sections present (each a word per set index, then two per bucket) and their buckets' count words.
 	uint section = ClassMapOffset + kClassHeaderBytes + sets * 4;
 	uint earlier = 0;
-	[loop] for (uint s = kForwardSection; s < a_section; ++s) {
+	[loop] for (uint s = kForwardSection; s < a_section; ++s)
+	{
 		const uint buckets = latch.Load(ClassMapOffset + 4 * s);
 		if (buckets != 0)
 			section += (sets + 2 * buckets) * 4;
@@ -1093,7 +1096,7 @@ void BuildInput(uint draw, DrawInputWords a_words)
 	const uint keyWord = KeyWord();
 	const uint drawKey = keyWord != 0 ? a_words.words[1][keyWord] : input.x;
 	const uint rowsWord = keyWord != 0 ? a_words.words[3].y : input.y;
-	if (drawKey == 0xFFFFFFFFu)
+	if (drawKey == 0xFFFFFFFFu || (SlotLayoutsOffset != 0 && drawKey >= ShadowKeyCount))
 		return;  // no key in the view's family: never an input its mask lets through
 	// The draw's object word: the object index, plus kObjectSunMiss when a sun-test pass meets no cascade. Counted for every such
 	// input, drawn or not, to compare with the CPU's count.
@@ -1317,7 +1320,7 @@ void BuildInput(uint draw, DrawInputWords a_words)
 		const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);  // centre (world), radius
 		// Phase 2 only revisits occlusion.
 		frustumRejected = phase == kPhaseOne ? MainFrustumRejected(objectIndex) :
-			(phase != kPhaseTwo && (Parabolic() ? ParabolicRejected(bound.xyz, bound.w) : Culled(bound.xyz, bound.w)));
+		                                       (phase != kPhaseTwo && (Parabolic() ? ParabolicRejected(bound.xyz, bound.w) : Culled(bound.xyz, bound.w)));
 		// A portal-strict point light's view: its cull's rooms, shared nodes and room frusta (StrictGateRejects), by the caster's gate.
 		if (!frustumRejected && phase == kPhaseSingle && StrictContext != 0)
 			frustumRejected = StrictGateRejects(StrictGatesIndex, LightContextsIndex, ObjectGatesIndex, StrictContext - 1, objectIndex, bound.xyz, bound.w);
@@ -1346,7 +1349,7 @@ void BuildInput(uint draw, DrawInputWords a_words)
 	// Publish the decision and the depth-drawn bit. Phase 1 writes every candidate, so nothing stale survives into the colour segment.
 	if (phase == kPhaseOne || phase == kPhaseTwo) {
 		const uint decided = (frustumRejected || fadeHidden) ? kVisibilityRejectedFinal :
-			(occlusionRejected ? (phase == kPhaseOne ? kVisibilityOccludedRetest : kVisibilityRejectedFinal) : kVisibilityVisible);
+		                                                       (occlusionRejected ? (phase == kPhaseOne ? kVisibilityOccludedRetest : kVisibilityRejectedFinal) : kVisibilityVisible);
 		visibility.Store(objectIndex * 4, (VisibilityStamp << kVisibilityStampShift) | decided | (draws ? kVisibilityDepthDrawn : 0));
 		RecordWriter(objectIndex, draw, 3);
 		if (phase == kPhaseTwo && !occlusionRejected)
@@ -1379,7 +1382,9 @@ void BuildInput(uint draw, DrawInputWords a_words)
 		return;
 	if (SizeProbe()) {
 		const float radius = ObjectRow(objectIndex, kObjectBoundRow).w;
-		const uint sizeClass = radius < 256.0 ? 0u : radius < 1024.0 ? 1u : radius < 4096.0 ? 2u : 3u;
+		const uint sizeClass = radius < 256.0 ? 0u : radius < 1024.0 ? 1u :
+		                                         radius < 4096.0     ? 2u :
+		                                                               3u;
 		const uint probeIndexCount = geometries.Load(input.z * kGeometryStride + 28);  // the index buffer's count (GeometryDraw +16, .w)
 		count.InterlockedAdd(kCountProbeCasters + sizeClass * 4, 1, scratch);
 		count.InterlockedAdd(kCountProbeTriangles + sizeClass * 4, probeIndexCount / 3, scratch);

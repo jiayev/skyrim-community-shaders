@@ -2,14 +2,16 @@
 // (evaluate, then merge in order), the object records and their geometry slots, and the per-frame traits.
 
 #include "Internal.h"
+
+#include "Features/DrawcallLimitFix/Core/Engine/SkinPalettes.h"
+#include "Features/DrawcallLimitFix/Core/Engine/SkinPartitions.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
-#include "Features/DrawcallLimitFix/Core/Engine/SkinPalettes.h"
-#include "Features/DrawcallLimitFix/Core/Engine/SkinPartitions.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
+#include "Rendering/EnvironmentProbe/Shadows.h"
 
 #include <atomic>
 #include <cassert>
@@ -71,7 +73,7 @@ namespace DCLF::Scene
 			InvalidateObjectIndices();
 			accumulatedPasses.clear();
 			stats.objects = 0;
-				stats.geometries = 0;
+			stats.geometries = 0;
 			stats.pipelines = 0;
 			stats.materials = 0;
 			return;
@@ -147,7 +149,6 @@ namespace DCLF::Scene
 			tables.ancestorValue.reserve(tracked.size());
 			tables.skinPartitions.reserve(tracked.size());
 		}
-
 	}
 
 	void Coordinator::DenseWalk()
@@ -423,6 +424,14 @@ namespace DCLF::Scene
 		};
 		if (shadowReject == ShadowReject::None || shadowReject == ShadowReject::VolumetricOnly) {
 			a_out.shadowTechnique = ShadowUtilityTechnique(leaf);
+			if (shadowReject == ShadowReject::None && SceneCapture::LeafView::Lighting(shadowProperty) && leaf.node) {
+				const auto type = static_cast<RE::FormType>(leaf.node->baseFormType);
+				a_out.probeCaster = (!leaf.node->userData || type == RE::FormType::Static || type == RE::FormType::Tree) &&
+				                    ::EnvironmentProbe::Shadows::StaticCaster(shadowProperty->flags, leaf.AlphaBlending(), leaf.AlphaTesting());
+				for (const auto* node = leaf.node; a_out.probeCaster && node; node = node->parent ? mirror.Node(node->parent) : nullptr)
+					if (node->bsx != -1 && ::EnvironmentProbe::Shadows::DynamicBsx(std::uint32_t(node->bsx)))
+						a_out.probeCaster = false;
+			}
 			if (a_out.shadowTechnique & 0x80)
 				sampleDiffuse();
 		}
@@ -640,10 +649,12 @@ namespace DCLF::Scene
 			++stats.shadowCasters;
 			if (volumetricOnly)
 				object.flags |= kObjectVolumetricOnly;
+			tables.probeCaster[objectId] = r.probeCaster;
 			tables.shadowTechnique[objectId] = r.shadowTechnique;
 			useKey(tables.shadowKeysUsed, r.shadowTechnique);
 		} else {
 			object.flags |= kObjectNoShadow;
+			tables.probeCaster[objectId] = 0;
 			tables.shadowTechnique[objectId] = 0;
 		}
 		tables.shadowReject[objectId] = r.shadowReject;
@@ -752,6 +763,7 @@ namespace DCLF::Scene
 		               ((property->flags & static_cast<std::uint64_t>(RE::BSShaderProperty::EShaderPropertyFlag::kTwoSided)) ? kObjectTwoSided : 0u);
 		tables.objectSeen[slot] = walkSerial;
 		tables.FreeBones(slot);
+		tables.probeCaster[slot] = 0;
 		tables.shadowTechnique[slot] = 0;
 		tables.shadowReject[slot] = static_cast<std::uint8_t>(ShadowReject::Layer);
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
@@ -940,12 +952,12 @@ namespace DCLF::Scene
 		// resolved again into the same slot.
 		const bool staleGeometry = !newGeometry &&
 		                           ((resolveBuffers && tables.geometries[geometryIt->second].vertexAddress == 0) ||
-		                               tables.geometries[geometryIt->second].firstIndex != a_source.firstIndex ||
-		                               tables.geometries[geometryIt->second].indexCount != a_source.indexCount ||
-		                               (resolveBuffers && (!tables.geometryImports[geometryIt->second].vertexOwner || !tables.geometryImports[geometryIt->second].indexOwner)) ||
-		                               tables.geometries[geometryIt->second].vertexBuffer != a_source.vertexBuffer ||
-		                               tables.geometries[geometryIt->second].indexBuffer != a_source.indexBuffer ||
-		                               (resolveBuffers && !denseWalk && relocatedGeometrySlots.contains(geometryIt->second)));
+									   tables.geometries[geometryIt->second].firstIndex != a_source.firstIndex ||
+									   tables.geometries[geometryIt->second].indexCount != a_source.indexCount ||
+									   (resolveBuffers && (!tables.geometryImports[geometryIt->second].vertexOwner || !tables.geometryImports[geometryIt->second].indexOwner)) ||
+									   tables.geometries[geometryIt->second].vertexBuffer != a_source.vertexBuffer ||
+									   tables.geometries[geometryIt->second].indexBuffer != a_source.indexBuffer ||
+									   (resolveBuffers && !denseWalk && relocatedGeometrySlots.contains(geometryIt->second)));
 		if (staleGeometry)
 			++stats.geometriesRefreshed;
 		if (newGeometry || staleGeometry) {
@@ -994,7 +1006,8 @@ namespace DCLF::Scene
 				if (*owner)
 					retiredImports.push_back(std::move(*owner));
 			tables.geometryImports[slot] = vertexLease && indexLease ? Tables::GeometryImport{ vertexLease->generation, indexLease->generation,
-				vertexLease->owner, indexLease->owner } : Tables::GeometryImport{};
+				vertexLease->owner, indexLease->owner } :
+			                                                           Tables::GeometryImport{};
 			tables.NoteGeometry(slot);
 			tables.geometrySlotKey[slot] = a_source.key;
 			tables.geometryLayerKey[slot] = a_source.layer ? 1 : 0;
@@ -1159,8 +1172,7 @@ namespace DCLF::Scene
 				// A skin's bound follows its bones, which move with no controller or body on the chain.
 				if (const auto* geometry = mirror.Geometry(a_key))
 					moves = geometry->skin != nullptr;
-			return !moves;
-		}, kMaxEventNodes);
+			return !moves; }, kMaxEventNodes);
 		return moves;
 	}
 
@@ -1190,8 +1202,8 @@ namespace DCLF::Scene
 		const auto* lighting = SceneCapture::LeafView::Lighting(leaf.property);
 		const auto* port = SceneCapture::LeafView::Port(leaf.property);
 		const void* emittance = lighting && (lighting->flags & static_cast<std::uint64_t>(RE::BSShaderProperty::EShaderPropertyFlag::kExternalEmittance)) ? lighting->emissive :
-		                        port && Extensions::PortRules(port->port).emissiveAlwaysListed                                                  ? port->emissive :
-		                                                                                                                                          nullptr;
+		                        port && Extensions::PortRules(port->port).emissiveAlwaysListed                                                            ? port->emissive :
+		                                                                                                                                                    nullptr;
 		if (emittance != a_tracked.listedEmittance) {
 			if (a_tracked.listedEmittance)
 				Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedEmittance, a_geometry);
@@ -1495,7 +1507,8 @@ namespace DCLF::Scene
 	{
 		static const std::uint32_t configured = [] {
 			const auto& value = SwitchValue(Switch::Fanout);
-			return value == "0" ? 0u : value == "1" ? 1u : 2u;
+			return value == "0" ? 0u : value == "1" ? 1u :
+			                                          2u;
 		}();
 		return configured;
 	}
@@ -1574,8 +1587,8 @@ namespace DCLF::Scene
 		const auto& d = a_out.delta;
 		// The entry as MergeWrite will leave it (a missing leaf resets the classification).
 		const std::uint32_t candidateFrame = a_out.write == EvalResult::Write::NoLeaf ? (denseWalk ? entry.candidateFrame : 0u) :
-		                                     d.candidateSet                            ? d.candidateFrame :
-		                                                                                 entry.candidateFrame;
+		                                     d.candidateSet                           ? d.candidateFrame :
+		                                                                                entry.candidateFrame;
 		const Ineligible reason = d.candidateSet ? d.candidateReason : entry.candidateReason;
 		a_out.classified = candidateFrame == PassStamp();
 		if (a_out.classified) {
@@ -1629,7 +1642,8 @@ namespace DCLF::Scene
 				return;
 			auto& g = moverGateStats;
 			++g.witnessChecks;
-			missed = missed ? missed : a_moverChanged ? "the mover set" : nullptr;
+			missed = missed ? missed : a_moverChanged ? "the mover set" :
+			                                            nullptr;
 			if (!missed)
 				return;
 			++g.witnessDiffer;

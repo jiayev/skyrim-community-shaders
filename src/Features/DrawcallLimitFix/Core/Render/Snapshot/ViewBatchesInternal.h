@@ -3,8 +3,9 @@
 // The CPU pipeline's view batches' internals (ViewBatches.cpp: the full build; SceneLists.cpp: the incremental lists): a lane before its
 // batch is laid out, the resident sequences' sink and rows, the list builder, the batches' layout and sort. The builder thread's alone.
 
-#include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+
+#include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatches.h"
 
 #include <ORGModuleServices/VersionedBufferBuild.h>
@@ -383,6 +384,8 @@ namespace DCLF::Draws::detail
 			if (caster != kNoKey) {
 				if (mask & kViewSunCaster)
 					AddShadow(ViewType::Sun, a_input, casters(), caster);
+				if (mask & kViewProbeSunCaster)
+					AddShadow(ViewType::ProbeSunCaster, a_input, casters(), caster);
 				if (mask & kViewSpotCaster)
 					AddShadow(ViewType::Spot, a_input, casters(), caster);
 				if (mask & kViewPointCaster)

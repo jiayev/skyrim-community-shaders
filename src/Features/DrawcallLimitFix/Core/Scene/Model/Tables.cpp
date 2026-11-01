@@ -25,6 +25,7 @@ namespace DCLF
 		boneOffset.resize(a_count, 0);
 		boneRows.resize(a_count, 0);
 		extraOffset.resize(a_count, kNoExtraRows);
+		probeCaster.resize(a_count, 0);
 		shadowTechnique.resize(a_count, 0);
 		shadowReject.resize(a_count, 0);
 		for (auto& column : occlusionTechnique)
@@ -63,6 +64,7 @@ namespace DCLF
 		columns.fadeDistance = fadeDistance[a_slot];
 		columns.boneOffset = boneOffset[a_slot];
 		columns.boneRows = boneRows[a_slot];
+		columns.probeCaster = probeCaster[a_slot] != 0;
 		columns.shadowTechnique = shadowTechnique[a_slot];
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 			columns.occlusionTechnique[v] = occlusionTechnique[v][a_slot];
@@ -91,7 +93,7 @@ namespace DCLF
 			causes |= kChangeSkin;
 		if (a.extraOffset != b.extraOffset || !same(a.extras, b.extras))
 			causes |= kChangeExtras;
-		if (a.shadowTechnique != b.shadowTechnique || a.shadowReject != b.shadowReject || a.occlusionTechnique != b.occlusionTechnique || a.shadowDiffuse != b.shadowDiffuse ||
+		if (a.probeCaster != b.probeCaster || a.shadowTechnique != b.shadowTechnique || a.shadowReject != b.shadowReject || a.occlusionTechnique != b.occlusionTechnique || a.shadowDiffuse != b.shadowDiffuse ||
 			a.shadowMaterial != b.shadowMaterial)
 			causes |= kChangeShadow;
 		// The draw template's geometry half: everything but the pipeline index, which is the bindings'.
@@ -108,7 +110,7 @@ namespace DCLF
 		if (a.resident != b.resident)
 			causes |= kChangeMembership;
 		if (x.pipelineIndex != y.pipelineIndex || a.draw.pipelineIndex != b.draw.pipelineIndex || x.geometryIndex != y.geometryIndex ||
-			!same(geometryHalf(a.draw), geometryHalf(b.draw)) || a.skinPartitions != b.skinPartitions || a.skinLodPartitions != b.skinLodPartitions || a.shadowTechnique != b.shadowTechnique ||
+			!same(geometryHalf(a.draw), geometryHalf(b.draw)) || a.skinPartitions != b.skinPartitions || a.skinLodPartitions != b.skinLodPartitions || a.probeCaster != b.probeCaster || a.shadowTechnique != b.shadowTechnique ||
 			a.shadowReject != b.shadowReject || a.occlusionTechnique != b.occlusionTechnique)
 			causes |= kChangeStructure;
 		return causes;
@@ -193,6 +195,7 @@ namespace DCLF
 		skinPartitions[a_slot] = 0;
 		skinLodPartitions[a_slot] = 0;
 		draws[a_slot] = DrawSequence{};
+		probeCaster[a_slot] = 0;
 		shadowTechnique[a_slot] = 0;
 		shadowReject[a_slot] = 0;
 		for (auto& column : occlusionTechnique)
@@ -272,6 +275,7 @@ namespace DCLF
 			extraOffset.clear();
 			extraRows.clear();
 			extraFree.clear();
+			probeCaster.clear();
 			shadowTechnique.clear();
 			shadowReject.clear();
 			for (auto& column : occlusionTechnique)
@@ -361,6 +365,7 @@ namespace DCLF
 		extraRows.clear();
 		extraOffset.clear();
 		extraFree.clear();
+		probeCaster.clear();
 		shadowTechnique.clear();
 		shadowReject.clear();
 		for (auto& column : occlusionTechnique)

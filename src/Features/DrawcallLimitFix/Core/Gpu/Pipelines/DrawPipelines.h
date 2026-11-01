@@ -5,6 +5,7 @@
 // requests any thread or the render thread posts and whose lane runs on the coordinator executor (BuildExecutor.h).
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <dxgiformat.h>
@@ -13,15 +14,14 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <bit>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "Features/DrawcallLimitFix/Core/Shading/ConstantEvaluator.h"
-#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
 #include "Features/DrawcallLimitFix/Api/Views.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
+#include "Features/DrawcallLimitFix/Core/Shading/ConstantEvaluator.h"
 
 namespace DCLF
 {
@@ -152,9 +152,9 @@ namespace DCLF
 		// Reserved (zero): the blocks' addresses are the draw's sequence's (DrawSequence); the pulled stages read the words below at
 		// fixed offsets.
 		std::uint64_t reserved[6]{};
-		std::uint32_t shadowMask = 0;                    // t14
-		std::uint32_t shadowMaskSampler = 0;             // s14
-		std::uint64_t vertexLayout = 0;                  // PipelineKey::vertexLayout, decoded by a pulled vertex stage
+		std::uint32_t shadowMask = 0;         // t14
+		std::uint32_t shadowMaskSampler = 0;  // s14
+		std::uint64_t vertexLayout = 0;       // PipelineKey::vertexLayout, decoded by a pulled vertex stage
 	};
 	static_assert(kPipelineRowHeader + sizeof(PipelineRowHeader) <= kPipelineRowBytes);
 	static_assert(offsetof(PipelineRowHeader, shadowMask) == 48 && offsetof(PipelineRowHeader, vertexLayout) == 56);  // DCLFPipeline*Index
@@ -247,7 +247,7 @@ namespace DCLF
 		std::uint32_t vertexConstants = 0;  // b0-b13, bit per register
 		std::uint32_t pixelConstants = 0;
 		std::array<std::uint64_t, kTextureRegisters / 64> textures{};  // pixel t0-t127
-		std::uint32_t samplers = 0;                                      // pixel s0-s15
+		std::uint32_t samplers = 0;                                    // pixel s0-s15
 
 		bool UsesTexture(std::uint32_t a_register) const { return (textures[a_register / 64] >> (a_register % 64)) & 1; }
 	};
@@ -352,9 +352,9 @@ namespace DCLF
 		};
 		// Every key the lane has requested a build for or found failed (a key waiting on its program or an input is absent).
 		ankerl::unordered_dense::map<PipelineKey, Entry, PipelineKeyHash> entries;
-		std::uint32_t generation = 0;         // a target change starts a new set; every earlier index is stale
-		std::uint32_t targetsGeneration = 0;  // DrawPipelines::Generation the set is built for
-		std::uint64_t revision = 0;           // new with each publication
+		std::uint32_t generation = 0;            // a target change starts a new set; every earlier index is stale
+		std::uint32_t targetsGeneration = 0;     // DrawPipelines::Generation the set is built for
+		std::uint64_t revision = 0;              // new with each publication
 		std::shared_ptr<const void> setVersion;  // holds every setIndex above (DrawPipelinesImpl.h, SetVersion)
 
 		struct ShadowEntry
@@ -364,9 +364,9 @@ namespace DCLF
 		};
 		// Every shadow view key the lane has requested a build for or found failed.
 		ankerl::unordered_dense::map<ShadowPipelineKey, ShadowEntry, ShadowPipelineKeyHash> shadowEntries;
-		std::uint32_t shadowGeneration = 0;                 // the shadow set's: a format change starts a new set
-		DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;     // the shadow map format the set is built for
-		std::shared_ptr<const void> shadowSetVersion;       // holds every setIndex of shadowEntries
+		std::uint32_t shadowGeneration = 0;              // the shadow set's: a format change starts a new set
+		DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;  // the shadow map format the set is built for
+		std::shared_ptr<const void> shadowSetVersion;    // holds every setIndex of shadowEntries
 
 		// By draw family: its pipelines (depth and colour ones) for targetsGeneration: built (FamilyBuilt) or failed (program: for good;
 		// build: until the next target change). Neither while waiting.
@@ -519,7 +519,7 @@ namespace DCLF
 		 * copies with their own depth bias for exactly that window, and the volumetric copy draws without culling. A new state reaches
 		 * the lane with the frame's inputs. a_renderMode is for the log.
 		 */
-		std::uint32_t ShadowRasterStateId(const D3D11_RASTERIZER_DESC& a_desc, std::uint32_t a_renderMode);
+		std::uint32_t ShadowRasterStateId(const D3D11_RASTERIZER_DESC& a_desc, std::uint32_t a_renderMode, DXGI_FORMAT targetFormat = DXGI_FORMAT_UNKNOWN);
 
 		/** @brief How many shadow view rasterizer states are registered (ids 1 to this). */
 		std::uint32_t ShadowRasterStateCount() const;
@@ -567,7 +567,6 @@ namespace DCLF
 		 */
 		void CaptureEngineStates();
 
-
 		/** @brief Render thread: increments whenever the targets change. */
 		std::uint32_t Generation() const { return generation; }
 		/** @brief Render thread: the shadow map format last posted, which the catalog's shadow set must match. Revisions read their copy. */
@@ -586,7 +585,7 @@ namespace DCLF
 		struct Impl;
 		std::unique_ptr<Impl> impl;
 		TargetFormats targets;
-		std::shared_ptr<const PipelineCatalog> heldCatalog;          // the frame's (HoldCatalog)
+		std::shared_ptr<const PipelineCatalog> heldCatalog;  // the frame's (HoldCatalog)
 		std::uint32_t generation = 0;
 		Stats stats;
 

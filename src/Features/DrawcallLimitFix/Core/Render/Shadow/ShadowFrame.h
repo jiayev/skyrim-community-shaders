@@ -5,7 +5,9 @@
 // Internal.h includes it in its order.
 
 // volk must precede every Vulkan header in this translation unit (Main/Resources.h first).
+
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
@@ -83,9 +85,9 @@ namespace DCLF::Draws
 	/** @brief One captured view of the frame's shadow epoch: where it draws its render mode's inputs, with which blocks. */
 	struct ShadowFrameView
 	{
-		std::uint32_t slot = 0;       // the view's sequence and count buffers, record region and latch
-		std::uint32_t modeIndex = 0;  // the inputs buffer (render mode 0xD, 0xE, 0xF)
-		std::uint32_t capacity = 0;   // ExecuteIndirect max count (GrowCapacity, per slot)
+		std::uint32_t slot = 0;                             // the view's sequence and count buffers, record region and latch
+		std::uint32_t modeIndex = 0;                        // the inputs buffer (render mode 0xD, 0xE, 0xF)
+		std::uint32_t capacity = 0;                         // ExecuteIndirect max count (GrowCapacity, per slot)
 		std::uint32_t x = 0, y = 0, width = 0, height = 0;  // viewport in its slice
 		float minDepth = 0.0f, maxDepth = 1.0f;
 		std::uint32_t target = 0;  // index into ShadowResources::depth
@@ -117,7 +119,7 @@ namespace DCLF::Draws
 		// Latched copies: view blocks, zeroed counts, and the commit's SharedData/FeatureData (kCommitList).
 		std::array<LatchedList, 3> latched;
 		static constexpr std::size_t kCommitList = 2;
-		// Not compared (implied by the latch and the buckets): the latch layout and each view's map row a commit writes against.
+		// The slot-to-bucket map can change without changing any bucket capacity or pipeline.
 		ShadowLatchLayout latchLayout;
 		std::shared_ptr<const std::vector<RowBuckets>> rows;
 		// Each key slot's entry (Lookups::shadowSlotKeys), for the latch's slot table. Slots are append-only per lookups instance, so a
@@ -128,12 +130,7 @@ namespace DCLF::Draws
 		// target's load and store). All of them in the first variant, which the commit writes the latch against, and every variant shares.
 		std::uint64_t activeViews = ~0ull;
 
-		bool SameShape(const ShadowFrame& o) const
-		{
-			// The version covers the pipelines the buckets bind.
-			return latch == o.latch && latched == o.latched && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) && indirect.valid == o.indirect.valid &&
-			       SameHandle(indirect.layout, o.indirect.layout) && indirect.version == o.indirect.version && views == o.views && activeViews == o.activeViews;
-		}
+		bool SameShape(const ShadowFrame& other) const;
 	};
 
 	// IndexPool: Resources/IndexPool.h (self-contained; included by Internal.h before this header).

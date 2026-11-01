@@ -3,6 +3,7 @@
 // features' (Features/Reflection, Features/FirstPerson), on the view engine's calls (ViewEngine.cpp).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 
 #include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"

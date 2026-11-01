@@ -47,6 +47,7 @@
 #include "Features/DrawcallLimitFix/Integrations/ExponentialHeightFog/ExponentialHeightFog.h"
 #include "Features/DrawcallLimitFix/Integrations/IBL/IBL.h"
 #include "Features/DrawcallLimitFix/Integrations/LightLimitFix/LightLimitFix.h"
+#include "Features/DrawcallLimitFix/Integrations/PhysicalSky/PhysicalSky.h"
 #include "Features/DrawcallLimitFix/Integrations/Skylighting/Skylighting.h"
 #include "Features/DrawcallLimitFix/Integrations/SubsurfaceScattering/SubsurfaceScattering.h"
 #include "Features/DrawcallLimitFix/Integrations/TerrainBlending/TerrainBlending.h"
@@ -100,6 +101,9 @@ namespace DCLF::Features
 			Integrations::TerrainBlending::kMaskRegister,
 			Integrations::VolumetricShadows::kSharedShadowMapRegister,
 			Integrations::CloudShadows::kCloudOcclusionRegister,
+			Integrations::PhysicalSky::kTransmittance,
+			Integrations::PhysicalSky::kCloudShadowMean,
+			Integrations::PhysicalSky::kCloudShadowVolume,
 			Integrations::ExponentialHeightFog::kLightScatteringRegister,
 			Integrations::DynamicCubemaps::kReflectionsRegister,
 			Integrations::DynamicCubemaps::kEnvironmentRegister,

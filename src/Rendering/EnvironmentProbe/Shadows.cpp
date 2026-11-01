@@ -1,5 +1,6 @@
 #include "Rendering/EnvironmentProbe/Shadows.h"
 #include "Globals.h"
+#include "Rendering/EnvironmentProbe/CameraPass.h"
 #include "Rendering/EnvironmentProbe/Capture.h"
 #include "Rendering/EnvironmentProbe/Scene.h"
 #include "State.h"
@@ -100,15 +101,33 @@ namespace EnvironmentProbe::Shadows
 		context->RSSetState(rasterState.get());
 	}
 
+	bool StaticCaster(std::uint64_t flags, bool alphaBlending, bool alphaTesting)
+	{
+		using F = RE::BSShaderProperty::EShaderPropertyFlag;
+		constexpr auto required = std::uint64_t(F::kZBufferWrite) | std::uint64_t(F::kCastShadows);
+		constexpr auto excluded = std::uint64_t(F::kRefraction) | std::uint64_t(F::kTempRefraction) | std::uint64_t(F::kLODLandscape) |
+		                          std::uint64_t(F::kEyeReflect) | std::uint64_t(F::kDecal) | std::uint64_t(F::kDynamicDecal);
+		return (flags & required) == required && !(flags & excluded) && (!alphaBlending || alphaTesting) &&
+		       (!(flags & std::uint64_t(F::kSkinned)) || (flags & std::uint64_t(F::kTreeAnim)));
+	}
+
+	bool DynamicBsx(std::uint32_t flags)
+	{
+		using B = RE::BSXFlags::Flag;
+		constexpr auto dynamic = std::uint32_t(B::kRagdoll) | std::uint32_t(B::kDynamic) | std::uint32_t(B::kAddon) |
+		                         std::uint32_t(B::kNeedsTransformUpdate) | std::uint32_t(B::kMagicShaderParticles) | std::uint32_t(B::kLights) |
+		                         std::uint32_t(B::kBreakable) | std::uint32_t(B::kSearchedBreakable);
+		return (flags & dynamic) != 0;
+	}
+
 	bool RejectGeometry(RE::BSCullingProcess* process, RE::BSGeometry& geometry)
 	{
 		if (!active.load() || process->camera != camera.get())
 			return false;
-		auto* property = netimmerse_cast<RE::BSLightingShaderProperty*>(geometry.GetGeometryRuntimeData().shaderProperty.get());
-		using enum RE::BSShaderProperty::EShaderPropertyFlag;
-		if (!property || geometry.worldBound.radius <= 32.f || property->flags.none(kZBufferWrite, kCastShadows) ||
-			property->flags.any(kRefraction, kTempRefraction, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal) ||
-			(property->flags.any(kSkinned) && property->flags.none(kTreeAnim)))
+		auto& data = geometry.GetGeometryRuntimeData();
+		auto* property = netimmerse_cast<RE::BSLightingShaderProperty*>(data.shaderProperty.get());
+		auto* alpha = static_cast<RE::NiAlphaProperty*>(data.alphaProperty.get());
+		if (!property || geometry.worldBound.radius <= 32.f || !StaticCaster(property->flags.underlying(), alpha && alpha->GetAlphaBlending(), alpha && alpha->GetAlphaTesting()))
 			return true;
 		if (auto* reference = geometry.GetUserData()) {
 			auto* base = reference->GetBaseObject();
@@ -116,32 +135,14 @@ namespace EnvironmentProbe::Shadows
 				return true;
 		}
 		static const RE::BSFixedString bsxKey{ "BSX" };
-		for (auto* node = static_cast<RE::NiAVObject*>(&geometry); node; node = node->parent) {
-			if (auto* extra = node->GetExtraData(bsxKey)) {
-				using F = RE::BSXFlags::Flag;
-				constexpr uint32_t dynamicFlags = uint32_t(F::kRagdoll) | uint32_t(F::kDynamic) | uint32_t(F::kAddon) |
-				                                  uint32_t(F::kNeedsTransformUpdate) | uint32_t(F::kMagicShaderParticles) | uint32_t(F::kLights) |
-				                                  uint32_t(F::kBreakable) | uint32_t(F::kSearchedBreakable);
-				if (uint32_t(static_cast<RE::BSXFlags*>(extra)->value) & dynamicFlags)
-					return true;
-			}
-		}
+		for (auto* node = static_cast<RE::NiAVObject*>(&geometry); node; node = node->parent)
+			if (auto* extra = node->GetExtraData(bsxKey); extra && DynamicBsx(std::uint32_t(static_cast<RE::BSXFlags*>(extra)->value)))
+				return true;
 		return false;
 	}
 
-	void Render(const Request& request)
+	void EnsureTarget()
 	{
-		parameters = {};
-		if (!request.supplementalSunShadows)
-			return;
-		auto* scene = globals::game::smState->shadowSceneNode[0];
-		auto* sun = scene->GetRuntimeData().sunShadowDirLight;
-		if (!sun || !globals::state->HasDirectionalShadows())
-			return;
-		auto forward = sun->GetShadowDirectionalLightRuntimeData().sunVector;
-		if (forward.SqrLength() < 0.5f)
-			return;
-		forward.Unitize();
 		if (!texture) {
 			D3D11_TEXTURE2D_DESC desc{};
 			desc.Width = desc.Height = resolution;
@@ -165,6 +166,25 @@ namespace EnvironmentProbe::Shadows
 			DX::ThrowIfFailed(globals::d3d::device->CreateRasterizerState(&raster, rasterState.put()));
 			Util::SetResourceName(rasterState.get(), "EnvironmentProbe::Sun Shadow Rasterizer");
 		}
+	}
+
+	ID3D11Texture2D* Target() { return texture ? texture->resource.get() : nullptr; }
+	ID3D11DepthStencilView* DepthView() { return texture ? texture->dsv.get() : nullptr; }
+
+	static bool Prepare(const Request& request)
+	{
+		parameters = {};
+		if (!request.supplementalSunShadows)
+			return false;
+		auto* scene = globals::game::smState->shadowSceneNode[0];
+		auto* sun = scene ? scene->GetRuntimeData().sunShadowDirLight : nullptr;
+		if (!sun || !globals::state->HasDirectionalShadows())
+			return false;
+		auto forward = sun->GetShadowDirectionalLightRuntimeData().sunVector;
+		if (forward.SqrLength() < 0.5f)
+			return false;
+		forward.Unitize();
+		EnsureTarget();
 		if (!camera) {
 			static REL::Relocation<RE::NiCamera*(void*)> ctor{ REL::RelocationID(69258, 70624) };
 			auto* memory = RE::malloc(0x188);
@@ -230,6 +250,41 @@ namespace EnvironmentProbe::Shadows
 		parameters.depthBias = depthScale;  // One game unit of receiver bias.
 		parameters.enabled = 1;
 
+		return true;
+	}
+
+	namespace
+	{
+		Request planned{};
+		Parameters plannedParameters{};
+		uint32_t drawnFrame = UINT32_MAX;
+	}
+
+	RE::NiCamera* PrepareDclf()
+	{
+		Request request;
+		if (!GetCameraPass().supplementalSunShadows || !GetCameraPass().PrepareRequest(request) || !Prepare(request))
+			return nullptr;
+		planned = request;
+		plannedParameters = parameters;
+		return camera.get();
+	}
+
+	void DclfSubmitted() { drawnFrame = globals::state->frameCount; }
+
+	void Render(const Request& request)
+	{
+		if (drawnFrame == globals::state->frameCount && planned.position == request.position && planned.faces == request.faces && planned.farDistance == request.farDistance) {
+			parameters = plannedParameters;
+			static bool logged = false;
+			if (!std::exchange(logged, true))
+				logger::info("[DCLF] environment probe used its shadow epoch depth map, frame {}, octants {:#04x}", drawnFrame, request.faces);
+			return;
+		}
+		drawnFrame = UINT32_MAX;
+		if (!Prepare(request))
+			return;
+		auto* scene = globals::game::smState->shadowSceneNode[0];
 		static REL::Relocation<RE::BSShaderAccumulator*(void*, uint32_t)> ctor{ REL::RelocationID(99920, 106564) };
 		auto* memory = RE::malloc(0x180);
 		if (!memory)

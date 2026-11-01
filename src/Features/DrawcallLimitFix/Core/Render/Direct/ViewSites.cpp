@@ -13,10 +13,13 @@
 // from), so a lane the GPU path's map sends to no bucket (a forward slot, a slot without its view pipeline) draws nothing there either.
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
-#include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+
+#include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
 
 #include <Resources/ExternalTextureResource.h>

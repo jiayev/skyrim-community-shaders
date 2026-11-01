@@ -1,10 +1,12 @@
 // The CPU-driven pipeline's recorder (Recorder.h): a culled batch's direct draws, one plain indexed draw a resident sequence.
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Direct/Recorder.h"
+
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
-#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Recorder.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/IndexPool.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"

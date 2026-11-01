@@ -3,8 +3,9 @@
 // (Api::ShadowExclusionContribution: Features/Shadows/Local's ExclusionBuild), which the shadow participant's payload calls.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF::Draws
 {
@@ -46,6 +47,8 @@ namespace DCLF::Draws
 					mask |= ModeViewBits(m);
 					caster |= !IsOcclusionMode(m);
 				}
+			if (caster && a_object < a_tables.probeCaster.size() && a_tables.probeCaster[a_object])
+				mask |= kViewProbeSunCaster;
 			const std::uint32_t casterKey = caster ? KeySlotOf(a_tables, a_lookups, a_object, BaseTechnique(a_tables, kSunShadowMode, a_object)) : ~0u;
 			std::uint32_t occlusionKey[kOcclusionViews];
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)

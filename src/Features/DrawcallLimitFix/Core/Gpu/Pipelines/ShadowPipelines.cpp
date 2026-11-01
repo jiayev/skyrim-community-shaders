@@ -4,43 +4,43 @@
 // volk must precede every Vulkan header in this translation unit.
 #include <rhi_interop_vulkan.h>
 
-#include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/EngineStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/EngineStates.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
-#include "RenderGraph/RenderGraphRuntime.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/SpirvReflection.h"
-#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
-#include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
-#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Lookups.h"
+#include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Shading/VertexInput.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 #include "ShaderCache.h"
 
 #include <Tracy/Tracy.hpp>
 
-#include <OpenRenderGraph/GraphHost.h>
 #include <ORGModuleServices/PipelineService.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <rhi_helpers.h>
 
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesImpl.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 #include <algorithm>
 #include <atomic>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
-#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesImpl.h"
 
 namespace DCLF
 {
@@ -174,7 +174,7 @@ namespace DCLF
 			return;
 		}
 		const ShadowRasterState rasterState = (*input->shadowStates)[a_key.viewState - 1];
-		const DXGI_FORMAT depthFormat = input->shadowFormat;
+		const DXGI_FORMAT depthFormat = rasterState.targetFormat == DXGI_FORMAT_UNKNOWN ? input->shadowFormat : rasterState.targetFormat;
 		org::services::PipelineRecipe recipe;
 		recipe.id = fmt::format("dclf.shadow.{:08X}.{:X}.{:016X}.{}", a_key.technique, a_key.rasterFlags, a_key.vertexLayout, a_key.viewState);
 		// Its program's binaries, as the main set's (TryRequest).
@@ -185,11 +185,7 @@ namespace DCLF
 			return BuildShadow(device, layout, key, &a_program, depthFormat, rasterState);
 		};
 		recipe.build = [build, program] { return build(*program); };
-		auto live = MakeLive(recipe.id, ShaderPrograms::SourcePathOf(*input->utility), *program,
-			[technique = a_key.technique, utility = input->utility](ShaderPrograms::Rebuilt<ShaderPrograms::ShadowProgram> a_done) {
-				ShaderPrograms::Get().RebuildShadow(technique, *utility, std::move(a_done));
-			},
-			build);
+		auto live = MakeLive(recipe.id, ShaderPrograms::SourcePathOf(*input->utility), *program, [technique = a_key.technique, utility = input->utility](ShaderPrograms::Rebuilt<ShaderPrograms::ShadowProgram> a_done) { ShaderPrograms::Get().RebuildShadow(technique, *utility, std::move(a_done)); }, build);
 		s.entries.try_emplace(a_key);
 		(void)service.Request(std::move(recipe),
 			[completions = completions, key = a_key, generation = s.generation, live = std::move(live)](const org::services::PipelineArtifact& a_artifact) {
@@ -259,8 +255,7 @@ namespace DCLF
 			a_version.pipelines.assign(s.setPipelines.begin(), s.setPipelines.begin() + admitted);
 			a_version.layouts.assign(s.layouts.begin(), s.layouts.begin() + admitted);
 			a_version.discards.assign(s.discards.begin(), s.discards.begin() + admitted);
-			return true;
-		}, [](const ShadowPipelineKey&) {});
+			return true; }, [](const ShadowPipelineKey&) {});
 	}
 
 	org::services::PipelinePayload DrawPipelines::Impl::BuildShadow(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, ShadowPipelineKey a_key,
@@ -290,7 +285,7 @@ namespace DCLF
 		return built;
 	}
 
-	std::uint32_t DrawPipelines::ShadowRasterStateId(const D3D11_RASTERIZER_DESC& a_desc, std::uint32_t a_renderMode)
+	std::uint32_t DrawPipelines::ShadowRasterStateId(const D3D11_RASTERIZER_DESC& a_desc, std::uint32_t a_renderMode, DXGI_FORMAT targetFormat)
 	{
 		// The scissor is not part of it: the epoch's pass is bounded by the view's viewport.
 		if (a_desc.FillMode != D3D11_FILL_SOLID || !a_desc.DepthClipEnable) {
@@ -300,10 +295,12 @@ namespace DCLF
 			return 0;
 		}
 		Impl::ShadowRasterState state;
+		state.targetFormat = targetFormat;
 		state.depthBias = static_cast<float>(a_desc.DepthBias);
 		state.depthBiasClamp = a_desc.DepthBiasClamp;
 		state.slopeScaledDepthBias = a_desc.SlopeScaledDepthBias;
-		state.cull = a_desc.CullMode == D3D11_CULL_NONE ? rhi::CullMode::None : a_desc.CullMode == D3D11_CULL_FRONT ? rhi::CullMode::Front : rhi::CullMode::Back;
+		state.cull = a_desc.CullMode == D3D11_CULL_NONE ? rhi::CullMode::None : a_desc.CullMode == D3D11_CULL_FRONT ? rhi::CullMode::Front :
+		                                                                                                              rhi::CullMode::Back;
 		state.frontCCW = a_desc.FrontCounterClockwise != FALSE;
 		auto& states = impl->shadowRasterStates;
 		for (std::size_t i = 0; i < states.size(); ++i)

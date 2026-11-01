@@ -10,6 +10,7 @@
 #include "Deferred.h"
 #include "Features/Effects11/D3D11StateBackup.h"
 #include "Features/LightLimitFix.h"
+#include "Features/PhysicalSky.h"
 #include "Features/TerrainBlending.h"
 #include "Globals.h"
 #include "Profiler.h"
@@ -664,6 +665,17 @@ namespace EnvironmentProbe
 			auto* coarseMap = Shadows::Map();
 			context->PSSetShaderResources(105, 1, &coarseMap);
 			context->PSSetConstantBuffers(13, 1, &state.sunShadowParameters);
+			// The probe runs outside the world Lighting pass. Bind its sunlight inputs
+			// for the native residual draws as well as the draws in the DCLF view.
+			const auto& sky = globals::features::physicalSky;
+			if (sky.loaded && sky.cbData.enabled) {
+				auto* transmittance = sky.texTrLut ? sky.texTrLut->srv.get() : nullptr;
+				auto* mean = sky.texCloudShadowMean ? sky.texCloudShadowMean->srv.get() : nullptr;
+				auto* volume = sky.texShadowVolume ? sky.texShadowVolume->srv.get() : nullptr;
+				context->PSSetShaderResources(61, 1, &transmittance);
+				context->PSSetShaderResources(69, 1, &mean);
+				context->PSSetShaderResources(112, 1, &volume);
+			}
 			auto& llf = globals::features::lightLimitFix;
 			if (llf.loaded && llf.probeLightMasks) {
 				auto* masks = llf.probeLightMasks->srv.get();

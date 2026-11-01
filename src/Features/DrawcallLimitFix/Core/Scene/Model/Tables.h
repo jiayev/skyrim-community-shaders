@@ -22,9 +22,9 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SlotTable.h"
+#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 #include "Features/DrawcallLimitFix/Core/Shading/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
-#include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 
 namespace DCLF
 {
@@ -33,14 +33,14 @@ namespace DCLF
 	/** @brief What a change-log entry changed (SceneTables::changeLog), by the columns its consumers read. */
 	enum ChangeCause : std::uint32_t
 	{
-		kChangeBindings = 1u << 0,    // flags, material, pipeline (the draw's too), the fade distance, whether it has a fade node
+		kChangeBindings = 1u << 0,       // flags, material, pipeline (the draw's too), the fade distance, whether it has a fade node
 		kChangeAncestorValue = 1u << 1,  // the ancestor value (Integrations/LightLimitFix's room index)
-		kChangeRetired2 = 1u << 2,    // retired (was the record's tree animation, never written); noted only within kChangeAll
-		kChangeSkin = 1u << 3,        // skin partitions, palette block (offset and rows)
-		kChangeExtras = 1u << 4,      // the extras block and its rows
-		kChangeShadow = 1u << 5,      // shadow technique and reason, sky technique, shadow material and diffuse
-		kChangeGeometry = 1u << 6,    // geometry slot, the draw's geometry half, face stream, the object's geometry
-		kChangeMembership = 1u << 7,  // residency
+		kChangeRetired2 = 1u << 2,       // retired (was the record's tree animation, never written); noted only within kChangeAll
+		kChangeSkin = 1u << 3,           // skin partitions, palette block (offset and rows)
+		kChangeExtras = 1u << 4,         // the extras block and its rows
+		kChangeShadow = 1u << 5,         // shadow technique and reason, sky technique, shadow material and diffuse
+		kChangeGeometry = 1u << 6,       // geometry slot, the draw's geometry half, face stream, the object's geometry
+		kChangeMembership = 1u << 7,     // residency
 		// Noted beside another cause when a scene revision's shapes change: pipelines (buckets and capacities), the geometry half
 		// and partitions (the draws), shadow and occlusion techniques and rejection (the shadow keys).
 		kChangeStructure = 1u << 8,
@@ -86,7 +86,7 @@ namespace DCLF
 		std::vector<std::uint32_t> materialFrameVersion;
 		// What MainBuild's kept bindings key on, new (NextVersion) whenever a covered value changes: a pipeline's PerGeometry
 		// floats and what its pairs' records read of it (key, permutation; the technique's are its TechniqueRow's).
-		std::vector<std::uint32_t> pipelineBindingVersion;    // parallel to pipelines
+		std::vector<std::uint32_t> pipelineBindingVersion;  // parallel to pipelines
 		// Write stamp of the pipeline family (PipelineFamily), bumped by every write of it (sizes included): the publication copies
 		// the family only when it moved. Pipeline slots are written right after their allocation (AllocatePipelineSlot notes it).
 		std::uint64_t pipelinesStamp = 0;
@@ -104,7 +104,7 @@ namespace DCLF
 		std::uint32_t NextVersion() { return ++versionCounter; }
 		// No shading (MaterialData, EmitColor, SSRParams.w, emissive multiplier, wetness): FrameValues' rows (BindlessShading),
 		// sampled at frame start for the slots the walk names (ShadingItem).
-		std::vector<ObjectAncestorValue> ancestorValue;       // parallel to objects
+		std::vector<ObjectAncestorValue> ancestorValue;  // parallel to objects
 		// The features' table families (Api::TableFamily; Features/TreeWind's trees, the fade roots: Features/Fades/FadeRoots.h): their
 		// columns, stamps, the objects' references into them and their rows' tags. Published with the rest: a family is copied only when its
 		// stamp moved.
@@ -160,10 +160,10 @@ namespace DCLF
 		}
 		// Multi-partition skins (CS_DCLF_SKIN_PARTITIONS): bit i draws partition i along nextPartition from geometryIndex; 0 for
 		// one geometry. A LOD skin's (kMeshLOD under a fade node) is the cumulative superset (row 3), narrowed by the draw.
-		std::vector<std::uint16_t> skinPartitions;            // parallel to objects
+		std::vector<std::uint16_t> skinPartitions;  // parallel to objects
 		// A LOD skin's partitions per level (byte L: level L's row of the engine's table). BuildDraws picks by FadeStateCS's level,
 		// never the node's (+0x152, which GetRenderPasses reads), so the record is written once.
-		std::vector<std::uint32_t> skinLodPartitions;         // parallel to objects
+		std::vector<std::uint32_t> skinLodPartitions;  // parallel to objects
 		// The property that supplied each pipeline's per-frame constants, for RefreshFrameConstants to re-evaluate. (Frame globals
 		// are FrameCapture's.) The coordinator's alone: not published (a publication's is empty).
 		std::vector<RE::BSShaderProperty*> geometryTemplate;  // parallel to pipelines
@@ -171,14 +171,14 @@ namespace DCLF
 		// when made (TechniqueRowFor) and when TechniqueInputs move (RefreshTechniqueRows). Never freed: a few dozen.
 		std::vector<std::uint32_t> techniqueKeys;
 		ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> techniqueRow;  // TechniqueKey -> row
-		std::vector<std::uint32_t> pipelineTechnique;  // parallel to pipelines: its row
+		std::vector<std::uint32_t> pipelineTechnique;                             // parallel to pipelines: its row
 		// The constants packed into pipeline rows: the render thread's pipeline blocks (GeometryPort), applied by the coordinator
 		// (ApplyConstantsPosts), and the technique rows it evaluates from FrameGlobals. A change draws with the next publication.
 		// Without them a pipeline is not drawable (MainReady, MainBuild::PackPipelines).
 		struct PipelineConstantsRow
 		{
 			GeometryConstants constants{};
-			PipelineKey key{};         // what it was evaluated for, with the slot's binding version
+			PipelineKey key{};  // what it was evaluated for, with the slot's binding version
 			std::uint32_t binding = 0;
 			std::uint32_t version = 0;  // NextVersion, whenever it is written
 			bool valid = false;
@@ -188,8 +188,8 @@ namespace DCLF
 		{
 			TechniqueConstants value{};
 			std::uint32_t constantsVersion = 0, bindingVersion = 0;  // the floats', the bindings' (filter modes, the shadow mask)
-			std::uint32_t passDescriptor = 0;  // a pass descriptor of the row's key (the first): what it is evaluated again for
-			TechniqueInputs inputs{};          // the frame sample its last write was made from (the parity's: late or differ)
+			std::uint32_t passDescriptor = 0;                        // a pass descriptor of the row's key (the first): what it is evaluated again for
+			TechniqueInputs inputs{};                                // the frame sample its last write was made from (the parity's: late or differ)
 			bool valid = false;
 		};
 		std::vector<TechniqueConstantsRow> techniqueConstants;  // parallel to techniqueKeys
@@ -212,8 +212,8 @@ namespace DCLF
 		const TechniqueConstantsRow& TechniqueOf(std::size_t a_pipeline) const { return techniqueConstants[pipelineTechnique[a_pipeline]]; }
 		/** @brief Whether the pipeline's technique binds the shadow mask (TechniqueKey's low bit). */
 		bool TechniqueShadowMask(std::size_t a_pipeline) const { return (techniqueKeys[pipelineTechnique[a_pipeline]] & 1u) != 0; }
-		std::vector<PipelinePermutation> permutations;        // parallel to pipelines
-		std::vector<DrawSequence> draws;  // one per object (templates: pipelineIndex is the table index)
+		std::vector<PipelinePermutation> permutations;  // parallel to pipelines
+		std::vector<DrawSequence> draws;                // one per object (templates: pipelineIndex is the table index)
 		// The fixed main ranges (Api/MainRanges.h): each object's slot in its range of the colour segment's second pass, in the order the
 		// range's feature gives (Features/Decals: the decals', in the engine's draw order - group, technique bucket, batch list, chain
 		// position), and each range's slots. The colour epoch writes the draw, or a zero-count one, to that fixed slot so overlapping
@@ -271,6 +271,7 @@ namespace DCLF
 		// The Utility technique each object casts with, without a view's mode bits (ShadowViews.h: ShadowUtilityTechnique), and
 		// why the engine would not draw it into a shadow map. Decided by the scene phase, since every shadow view is drawn before
 		// the accumulate phase. 0 and ShadowReject::NotLighting for a non-caster.
+		std::vector<std::uint8_t> probeCaster;
 		std::vector<std::uint32_t> shadowTechnique;  // parallel to objects
 		std::vector<std::uint8_t> shadowReject;      // parallel to objects (ShadowReject)
 		// Per occlusion view, parallel to objects: the Utility technique the map draws it with (Skylighting::OcclusionTechnique),
@@ -343,6 +344,7 @@ namespace DCLF
 			ID3D11ShaderResourceView* shadowDiffuse = nullptr;
 			const RE::BSShaderMaterial* shadowMaterial = nullptr;
 			float fadeDistance = 0.0f;
+			bool probeCaster = false;
 			std::uint32_t boneOffset = 0, boneRows = 0, extraOffset = kNoExtraRows, shadowTechnique = 0, streamRow = kNoStreamRow;
 			std::array<std::uint32_t, kOcclusionViews> occlusionTechnique{};
 			std::uint32_t sceneFlags = 0;
@@ -369,7 +371,7 @@ namespace DCLF
 		void ClearStreamRow(std::uint32_t a_slot);
 		// An alpha-tested caster's diffuse view and material (its binding key); null otherwise. The shadow build reads only the
 		// material's texture transform, which BSLightingShaderPropertyFloatController moves between Main::Draw and BeforeShadowMaps.
-		std::vector<ID3D11ShaderResourceView*> shadowDiffuse;    // parallel to objects
+		std::vector<ID3D11ShaderResourceView*> shadowDiffuse;     // parallel to objects
 		std::vector<const RE::BSShaderMaterial*> shadowMaterial;  // parallel to objects
 		// The distinct diffuse views among them (a few hundred), so lookups refresh per view rather than per caster.
 		std::vector<ID3D11ShaderResourceView*> shadowTextureSet;
@@ -415,8 +417,16 @@ namespace DCLF
 					a_function(static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining)));
 		}
 		bool MaterialUsed(std::size_t a_slot) const { return BitSet(usedMaterialBits, a_slot); }
-		void UnmarkMaterial(std::uint32_t a_slot) { if (a_slot / 64 < usedMaterialBits.size()) usedMaterialBits[a_slot / 64] &= ~(1ull << (a_slot % 64)); }
-		void UnmarkPipeline(std::uint32_t a_slot) { if (a_slot / 64 < usedPipelineBits.size()) usedPipelineBits[a_slot / 64] &= ~(1ull << (a_slot % 64)); }
+		void UnmarkMaterial(std::uint32_t a_slot)
+		{
+			if (a_slot / 64 < usedMaterialBits.size())
+				usedMaterialBits[a_slot / 64] &= ~(1ull << (a_slot % 64));
+		}
+		void UnmarkPipeline(std::uint32_t a_slot)
+		{
+			if (a_slot / 64 < usedPipelineBits.size())
+				usedPipelineBits[a_slot / 64] &= ~(1ull << (a_slot % 64));
+		}
 		/** @brief The used pipeline set cut to a_slots (pipelineSlots.TrimTop): no bit past the table. */
 		void TrimPipelineUsed(std::uint32_t a_slots)
 		{
@@ -482,7 +492,7 @@ namespace DCLF
 		std::vector<std::uint32_t> objectSeen;
 		// New on every tracked insertion, including detach/reattach and pointer reuse.
 		std::vector<std::uint64_t> objectIdentity;  // parallel to objects; zero for a free slot
-		std::vector<std::uint64_t> objectGroup;  // actor siblings share this ID
+		std::vector<std::uint64_t> objectGroup;     // actor siblings share this ID
 		// Parallel to objects: the flags as the scene phase wrote them. The accumulate phase patches the record in place; the delta
 		// walk restores each patched slot's scene half from here.
 		std::vector<std::uint32_t> sceneFlags;
@@ -503,10 +513,10 @@ namespace DCLF
 		enum RetiredKind : std::uint8_t
 		{
 			kRetiredObject,
-			kRetiredFamilyRow,  // a table family's row (families); extra: the family's index
-			kRetiredExtras,     // slot: the block's row offset
-			kRetiredBones,      // slot: the block's offset, extra: its rows
-			kRetiredStreamRow,  // a vertex stream row (streamRows)
+			kRetiredFamilyRow,       // a table family's row (families); extra: the family's index
+			kRetiredExtras,          // slot: the block's row offset
+			kRetiredBones,           // slot: the block's offset, extra: its rows
+			kRetiredStreamRow,       // a vertex stream row (streamRows)
 			kRetiredMaterialLookup,  // a material slot's bindings to drop (Coordinator::RetireMaterialBinding)
 			kRetiredPipelineLookup,  // a pipeline slot's lookups to drop (its mask binding: Coordinator::RetireMaskBinding)
 			kRetiredGeometrySlot,    // a SlotTable's slot; extra: its generation when freed

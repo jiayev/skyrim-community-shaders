@@ -66,6 +66,7 @@ namespace DCLF::Direct
 		Reflection,
 		FirstPerson,
 		EnvironmentProbe,
+		ProbeSunCaster,
 		kCount
 	};
 	inline constexpr std::size_t kViewTypes = static_cast<std::size_t>(ViewType::kCount);

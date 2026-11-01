@@ -17,6 +17,7 @@
 #include "Globals.h"
 #include "GpuEventTimers.h"
 #include "Rendering/EnvironmentProbe/CameraPass.h"
+#include "Rendering/EnvironmentProbe/Shadows.h"
 #include "Utils/D3D.h"
 
 #include "RenderGraph/RenderGraphRuntime.h"
@@ -326,6 +327,8 @@ namespace DCLF
 							auto texture = resource.try_as<ID3D11Texture2D>();
 							return SUCCEEDED(Util::SaveTextureToFile(globals::d3d::device, globals::d3d::context, *dir / "dclf-shots" / (prefix + name + ".dds"), texture.get()));
 						};
+						if (::EnvironmentProbe::Shadows::Data().enabled && ::EnvironmentProbe::Shadows::Map())
+							save(::EnvironmentProbe::Shadows::Map(), "sun-depth");
 						const bool saved = save(probe.Radiance(), "radiance") && save(probe.Depth(), "distance") && save(probe.Normals(), "normals");
 						logger::info("[DCLF] probe dump {}: {}", prefix, saved ? "saved" : "failed");
 						return;

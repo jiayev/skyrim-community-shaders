@@ -3,17 +3,20 @@
 // Features/Shadows/Engine's handler calls it (ExecuteShadowFrame: Api/ShadowEpochs.h), in its epoch's segment (its traits).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Core/Render/Direct/ShadowSite.h"
-#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
-#include "Features/DrawcallLimitFix/Core/Render/Epochs/ExecutionOwners.h"
+
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SunVolume.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/ShadowSite.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ExecutionOwners.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
-#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Rendering/EnvironmentProbe/Shadows.h"
 
 namespace DCLF
 {
@@ -113,10 +116,11 @@ namespace DCLF
 					layout.rasterStates));
 			const std::uint32_t mapRowOffset = layout.MapOffset() + layout.MapRowOf(a_mode, a_rasterState) * layout.MapRowBytes();
 			a_latch.pipelineMapOffset = static_cast<std::uint32_t>(a_latchBlock.Offset(a_latchSlot)) + mapRowOffset;
+			const auto& row = a_buckets.bucketOfSlot;
+			a_latch.shadowKeyCount = static_cast<std::uint32_t>(row.size());
 			if (!a_write)
 				return;
 			// ReserveShadowLatch sized the row for every key slot.
-			const auto& row = a_buckets.bucketOfSlot;
 			if (row.size() > layout.keySlots)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} shadow key slots past the latch's {}", row.size(), layout.keySlots));
 			if (!row.empty())
@@ -131,11 +135,12 @@ namespace DCLF
 			bool a_write, BuildDrawsLatch& a_latch)
 		{
 			a_latch.slotLayoutsOffset = static_cast<std::uint32_t>(a_latchBlock.Offset(a_latchSlot)) + a_layout.SlotLayoutsOffset();
-			if (!a_write || !a_frame.slotLayouts || a_frame.slotLayouts->empty())
-				return;
-			const auto& layouts = *a_frame.slotLayouts;
-			const std::size_t count = std::min<std::size_t>(layouts.size(), a_layout.keySlots);
-			LatchWrite(a_latchBlock, "shadow slot layouts", a_latchSlot, a_layout.SlotLayoutsOffset(), std::as_bytes(std::span(layouts.data(), count)));
+			const auto slots = a_frame.slotLayouts ? static_cast<std::uint32_t>(a_frame.slotLayouts->size()) : 0u;
+			a_latch.shadowKeyCount = std::min(a_latch.shadowKeyCount, slots);
+			if (slots > a_layout.keySlots)
+				stl::report_and_fail("Drawcall Limit Fix: the shadow key table does not fit its latch");
+			if (a_write && slots)
+				LatchWrite(a_latchBlock, "shadow slot layouts", a_latchSlot, a_layout.SlotLayoutsOffset(), std::as_bytes(std::span(*a_frame.slotLayouts)));
 		}
 
 		/** @brief Writes the sun's full-frustum processes into the frame slot's latch region; returns their offset into the block. */
@@ -311,7 +316,8 @@ namespace DCLF
 					const auto inputCount = static_cast<std::uint32_t>(payload.Inputs());
 					// Frustum culling, no engine-visibility gate. Only class-split modes test the caster class (not the paraboloids).
 					auto latch = ShadowViewLatch(view, inputCount, frameNumber, seedsIndex);
-					const std::uint32_t classFlags = view.casterClass ? kCullVolumetricOnly : view.modeIndex == kParabolicShadowMode ? 0u : kCullCastersOnly;
+					const std::uint32_t classFlags = view.casterClass ? kCullVolumetricOnly : view.modeIndex == kParabolicShadowMode ? 0u :
+					                                                                                                                   kCullCastersOnly;
 					latch.cullFlags = (view.hasViewProj ? (1u | (view.renderMode == 0xE ? kCullNoNearPlane : 0u)) : 0u) | classFlags |
 					                  (view.sunView ? kCullSunEntry : 0u) | KeyWordOf(view.modeIndex);
 					// A sun view's casters below the size threshold (cascades and their volumetric copies; local lights and the occlusion
@@ -324,6 +330,10 @@ namespace DCLF
 					if (view.sunView && shadowSizeProbe.load(std::memory_order_relaxed) >= 0)
 						latch.cullFlags |= kCullSizeProbe;
 					latch.viewBits = ShadowViewBits(view.modeIndex, view.sunView);
+					if (view.targetIndex == kProbeSunTarget) {
+						latch.viewBits = kViewProbeSunCaster;
+						latch.cullFlags |= kCullMinRadius;
+					}
 					// A focus view draws its target's members alone (root slot + 1; an unlisted target draws nothing).
 					if (view.focus) {
 						const auto root = view.focusTarget ? roots.Find(view.focusTarget) : kNoFadeRoot;
@@ -360,7 +370,9 @@ namespace DCLF
 					LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 					// Its list as ShadowViewBits selects the inputs: the paraboloids' the point casters, a clamped mode's the sun's or the spots'.
 					if (a_direct)
-						a_direct->push_back({ view.modeIndex == kParabolicShadowMode ? Direct::ViewType::Point : view.sunView ? Direct::ViewType::Sun : Direct::ViewType::Spot,
+						a_direct->push_back({ view.targetIndex == kProbeSunTarget ? Direct::ViewType::ProbeSunCaster : view.modeIndex == kParabolicShadowMode ? Direct::ViewType::Point :
+																												   view.sunView                               ? Direct::ViewType::Sun :
+																																								Direct::ViewType::Spot,
 							slot, index, latch });
 					Diagnostics::Notify(Diagnostics::ShadowViewLatched{ view, latch, frameNumber, payload, shadowStats });
 					resources.labels.push_back({ view.viewId, view.renderMode, slot });
@@ -664,6 +676,35 @@ namespace DCLF
 		}
 		const auto revisionShape = revision.shape->Value<ShadowVariants>()->shapes.front();
 		const ShadowFrame& target = *revisionShape;
+		bool probeSun = false;
+		if (!layouts.empty() && layouts.back().target == kProbeSunTarget && Extensions::ViewOn(ActiveToggles(), Api::EngineView::EnvironmentProbe)) {
+			const auto index = layouts.size() - 1;
+			const auto& layout = layouts[index];
+			if (index < target.views.size() && target.views[index].target == kProbeSunTarget &&
+				target.rows && index < target.rows->size() && !(*target.rows)[index].pipelines.empty()) {
+				auto* camera = ::EnvironmentProbe::Shadows::PrepareDclf();
+				if (camera && ::EnvironmentProbe::Shadows::Target() == resources->depthTexture[kProbeSunTarget]) {
+					auto& view = pending.emplace_back();
+					view.slot = layout.slot;
+					view.targetIndex = layout.target;
+					view.modeIndex = layout.modeIndex;
+					view.renderMode = PassCapture::kFirstShadowMode + view.modeIndex;
+					view.rasterState = layout.rasterState;
+					view.width = layout.width;
+					view.height = layout.height;
+					view.dsvFormat = DXGI_FORMAT_D32_FLOAT;
+					ShadowCameras::Camera matrices;
+					ShadowCameras::CameraMatrices(*camera, matrices);
+					view.eye = { matrices.eye[0], matrices.eye[1], matrices.eye[2] };
+					ShadowCameras::Block(matrices, view.perFrame.data());
+					view.perFrameBytes = ShadowCameras::kBlockBytes;
+					std::memcpy(view.viewProj.data(), reinterpret_cast<const float*>(view.perFrame.data()) + 32, sizeof(view.viewProj));
+					view.hasViewProj = true;
+					globals::d3d::context->ClearDepthStencilView(::EnvironmentProbe::Shadows::DepthView(), D3D11_CLEAR_DEPTH, 1, 0);
+					probeSun = true;
+				}
+			}
+		}
 		// Clamped to the latch the producer sized (ReserveShadowLatch).
 		if (in.sunEntryProcesses.size() > target.latchLayout.sunProcesses) {
 			++impl->revisions.latchClamped[epoch];
@@ -729,8 +770,7 @@ namespace DCLF
 			blocksMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - blocksStart).count();
 			Draws::LogShadowEpoch(commit);
 			TracyCZoneEnd(shadowViewsZone);
-			bodyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bodyStart).count();
-		}, owners.Handle());
+			bodyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bodyStart).count(); }, owners.Handle());
 		const double totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		shadowStats.prepareMs += prepareMs;
 		shadowStats.inputsMs += inputsMs;
@@ -741,6 +781,8 @@ namespace DCLF
 			logger::error("[DCLF] the shadow epoch failed; the render graph is disabled");
 			return notReady(ShadowNotReady::Epoch);
 		}
+		if (probeSun)
+			::EnvironmentProbe::Shadows::DclfSubmitted();
 		engine.NoteShadowEpochDrawn(*ahead, modeUsed, frameNumber, mapsDrawn, occlusionMs, shadowStats);
 		// The revision report's "occlusion ... (in the shadow epoch)".
 		impl->revisions.occlusionSubmitted += mapsDrawn != 0;

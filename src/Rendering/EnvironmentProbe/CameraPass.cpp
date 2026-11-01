@@ -12,15 +12,49 @@ namespace EnvironmentProbe
 		return pass;
 	}
 
+	bool CameraPass::PrepareRequest(Request& request)
+	{
+		if (!enabled)
+			return false;
+		const auto frame = globals::state->frameCount;
+		if (resetPending.exchange(false)) {
+			validFaces = 0;
+			anchor.Reset();
+			anchorFrame = UINT32_MAX;
+		}
+		if (anchorFrame != frame) {
+			const auto* camera = RE::Main::WorldRootCamera();
+			if (!camera)
+				return false;
+			const auto& rotation = camera->world.rotate;
+			const RE::NiPoint3 forward{ rotation.entry[0][0], rotation.entry[1][0], rotation.entry[2][0] };
+			bool discontinuity = false;
+			const auto start = std::chrono::steady_clock::now();
+			anchorReady = anchor.Update(camera->world.translate, forward, anchorDistance, *globals::game::deltaTime, frame, discontinuity);
+			if (discontinuity || !anchorReady)
+				validFaces = 0;
+			if (anchorReady && globals::state->IsDeveloperMode() && frame % 127 == 0) {
+				const auto offset = anchor.Position() - camera->world.translate;
+				logger::info("[EnvironmentProbeAnchor] frame={} offset=({:.2f},{:.2f},{:.2f}) cpu_us={:.1f} reset={}", frame, offset.x, offset.y, offset.z,
+					std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count(), discontinuity);
+			}
+			anchorFrame = frame;
+		}
+		if (!anchorReady)
+			return false;
+		request.position = anchor.Position();
+		request.faces = mode == Mode::AllFaces ? 0xffu : 1u << (frame & 7u);
+		request.farDistance = FarDistance;
+		request.supplementalSunShadows = supplementalSunShadows;
+		request.asyncShaders = true;
+		return true;
+	}
+
 	void CameraPass::Render()
 	{
 		if (!enabled || lastFrame == globals::state->frameCount)
 			return;
 		lastFrame = globals::state->frameCount;
-		if (resetPending.exchange(false)) {
-			validFaces = 0;
-			anchor.Reset();
-		}
 		valid = false;
 		result = Result::Unavailable;
 		if (REL::Module::IsVR() || !globals::d3d::device || !globals::game::smState->shadowSceneNode[0])
@@ -57,35 +91,9 @@ namespace EnvironmentProbe
 				context->ClearRenderTargetView(depth->rtv.get(), emptyDepth);
 				context->ClearRenderTargetView(normals->rtv.get(), black);
 			}
-			// Image-space draws can replace the cached framebuffer with an orthographic
-			// camera. The world camera retains the actual capture position in both POVs.
-			const auto* camera = RE::Main::WorldRootCamera();
-			if (!camera)
-				return;
-			bool discontinuity;
-			const auto anchorStart = std::chrono::steady_clock::now();
-			const auto& rotation = camera->world.rotate;
-			const RE::NiPoint3 forward{ rotation.entry[0][0], rotation.entry[1][0], rotation.entry[2][0] };
-			if (!anchor.Update(camera->world.translate, forward, anchorDistance, *globals::game::deltaTime, lastFrame, discontinuity)) {
-				validFaces = 0;
-				return;
-			}
-			if (discontinuity)
-				validFaces = 0;
-			const auto position = anchor.Position();
-			if (globals::state->IsDeveloperMode() && lastFrame % 127 == 0) {
-				const auto offset = position - camera->world.translate;
-				logger::info("[EnvironmentProbeAnchor] frame={} offset=({:.2f},{:.2f},{:.2f}) cpu_us={:.1f} reset={}",
-					lastFrame, offset.x, offset.y, offset.z,
-					std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - anchorStart).count(), discontinuity);
-			}
 			Request request;
-			request.position = { position.x, position.y, position.z };
-			request.faces = mode == Mode::AllFaces ? 0xFFu : 1u << (lastFrame & 7u);
-			request.cullDynamic = false;
-			request.supplementalSunShadows = supplementalSunShadows;
-			request.asyncShaders = true;
-			request.farDistance = FarDistance;
+			if (!PrepareRequest(request))
+				return;
 			request.radiance = radiance->rtv.get();
 			request.depth = depth->rtv.get();
 			request.normals = normals->rtv.get();

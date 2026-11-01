@@ -91,7 +91,7 @@ namespace DCLF::SceneCapture
 		std::uint16_t kind = 0;
 		std::uint32_t flags = 0;
 		const void* userData = nullptr;
-		std::uint8_t formType = 0;
+		std::uint8_t formType = 0, baseFormType = 0;
 		bool actor = false;
 		/** @brief Whether the record's reference is an ActorCharacter (by form type). */
 		bool IsActorCharacter() const { return userData && formType == static_cast<std::uint8_t>(RE::FormType::ActorCharacter); }

@@ -26,6 +26,7 @@ namespace EnvironmentProbe
 
 		/** @brief Captures the world camera once per frame, after main world rendering. */
 		void Render();
+		bool PrepareRequest(Request& request);
 		/** @brief Returns the latest successful radiance capture, or null when unavailable. */
 		ID3D11ShaderResourceView* Radiance() const { return valid && !resetPending.load() ? radiance->srv.get() : nullptr; }
 		/** @brief Returns the latest successful radial depth capture in game units. */
@@ -42,6 +43,8 @@ namespace EnvironmentProbe
 
 	private:
 		Anchor anchor;
+		uint32_t anchorFrame = UINT32_MAX;
+		bool anchorReady = false;
 		std::unique_ptr<Texture2D> radiance;
 		std::unique_ptr<Texture2D> depth;
 		std::unique_ptr<Texture2D> normals;

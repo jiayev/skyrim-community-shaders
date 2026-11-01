@@ -52,22 +52,22 @@ namespace DCLF::Scene
 			std::string classifyDiffersFirst;
 			std::uint64_t verdictsChecked = 0, verdictsSkipped = 0, verdictsMissed = 0;
 			std::string firstVerdictMissed;
-			std::uint64_t leafMissing = 0;  // leafStats.missing
+			std::uint64_t leafMissing = 0;                                            // leafStats.missing
 			std::array<double, static_cast<std::size_t>(BuildPart::Count)> partMs{};  // the chunk's PartTimer (CS_DCLF_PROFILE)
 			std::array<double, static_cast<std::size_t>(EvaluateKind::Count)> evaluateKindMs{};
-			CoordinatorMirror::MirrorReadStats mirror;  // mirrorReadSink
+			CoordinatorMirror::MirrorReadStats mirror;                             // mirrorReadSink
 			ankerl::unordered_dense::map<const RE::NiAVObject*, bool> rootMotion;  // RootMovesNow's answers
 		};
 		/** @brief What an evaluation decided for its entry's Tracked, applied by its merge. */
 		struct TrackedDelta
 		{
-			bool entryClassSet = false;                        // resolved once
+			bool entryClassSet = false;  // resolved once
 			Api::EntryClass entryClass = Api::EntryClass::None;
-			bool ownerSet = false;                             // resolved once
+			bool ownerSet = false;  // resolved once
 			Extensions::OwnerClassRule owner;
 			bool verdictSet = false;
 			CoordinatorTracked::Tracked::StaticVerdict verdict;
-			bool candidateSet = false;                         // classified, or its frame verdict changed
+			bool candidateSet = false;  // classified, or its frame verdict changed
 			std::uint32_t candidateFrame = 0;
 			Ineligible candidateReason = Ineligible::None;
 		};
@@ -103,11 +103,12 @@ namespace DCLF::Scene
 			// Slot-free record inputs.
 			std::uint16_t partitionMask = 0;
 			bool lodChain = false;
-			bool skinCandidate = false;  // in this walk's skinnedObjects
-			std::uint32_t boneRows = 0;  // 0 without a palette (or past 240)
+			bool skinCandidate = false;      // in this walk's skinnedObjects
+			std::uint32_t boneRows = 0;      // 0 without a palette (or past 240)
 			std::uint32_t particleRows = 0;  // a particle member's block of the frame's palettes (its palette rows class's rule)
 			std::uint8_t shadowReject = 0;
 			std::uint32_t shadowTechnique = 0;
+			bool probeCaster = false;
 			const RE::BSShaderMaterial* shadowMaterial = nullptr;  // the alpha-tested techniques' diffuse
 			ID3D11ShaderResourceView* shadowDiffuse = nullptr;
 			std::array<std::uint32_t, kOcclusionViews> occlusion{};

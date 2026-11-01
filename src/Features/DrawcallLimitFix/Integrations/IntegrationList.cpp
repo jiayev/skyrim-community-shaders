@@ -10,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Integrations/ExtendedTranslucency/ExtendedTranslucency.h"
 #include "Features/DrawcallLimitFix/Integrations/IBL/IBL.h"
 #include "Features/DrawcallLimitFix/Integrations/LightLimitFix/LightLimitFix.h"
+#include "Features/DrawcallLimitFix/Integrations/PhysicalSky/PhysicalSky.h"
 #include "Features/DrawcallLimitFix/Integrations/Skylighting/Skylighting.h"
 #include "Features/DrawcallLimitFix/Integrations/SubsurfaceScattering/SubsurfaceScattering.h"
 #include "Features/DrawcallLimitFix/Integrations/TerrainBlending/TerrainBlending.h"
@@ -50,6 +51,7 @@ namespace DCLF::Integrations
 			VolumetricShadows::Integration(),
 			ExponentialHeightFog::Integration(),
 			CloudShadows::Integration(),
+			PhysicalSky::Integration(),
 			DynamicCubemaps::Integration(),
 			Skylighting::Integration(),
 			TerrainShadows::Integration(),

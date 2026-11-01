@@ -2,8 +2,11 @@
 // lane reads, and a slot's readiness for a phase.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
+
 #include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
+#include "Features/EnvironmentProbeFeature.h"
+#include "Rendering/EnvironmentProbe/Shadows.h"
 
 namespace DCLF
 {
@@ -106,6 +109,26 @@ namespace DCLF
 		}
 		if (placements.empty() || !plainState || !unclampedState)
 			return false;
+		// The probe uses a separate floating-point depth attachment with two-sided static casters.
+		if (globals::features::environmentProbe.loaded) {
+			::EnvironmentProbe::Shadows::EnsureTarget();
+			if (ImportDepthTexture(kProbeSunTarget, ::EnvironmentProbe::Shadows::Target(), ::EnvironmentProbe::Shadows::DepthView(), kProbeSunTarget)) {
+				D3D11_RASTERIZER_DESC raster{};
+				raster.FillMode = D3D11_FILL_SOLID;
+				raster.CullMode = D3D11_CULL_NONE;
+				// The orthographic near plane is upstream of the entire scene bound. Depths past
+				// the far plane would clamp to the clear value and cannot occlude a receiver.
+				raster.DepthClipEnable = TRUE;
+				raster.SlopeScaledDepthBias = 1.5f;
+				const auto state = DrawPipelines::Get().ShadowRasterStateId(raster, PassCapture::kFirstShadowMode + kSunShadowMode, DXGI_FORMAT_D32_FLOAT);
+				if (state) {
+					readyStates[kSunShadowMode].Add(state, false);
+					D3D11_TEXTURE2D_DESC extent{};
+					::EnvironmentProbe::Shadows::Target()->GetDesc(&extent);
+					add(kSunShadowMode, kProbeSunTarget, 0, 0, extent.Width, extent.Height, state);
+				}
+			}
+		}
 		shadowPlacements = std::move(placements);
 		// A revision input: the next revision reserves the latch and slots (ReserveShadowLatch).
 		shadowHost.PostRevisionInputs();

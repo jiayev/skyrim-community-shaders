@@ -1393,6 +1393,7 @@ namespace DCLF::Scene
 			a_column(a_left.boneOffset, a_right.boneOffset, kChangeSkin);
 			a_column(a_left.boneRows, a_right.boneRows, kChangeSkin);
 			a_column(a_left.shadowTechnique, a_right.shadowTechnique, kChangeShadow);
+			a_column(a_left.probeCaster, a_right.probeCaster, kChangeShadow);
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 				a_column(a_left.occlusionTechnique[v], a_right.occlusionTechnique[v], kChangeShadow);
 			a_column(a_left.streamRow, a_right.streamRow, kChangeAll);

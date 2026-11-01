@@ -49,7 +49,7 @@ namespace DCLF
 		constexpr std::uint16_t kCadenceMask = static_cast<std::uint16_t>(((1u << Direct::kViewTypes) - 1u) & ~(1u << static_cast<std::uint32_t>(Direct::ViewType::Main)));
 
 		constexpr std::string_view kCpuViewNames[] = { "main", "decal", "forward", "refraction", "sun", "spot", "point", "sky", "precipitation", "reflection",
-			"first-person", "environment-probe" };
+			"first-person", "environment-probe", "probe-sun-caster" };
 		static_assert(std::size(kCpuViewNames) == Direct::kViewTypes);
 
 		// The features' toggles (RegisterToggle), in registration order: their strings (the table's entries view them), their anchors and

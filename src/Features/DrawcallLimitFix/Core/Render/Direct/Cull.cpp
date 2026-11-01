@@ -46,7 +46,7 @@ namespace DCLF::Direct
 		bool ShadowFamily(ViewType a_type)
 		{
 			return a_type == ViewType::Sun || a_type == ViewType::Spot || a_type == ViewType::Point || a_type == ViewType::SkyOccluder ||
-			       a_type == ViewType::PrecipOccluder;
+			       a_type == ViewType::PrecipOccluder || a_type == ViewType::ProbeSunCaster;
 		}
 
 		// ---- The frustum stamps: per object slot, the frame its bound was last in the main camera's frustum (and portals), and whether

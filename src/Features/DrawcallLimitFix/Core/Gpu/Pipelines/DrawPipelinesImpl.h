@@ -715,6 +715,7 @@ namespace DCLF
 		// Render thread: the shadow view rasterizer states by id - 1; the lane reads the posted copy (FrameInput::shadowStates).
 		struct ShadowRasterState
 		{
+			DXGI_FORMAT targetFormat = DXGI_FORMAT_UNKNOWN;
 			float depthBias = 0.0f;
 			float depthBiasClamp = 0.0f;
 			float slopeScaledDepthBias = 0.0f;

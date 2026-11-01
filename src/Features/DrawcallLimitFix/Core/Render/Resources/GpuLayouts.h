@@ -53,9 +53,10 @@ namespace DCLF::Draws
 	// alone (FUN_1414b44f0), i.e. the accumulation-hint-8 volumetric-only casters (kCullVolumetricOnly). [3] depth target 10 as
 	// Skylighting swaps it in; [4] depth target 10 itself, the precipitation mask.
 	constexpr std::uint32_t kFirstOcclusionTarget = 3;
-	constexpr std::uint32_t kShadowDepthTargets = kFirstOcclusionTarget + kOcclusionViews;
+	constexpr std::uint32_t kProbeSunTarget = kFirstOcclusionTarget + kOcclusionViews;
+	constexpr std::uint32_t kShadowDepthTargets = kProbeSunTarget + 1;
 	inline constexpr std::uint32_t OcclusionDepthTarget(std::uint32_t a_view) { return kFirstOcclusionTarget + a_view; }
-	inline constexpr bool IsOcclusionTarget(std::uint32_t a_target) { return a_target >= kFirstOcclusionTarget; }
+	inline constexpr bool IsOcclusionTarget(std::uint32_t a_target) { return a_target >= kFirstOcclusionTarget && a_target < kProbeSunTarget; }
 	// The sequence buffers' start sizes; each grows before its epoch to every draw the tracked objects can produce
 	// (SceneDrawBound). A bound over the device's maxSequenceCount is a hard failure.
 	constexpr std::uint32_t kInitialSequenceDraws = 16384;
@@ -256,8 +257,9 @@ namespace DCLF::Draws
 		return (a_objectFlags & ~kInputDrawable) | (a_drawable ? kInputDrawable : 0u);
 	}
 	// DrawInput::ViewWords::mask and BuildDrawsLatch::viewBits: the view types an object takes part in. BuildDrawsCS.hlsl.
-	constexpr std::uint32_t kViewMainCull = 1u << 0;     // a main-camera visibility candidate (the depth segment's inputs)
-	constexpr std::uint32_t kViewMain = 1u << 1;         // drawn by the main camera (the set's main phase)
+	constexpr std::uint32_t kViewMainCull = 1u << 0;  // a main-camera visibility candidate (the depth segment's inputs)
+	constexpr std::uint32_t kViewMain = 1u << 1;      // drawn by the main camera (the set's main phase)
+	constexpr std::uint32_t kViewProbeSunCaster = 1u << 13;
 	constexpr std::uint32_t kViewSunCaster = 1u << 2;    // the sun's cascades
 	constexpr std::uint32_t kViewSpotCaster = 1u << 3;   // the other clamped views (spot lights)
 	constexpr std::uint32_t kViewPointCaster = 1u << 4;  // the point lights' paraboloids
@@ -272,7 +274,7 @@ namespace DCLF::Draws
 	 * @brief Core's view bits: a view's bit (a feature's own, of either view family) is none of them (Extensions::ResolveViewBits,
 	 * Features/Manifest.cpp).
 	 */
-	constexpr std::uint32_t kCoreViewBits = kViewMainCull | kViewMain | kViewSunCaster | kViewSpotCaster | kViewPointCaster | kViewDecal |
+	constexpr std::uint32_t kCoreViewBits = kViewProbeSunCaster | kViewMainCull | kViewMain | kViewSunCaster | kViewSpotCaster | kViewPointCaster | kViewDecal |
 	                                        kViewForward | kViewRefraction;
 	// The main segments' views of the one main list: depth culls every candidate; colour draws members and every decal's slot.
 	constexpr std::uint32_t kDepthViewBits = kViewMainCull;
@@ -486,7 +488,7 @@ namespace DCLF::Draws
 		// A sun view under kCullMinTexels: the least bound radius (world units) a caster keeps, the size threshold in texels over the view's
 		// texels per world unit (ShadowEpochs.cpp, SunCasterMinRadius). 0 elsewhere.
 		float minCasterRadius;
-		std::uint32_t spare;  // 0
+		std::uint32_t shadowKeyCount;  // key slots covered by both the shadow bucket row and vertex layouts
 		// The latches of the main rows (PayloadLatch: the depth and colour segments', the views'): the device address of the frame's copy
 		// of the installed payload's animated material rows (Api::PassDef::animatedRows: Features/TextureTransforms' pool), which BuildDraws
 		// points a row whose header names one at (MaterialRowHeader::animatedRow). 0: none (every draw reads the installed rows).
@@ -499,7 +501,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kFocusRootNone = 0xFFFFFFFFu;
 	// BuildDrawsLatch::portalProgramsIndex's byte offset (BuildDrawsCS, FadeStateCS and PortalBatchCS read it as kLatchPortalPrograms).
 	constexpr std::uint32_t kLatchPortalProgramsOffset = 320;
-	static_assert(sizeof(BuildDrawsLatch) == 368 && offsetof(BuildDrawsLatch, animatedRowsLo) == 348 && offsetof(BuildDrawsLatch, frameRowsLo) == 356 && offsetof(BuildDrawsLatch, spare) == 344 && offsetof(BuildDrawsLatch, slotLayoutsOffset) == 336 && offsetof(BuildDrawsLatch, minCasterRadius) == 340 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
+	static_assert(sizeof(BuildDrawsLatch) == 368 && offsetof(BuildDrawsLatch, animatedRowsLo) == 348 && offsetof(BuildDrawsLatch, frameRowsLo) == 356 && offsetof(BuildDrawsLatch, shadowKeyCount) == 344 && offsetof(BuildDrawsLatch, slotLayoutsOffset) == 336 && offsetof(BuildDrawsLatch, minCasterRadius) == 340 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
 				  offsetof(BuildDrawsLatch, lightContextsIndex) == 324 && offsetof(BuildDrawsLatch, strictContext) == 332 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, classTableOffset) == 292 &&
 				  offsetof(BuildDrawsLatch, classMapOffset) == 296 && offsetof(BuildDrawsLatch, focusRoot) == 268 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 288 && offsetof(BuildDrawsLatch, inputsIndex) == 256 &&
 				  offsetof(BuildDrawsLatch, viewBits) == 264 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
@@ -608,6 +610,7 @@ namespace DCLF::Draws
 		std::uint64_t vertexLayout = 0;
 		std::uint32_t technique = 0;
 		std::uint32_t reserved = 0;
+		bool operator==(const ShadowSlotEntry&) const = default;
 	};
 	static_assert(sizeof(ShadowSlotEntry) == 16);
 	constexpr std::uint32_t kShadowSlotTechniqueKnown = 0x80000000u;
