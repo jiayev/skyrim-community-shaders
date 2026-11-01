@@ -71,7 +71,11 @@ if(MODE STREQUAL "AIO")
 elseif(MODE STREQUAL "SHADERS")
     read_paths_file(FEATURE_SHADER_PATHS FEATURE_SHADER_PATHS_FILE)
 
-    file(GLOB_RECURSE _package_shaders LIST_DIRECTORIES FALSE "${SOURCE_DIR}/package/Shaders/*")
+    file(
+        GLOB_RECURSE _package_shaders
+        LIST_DIRECTORIES FALSE
+        "${SOURCE_DIR}/package/Shaders/*"
+    )
     list(FILTER _package_shaders EXCLUDE REGEX "/Tests/")
 
     set(_current_shader_rels)
@@ -82,7 +86,11 @@ elseif(MODE STREQUAL "SHADERS")
 
     foreach(_shader_path IN LISTS FEATURE_SHADER_PATHS)
         if(EXISTS "${_shader_path}")
-            file(GLOB_RECURSE _feat_shaders LIST_DIRECTORIES FALSE "${_shader_path}/*")
+            file(
+                GLOB_RECURSE _feat_shaders
+                LIST_DIRECTORIES FALSE
+                "${_shader_path}/*"
+            )
             list(FILTER _feat_shaders EXCLUDE REGEX "/Tests/")
             foreach(_src IN LISTS _feat_shaders)
                 file(RELATIVE_PATH _rel "${_shader_path}" "${_src}")
@@ -92,7 +100,11 @@ elseif(MODE STREQUAL "SHADERS")
     endforeach()
     list(REMOVE_DUPLICATES _current_shader_rels)
 
-    file(GLOB_RECURSE _aio_shaders LIST_DIRECTORIES FALSE "${AIO_DIR}/Shaders/*")
+    file(
+        GLOB_RECURSE _aio_shaders
+        LIST_DIRECTORIES FALSE
+        "${AIO_DIR}/Shaders/*"
+    )
     set(_stale_shader_files)
     foreach(_existing IN LISTS _aio_shaders)
         file(RELATIVE_PATH _rel "${AIO_DIR}/Shaders" "${_existing}")

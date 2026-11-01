@@ -6,5 +6,5 @@ target_include_directories(
   Streamline INTERFACE ${CMAKE_SOURCE_DIR}/extern/Streamline/include)
 
 if(MSVC)
-  target_compile_options(Streamline INTERFACE /wd5103)
+    target_compile_options(Streamline INTERFACE /wd5103)
 endif()

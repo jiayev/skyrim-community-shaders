@@ -101,8 +101,12 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	AddVectoredExceptionHandler(1, &CommunityShadersCrashDump);
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION.string());
 	SKSE::Init(a_skse);
-	if (Plugin::BUILD_DESCRIBE != std::format("v{}", Util::GetFormattedVersion(Plugin::VERSION)))
-		logger::info("Build {}", Util::GetBuildLabel());
+	logger::info("Community Shaders {} | branch: {} | describe: {} | hash: {}{}",
+		Util::GetFormattedVersion(Plugin::VERSION),
+		Plugin::BUILD_BRANCH.empty() ? "(detached)" : Plugin::BUILD_BRANCH,
+		Plugin::BUILD_DESCRIBE,
+		Plugin::BUILD_HASH.empty() ? "unknown" : Plugin::BUILD_HASH,
+		Plugin::BUILD_DIRTY ? " (dirty)" : "");
 	SKSE::AllocTrampoline(1 << 10);
 	return Load();
 }

@@ -22,8 +22,8 @@ op-reordering restructure produces.
 
 ## Prerequisites
 
--   RenderDoc, reachable via the `renderdoc` MCP (`Eval`, `Get-Texture`, `Instance`).
--   SkyrimSE or SkyrimVR launchable with RenderDoc injected (`rd.ExecuteAndInject(<loader>, …,
+- RenderDoc, reachable via the `renderdoc` MCP (`Eval`, `Get-Texture`, `Instance`).
+- SkyrimSE or SkyrimVR launchable with RenderDoc injected (`rd.ExecuteAndInject(<loader>, …,
 hookIntoChildren=True)`, or launch from the RenderDoc GUI) — `<loader>` is `skse64_loader.exe`
     for SE/AE and `sksevr_loader.exe` for VR. The **main menu** already runs the TAA pass, so it is
     a valid capture surface on either edition.
@@ -70,27 +70,27 @@ shader as the "candidate" and reports a meaningless `EQUIVALENT`.
 Confirm with `Instance list` (the `renderdoc` MCP) that an instance shows `capture_loaded: true`
 after capturing.
 
--   The **main menu** runs the TAA pass, but its history rectification is near-passthrough on a
-    static image. **A menu frame does NOT validate any change that flows through the motion-
-    dependent path** (reject / history reproject / clip-to-AABB) — it reads a false `EQUIVALENT`.
-    Use a menu frame only for changes you already know are motion-independent. _(This is how a
-    gate-inversion bug once slipped through: byte-for-byte `EQUIVALENT` on the menu, ~4× off under
-    motion — caught only by re-running on an in-game motion frame and bisecting the commits.)_
--   For anything touching the blend/reject core, capture an **in-game frame with real motion**.
-    Via `dev-bench` + `renderdoc`: load a light **interior** save, then `record replay` a movement
-    recording (continuous teleport along a path = sustained motion vectors) and fire
-    `TargetControl.TriggerCapture(1)` ~3 s into the replay from a **concurrent** `Eval` (the replay
-    call blocks for its whole duration, so the trigger must run in parallel). `camera setPov vanity`
-    gives orbiting motion on SE; in VR the HMD drives the camera, so **player translation is the
-    reliable VR motion source**.
--   **Capture size is the gate.** SE in-game ≈ 1.5 GB; VR interior ≈ 0.5–5.5 GB (loads fine); VR
-    **exterior ≈ 14 GB and wedges/crashes RenderDoc** — stay indoors (e.g. Dragonsreach). A
-    corrupt/oversized `.rdc` needs a full RenderDoc relaunch, not an MCP reconnect.
--   `TargetControl` sometimes returns a **stale** `NewCapture` path — verify the new `.rdc` by
-    timestamp/size on disk, don't trust the returned string.
--   On a huge frame, a full-frame `SetFrameEvent` sweep times out the eval worker — use
-    `taa_candidates(reverse=True, stop_after=1)` (or `max_scan_drawcalls=N`) to scan from the end
-    (post-process is near there) and stop at the first match.
+- The **main menu** runs the TAA pass, but its history rectification is near-passthrough on a
+  static image. **A menu frame does NOT validate any change that flows through the motion-
+  dependent path** (reject / history reproject / clip-to-AABB) — it reads a false `EQUIVALENT`.
+  Use a menu frame only for changes you already know are motion-independent. _(This is how a
+  gate-inversion bug once slipped through: byte-for-byte `EQUIVALENT` on the menu, ~4× off under
+  motion — caught only by re-running on an in-game motion frame and bisecting the commits.)_
+- For anything touching the blend/reject core, capture an **in-game frame with real motion**.
+  Via `dev-bench` + `renderdoc`: load a light **interior** save, then `record replay` a movement
+  recording (continuous teleport along a path = sustained motion vectors) and fire
+  `TargetControl.TriggerCapture(1)` ~3 s into the replay from a **concurrent** `Eval` (the replay
+  call blocks for its whole duration, so the trigger must run in parallel). `camera setPov vanity`
+  gives orbiting motion on SE; in VR the HMD drives the camera, so **player translation is the
+  reliable VR motion source**.
+- **Capture size is the gate.** SE in-game ≈ 1.5 GB; VR interior ≈ 0.5–5.5 GB (loads fine); VR
+  **exterior ≈ 14 GB and wedges/crashes RenderDoc** — stay indoors (e.g. Dragonsreach). A
+  corrupt/oversized `.rdc` needs a full RenderDoc relaunch, not an MCP reconnect.
+- `TargetControl` sometimes returns a **stale** `NewCapture` path — verify the new `.rdc` by
+  timestamp/size on disk, don't trust the returned string.
+- On a huge frame, a full-frame `SetFrameEvent` sweep times out the eval worker — use
+  `taa_candidates(reverse=True, stop_after=1)` (or `max_scan_drawcalls=N`) to scan from the end
+  (post-process is near there) and stop at the first match.
 
 ### 3. Load the harness and run the A/B (via the `renderdoc` MCP `Eval`)
 
@@ -121,8 +121,8 @@ ab(<eventId>,
 shader with slightly different optimization than offline fxc, so even an identical shader leaves
 a small **noise floor** (`baseline_vs_live.mean_abs`, e.g. ~2e-4 on a 10-bit RT). `ab()` reports:
 
--   `noise_floor_mean` — the baseline residue.
--   `verdict`: `EQUIVALENT` if `candidate_vs_live.mean_abs ≤ 3× the floor`, else `DIFFERS`.
+- `noise_floor_mean` — the baseline residue.
+- `verdict`: `EQUIVALENT` if `candidate_vs_live.mean_abs ≤ 3× the floor`, else `DIFFERS`.
 
 Validated on the SE main menu (TAA on, HDR/frame-gen off): the pre-rename `dev` shader read
 `EQUIVALENT` (mean = floor), a deliberately ×0.5 shader read `DIFFERS` (mean ≈ 83× floor, 61%
@@ -150,10 +150,10 @@ ab(cands[0]["eventId"], candidate_dxbc=..., baseline_dxbc=...)
 
 So to point it at a different shader you change only:
 
--   **The pass fingerprint** — pass your shader's distinctive SRV names to `find_candidates()` (no
-    source edit needed). Match by bound resources, not draw index (indices shift frame to frame).
--   **The permutation defines** — compile A′/B with the exact `/D` set the running build used.
--   **The capture state** — pick a frame that actually exercises the code path (see lessons).
+- **The pass fingerprint** — pass your shader's distinctive SRV names to `find_candidates()` (no
+  source edit needed). Match by bound resources, not draw index (indices shift frame to frame).
+- **The permutation defines** — compile A′/B with the exact `/D` set the running build used.
+- **The capture state** — pick a frame that actually exercises the code path (see lessons).
 
 ## Lessons (generalizable RE technique)
 
