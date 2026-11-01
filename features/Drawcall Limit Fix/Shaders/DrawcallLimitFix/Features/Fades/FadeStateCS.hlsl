@@ -10,6 +10,7 @@
 // after the update is published into the frame's output of two (by the scene frame's parity). The builds read the other one,
 // the frame before's (BuildDrawsLatch::fadeStatesIndex), so nothing waits for this pass.
 
+#include "DrawcallLimitFix/CullEye.hlsli"
 #include "DrawcallLimitFix/PortalPrograms.hlsli"
 #include "DrawcallLimitFix/PortalQueries.hlsli"
 
@@ -377,9 +378,9 @@ uint OnVisible(inout FadeNodeState s, FadeRootStatic r, float3 c)
 	return verdict | (drawn ? kFadeVerdictDrawn : 0u);
 }
 
-// The cull's sphere test against the main camera's frustum: the depth segment's view-projection (camera translation folded
-// in, so a world position projects directly), its planes normalised. NoNearPlane (the latch's cull flags, bit 9) drops the
-// near plane, as BuildDraws does.
+// The cull's sphere test against the main camera's frustum: the depth segment's camera-relative view-projection, its planes
+// normalised, and the centre made relative to its eye. NoNearPlane (the latch's cull flags, bit 9) drops the near plane, as
+// BuildDraws does.
 bool InView(float3 a_centre, float a_radius)
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
@@ -388,6 +389,7 @@ bool InView(float3 a_centre, float a_radius)
 	const float4 r1 = asfloat(latch.Load4(LatchOffset + 48));
 	const float4 r2 = asfloat(latch.Load4(LatchOffset + 64));
 	const float4 r3 = asfloat(latch.Load4(LatchOffset + 80));
+	const precise float3 centre = a_centre - LatchCullEye(latch, LatchOffset).xyz;
 	float4 planes[6] = { r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2 };
 	[unroll] for (uint p = 0; p < 6; ++p)
 	{
@@ -396,7 +398,7 @@ bool InView(float3 a_centre, float a_radius)
 		const float length = sqrt(dot(planes[p].xyz, planes[p].xyz));
 		if (length <= 0.0f)
 			continue;
-		if ((dot(planes[p].xyz, a_centre) + planes[p].w) / length < -a_radius)
+		if ((dot(planes[p].xyz, centre) + planes[p].w) / length < -a_radius)
 			return false;
 	}
 	return true;
@@ -610,6 +612,7 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 			if (program >= programCount || (root.Bits & kFadeRootPreprocessed) != 0u) {
 				query.Program = FrustumInView(query.Bound.xyz, query.Bound.w, root.Bits) ? 1u : 0u;
 			} else {
+				query.Bound.w = PortalRadiusWithMargin(query.Bound.w, LatchCullEye(latch, LatchOffset).w);
 				query.Program = program;
 				query.Flags = ((root.Bits & kFadeRootAlwaysDraw) != 0u ? 1u << 11 : 0u) | ((root.Bits & kFadeRootPreprocessed) != 0u ? 1u << 12 : 0u) | ((root.Bits & kFadeRootPreprocessHidden) != 0u ? 1u << 20 : 0u);
 			}

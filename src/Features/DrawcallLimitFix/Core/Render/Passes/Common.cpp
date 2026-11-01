@@ -11,12 +11,8 @@ namespace DCLF::Draws
 {
 	void FoldEyeIntoViewProj(const std::array<float, 16>& a_viewProj, const RE::NiPoint3& a_eye, float (&a_out)[16])
 	{
-		std::memcpy(a_out, a_viewProj.data(), sizeof(a_out));
-		for (std::uint32_t row = 0; row < 4; ++row) {
-			a_out[row * 4 + 3] = a_viewProj[row * 4 + 3] -
-			                     (a_viewProj[row * 4 + 0] * a_eye.x + a_viewProj[row * 4 + 1] * a_eye.y +
-								     a_viewProj[row * 4 + 2] * a_eye.z);
-		}
+		const float eye[3]{ a_eye.x, a_eye.y, a_eye.z };
+		FoldCullEye(a_viewProj.data(), eye, a_out);
 	}
 
 	std::shared_ptr<org::ExternalTextureResource> ImportImage(rhi::Device a_device, const DxvkOrgInteropImageInfo& a_image, org::TextureDescription a_desc,

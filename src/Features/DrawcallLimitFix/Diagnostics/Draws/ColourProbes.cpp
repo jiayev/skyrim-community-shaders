@@ -30,9 +30,11 @@ namespace DCLF::Diagnostics
 					if (!geometry || geometry->worldBound.radius <= 0.0f)
 						continue;
 					const auto& bound = geometry->worldBound;
+					// The latch's ViewProj takes eye-relative positions.
+					const float relative[3]{ bound.center.x - latch.cullEye[0], bound.center.y - latch.cullEye[1], bound.center.z - latch.cullEye[2] };
 					float clip[4];
 					for (std::uint32_t row = 0; row < 4; ++row)
-						clip[row] = latch.viewProj[row * 4] * bound.center.x + latch.viewProj[row * 4 + 1] * bound.center.y + latch.viewProj[row * 4 + 2] * bound.center.z +
+						clip[row] = latch.viewProj[row * 4] * relative[0] + latch.viewProj[row * 4 + 1] * relative[1] + latch.viewProj[row * 4 + 2] * relative[2] +
 						            latch.viewProj[row * 4 + 3];
 					if (clip[3] <= 1.0f)
 						continue;

@@ -1,6 +1,7 @@
 // Drawcall Limit Fix: culls this frame's draw inputs and writes their indirect draw sequences (DrawSequence, Records.h) from the
 // inputs and the geometry table. Compiled to SPIR-V at runtime (ComputeProgram) with BasicRHI's descriptor-heap ABI.
 
+#include "DrawcallLimitFix/CullEye.hlsli"
 #include "DrawcallLimitFix/HzbTest.hlsli"
 #include "DrawcallLimitFix/ParabolicPrograms.hlsli"
 #include "DrawcallLimitFix/PortalPrograms.hlsli"
@@ -202,8 +203,11 @@ static uint VisibilityStamp;
 // The HZB covers a power-of-two area larger than the image: this is the image-to-HZB UV ratio per axis, 16-bit fixed point.
 // Without it the test samples the far-plane padding and the HZB looks empty.
 static uint HzbUvScalePacked;
-// The main pass's view-projection with the camera translation folded in: absolute world positions project directly.
+// The view's camera-relative view-projection, and the eye a world position is made relative to before it projects (CullEye.hlsli).
 static float4x4 ViewProj;
+static float3 CullEye;
+// What a test on absolute positions and planes adds to a bound's radius, so rounding can't cull (CullEye.hlsli).
+static float CullMargin;
 // A shadow view's caster volume (NiCullingProcess::customCullPlanes): absolute world (normal, constant), inside where
 // dot(normal, p) - constant >= 0. CullPlaneMask selects the tested planes; 0 for the main camera.
 static uint CullPlaneMask;
@@ -293,6 +297,9 @@ void LoadViewLatch()
 		CullPlanes[p] = asfloat(latch.Load4(LatchOffset + 96 + p * 16));
 	ViewProj = float4x4(asfloat(latch.Load4(LatchOffset + 32)), asfloat(latch.Load4(LatchOffset + 48)),
 		asfloat(latch.Load4(LatchOffset + 64)), asfloat(latch.Load4(LatchOffset + 80)));
+	const float4 cullEye = LatchCullEye(latch, LatchOffset);
+	CullEye = cullEye.xyz;
+	CullMargin = cullEye.w;
 	PipelineMapOffset = latch.Load(LatchOffset + 192);
 	SlotLayoutsOffset = latch.Load(LatchOffset + 336);
 	MinCasterRadius = asfloat(latch.Load(LatchOffset + 340));
@@ -422,7 +429,7 @@ bool OutsideSunEntry(float4 a_entry)
 			if ((mask & (1u << p)) == 0)
 				continue;
 			const float4 plane = asfloat(latch.Load4(record + 16 + p * 16));
-			outside = dot(plane.xyz, a_entry.xyz) - plane.w < -a_entry.w;
+			outside = dot(plane.xyz, a_entry.xyz) - plane.w < -(a_entry.w + CullMargin);
 		}
 		if (!outside)
 			return false;
@@ -820,7 +827,8 @@ void StageForwardKey(RWByteAddressBuffer sequences, uint a_slot, uint a_object)
 	const float4 forwardSort = ObjectRow(a_object, kObjectForwardSortRow);
 	const uint ordinal = asuint(forwardSort.w);
 	const float3 sortCentre = ordinal != 0 ? forwardSort.xyz : ObjectRow(a_object, kObjectBoundRow).xyz;
-	const float clipW = mul(ViewProj, float4(sortCentre, 1.0)).w;
+	const precise float3 sortRelative = sortCentre - CullEye;
+	const float clipW = mul(ViewProj, float4(sortRelative, 1.0)).w;
 	const uint group = ordinal != 0 ? (asuint(forwardSort.x) * 0x9E3779B1u) ^ (asuint(forwardSort.y) * 0x85EBCA77u) ^ (asuint(forwardSort.z) * 0xC2B2AE3Du) : 0u;
 	const uint stagedAt = a_slot * kSequenceStride;
 	sequences.Store(stagedAt + kSequenceInstanceCount, group);
@@ -833,12 +841,14 @@ void StageForwardKey(RWByteAddressBuffer sequences, uint a_slot, uint a_object)
 // and an object wholly behind the camera fails the near plane (nothing else would reject it).
 bool Culled(float3 boundCentre, float boundRadius)
 {
-	const float3 centre = boundCentre;
+	// The caster volume's planes are absolute: the margin keeps rounding from culling.
 	[unroll] for (uint p = 0; p < 6; ++p)
 	{
-		if ((CullPlaneMask & (1u << p)) && dot(CullPlanes[p].xyz, centre) - CullPlanes[p].w < -boundRadius)
+		if ((CullPlaneMask & (1u << p)) && dot(CullPlanes[p].xyz, boundCentre) - CullPlanes[p].w < -(boundRadius + CullMargin))
 			return true;
 	}
+	// The corners project eye-relative, so large terms never cancel in float.
+	const precise float3 centre = boundCentre - CullEye;
 	float4 planes = float4(1, 1, 1, 1);  // all-corners-outside accumulators: -x, +x, -y, +y
 	float2 depthPlanes = float2(1, 1);   // near, far
 	[unroll] for (uint corner = 0; corner < 8; ++corner)
@@ -859,8 +869,13 @@ bool Culled(float3 boundCentre, float boundRadius)
 
 bool ParabolicRejected(float3 a_centre, float a_radius)
 {
-	const uint code = ParabolicSphereMask(float4(a_centre, a_radius), CullPlanes[0], CullPlanes[1], (CullFlags & 0x200000) != 0);
-	return (CullFlags & 0x100000) != 0 ? (code & 2u) == 0 : (code & 1u) == 0;
+	// Absolute: the margin keeps rounding from culling. The sphere grows. The plane moves only for the back hemisphere, the one whose test
+	// a bound near the plane can fail (Cull.cpp's ApplyPlaneMargin).
+	const bool back = (CullFlags & 0x100000) != 0;
+	const float4 sphere = float4(CullPlanes[0].xyz, CullPlanes[0].w + CullMargin);
+	const float4 plane = float4(CullPlanes[1].xyz, CullPlanes[1].w + (back ? CullMargin : 0.0));
+	const uint code = ParabolicSphereMask(float4(a_centre, a_radius), sphere, plane, (CullFlags & 0x200000) != 0);
+	return back ? (code & 2u) == 0 : (code & 1u) == 0;
 }
 
 // Occlusion against the HZB (HzbTest.hlsli), with diagnostic counters.
@@ -868,6 +883,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 {
 	HzbView view;
 	view.ViewProj = ViewProj;
+	view.Eye = CullEye;
 	view.Index = HzbIndex;
 	view.BaseSize = HzbUnpackSize(HzbSizePacked);
 	view.Mips = HzbMips;
@@ -1019,6 +1035,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 			if (program < programs.Load(kPortalSetBytes)) {
 				query.Program = program;
 				query.Flags = 0;
+				query.Bound.w = PortalRadiusWithMargin(query.Bound.w, CullMargin);
 			}
 		}
 	}
@@ -1103,14 +1120,14 @@ void BuildInput(uint draw, DrawInputWords a_words)
 		RWByteAddressBuffer sunCount = ResourceDescriptorHeap[CountIndex];
 		sunCount.InterlockedAdd(kCountSunTested, 1, sunScratch);
 		const float4 sunBound = ObjectRow(objectIndex, kObjectBoundRow);
-		if (!InSunCascades(sunBound.xyz, sunBound.w)) {
+		if (!InSunCascades(sunBound.xyz, sunBound.w + CullMargin)) {
 			objectWord |= kObjectSunMiss;
 			sunCount.InterlockedAdd(kCountSunMissed, 1, sunScratch);
 		}
 	}
 	if (LocalShadowOffset != 0) {
 		const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);
-		objectWord |= (LocalShadowMask(bound.xyz, bound.w, (input.w & kObjectLandscapeLights) != 0, objectIndex) & 0xFu) << kObjectLocalShadowShift;
+		objectWord |= (LocalShadowMask(bound.xyz, bound.w + CullMargin, (input.w & kObjectLandscapeLights) != 0, objectIndex) & 0xFu) << kObjectLocalShadowShift;
 	}
 	// The drawable bit is the main family's; a shadow view draws every input its bits select.
 	const bool drawable = keyWord != 0 || (input.w & kInputDrawable) != 0;
@@ -1320,7 +1337,7 @@ void BuildInput(uint draw, DrawInputWords a_words)
 			(phase != kPhaseTwo && (Parabolic() ? ParabolicRejected(bound.xyz, bound.w) : Culled(bound.xyz, bound.w)));
 		// A portal-strict point light's view: its cull's rooms, shared nodes and room frusta (StrictGateRejects), by the caster's gate.
 		if (!frustumRejected && phase == kPhaseSingle && StrictContext != 0)
-			frustumRejected = StrictGateRejects(StrictGatesIndex, LightContextsIndex, ObjectGatesIndex, StrictContext - 1, objectIndex, bound.xyz, bound.w);
+			frustumRejected = StrictGateRejects(StrictGatesIndex, LightContextsIndex, ObjectGatesIndex, StrictContext - 1, objectIndex, bound.xyz, bound.w + CullMargin);
 		if (frustumRejected) {
 			count.InterlockedAdd(kCountCulled, 1, scratch);
 		} else if (CullMode() >= 2 && Occluded(bound.xyz, bound.w)) {

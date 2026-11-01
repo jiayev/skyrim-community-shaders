@@ -138,8 +138,8 @@ VS_OUTPUT main(uint a_vertex : SV_VertexID, uint a_instance : SV_InstanceID)
 	adjustedModelPosition.y = dot(input.InstanceData2.yx, scaledModelPosition.xy);
 	adjustedModelPosition.z = scaledModelPosition.z;
 	precise float3 modelPosition = input.InstanceData1.xyz + adjustedModelPosition.xyz;
-	precise float3 worldPosition = modelPosition + translate;
-	precise float4 relativePosition = float4(worldPosition - FrameBuffer::CameraPosAdjust.xyz, 1.0);
+	// The translation is made eye-relative first, so the sum never rounds at world magnitude.
+	precise float4 relativePosition = float4((translate - FrameBuffer::CameraPosAdjust.xyz) + modelPosition, 1.0);
 	precise float4 viewPosition = mul(FrameBuffer::CameraViewProj, relativePosition);
 
 #		ifdef RENDER_DEPTH
@@ -147,7 +147,8 @@ VS_OUTPUT main(uint a_vertex : SV_VertexID, uint a_instance : SV_InstanceID)
 	vsout.Depth.zw = input.InstanceData2.zw;
 #		else
 	vsout.WorldPosition = relativePosition;
-	vsout.PreviousWorldPosition = float4(worldPosition - FrameBuffer::CameraPreviousPosAdjust.xyz, 1.0);
+	precise float4 previousRelativePosition = float4((translate - FrameBuffer::CameraPreviousPosAdjust.xyz) + modelPosition, 1.0);
+	vsout.PreviousWorldPosition = previousRelativePosition;
 	vsout.ViewPosition = viewPosition;
 #		endif  // RENDER_DEPTH
 

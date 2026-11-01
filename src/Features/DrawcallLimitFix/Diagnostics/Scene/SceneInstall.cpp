@@ -51,5 +51,7 @@ namespace DCLF::Diagnostics
 			InstallMirrorWatchPlacement();
 		if (SwitchEnabled(Switch::Census))
 			InstallCensus();
+		if (SwitchEnabled(Switch::PrecisionCensus))
+			InstallPrecisionCensus();
 	}
 }

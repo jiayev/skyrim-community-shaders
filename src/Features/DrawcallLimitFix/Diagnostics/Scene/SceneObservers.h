@@ -13,6 +13,7 @@ namespace DCLF::Diagnostics
 {
 	void InstallRegistrations(bool a_parity);
 	void InstallCensus();
+	void InstallPrecisionCensus();
 	void InstallWalkParity();
 	void InstallChangeLogParity();
 	void InstallResidentParity();

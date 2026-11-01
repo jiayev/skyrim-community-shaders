@@ -138,6 +138,7 @@ namespace DCLF
 			// (Features/TreeLod's CS_DCLF_TREE_LOD_AUDIT is listed here, after CS_DCLF_TRACE_TEXTURE_PATHS.)
 			{ Census, "CS_DCLF_CENSUS", D, N, false,
 				"1: T7a's census, every report: what the engine still draws (the passes registered and not withheld) per view and class (DCLF's verdict for Lighting geometry; shader type and RTTI otherwise)" },
+			{ PrecisionCensus, "CS_DCLF_PRECISION_CENSUS", D, N, false, "1: every 300 frames, what the engine's float translations lose against their parent chains composed in double, by distance from the origin" },
 			{ MirrorWatch, "CS_DCLF_MIRROR_WATCH", D, N, false, "1|<name>|node:|geometry:|transform:|fade:|fadetype:|alpha:|alphas:<form ID>|...|missed:<field>|parity...: hardware watchpoints, with the writers' callers, name the writers the mirror misses (MirrorWatch.h)" },
 			{ TableStart, "CS_DCLF_TABLE_START", D, N, false, "small: the growable GPU tables start with a few rows, so that growth runs early and often" },
 			// (Features/OcclusionMaps' CS_DCLF_SKYLIGHT_DUMP_DIR is listed here, after CS_DCLF_TABLE_START.)
