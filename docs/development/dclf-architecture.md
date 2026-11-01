@@ -188,12 +188,12 @@ DCLF is persistent: once a frame installs claims, no frame hands drawing back to
 -   **The one uncoverable frame** is the one whose colour pass made new main resources: no revision it adopted at its start is
     for them, so its colour epoch is not drawn (logged as `main resources made at frame N's colour pass`); the next frame waits.
 -   **Explicit builds.** While revisions draw, an extension added or removed waits for the build point
-    (`PersistentGraphHost::SetExplicitBuilds`, `BuildIfRequested`), the first thing the frame start does, so the graph a frame's
+    (`GraphHost::SetExplicitBuilds`, `BuildIfRequested`), the first thing the frame start does, so the graph a frame's
     recordings were made on runs through the whole frame. The build point also serves the revision code's owner-thread requests
     (`ServeRevisionRequests`) and posts the revision inputs (`PostRevisionInputs`).
 -   **Tickets for recordings.** A live epoch's recording waits for the slot its unsubmitted ticket holds. The build point gives
     back the tickets of epochs the last frame did not submit (no water in view) while recordings are outstanding
-    (`ReleaseTicketsForRecordings`, `PersistentGraphHost::ReleaseEpochTicket`); the frame-start wait does the same every 16 ms.
+    (`ReleaseTicketsForRecordings`, `GraphHost::ReleaseEpochTicket`); the frame-start wait does the same every 16 ms.
 -   **Revision-driven epochs are required.** DCLF draws only from scene revisions' recordings, which need ORG's async,
     revision-driven epochs (`CS_ORG_ASYNC_EPOCHS`, `CS_ORG_REUSE_RECORDINGS`). Without them `BuildPoint` sets `failed`
     (`Core/Render/Revision/Coverage.cpp`).
@@ -881,7 +881,7 @@ scene tables hold none of them.
     named for shading; it settles a written slot by sampling again until its transforms agree.
 -   **The GPU waits, the render thread never does.** The producer signals the host's frame-wait timeline to the frame's sequence
     number after its uploads, always, also after a failure; every batch of the frame waits for it
-    (`PersistentGraphHost::SetFrameWaitValue`). A late producer costs GPU idle, never render-thread time.
+    (`GraphHost::SetFrameWaitValue`). A late producer costs GPU idle, never render-thread time.
 -   **What the render thread samples itself** at `Kick`: the fade nodes' seeds (before the frame's culls update the nodes,
     [Fades on the GPU](#fades-on-the-gpu)), the tree seeds (the near-list test reads a cull result, `TreeStaticOfNode`), the
     claimed first-person rows and palettes (before `Main::Draw` moves the skeleton into its root's space,
@@ -1078,9 +1078,19 @@ payload's parts by value. A commit builds nothing, prepares nothing and compares
     stop at the row's count. A pass's revision is its buffers' named-version serials plus a shape, never a per-frame counter. A
     breach cost about 2.6 ms a frame of re-prepared tickets (`CS_ORG_EPOCH_STATS=1` reports "prepared again after the feature's
     inputs changed").
--   **Epochs in one compile.** The persistent program compiles once over the whole frame, epochs in frame order, with an executable
-    each (`CS_ORG_EPOCHS`). Authored order is reassigned by epoch rank, then registration order (registration order alone closed a
-    dependency cycle across epochs).
+-   **A graph per epoch.** Each segment of the epoch order is a graph of its own (`CS_ORG_EPOCHS`; ORG's
+    `extern/OpenRenderGraph/docs/persistent-epochs.md`), built from the same extensions with only its passes and their resources. A
+    graph condition names the epochs it changes, so a cell or pipeline switch rebuilds those epochs alone, with no device wait. In
+    the phase-2 tour, a condition change rebuilt epochs 3, 1, 2, 6 and 8 in 0.04-6.75 ms and kept light culling's.
+-   **Open epochs.** An epoch leaves every resource as its last use left it, and the next takes it from there through ORG's ledgers
+    (admitted at submission, predicted from the frame before). Only DXVK's images go back to their home state, on the graphics queue
+    (`CS_ORG_EXTERNAL_HOME`). `CS_ORG_CLOSED=1` makes every epoch closed again.
+    -   The render thread's admission, handoff and commit cost about as much as closed epochs did. In the optimized build
+        (2026-11-01, Whiterun), the submit phases sum to 79 us a frame over the five epochs, against 84 us closed.
+    -   The handoff lists a predicted plan needs are recorded once per frame slot and submitted again.
+-   **In-stream epochs.** The async epochs' graphics work runs inside DXVK's command list (`CS_ORG_IN_STREAM`; "Ordering against
+    D3D11" in `render-graph.md`). DXVK's list is split only where a segment waits for compute work that waits for the stream: 1.3
+    times a frame, the Z-prepass's compute entry, against 6 when every epoch was enqueued behind it.
 
 ### One epoch for every shadow view
 
@@ -1120,8 +1130,8 @@ latch's `drawCount` of 0 skips its view.
     texture transforms. The next frame's state (tree wind, the fade roots' portal batch and states) goes after phase 1's build,
     beside the depth draws. The fade events' copy is last. Scheduled before the member portals, the next frame's state held the
     build behind tree wind and the whole fade chain. The epoch's copy passes (tree LOD's counts, the visibility and fade events'
-    readbacks, the shadow cull counters) prefer the graphics queue: the graph's copy slot is the same VkQueue, and a pass on its own
-    slot split the epoch into another batch with a timeline hop.
+    readbacks, the shadow cull counters) prefer the graphics queue. The graph's copy queue is a transfer-family queue
+    (`CS_ORG_COPY_QUEUE`), where each would add a cross-queue hop and, inside an in-stream epoch, a split of DXVK's list.
 -   **Every queue of DXVK's device is used under DXVK's submission lock** (`RenderGraphRuntime`'s `LockQueue`), the compute submitter
     included. The stream's wait at an epoch's end is on `computeExit`, a semaphore every compute submission signals that lives as
     long as the device (a graph rebuild destroys the graph's own timelines). Why: a compute submission of only semaphore operations
@@ -2784,7 +2794,7 @@ stand-ins and the engine boundary are the GPU path's: the same objects are DCLF'
     visibility decoder.
 -   **Lifetime.** A CPU frame's state (arenas, secondaries, the adopted buffer's wrapper, the executions' owners) is its frame
     slot's, one per two host frame slots. Each frame ends with a signal on DCLF's CPU-frame timeline behind its callbacks; the
-    slot's next frame waits for it before it reuses the slot and its latch regions (`PersistentGraphHost::BeginExternalFrameSlot`).
+    slot's next frame waits for it before it reuses the slot and its latch regions (`GraphHost::BeginExternalFrameSlot`).
     The colour commit writes at the slot's second host slot (`FrameSlot::colourSlot`, switched in `Direct::ExecuteEpoch`): the
     depth and colour commits share the main latch block, and the GPU reads the depth latch when the depth site's work runs, after
     the colour commit. With one region the depth site's GPU readers (the texture transforms' stage word among them) read the colour

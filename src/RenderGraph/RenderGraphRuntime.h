@@ -31,6 +31,7 @@ namespace org::services
 namespace rhi
 {
 	class Timeline;
+	struct TimelinePoint;
 	template <class TObject>
 	class ObjectPtr;
 	using TimelinePtr = ObjectPtr<Timeline>;
@@ -267,6 +268,14 @@ public:
 	bool EmitExternalCommands(void (*a_record)(void* a_user, VkCommandBuffer a_commandBuffer), void* a_user,
 		std::span<const ExternalCommandsWait> a_waits, std::span<const ExternalCommandsWait> a_signals, bool a_bindsState,
 		const char* a_label, bool a_fullBarrier = false);
+	/** @brief An ORG timeline point as the semaphore EmitExternalCommands takes (the frame-wait timeline's too); none when it has none. */
+	static ExternalCommandsWait NativeTimelinePoint(const rhi::TimelinePoint& a_point);
+	/**
+	 * @brief The async epochs whose graphics work goes into DXVK's own command stream (CS_ORG_IN_STREAM, default on when DXVK takes
+	 * external commands; =0 off): external epochs (org::GraphHost::SetExternalEpochs) whose execution ExecuteEpoch emits there, so
+	 * DXVK's command list is split only where a wait needs it. Empty when off.
+	 */
+	std::vector<std::uint32_t> InStreamEpochs() const;
 
 	/**
 	 * @brief Runtime DXC compilation to SPIR-V with BasicRHI's ABI (ORGModuleServices), content-addressed

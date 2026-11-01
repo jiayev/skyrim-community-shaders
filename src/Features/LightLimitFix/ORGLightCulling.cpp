@@ -328,8 +328,11 @@ namespace
 		void GatherStructuralPasses(org::RenderGraph&, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override
 		{
 			const auto epoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::LightCulling);
+			// On the graphics queue with the culling that reads it: on the copy queue it would only start the epoch with a wait on
+			// DXVK's stream, and split DXVK's command list for the culling's wait on it.
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.llf.latch-lights",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<LatchLightsPass>(resources)))
+					.PreferQueue(org::QueueKind::Graphics)
 					.Epoch(epoch));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.llf.build-clusters",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<BuildClustersPass>(resources)))
