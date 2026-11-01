@@ -4,8 +4,6 @@
         "language": "日本語",
         "locale": "ja"
     },
-    "common.active": "有効化",
-    "common.inactive": "無効化",
     "cs_editor.add_new_marker": "新しいマーカーを追加する",
     "cs_editor.ambient_color": "アンビエントカラー",
     "cs_editor.apply": "適用",
@@ -41,5 +39,7 @@
     "ui.copy": "コピー",
     "ui.dont_ask_again": "もう表示しない",
     "ui.search": "検索…",
-    "ui.search_features": "機能を検索…"
+    "ui.search_features": "機能を検索…",
+    "common.active": "有効化",
+    "common.inactive": "無効化"
 }
