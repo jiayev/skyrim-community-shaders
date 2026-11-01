@@ -1,8 +1,8 @@
 #pragma once
 
-#include <d3d11.h>
 #include <chrono>
 #include <cstdint>
+#include <d3d11.h>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -73,15 +73,16 @@ public:
 	 */
 	enum class Segment : std::uint32_t
 	{
-		LightCulling,  // Light Limit Fix, before the main pass
-		ZPrepass,      // Drawcall Limit Fix's depth, inside Main::RenderDepth after the world's depth draws, before kPOST_ZPREPASS_COPY
-		MainOpaque,    // Drawcall Limit Fix's colour, where the main pass's opaque batches end
-		ShadowView,    // Drawcall Limit Fix's shadow casters, inside one shadow view's draw
-		SkyOcclusion,  // Drawcall Limit Fix's variant of Skylighting's occlusion map, after the engine's RenderMask
-		Reflection,    // Drawcall Limit Fix's water reflection faces, after the engine's face render (TESWaterReflections::Update)
-		Forward,       // Drawcall Limit Fix's forward epoch (T7d): blended Lighting, at the engine's blended draw after the composite
+		LightCulling,      // Light Limit Fix, before the main pass
+		ZPrepass,          // Drawcall Limit Fix's depth, inside Main::RenderDepth after the world's depth draws, before kPOST_ZPREPASS_COPY
+		MainOpaque,        // Drawcall Limit Fix's colour, where the main pass's opaque batches end
+		ShadowView,        // Drawcall Limit Fix's shadow casters, inside one shadow view's draw
+		SkyOcclusion,      // Drawcall Limit Fix's variant of Skylighting's occlusion map, after the engine's RenderMask
+		Reflection,        // Drawcall Limit Fix's water reflection faces, after the engine's face render (TESWaterReflections::Update)
+		Forward,           // Drawcall Limit Fix's forward epoch (T7d): blended Lighting, at the engine's blended draw after the composite
 		FirstPersonDepth,  // Drawcall Limit Fix's first-person depth (T7e), at RenderDepth's first-person draw, before kPOST_ZPREPASS_COPY
 		FirstPerson,       // Drawcall Limit Fix's first-person colour (T7e), at Main::RenderFirstPersonView's accumulator render
+		EnvironmentProbe,
 		Count
 	};
 

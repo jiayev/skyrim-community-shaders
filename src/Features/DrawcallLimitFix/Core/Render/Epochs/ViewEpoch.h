@@ -5,13 +5,13 @@
 // their shapes are the revision producer's. Self-contained (features include it); Internal.h includes it in its order.
 
 // volk must precede every Vulkan header in this translation unit (Main/Resources.h first).
-#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Api/Passes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
 #include "Features/DrawcallLimitFix/Core/Render/Main/FrameLayout.h"
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
@@ -64,10 +64,29 @@ namespace DCLF::Draws
 	 *   viewport depth range [0, f1stPersonFarDepthRange].
 	 */
 	// The faces a view's epoch draws at most (Api::ViewShape::faces; the reflection's six).
-	constexpr std::uint32_t kMaxViewFaces = 6;
+	constexpr std::uint32_t kMaxViewFaces = 8;
 	// A face's VS_PerFrame (b12, VS and PS) as the engine writes it for the view's camera: at most a D3D11 block's worth.
 	constexpr std::uint32_t kViewBlockBytes = 1024;
 	static_assert(kViewBlockBytes % 256 == 0);  // pushed per face: 16-byte aligned for the descriptor-buffer model's pointer loads
+
+	// Each octant uses its own uniform buffer descriptors and frame record. The
+	// pooled pipelines read frameBlocks in the record even with a per-face push.
+	struct ProbeBlock
+	{
+		std::array<std::byte, ShadowCameras::kBlockBytes> camera;
+		std::byte cameraPadding[768 - ShadowCameras::kBlockBytes];
+		std::array<std::byte, 400> capture;
+		std::byte capturePadding[512 - 400];
+		std::array<std::byte, 64> shadowParameters;
+		std::byte shadowPadding[256 - 64];
+		DCLF::DrawBindings record;
+		std::byte recordPadding[1024 - sizeof(DCLF::DrawBindings)];
+	};
+	static_assert(sizeof(ProbeBlock) == 2560 && offsetof(ProbeBlock, record) == 1536);
+	inline constexpr std::uint32_t ViewBlockBytes(ViewKind kind)
+	{
+		return kind == ViewKind::EnvironmentProbe ? sizeof(ProbeBlock) : kViewBlockBytes;
+	}
 
 	/** @brief What tells the views apart: their faces, options, epochs and names. */
 	struct ViewTraits
@@ -108,9 +127,9 @@ namespace DCLF::Draws
 		std::uint32_t slots = 0;    // pipeline slots the map holds a word for
 		std::uint32_t buckets = 0;  // entries a face's table holds
 		std::uint32_t faceBytes = kViewBlockBytes;
-		std::uint32_t frameBytes = 0;  // the frame values' (none: a view drawing with the main frame constants)
+		std::uint32_t frameBytes = 0;     // the frame values' (none: a view drawing with the main frame constants)
 		std::uint32_t classMapWords = 0;  // set indices the class map holds a word for (IndirectState::classOf; none: no forward part)
-		static ViewLatchLayout Initial(const ViewTraits& a_traits) { return { a_traits.faces, 64, 4, a_traits.trees ? Extensions::DrawFamilyFaceBytes() : kViewBlockBytes }; }
+		static ViewLatchLayout Initial(const ViewTraits& a_traits) { return { a_traits.faces, 64, 4, a_traits.trees ? Extensions::DrawFamilyFaceBytes() : ViewBlockBytes(a_traits.kind) }; }
 		std::uint32_t MapOffset() const { return faces * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
 		std::uint32_t TableOffset(std::uint32_t a_face) const { return MapOffset() + slots * 4 + a_face * buckets * 8; }
 		// BuildDrawsLatch::classMapOffset's: [set indices, 0, 0, 0], then a word per set index (16-byte aligned: the table ends on 8).
@@ -134,7 +153,7 @@ namespace DCLF::Draws
 		std::shared_ptr<const org::LatchBlock> latch;
 		std::uint32_t width = 0, height = 0;  // a face's render area
 		float depthRange = 1.0f;              // the viewport's maximum depth
-		std::uint32_t sequenceDraws = 0;  // a face's range of the sequences
+		std::uint32_t sequenceDraws = 0;      // a face's range of the sequences
 		// A bucket: the pipeline slots of one pair of pipelines (the depth one: the Z-prepass group's, for a view with a depth pass),
 		// its range of a face's sequences.
 		struct Bucket
@@ -204,6 +223,7 @@ namespace DCLF::Draws
 		std::shared_ptr<org::Buffer> frameConstants;
 		std::uint64_t frameConstantsAddress = 0;
 		std::shared_ptr<const FrameBlockViews> frameBlocks;  // its pass-wide blocks' views (FrameBlockViews), which its record names
+		std::array<std::shared_ptr<const FrameBlockViews>, kMaxViewFaces> probeBlocks;
 		bool sharedLightZeroed = false;
 		// With them, its copies of the main pass's frame buffers (Resources::frameBuffers' shape: Deferred's sun cascades at t98), which its
 		// commit fills from each buffer's CPU mirror (this frame's contents) and names at their registers. Made by SetupView, made again by
@@ -213,6 +233,9 @@ namespace DCLF::Draws
 		// epoch's depth, the engine's kPOST_ZPREPASS_COPY (FUN_1414cb6d0 binds it as the first-person pass's depth).
 		std::shared_ptr<org::PixelBuffer> depth;
 		std::shared_ptr<org::ExternalTextureResource> target;
+		std::array<std::shared_ptr<org::ExternalTextureResource>, 3> probeAttachments;  // radial distance, normal, reversed Z
+		using ProbeTextures = std::array<winrt::com_ptr<ID3D11Texture2D>, 4>;
+		std::shared_ptr<const ProbeTextures> probeTextures;
 		ID3D11Texture2D* targetTexture = nullptr;
 		std::uint32_t width = 0, height = 0;
 		// Per draw family with faces (a trees view's), per face a row (its list the face's) and a list, for the family's units (tree LOD's:
@@ -343,6 +366,7 @@ namespace DCLF::Draws
 		std::span<const std::byte> block;  // written when not empty
 		std::array<float, 16> viewProj{};
 		RE::NiPoint3 eye;
+		std::span<const std::byte> shared;
 	};
 
 	/** @brief What a view's revision shapes read of the frame (RevisionInputs): its resources, targets, render area and depth range. */

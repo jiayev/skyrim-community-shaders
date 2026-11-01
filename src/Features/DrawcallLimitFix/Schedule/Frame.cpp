@@ -48,6 +48,7 @@ namespace DCLF::Schedule
 			{ .id = "depth.committed", .owner = "Core", .where = "Main::RenderDepth's world draw done (the shell's Main_RenderDepth_WorldDrawn hook), the views' work there with it" },
 			{ .id = "opaque.after", .owner = "Features/MainView", .where = "the main pass's opaque batches done (Deferred's Main_RenderWorld_BlendedDecals hook)" },
 			{ .id = "blended.draw", .owner = "Features/Forward", .where = "the main pass's blended draw for the main accumulator (both its call sites, ForwardHooks.cpp)" },
+			{ .id = "environment-probe.capture", .owner = "EnvironmentProbe", .where = "after world rendering, into the camera probe atlas" },
 			{ .id = "fp.colour-render", .owner = "Features/FirstPerson", .where = "Main::RenderFirstPersonView's accumulator render (FirstPersonHooks.cpp)" },
 		};
 
@@ -150,6 +151,8 @@ namespace DCLF::Schedule
 		// In the scene revisions' slot order (an epoch is its row's index); the frame runs them in kFrameOrder. The main epochs decide the
 		// frame's claims (the forward epoch's too while its class is on: its members' passes are withheld with the claims, and only it
 		// draws them).
+		constexpr std::string_view kEnvironmentProbe[] = { "view.latched-copies", "view.build-draws", "view.faces", "view.probe-direct" };
+
 		constexpr Api::EpochDef kEpochs[] = {
 			{ .id = "main.depth", .label = "Z-prepass", .trigger = "depth.committed", .segment = SegmentOf(Segment::ZPrepass), .shape = Api::EpochShape::Main, .shapeIndex = MainOf(Api::MainShape::Depth), .claims = true, .passes = kMainDepth },
 			{ .id = "main.colour", .label = "colour", .trigger = "opaque.after", .segment = SegmentOf(Segment::MainOpaque), .shape = Api::EpochShape::Main, .shapeIndex = MainOf(Api::MainShape::Colour), .claims = true, .passes = kMainColour },
@@ -164,6 +167,7 @@ namespace DCLF::Schedule
 			// barriers and latched copies with it. Its colour epoch keeps sharing its shape.
 			{ .id = "fp.depth", .label = "first-person depth", .trigger = "depth.committed", .segment = SegmentOf(Segment::ZPrepass), .shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::FirstPerson), .hostedBy = "main.depth" },
 			{ .id = "fp.colour", .label = "first-person colour", .trigger = "fp.colour-render", .segment = SegmentOf(Segment::FirstPerson), .shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::FirstPerson), .sharesWith = "fp.depth", .passes = kFirstPersonColour },
+			{ .id = "environment-probe", .label = "environment probe", .trigger = "environment-probe.capture", .segment = SegmentOf(Segment::EnvironmentProbe), .shape = Api::EpochShape::View, .shapeIndex = ViewOf(Api::EngineView::EnvironmentProbe), .passes = kEnvironmentProbe },
 		};
 
 		// Light Limit Fix's light culling: live (its ticket prepared on the host's thread), not a revision's.
@@ -180,6 +184,7 @@ namespace DCLF::Schedule
 			"light-culling",
 			"main.colour",
 			"forward",
+			"environment-probe",
 			"fp.colour",
 		};
 		// The host's async epochs, in its ticket loop's order; the revision-driven ones are those with revision.
@@ -189,6 +194,7 @@ namespace DCLF::Schedule
 			"light-culling",
 			"main.colour",
 			"forward",
+			"environment-probe",
 			"fp.colour",
 		};
 	}

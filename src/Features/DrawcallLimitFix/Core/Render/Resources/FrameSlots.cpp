@@ -4,7 +4,7 @@
 
 namespace DCLF::Draws
 {
-	std::shared_ptr<const FrameBlockViews> FrameBlockViews::Create(rhi::Device a_device, const std::shared_ptr<org::Buffer>& a_frameConstants)
+	std::shared_ptr<const FrameBlockViews> FrameBlockViews::Create(rhi::Device a_device, const std::shared_ptr<org::Buffer>& a_frameConstants, std::optional<std::uint32_t> a_probeOctant)
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
 		auto service = host && host->Graph() ? host->Graph()->RetainDescriptorService() : nullptr;
@@ -20,10 +20,21 @@ namespace DCLF::Draws
 		ForEachFrameBlock([&](bool a_pixel, std::uint32_t a_register, std::uint32_t a_block) {
 			if (!ok)
 				return;
+			rhi::CbvDesc desc{ .byteOffset = FrameBlockOffset(a_pixel, a_register), .byteSize = static_cast<std::uint32_t>(kFrameSlotBytes) };
+			if (a_probeOctant) {
+				if (a_register == kPerFrameVertexRegister)
+					desc = { .byteOffset = offsetof(ProbeBlock, camera), .byteSize = sizeof(ProbeBlock::camera) };
+				else if ((!a_pixel && a_register == 8) || (a_pixel && a_register == 9))
+					desc = { .byteOffset = offsetof(ProbeBlock, capture), .byteSize = sizeof(ProbeBlock::capture) };
+				else if (a_pixel && a_register == 10)
+					desc = { .byteOffset = offsetof(ProbeBlock, shadowParameters), .byteSize = sizeof(ProbeBlock::shadowParameters) };
+				else
+					return;
+				desc.byteOffset += std::uint64_t(*a_probeOctant) * sizeof(ProbeBlock);
+			}
 			const rhi::DescriptorSlot slot = views->service->AllocateDescriptorSlot(rhi::DescriptorHeapType::CbvSrvUav, true);
 			views->slots[a_block] = slot;
 			views->made = a_block + 1;
-			const rhi::CbvDesc desc{ .byteOffset = FrameBlockOffset(a_pixel, a_register), .byteSize = static_cast<std::uint32_t>(kFrameSlotBytes) };
 			if (!slot.heap.valid() || a_device.CreateConstantBufferView(slot, resource, desc) != rhi::Result::Ok) {
 				logger::error("[DCLF] frame block views: the view of {} b{} could not be made", a_pixel ? "PS" : "VS", a_register);
 				ok = false;
@@ -54,10 +65,10 @@ namespace DCLF::Draws
 		if (slot == kFrameSlotSharedLight)
 			return "frame constants: zeroed light block";
 		if (slot == kFrameSlotLighting)
-			return within < sizeof(FrameLighting)                                   ? "frame constants: frame lighting" :
-			       within < sizeof(FrameLighting) + sizeof(LodFadeFrame)           ? "frame constants: LOD fade frame" :
-			       within < kExtrasPixelFrameOffset % kFrameSlotBytes               ? "frame constants: foliage parity" :
-			                                                                         "frame constants PS b13 (extras frame)";
+			return within < sizeof(FrameLighting)                        ? "frame constants: frame lighting" :
+			       within < sizeof(FrameLighting) + sizeof(LodFadeFrame) ? "frame constants: LOD fade frame" :
+			       within < kExtrasPixelFrameOffset % kFrameSlotBytes    ? "frame constants: foliage parity" :
+			                                                               "frame constants PS b13 (extras frame)";
 		if (slot == kFrameSlotRecord)
 			return "frame constants: frame record";
 		return "frame constants: ?";

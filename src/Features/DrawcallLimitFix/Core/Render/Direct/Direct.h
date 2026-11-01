@@ -65,6 +65,7 @@ namespace DCLF::Direct
 		PrecipOccluder,
 		Reflection,
 		FirstPerson,
+		EnvironmentProbe,
 		kCount
 	};
 	inline constexpr std::size_t kViewTypes = static_cast<std::size_t>(ViewType::kCount);
@@ -83,12 +84,12 @@ namespace DCLF::Direct
 	 */
 	enum Experiment : std::uint32_t
 	{
-		kExpCullEarly = 1u << 0,  // CullBatch: a lane outside the frustum dropped before its other tests (gathering its inputs)
-		kExpPortalEarly = 1u << 1,  // Features/Portals' CPU plane set test stopped at the plane that decides it
+		kExpCullEarly = 1u << 0,      // CullBatch: a lane outside the frustum dropped before its other tests (gathering its inputs)
+		kExpPortalEarly = 1u << 1,    // Features/Portals' CPU plane set test stopped at the plane that decides it
 		kExpParabolicPass = 1u << 3,  // CullBatch: a paraboloid view's sphere test over the lanes, four at a time, before the lanes' own tests
-		kExpPrefillLive = 1u << 4,  // MakeViewBatches fills both live columns (the producer's first fill a set and parity skipped)
-		kExpPortalBatch = 1u << 2,  // CullBatch: the main camera lists' portal tests made over the batch's lanes, four at a time (portalTestBatch)
-		kExpIncremental = 1u << 5,  // the view batch sets from the incremental scene lists (Snapshot/SceneLists.cpp), not a full build each
+		kExpPrefillLive = 1u << 4,    // MakeViewBatches fills both live columns (the producer's first fill a set and parity skipped)
+		kExpPortalBatch = 1u << 2,    // CullBatch: the main camera lists' portal tests made over the batch's lanes, four at a time (portalTestBatch)
+		kExpIncremental = 1u << 5,    // the view batch sets from the incremental scene lists (Snapshot/SceneLists.cpp), not a full build each
 		// CullBatch's frustum pass in the widest kernel the CPU has (CullSimd.h: AVX2's 8 lanes, or AVX-512's 16 with kExpCullAvx512), a group
 		// of lanes stopping at the plane all are outside of, with the tombstones folded in; off, the SSE pass of four.
 		kExpCullWide = 1u << 6,
@@ -345,10 +346,10 @@ namespace DCLF::Direct
 		// Added for Cull.cpp (BuildDrawsLatch's other words; Cull.h's builders fill them from the latch):
 		// The view-projection's six clip planes in world space (normalised, inward: -x, +x, -y, +y, near, far), tested as spheres.
 		std::array<std::array<float, 4>, 6> clipPlanes{};
-		float treeHeightBase = 0.0f;  // BSTreeNode::OnVisible's height test: base (treeHeight is its limit; +infinity off)
-		float minCasterRadius = 0.0f;  // kCullMinTexels
+		float treeHeightBase = 0.0f;      // BSTreeNode::OnVisible's height test: base (treeHeight is its limit; +infinity off)
+		float minCasterRadius = 0.0f;     // kCullMinTexels
 		std::uint32_t strictContext = 0;  // a portal-strict point light's atlas entry + 1 (0: not gated)
-		bool sunTest = false;  // the colour pass's sun test (kSunTestOn)
+		bool sunTest = false;             // the colour pass's sun test (kSunTestOn)
 		// The main camera's lists (Main, Decal, Forward, Refraction) culled only for their verdicts (kAccumulated): a per-snapshot list's
 		// per-frame stamp pass. Nothing is kept.
 		bool stampOnly = false;
@@ -379,8 +380,8 @@ namespace DCLF::Direct
 		// Per kept lane (null: every sequence, none as the copy): bits 0-15 the lane's sequences drawn (bit s: its sequence s), bits 16-31
 		// those of them drawn as the LOD cross-fade copy (their object word with kObjectCrossfadeCopy, bit 30).
 		const std::uint32_t* drawMasks = nullptr;
-		rhi::CommandList* commands = nullptr;        // Parallel mode's secondary (null in Serial mode)
-		bool last = false;                           // the view's list ends with it
+		rhi::CommandList* commands = nullptr;  // Parallel mode's secondary (null in Serial mode)
+		bool last = false;                     // the view's list ends with it
 	};
 
 	/** @brief The CS thread's queue of a site's culled batches (MPSC: the cull jobs push, the site's callback drains). */
@@ -394,6 +395,7 @@ namespace DCLF::Direct
 		Colour,       // opaque.after: main colour and decals
 		Forward,      // blended.draw: forward and refraction
 		FirstPerson,  // fp.colour-render
+		EnvironmentProbe,
 		kCount
 	};
 

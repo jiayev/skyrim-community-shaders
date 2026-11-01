@@ -30,6 +30,7 @@ namespace DCLF::Api
 		// The player's first-person skeleton (arms, weapons, shield, magic hands): a depth epoch in RenderDepth and a colour epoch at
 		// Main::RenderFirstPersonView, and their forward part (Features/FirstPerson: its set phase, view bit and engine hooks).
 		FirstPerson,
+		EnvironmentProbe,
 		Count,
 	};
 
@@ -38,6 +39,7 @@ namespace DCLF::Api
 	{
 		CategoryRoot,   // entries filed under the view's category root only: an exclusive phase (the main mask is the view bit alone)
 		LodTechniques,  // a main-eligible slot whose pipeline is a LOD Lighting technique, beside the main phase
+		WorldLighting,  // eligible world Lighting slots with the view's forward pipeline
 	};
 	/** @brief How a view's pipeline slots map to its forward keys (Core's ViewForwardKey, per slot). */
 	struct ViewKeyRule

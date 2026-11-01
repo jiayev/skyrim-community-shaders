@@ -21,19 +21,19 @@
 
 #include <Tracy/Tracy.hpp>
 
-#include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
-#include <ORGModuleServices/PipelineRegistry.h>
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
-#include "RenderGraph/RenderGraphRuntime.h"
-#include "ShaderCache.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Shading/ConstantEvaluator.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+#include "ShaderCache.h"
+#include <ORGModuleServices/PipelineRegistry.h>
 
-#include <ORGModuleServices/ShaderCompiler.h>
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
+#include <ORGModuleServices/ShaderCompiler.h>
 
 namespace DCLF
 {
@@ -336,7 +336,7 @@ namespace DCLF
 		explicit Sources(std::uint64_t a_generation);
 
 		std::uint64_t generation = 0;
-		bool missing = false;  // Lighting.hlsl could not be read: no SPIR-V builds of this generation
+		bool missing = false;                 // Lighting.hlsl could not be read: no SPIR-V builds of this generation
 		std::vector<std::byte> source;        // Lighting.hlsl
 		std::vector<std::byte> pulledSource;  // its pulled builds' (PulledLightingSource); empty when it could not be made
 		std::vector<std::byte> utilitySource;
@@ -705,16 +705,17 @@ namespace DCLF
 		if (missing || (utility && utilitySource.empty()) || (drawBuild && drawFamilySources[d].empty()) ||
 			(familyBuild && (pulled ? familyPulledSources[f] : familySources[f]).empty()) || (pulled && !utility && !drawBuild && !familyBuild && pulledSource.empty()))
 			return false;
-		a_out.source = utility ? utilitySource : drawBuild ? drawFamilySources[d] : familyBuild ? (pulled ? familyPulledSources[f] : familySources[f]) :
-		               pulled  ? pulledSource :
-		                         source;
+		a_out.source = utility ? utilitySource : drawBuild ? drawFamilySources[d] :
+		                                     familyBuild   ? (pulled ? familyPulledSources[f] : familySources[f]) :
+		                                     pulled        ? pulledSource :
+		                                                     source;
 		a_out.fingerprint = utility ? utilityFingerprint : drawBuild ? drawFamilyFingerprints[d] :
-		                    familyBuild                      ? (pulled ? familyPulledFingerprints[f] : familyFingerprints[f]) :
-		                    pulled                           ? pulledFingerprint :
-		                                                       sourceFingerprint;
+		                                               familyBuild   ? (pulled ? familyPulledFingerprints[f] : familyFingerprints[f]) :
+		                                               pulled        ? pulledFingerprint :
+		                                                               sourceFingerprint;
 		a_out.name = utility ? kUtilitySourcePath : drawBuild ? Extensions::DrawFamilyOf(drawFamily).sourcePath.c_str() :
-		             familyBuild                  ? Extensions::ProgramFamilyOf(family).sourcePath.c_str() :
-		                                            kSourcePath;
+		                                        familyBuild   ? Extensions::ProgramFamilyOf(family).sourcePath.c_str() :
+		                                                        kSourcePath;
 		a_out.pulled = pulled;
 		a_out.family = familyBuild;
 		return true;
@@ -725,7 +726,12 @@ namespace DCLF
 		std::mutex mutex;
 		std::mutex requestMutex;
 		bool started = false;
-		struct Pending { const RE::BSShader* shader; bool pixel; std::uint32_t descriptor; };
+		struct Pending
+		{
+			const RE::BSShader* shader;
+			bool pixel;
+			std::uint32_t descriptor;
+		};
 		std::vector<Pending> pending;
 		ankerl::unordered_dense::map<std::uint64_t, StagePtr> stages;
 		// The compiler Configure pointed at DCLF's build executor (requestMutex): the runtime's, which a restart replaces.
@@ -856,14 +862,17 @@ namespace DCLF
 		}
 		ZoneScopedN("CS.DCLF.Shaders.Precompile");
 
-		auto stage = stages->Request(*this, a_shader, a_pixel, a_descriptor);
 		const bool lighting = type == RE::BSShader::Type::Lighting;
-		auto depth = a_pixel && lighting ? stages->Request(*this, a_shader, true, a_descriptor, true) : StagePtr{};
+		const bool probe = lighting && (a_descriptor & static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::EnvironmentProbe));
+		// Octants use the pulled forward pair. Their three outputs and reversed depth
+		// belong to the capture pass, so no main colour or Z-prepass program uses them.
+		auto stage = !probe ? stages->Request(*this, a_shader, a_pixel, a_descriptor) : StagePtr{};
+		auto depth = a_pixel && lighting && !probe ? stages->Request(*this, a_shader, true, a_descriptor, true) : StagePtr{};
 		// The Z-prepass's pulled builds: the vertex stage, and the depth pixel stage; the plain colour draws' pixel stage; and the depth-only
 		// vertex stage of a Z-prepass pipeline without a pixel stage (DCLF_DEPTH_ONLY: Program::pulledDepthVertex).
-		auto pulled = lighting ? stages->Request(*this, a_shader, a_pixel, a_descriptor, a_pixel, nullptr, true) : StagePtr{};
-		auto pulledColour = lighting && a_pixel ? stages->Request(*this, a_shader, true, a_descriptor, false, nullptr, true) : StagePtr{};
-		auto pulledDepthVertex = lighting && !a_pixel ? stages->Request(*this, a_shader, false, a_descriptor, true, nullptr, true) : StagePtr{};
+		auto pulled = lighting ? stages->Request(*this, a_shader, a_pixel, a_descriptor, a_pixel && !probe, nullptr, true) : StagePtr{};
+		auto pulledColour = lighting && a_pixel && !probe ? stages->Request(*this, a_shader, true, a_descriptor, false, nullptr, true) : StagePtr{};
+		auto pulledDepthVertex = lighting && !a_pixel && !probe ? stages->Request(*this, a_shader, false, a_descriptor, true, nullptr, true) : StagePtr{};
 		// A shadow technique's canonical form, which the shadow views' merged pipelines draw with (CanonicalShadowTechnique).
 		static const bool shadowMerge = SwitchOnUnlessZero(Switch::ShadowMerge);
 		const std::uint32_t canonical = !lighting && shadowMerge ? CanonicalShadowTechnique(a_descriptor) : a_descriptor;
@@ -871,7 +880,8 @@ namespace DCLF
 		// Stay inside CS's bounded compilation workers until this task is done, including cache hits. CS's workers, not
 		// DCLF's: the compiles run on DCLF's pool, which never waits on these.
 		for (const auto* requested : { &stage, &depth, &pulled, &pulledColour, &pulledDepthVertex, &merged }) {
-			if (!*requested) continue;
+			if (!*requested)
+				continue;
 			(*requested)->done.wait(false, std::memory_order_acquire);
 			const auto& artifact = *(*requested)->artifact;
 			if (!artifact) {
@@ -888,14 +898,18 @@ namespace DCLF
 		std::vector<StageCache::Pending> pending;
 		{
 			std::lock_guard lock(stages->mutex);
-			if (stages->started) return;
+			if (stages->started)
+				return;
 			stages->started = true;
 			pending.swap(stages->pending);
 		}
 		for (const auto request : pending)
 			SIE::ShaderCache::Instance().compilationPool.detach_task([this, request] {
-				try { Precompile(*request.shader, request.pixel, request.descriptor); }
-				catch (const std::exception& e) { logger::warn("[DCLF] ORG shader precompile failed: {}", e.what()); }
+				try {
+					Precompile(*request.shader, request.pixel, request.descriptor);
+				} catch (const std::exception& e) {
+					logger::warn("[DCLF] ORG shader precompile failed: {}", e.what());
+				}
 
 				SIE::ShaderCache::Instance().NotifyPoolProgress();
 			});
@@ -1060,7 +1074,8 @@ namespace DCLF
 			for (const auto& [bit, artifact] : a_artifacts) {
 				if (!(a_stages & bit))
 					continue;
-				(!*artifact ? failed : artifact->fromCache ? cached : compiled) |= bit;
+				(!*artifact ? failed : artifact->fromCache ? cached :
+															 compiled) |= bit;
 			}
 			const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a_requested).count();
 			logger::warn("[DCLF] on-demand SPIR-V {} done after {:.0f} ms: compiled now [{}], from the disk cache [{}], failed [{}]", a_what, ms,
@@ -1159,10 +1174,14 @@ namespace DCLF
 		// The entry a waiter is: its kind's map, by its id.
 		const auto visit = [&](const StageWaiter& a_waiter, auto&& a_visit) {
 			switch (a_waiter.user) {
-			case StageUser::Shadow: return a_visit(*shadowEntries.find(static_cast<std::uint32_t>(a_waiter.id))->second);
-			case StageUser::Forward: return a_visit(*forwardEntries.find(a_waiter.id)->second);
-			case StageUser::Lighting: return a_visit(*entries.find(a_waiter.id)->second);
-			default: break;
+			case StageUser::Shadow:
+				return a_visit(*shadowEntries.find(static_cast<std::uint32_t>(a_waiter.id))->second);
+			case StageUser::Forward:
+				return a_visit(*forwardEntries.find(a_waiter.id)->second);
+			case StageUser::Lighting:
+				return a_visit(*entries.find(a_waiter.id)->second);
+			default:
+				break;
 			}
 			if (IsDrawFamilyUser(a_waiter.user))
 				return IsDrawFamilyForward(a_waiter.user) ? a_visit(*drawFamilyForwardEntries[DrawFamilyIndexOf(a_waiter.user)]) :

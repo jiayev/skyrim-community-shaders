@@ -37,10 +37,10 @@ namespace DCLF::Api
 	class ViewPointContext
 	{
 	public:
-		std::uint32_t frame = 0;                     // FrameView's number
-		bool failed = false;                         // IndirectDraws::Failed: DCLF claims nothing this session
-		const SceneTables* tables = nullptr;         // the frame's installed tables (FrameView::GetTables)
-		const PipelineCatalog* catalog = nullptr;    // the frame's catalog (FrameCatalog)
+		std::uint32_t frame = 0;                   // FrameView's number
+		bool failed = false;                       // IndirectDraws::Failed: DCLF claims nothing this session
+		const SceneTables* tables = nullptr;       // the frame's installed tables (FrameView::GetTables)
+		const PipelineCatalog* catalog = nullptr;  // the frame's catalog (FrameCatalog)
 	};
 
 	/**
@@ -125,8 +125,8 @@ namespace DCLF::Extensions
 		bool registered = false;  // a feature's registration filled it
 		Api::ToggleId toggle;     // the feature's toggle
 		bool forwardDecals = false;
-		std::uint8_t phase = 0;      // its set phase (the feature's own SetPhase bit)
-		std::uint32_t viewBit = 0;   // its view bit at the GPU cull (the feature's own kView*)
+		std::uint8_t phase = 0;     // its set phase (the feature's own SetPhase bit)
+		std::uint32_t viewBit = 0;  // its view bit at the GPU cull (the feature's own kView*)
 		Api::ViewMembership membership = Api::ViewMembership::LodTechniques;
 		Api::ViewKeyRule keys;
 		// Its shape, the strings owned here (shape's views point into them; Core's ViewTraits too, TraitsOf).
@@ -150,11 +150,12 @@ namespace DCLF::Extensions
 	struct ViewSet
 	{
 		std::array<ViewEntry, kEngineViews> views;
-		std::uint8_t phases = 0;        // every view's set phase
-		std::uint8_t rootPhases = 0;    // the CategoryRoot views' (exclusive phases)
-		std::uint8_t lodPhases = 0;     // the LodTechniques views' (beside the main phase)
-		std::uint32_t viewBits = 0;     // every view's bit
-		std::uint32_t rootViewBits = 0; // the CategoryRoot views' bits
+		std::uint8_t phases = 0;      // every view's set phase
+		std::uint8_t rootPhases = 0;  // the CategoryRoot views' (exclusive phases)
+		std::uint8_t worldLightingPhases = 0;
+		std::uint8_t lodPhases = 0;      // the LodTechniques views' (beside the main phase)
+		std::uint32_t viewBits = 0;      // every view's bit
+		std::uint32_t rootViewBits = 0;  // the CategoryRoot views' bits
 		// The CategoryRoot views, in slot order (their roots, their members' claims, their frame values' rows).
 		std::array<Api::EngineView, kEngineViews> rootViews{};
 		std::uint32_t rootCount = 0;

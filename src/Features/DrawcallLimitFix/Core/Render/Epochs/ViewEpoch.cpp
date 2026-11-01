@@ -6,6 +6,8 @@
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 
 #include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Features/EnvironmentProbe/EnvironmentProbe.h"
+#include "ShaderCache.h"
 
 namespace DCLF
 {
@@ -47,6 +49,14 @@ namespace DCLF
 			if (keys.forwardRasterToForwardPart && RasterForward(pipelineKey.rasterFlags))
 				return false;
 			a_key = ForwardPipelineKey{ pipelineKey.vertexDescriptor, pipelineKey.pixelDescriptor & ~kLightingPixelDeferred, keys.keyFlags | twoSided };
+			if (a_kind == Api::EngineView::EnvironmentProbe) {
+				// Layered, blended and refractive geometry has its own ordering or depth-write policy.
+				if (!Features::EnvironmentProbe::SupportsPipeline(pipelineKey.rasterFlags))
+					return false;
+				const auto capture = static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::EnvironmentProbe);
+				a_key.vertexDescriptor |= capture;
+				a_key.pixelDescriptor |= capture;
+			}
 			return true;
 		}
 
@@ -200,7 +210,12 @@ namespace DCLF
 			const auto base = FramePushWords(a_in.frameConstantsAddress);
 			frame->push.assign(traits.faces, base);
 			for (std::uint32_t f = 0; f < traits.faces; ++f) {
-				const std::uint64_t block = a_resources.blocksAddress + std::uint64_t(f) * kViewBlockBytes;
+				const std::uint64_t block = a_resources.blocksAddress + std::uint64_t(f) * ViewBlockBytes(traits.kind);
+				if (traits.kind == ViewKind::EnvironmentProbe) {
+					const auto record = block + offsetof(ProbeBlock, record);
+					frame->push[f][kFramePushRecord] = static_cast<std::uint32_t>(record);
+					frame->push[f][kFramePushRecord + 1] = static_cast<std::uint32_t>(record >> 32);
+				}
 				for (const bool pixel : { false, true })
 					if (const std::uint32_t word = FramePushWord(pixel, kPerFrameVertexRegister); word != ~0u) {
 						frame->push[f][word] = static_cast<std::uint32_t>(block);
@@ -218,7 +233,7 @@ namespace DCLF
 			for (std::uint32_t f = 0; f < traits.faces; ++f) {
 				const std::uint32_t face = latches.layout.FaceOffset(f);
 				fromZeros.copies.push_back({ a_resources.bucketCounts[f]->Key(), 0, bucketBytes, 0 });
-				fromLatch.copies.push_back({ a_resources.blocks.get(), face, kViewBlockBytes, std::uint64_t(f) * kViewBlockBytes });
+				fromLatch.copies.push_back({ a_resources.blocks.get(), face, ViewBlockBytes(traits.kind), std::uint64_t(f) * ViewBlockBytes(traits.kind) });
 				for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
 					if (frame->faces[d].pipeline.valid() && a_resources.faceRows[d][f] && a_resources.faceLists[d][f]) {
 						const auto& entry = Extensions::DrawFamilies()[d];
@@ -381,7 +396,7 @@ namespace DCLF
 			latch.dispatch[2] = 1;
 			latch.drawCount = inputs;
 			latch.cullFlags = traits.frustumCull ? 1u : 0u;  // the frustum alone, near plane included; 0: untested (BuildDrawsCS CullMode)
-			latch.viewBits = traits.viewBits;  // the main list's members of the view
+			latch.viewBits = traits.viewBits;                // the main list's members of the view
 			latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;
 			latch.placementsIndex = FrameValues::Get().PlacementsIndex();
 			// The root states' seeds (the cull binding RootSeeds: a pooled buffer's index).
@@ -437,13 +452,28 @@ namespace DCLF
 						state.frameTextures[frameBuffer.textureRegister] = GpuTextures::Get().NullBufferIndex(false);
 				}
 			}
-			const auto shared = SharedDataBlock(), feature = FeatureDataBlock();
+			const auto shared = traits.kind == ViewKind::EnvironmentProbe ? a_faces.front().shared : SharedDataBlock();
+			const auto feature = FeatureDataBlock();
 			const std::uint32_t vsMask = (1u << kPerFrameVertexRegister) | (1u << kFrameFogRegister);
 			const std::uint32_t psMask = (1u << kPerFrameVertexRegister) | (shared.empty() ? 0u : 1u << kSharedDataRegister) | (feature.empty() ? 0u : 1u << kFeatureDataRegister);
 			auto& textures = GpuTextures::Get();
 			const std::uint32_t nullIndex = textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u;
 			const DrawBindings record = FrameRecordOf(own->frameConstantsAddress, *own->frameBlocks, vsMask, psMask, state.frameTextures, nullIndex, *InstalledPayload(),
 				{ FrameValues::Get().PlacementsIndex(), FrameValues::Get().PalettesIndex(), FrameValues::Get().ShadingIndex() }, adopted, *scene, frameNumber);
+			if (traits.kind == ViewKind::EnvironmentProbe) {
+				for (std::uint32_t f = 0; f < traits.faces; ++f) {
+					if (f >= a_faces.size() || !a_faces[f].drawn)
+						continue;
+					auto octant = record;
+					ForEachFrameBlock([&](bool pixel, std::uint32_t reg, std::uint32_t ordinal) {
+						if (reg == kPerFrameVertexRegister || (!pixel && reg == 8) || (pixel && (reg == 9 || reg == 10)))
+							octant.frameBlocks[ordinal] = own->probeBlocks[f]->indices[ordinal];
+						else if (!pixel && (reg == kSharedDataRegister || reg == kFeatureDataRegister))
+							octant.frameBlocks[ordinal] = record.frameBlocks[(FramePushWord(true, reg) - kFramePushRegisters) / 2];
+					});
+					LatchWriteValue(latchBlock, labels.blocks, latchSlot, layout.FaceOffset(f) + offsetof(ProbeBlock, record), octant);
+				}
+			}
 			frame(own->frameConstants, &record, sizeof(record), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
 			frame(own->frameConstants, shared.data(), shared.size(), FrameSlotOffset(true, kSharedDataRegister));
 			frame(own->frameConstants, feature.data(), feature.size(), FrameSlotOffset(true, kFeatureDataRegister));

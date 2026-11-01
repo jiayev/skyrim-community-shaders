@@ -4,14 +4,16 @@
 // but for ViewDrawable and ViewSlotReady (the scene lane's commit) and ViewCovered. (A trees view's draw families per face: ViewFaces.cpp; the
 // roots its faces draw: ViewRoots.cpp.)
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/LightLimitFix.h"
+#include "Features/LightLimitFix/ORGLightCulling.h"
 
 namespace DCLF
 {
@@ -161,10 +163,12 @@ namespace DCLF
 			const auto frameTextures = Extensions::RegisteredFrameTextures();
 			const auto frameTextureAt = Extensions::FrameTextureIndices();
 			for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters; ++t) {
+				if (a_state.resources->traits->kind == Api::EngineView::EnvironmentProbe && (t == 35 || t == 36 || t == 104 || t == 105))
+					continue;
 				const auto at = frameTextureAt[t];
-				auto* const view = t == kCharacterLightRegister                               ? Scene::FrameView::Get().GetFrameCapture().characterLightView :
+				auto* const view = t == kCharacterLightRegister                                   ? Scene::FrameView::Get().GetFrameCapture().characterLightView :
 				                   at != Extensions::kNoFrameTexture && at < frameTextures.size() ? static_cast<ID3D11ShaderResourceView*>(frameTextures[at].view()) :
-				                                                                                  nullptr;
+				                                                                                    nullptr;
 				a_state.frameTextures[t] = HoldFrameTexture(a_state.frameTextureViews[t], a_state.frameTextureBindings[t], view, t, view ? 0u : textures.NullIndex(), a_owners);
 			}
 		}
@@ -288,8 +292,7 @@ namespace DCLF
 			reached = Direct::FirstPersonColourReached();
 			if (revision && revision.recordings && !revision.recordings->recordings.empty())
 				SubmitRevisionRecording(a_epoch, *revision.recordings, 0);
-			owners.Seal(scene.get());
-		}, owners.Handle());
+			owners.Seal(scene.get()); }, owners.Handle());
 		if (!ok)
 			return IndirectDraws::ViewSubmit::Failed;
 		return reached ? IndirectDraws::ViewSubmit::Submitted : IndirectDraws::ViewSubmit::NoRevision;
@@ -320,7 +323,7 @@ namespace DCLF
 		}
 		// The CPU pipeline: an epoch of its own is first person's colour (no faces: it draws what the frame's first-person depth culled),
 		// covered by its shape (DecideEpochCoverage); its body opens the first-person colour site, whose callback follows it.
-		if (Direct::CpuFrame())
+		if (Direct::CpuFrame() && a_view != Api::EngineView::EnvironmentProbe)
 			return impl->SubmitDirectViewEpoch(epoch, epochs.segments[a_epoch], a_listed, a_faces);
 		// The selected revision's shape and recording (DecideCoverage covered the view): trusted, its map, buckets and latch are what the
 		// values go into.
@@ -330,6 +333,8 @@ namespace DCLF
 		std::shared_ptr<const ViewFrame> shape;
 		if (!a_faces.empty())
 			shape = revision.shape->Value<ViewFrame>();
+		if (a_view == Api::EngineView::EnvironmentProbe && (!shape || shape->buckets.empty() || !shape->indirect.valid))
+			return ViewSubmit::NoRevision;
 		// A view with frame constants of its own holds its commit's frame textures, not the colour segment's.
 		auto& state = impl->View(a_view);
 		const bool ownFrame = !a_faces.empty() && state.resources && state.resources->frameConstants;
@@ -339,18 +344,63 @@ namespace DCLF
 			return ViewSubmit::NoOwners;
 		if (ownFrame)
 			ResolveViewFrameTextures(state, owners.List());
+		if (a_view == Api::EngineView::EnvironmentProbe) {
+			// Imported Vulkan images borrow the D3D textures. A later public capture
+			// may replace its targets before this execution retires.
+			owners.Add(state.resources->probeTextures);
+			constexpr std::uint32_t registers[] = { 35, 36, 104, 105 };
+			for (std::size_t i = 0; i < a_listed.probeTextures.size(); ++i) {
+				const auto t = registers[i];
+				const auto texture = a_listed.probeTextures[i];
+				if (t == 35 && texture && globals::features::lightLimitFix.orgCulledThisFrame) {
+					// LLF uploaded this frame's same light array into its graph buffer.
+					// Its native WRITE_DISCARD buffer can change backing on every update.
+					std::uint32_t lightList, mainGrid;
+					if (ORGLightCulling::Get().GetShaderResourceIndices(state.frameTextures[t], lightList, mainGrid))
+						continue;
+				}
+				const auto absent = i < 2 ? GpuTextures::Get().NullBufferIndex(false) : GpuTextures::Get().NullIndex();
+				state.frameTextures[t] = HoldFrameTexture(state.frameTextureViews[t], state.frameTextureBindings[t], texture, t, absent, owners.List());
+				if (texture && state.frameTextures[t] == GpuTextures::kInvalid) {
+					static std::array<bool, std::size(registers)> logged{};
+					if (!std::exchange(logged[i], true))
+						logger::info("[DCLF] environment probe waiting for frame texture t{}", t);
+					return ViewSubmit::NoOwners;
+				}
+			}
+		}
 		// A trees view's draw families' rows (ViewFaces.cpp), their textures held with the owners.
 		ViewFamilyRows rows{};
 		const bool trees = !a_faces.empty() && TraitsOf(a_view).trees;
 		if (trees)
 			rows = impl->ViewFaceRows(a_view, *shape, owners.List());
 		std::uint32_t drawn = 0;
-		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(epochs.segments[a_epoch], [&](org::RenderGraph&) {
+		const auto commit = [&] {
 			if (!a_faces.empty())
 				drawn = impl->CommitView(*shape, a_faces, a_listed.inputs, trees ? &rows : nullptr);
 			impl->SubmitRevisionRecording(epoch, *revision.recordings, 0);
 			owners.Seal(impl->scene.get());
-		}, owners.Handle());
+		};
+		bool ok = false;
+		if (Direct::CpuFrame()) {
+			std::vector<Direct::CullView> faces;
+			for (std::uint32_t f = 0; f < a_faces.size(); ++f) {
+				if (!a_faces[f].drawn)
+					continue;
+				BuildDrawsLatch latch{};
+				latch.cullFlags = 1;
+				latch.visibilityStamp = Scene::FrameView::Get().GetFrame() & 0x0FFFFFFFu;
+				FoldEyeIntoViewProj(a_faces[f].viewProj, a_faces[f].eye, latch.viewProj);
+				faces.push_back(Direct::CullViewOfLatch(Direct::ViewType::EnvironmentProbe, f, latch));
+			}
+			bool reached = false;
+			ok = Direct::ExecuteEpoch(epochs.segments[a_epoch], [&] {
+				reached = Direct::ProbeReached(shape, faces);
+				if (reached)
+					commit(); }, owners.Handle()) && reached;
+		} else {
+			ok = RenderGraphRuntime::Get().ExecuteEpoch(epochs.segments[a_epoch], [&](org::RenderGraph&) { commit(); }, owners.Handle());
+		}
 		if (!ok)
 			return ViewSubmit::Failed;
 		if (a_drawn)
@@ -378,7 +428,7 @@ namespace DCLF
 	bool IndirectDraws::ViewSlotReady(Api::EngineView a_view, const void* a_tables, const void* a_lookups, const PipelineCatalog* a_catalog, std::uint32_t a_slot,
 		std::uint32_t* a_why) const
 	{
-		if (Extensions::ViewEntryOf(a_view).membership == Api::ViewMembership::LodTechniques) {
+		if (Extensions::ViewEntryOf(a_view).membership != Api::ViewMembership::CategoryRoot) {
 			// A LodTechniques view's member (the reflection's): the slot's forward pipeline as a_catalog has it for the view's targets
 			// (ViewPipelinesOf's rule, which the revision's shapes resolve from their publication's catalog): the scene lane's commit's, from
 			// its own catalog, never the render thread's per-frame list (the state's slot pipelines, which ResolveViewPipelines assigns whole).
@@ -409,7 +459,7 @@ namespace DCLF
 		// colour signature of its state class, into the main pass's attachments with the view's depth, which must be the main pass's format.
 		if (p < tables.pipelines.size() && RasterForward(tables.pipelines[p].rasterFlags))
 			return (!RasterRefraction(tables.pipelines[p].rasterFlags) && state.forwardCompatible.load(std::memory_order_acquire) &&
-			           GetIndirectState(*a_catalog, a_catalog->targetsGeneration).valid) ||
+					   GetIndirectState(*a_catalog, a_catalog->targetsGeneration).valid) ||
 			       fail(2);
 		ForwardPipelineKey key;
 		if (p >= tables.pipelines.size() || !ViewForwardKey(a_view, tables, p, key))

@@ -3,23 +3,23 @@
 // The CPU pipeline's view batches' internals (ViewBatches.cpp: the full build; SceneLists.cpp: the incremental lists): a lane before its
 // batch is laid out, the resident sequences' sink and rows, the list builder, the batches' layout and sort. The builder thread's alone.
 
+#include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatches.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 
 #include <ORGModuleServices/VersionedBufferBuild.h>
 #include <tbb/concurrent_queue.h>
 
 #include <algorithm>
+#include <ankerl/unordered_dense.h>
 #include <array>
 #include <atomic>
-#include <ankerl/unordered_dense.h>
 #include <bit>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
-#include <memory>
 #include <vector>
 
 namespace DCLF::Draws::detail
@@ -194,7 +194,7 @@ namespace DCLF::Draws::detail
 		{
 			const std::uint32_t p = a_input.partitions;
 			const bool chain = (p & kPartitionChain) != 0;
-			const std::uint32_t span = chain ? (p & kPartitionChainCount) :
+			const std::uint32_t span = chain                          ? (p & kPartitionChainCount) :
 			                           (p == 0 || p == kNoPartitions) ? 1u :
 			                                                            static_cast<std::uint32_t>(std::bit_width(p & (kNoPartitions - 1)));
 			const GeometryDraw* stream = a_input.streamIndex != ~0u ? At(a_input.streamIndex) : nullptr;
@@ -279,7 +279,8 @@ namespace DCLF::Draws::detail
 		out |= (f & kObjectVolumetricOnly) ? Direct::kLaneVolumetricOnly : 0u;
 		out |= (f & kObjectLandscapeLights) ? Direct::kLaneLandscapeLights : 0u;
 		const std::uint32_t terrain = ObjectTerrainGroup(f);
-		out |= terrain == 1 ? Direct::kLaneTerrainGroup1 : terrain == 2 ? Direct::kLaneTerrainGroup2 : 0u;
+		out |= terrain == 1 ? Direct::kLaneTerrainGroup1 : terrain == 2 ? Direct::kLaneTerrainGroup2 :
+		                                                                  0u;
 		return out;
 	}
 
@@ -312,13 +313,15 @@ namespace DCLF::Draws::detail
 		{
 			if (a_in.catalog)
 				zGroups = GetIndirectState(*a_in.catalog, a_in.targetsGeneration).zGroups;
+			probeBit = Extensions::ViewEntryOf(Api::EngineView::EnvironmentProbe).viewBit;
 			reflectionBit = Extensions::ViewEntryOf(Api::EngineView::Reflection).viewBit;
 			firstPersonBit = Extensions::ViewEntryOf(Api::EngineView::FirstPerson).viewBit;
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 				const std::uint32_t bit = Extensions::OcclusionMapOf(v).viewBit;
 				// Features/OcclusionMaps' bits (GpuLayouts.h: 1u << 5 the sky occluder's, 1u << 6 the precipitation mask's).
 				occlusionBits[v] = bit;
-				occlusionView[v] = bit == (1u << 5) ? ViewType::SkyOccluder : bit == (1u << 6) ? ViewType::PrecipOccluder : ViewType::kCount;
+				occlusionView[v] = bit == (1u << 5) ? ViewType::SkyOccluder : bit == (1u << 6) ? ViewType::PrecipOccluder :
+				                                                                                 ViewType::kCount;
 			}
 		}
 
@@ -364,6 +367,8 @@ namespace DCLF::Draws::detail
 				AddMain(ViewType::Forward, a_input, mainRuns(), 0, a_input.pipelineIndex);
 			if (drawable && (mask & kViewRefraction))
 				AddMain(ViewType::Refraction, a_input, mainRuns(), 0, 0).bucketKey = 0;
+			if (drawable && (mask & probeBit))
+				AddMain(ViewType::EnvironmentProbe, a_input, mainRuns(), 0, a_input.pipelineIndex);
 			if (drawable && reflectionBit && (mask & reflectionBit))
 				AddMain(ViewType::Reflection, a_input, mainRuns(), 0, a_input.pipelineIndex);
 			if (drawable && firstPersonBit && (mask & firstPersonBit))
@@ -440,7 +445,7 @@ namespace DCLF::Draws::detail
 		SequenceSink* sinkTarget;
 		std::array<std::vector<Lane>, Direct::kViewTypes>* lanes;
 		std::vector<std::uint32_t> zGroups;
-		std::uint32_t reflectionBit = 0, firstPersonBit = 0;
+		std::uint32_t reflectionBit = 0, firstPersonBit = 0, probeBit = 0;
 		std::array<std::uint32_t, kOcclusionViews> occlusionBits{};
 		std::array<ViewType, kOcclusionViews> occlusionView{};
 	};
@@ -500,7 +505,8 @@ namespace DCLF::Draws::detail
 		bool a_extend = false)
 	{
 		std::sort(a_lanes.begin(), a_lanes.end(),
-			[](const Lane& a, const Lane& b) { return a.k0 != b.k0 ? a.k0 < b.k0 : a.k1 != b.k1 ? a.k1 < b.k1 : a.object < b.object; });
+			[](const Lane& a, const Lane& b) { return a.k0 != b.k0 ? a.k0 < b.k0 : a.k1 != b.k1 ? a.k1 < b.k1 :
+			                                                                                      a.object < b.object; });
 		if (!a_extend)
 			a_bucketOf.clear();
 		// Sorted lanes of one bucket key are mostly adjacent (it is, or follows, their k1): the last key's bucket is kept.

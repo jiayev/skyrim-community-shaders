@@ -13,16 +13,17 @@
 // from), so a lane the GPU path's map sends to no bucket (a forward slot, a slot without its view pipeline) draws nothing there either.
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
 
 #include <Resources/ExternalTextureResource.h>
 #include <Resources/PixelBuffer.h>
 #include <rhi.h>
 
+#include <Tracy/Tracy.hpp>
 #include <algorithm>
 #include <array>
 #include <deque>
@@ -30,7 +31,6 @@
 #include <memory>
 #include <utility>
 #include <vector>
-#include <Tracy/Tracy.hpp>
 
 namespace DCLF::Direct::detail
 {
@@ -73,7 +73,7 @@ namespace DCLF::Direct::detail
 		struct ViewTargets
 		{
 			std::shared_ptr<org::ExternalTextureResource> target;  // the cube, or kPOST_ZPREPASS_COPY (held: the views are of it)
-			rhi::ResourcePtr depth;                                 // the faces' own depth (the reflection's)
+			rhi::ResourcePtr depth;                                // the faces' own depth (the reflection's)
 			rhi::DescriptorHeapPtr rtvHeap, dsvHeap;
 			std::array<rhi::DescriptorSlot, Draws::kMaxViewFaces> colours{};
 			rhi::DescriptorSlot dsv{};
@@ -104,7 +104,7 @@ namespace DCLF::Direct::detail
 			std::shared_ptr<const IndirectState> pipelines;
 			std::shared_ptr<const ViewTargets> targets;
 			std::shared_ptr<const TargetViews> main;  // the depth run's main targets
-			std::array<rhi::Format, 1> colourFormats{};
+			std::array<rhi::Format, 3> colourFormats{};
 			bool valid = false;
 		};
 
@@ -442,6 +442,20 @@ namespace DCLF::Direct::detail
 		}
 	}
 
+	void RecordProbeSite(SiteOut& out, SiteRun& run, const rhi::PassBeginInfo& targets)
+	{
+		const auto& view = *static_cast<const HostedView*>(run.viewState.get());
+		auto begin = targets;
+		begin.width = view.shape->width;
+		begin.height = view.shape->height;
+		begin.maxDepth = 1.0f;
+		begin.debugName = "DCLF direct environment probe octant";
+		for (const auto& face : view.faces) {
+			Barrier(out.Inline(), kAttachments);
+			RecordViewPass(out, run, *face.site, begin, face.bindings);
+		}
+	}
+
 	void RecordFirstPersonSite(SiteOut& a_out, SiteRun& a_run)
 	{
 		const auto* run = static_cast<const FirstPersonRun*>(a_run.viewState.get());
@@ -524,6 +538,51 @@ namespace DCLF::Direct
 		FrameStateOf(*slot).pending.push_back(std::move(view));
 	}
 
+	bool ProbeReached(const std::shared_ptr<const Draws::ViewFrame>& shape, std::span<const CullView> faces)
+	{
+		auto* slot = S().current;
+		if (!slot || !slot->depthRan || !slot->set || !shape || faces.empty())
+			return false;
+		const auto depth = std::ranges::find(slot->runs, Site::Depth, &SiteRun::site);
+		if (depth == slot->runs.end() || !depth->valid)
+			return false;
+		auto view = std::make_shared<HostedView>();
+		view->type = ViewType::EnvironmentProbe;
+		view->shape = shape;
+		view->pipelines = ViewPipelines(*shape, slot->set->buckets[static_cast<std::size_t>(view->type)]);
+		view->colourFormats = { rhi::helpers::ToRHI(DXGI_FORMAT_R16G16B16A16_FLOAT), rhi::helpers::ToRHI(DXGI_FORMAT_R32_FLOAT), rhi::helpers::ToRHI(DXGI_FORMAT_R16G16_UNORM) };
+		const auto base = depth->bindings;
+		auto& run = NewBareRun(*slot, Site::EnvironmentProbe);
+		run.bindings = base;
+		run.valid = true;
+		run.viewState = view;
+		for (const auto& cull : faces) {
+			auto& face = view->faces.emplace_back();
+			face.bindings = base;
+			face.bindings.main = view->pipelines.get();
+			face.bindings.framePush = shape->push[cull.viewIndex];
+			face.bindings.families = {};
+			face.bindings.offsetDepth = false;
+			auto& site = NewView(*slot, run, view->type, cull, false);
+			face.site = &site;
+			site.bindings = &face.bindings;
+			site.secondary = true;
+			site.inheritance.colorFormats = { view->colourFormats.data(), 3u };
+			site.inheritance.depthFormat = rhi::helpers::ToRHI(DXGI_FORMAT_D32_FLOAT);
+			site.inheritance.width = shape->width;
+			site.inheritance.height = shape->height;
+			site.inheritance.maxDepth = 1.0f;
+			site.inheritance.debugName = "DCLF direct environment probe";
+		}
+		OnCullFrame(*slot, [slot, run = &run](const std::shared_ptr<const CullFrame>& frame) {
+			run->cullFrame = frame;
+			for (auto* face : run->views)
+				DispatchCulls(*slot, *run, *face, frame);
+		});
+		SetPending(run);
+		return true;
+	}
+
 	bool FirstPersonColourReached()
 	{
 		auto& s = S();
@@ -572,7 +631,7 @@ namespace DCLF::Direct
 
 	bool ViewSiteLive(std::uint32_t a_view)
 	{
-		if (a_view != Draws::ViewIndex(Api::EngineView::Reflection) && a_view != Draws::ViewIndex(Api::EngineView::FirstPerson))
+		if (a_view != Draws::ViewIndex(Api::EngineView::Reflection) && a_view != Draws::ViewIndex(Api::EngineView::FirstPerson) && a_view != Draws::ViewIndex(Api::EngineView::EnvironmentProbe))
 			return false;
 		const auto kind = static_cast<Api::EngineView>(a_view);
 		return Extensions::ViewRegistered(kind) && Extensions::ViewOn(ActiveToggles(), kind);

@@ -1,9 +1,9 @@
 // The views' entries (see the header): the features' contributions and work, and what the per-object paths read of them.
 
 // Internal.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
 namespace DCLF::Extensions
 {
@@ -63,7 +63,12 @@ namespace DCLF::Extensions
 			for (const auto& entry : a_set.views) {
 				const bool root = entry.membership == Api::ViewMembership::CategoryRoot;
 				a_set.phases |= entry.phase;
-				(root ? a_set.rootPhases : a_set.lodPhases) |= entry.phase;
+				if (root)
+					a_set.rootPhases |= entry.phase;
+				else if (entry.membership == Api::ViewMembership::WorldLighting)
+					a_set.worldLightingPhases |= entry.phase;
+				else
+					a_set.lodPhases |= entry.phase;
 				a_set.viewBits |= entry.viewBit;
 				a_set.rootViewBits |= root ? entry.viewBit : 0u;
 			}

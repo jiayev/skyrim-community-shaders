@@ -1,5 +1,9 @@
 #include "Deferred.h"
 #include "Features/EnvironmentProbeFeature.h"
+#if defined(CS_HAS_DCLF)
+#	include "Features/DrawcallLimitFix/Features/EnvironmentProbe/EnvironmentProbe.h"
+#	include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
+#endif
 #include "Features/ViewAtmosphere.h"
 #include "Rendering/EnvironmentProbe/Capture.h"
 
@@ -679,6 +683,10 @@ void Deferred::CaptureDirectionalShadowMap()
 	parameters->GetDesc(&sourceDesc);
 	if (sourceDesc.ByteWidth < 64)
 		return;
+#if defined(CS_HAS_DCLF)
+	if (DCLF::ShellState::Running() && globals::features::environmentProbe.loaded && globals::features::environmentProbe.settings.Enabled)
+		DCLF::Features::EnvironmentProbe::CaptureShadowParameters(parameters.get(), globals::state->frameCount);
+#endif
 	if (directionalShadowParameters)
 		directionalShadowParameters->GetDesc(&snapshotDesc);
 	if (sourceDesc.ByteWidth != snapshotDesc.ByteWidth) {

@@ -1,7 +1,7 @@
 // The test harness: the CS_DCLF_TEST_* switches' scripted commands, toggles, turns, moves and exit, run every Present on the render
 // (main) thread, DCLF installed or not.
-#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "TestHarness.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
@@ -14,13 +14,15 @@
 #include "Features/PostProcessing.h"
 #include "Features/RemoteControl/NvPerf.h"
 #include "Features/ScreenshotFeature.h"
-#include "GpuEventTimers.h"
 #include "Globals.h"
+#include "GpuEventTimers.h"
+#include "Rendering/EnvironmentProbe/CameraPass.h"
+#include "Utils/D3D.h"
 
-#include <Tracy/Tracy.hpp>
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "State.h"
 #include "Vram/VramLedger.h"
+#include <Tracy/Tracy.hpp>
 
 #include <ORGModuleServices/PipelineRegistry.h>
 #include <OpenRenderGraph/GraphHost.h>
@@ -46,7 +48,7 @@ namespace DCLF
 		{
 			bool reloadAsked = false;
 			std::uint64_t reloadSerial = 0, reloadGeneration = 0;  // the registry's before the reload was asked
-			std::uint64_t nvperfCapture = 0;                         // 0: none started
+			std::uint64_t nvperfCapture = 0;                       // 0: none started
 			std::set<std::string> signals;
 			std::string feature;
 
@@ -310,6 +312,24 @@ namespace DCLF
 						globals::features::screenshotFeature.RequestCapture(dir / (command.substr(10) + ".png"));
 						return;
 					}
+					if (command == "dclf:probe-dump") {
+						auto& probe = ::EnvironmentProbe::GetCameraPass();
+						const auto dir = logger::log_directory();
+						if (!dir || !probe.Radiance() || !probe.Depth() || !probe.Normals() || probe.ValidFaces() != 0xff) {
+							logger::info("[DCLF] probe dump skipped, valid octants {:#04x}", probe.ValidFaces());
+							return;
+						}
+						const auto prefix = fmt::format("probe-{}-", globals::state->frameCount);
+						const auto save = [&](ID3D11ShaderResourceView* view, const char* name) {
+							winrt::com_ptr<ID3D11Resource> resource;
+							view->GetResource(resource.put());
+							auto texture = resource.try_as<ID3D11Texture2D>();
+							return SUCCEEDED(Util::SaveTextureToFile(globals::d3d::device, globals::d3d::context, *dir / "dclf-shots" / (prefix + name + ".dds"), texture.get()));
+						};
+						const bool saved = save(probe.Radiance(), "radiance") && save(probe.Depth(), "distance") && save(probe.Normals(), "normals");
+						logger::info("[DCLF] probe dump {}: {}", prefix, saved ? "saved" : "failed");
+						return;
+					}
 					// "dclf:vram-json": VRAM attribution's snapshot (the menu's Memory dump) written to the log directory.
 					if (command == "dclf:vram-json") {
 						const auto path = Vram::WriteJson(logger::log_directory().value_or(std::filesystem::path{}));
@@ -423,8 +443,11 @@ namespace DCLF
 						// "dclf:epochs=flush|enqueue|signal": not submitted, each still closing DXVK's command list at its point, then
 						// enqueuing an empty submission, or one signalling a timeline (RenderGraphRuntime::SkipDclfEpochs).
 						const std::string value = command.substr(12);
-						const std::uint32_t boundary = value == "flush" ? 1u : value == "enqueue" ? 2u : value == "signal" ? 3u : value == "cmd" ? 4u :
-													   value == "cmd3" ? 5u : 0u;
+						const std::uint32_t boundary = value == "flush" ? 1u : value == "enqueue" ? 2u :
+						                                                   value == "signal"      ? 3u :
+						                                                   value == "cmd"         ? 4u :
+						                                                   value == "cmd3"        ? 5u :
+						                                                                            0u;
 						RenderGraphRuntime::SkipDclfEpochs(value == "1" ? 0u : ~0u, boundary);
 						return;
 					}
@@ -520,7 +543,9 @@ namespace DCLF
 					// execution's too) or every barrier (unsafe: empty-epoch timing only), from a rebuild.
 					if (command.rfind("dclf:list-barriers=", 0) == 0) {
 						const std::string value = command.substr(19);
-						org::diagnostics::DiagnosticSkipListBarriers().store(value == "external" ? 1 : value == "all" ? 2 : 0, std::memory_order_relaxed);
+						org::diagnostics::DiagnosticSkipListBarriers().store(value == "external" ? 1 : value == "all" ? 2 :
+																														0,
+							std::memory_order_relaxed);
 						if (auto* host = RenderGraphRuntime::Get().Host())
 							host->RequestRebuild();
 						return;
@@ -558,7 +583,8 @@ namespace DCLF
 					// "dclf:cull=off|frustum|occlusion": the GPU culling's mode (CS_DCLF_CULL's live value).
 					if (command.rfind("dclf:cull=", 0) == 0) {
 						const std::string value = command.substr(10);
-						DCLF::Toggles::Get().Requested().cullMode = value == "occlusion" ? 2 : value == "frustum" ? 1 : 0;
+						DCLF::Toggles::Get().Requested().cullMode = value == "occlusion" ? 2 : value == "frustum" ? 1 :
+						                                                                                            0;
 						return;
 					}
 					// The CPU-driven pipeline's toggles (CS_DCLF_PIPELINE's, CS_DCLF_CPU_RECORD's and CS_DCLF_CPU_CADENCE's live values):

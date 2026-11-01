@@ -170,7 +170,7 @@ namespace DCLF::Draws
 	{
 	public:
 		/** @brief Render thread, with the buffer: null (logged) when a slot or view cannot be made. */
-		static std::shared_ptr<const FrameBlockViews> Create(rhi::Device a_device, const std::shared_ptr<org::Buffer>& a_frameConstants);
+		static std::shared_ptr<const FrameBlockViews> Create(rhi::Device a_device, const std::shared_ptr<org::Buffer>& a_frameConstants, std::optional<std::uint32_t> a_probeOctant = {});
 		FrameBlockViews() = default;
 		FrameBlockViews(const FrameBlockViews&) = delete;
 		FrameBlockViews& operator=(const FrameBlockViews&) = delete;

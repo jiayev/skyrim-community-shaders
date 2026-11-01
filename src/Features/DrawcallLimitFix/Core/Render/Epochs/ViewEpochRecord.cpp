@@ -1,9 +1,10 @@
 // The views' epochs' recording (ViewEpoch.h): their passes (cull, a trees view's draw family, draws, forward range), their PassDefs
 // (view.*, which Passes/CorePasses.cpp registers) and graph extension.
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
 namespace DCLF
 {
@@ -114,6 +115,8 @@ namespace DCLF
 			enum class DrawMode : std::uint8_t
 			{
 				Faces,
+				Octants,
+				DirectOctants,
 				Depth,
 				Colour,
 			};
@@ -162,7 +165,16 @@ namespace DCLF
 					const auto& scene = *main.scene;
 					const std::uint32_t faces = resources->traits->faces;
 					DrawBindings bindings{};
-					if (mode == DrawMode::Faces) {
+					if (mode == DrawMode::Octants || mode == DrawMode::DirectOctants) {
+						const auto buffers = Extensions::RegisteredFrameGraphBuffers();
+						for (std::size_t b = 0; b < buffers.size(); ++b)
+							if (((main.graphBuffers >> b) & 1) && buffers[b].firstRegister == 35)
+								a_builder.ShaderResource(org::ResourceIdentifier(buffers[b].resources[0].c_str()), noViews);
+						bindings.colours[0] = a_builder.RenderTarget(resources->target).View();
+						for (std::uint32_t i = 0; i < 2; ++i)
+							bindings.colours[i + 1] = a_builder.RenderTarget(resources->probeAttachments[i]).View();
+						bindings.depth = a_builder.DepthReadWrite(resources->probeAttachments[2]).View();
+					} else if (mode == DrawMode::Faces) {
 						for (std::uint32_t f = 0; f < faces; ++f)
 							bindings.colours[f] = a_builder.RenderTarget(resources->target, org::RtvView{ UINT32_MAX, 0, f }).View();
 						bindings.depth = a_builder.DepthReadWrite(resources->depth).View();
@@ -172,6 +184,11 @@ namespace DCLF
 						bindings.depth = a_builder.DepthReadWrite(resources->target).View();
 					} else {
 						bindings.depth = a_builder.DepthReadWrite(main.nativeDepth).View();
+					}
+					if (mode == DrawMode::DirectOctants) {
+						a_builder.ShaderResource(resources->blocks, noViews);
+						a_builder.ShaderResource(resources->frameConstants, noViews);
+						return bindings;
 					}
 					// The sequences are the draws' arguments and what the vertex stage reads by device address (DCLF_PULLED).
 					bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
@@ -216,7 +233,9 @@ namespace DCLF
 					if (!frame || !frame->indirect.valid || !frame->width || !frame->height || (mode != DrawMode::Faces && frame->buckets.empty()))
 						return prepared;
 					prepared.faces = resources->traits->faces;
-					const std::uint32_t colours = mode == DrawMode::Faces ? prepared.faces : mode == DrawMode::Colour ? 2u : 0u;
+					const std::uint32_t colours = mode == DrawMode::Faces ? prepared.faces : (mode == DrawMode::Octants || mode == DrawMode::DirectOctants) ? 3u :
+					                                                                     mode == DrawMode::Colour                                           ? 2u :
+					                                                                                                                                          0u;
 					for (std::uint32_t i = 0; i < colours; ++i)
 						prepared.colours[i] = a_preparation.Capture(a_bindings.colours[i]);
 					for (std::size_t d = 0; d < Extensions::kDrawFamilies; ++d)
@@ -236,6 +255,24 @@ namespace DCLF
 					const auto& frame = *a_prepared.frame;
 					const auto mode = a_prepared.mode;
 					auto& commands = a_recording.Commands();
+					if (mode == DrawMode::DirectOctants) {
+						std::array<rhi::ColorAttachment, 3> colours{};
+						for (std::size_t i = 0; i < colours.size(); ++i) {
+							colours[i].rtv = a_recording.Resolve(a_prepared.colours[i]);
+							colours[i].resource = a_recording.Resolve(a_bindings.colours[i].Resource()).GetHandle();
+							colours[i].loadOp = rhi::LoadOp::Load;
+							colours[i].storeOp = rhi::StoreOp::Store;
+						}
+						rhi::DepthAttachment depth{};
+						depth.dsv = a_recording.Resolve(a_prepared.depth);
+						depth.depthLoad = rhi::LoadOp::Load;
+						depth.depthStore = rhi::StoreOp::Store;
+						rhi::PassBeginInfo begin{};
+						begin.colors = { colours.data(), 3u };
+						begin.depth = &depth;
+						Direct::detail::RecordExecutingSite(Direct::Site::EnvironmentProbe, commands, &begin);
+						return;
+					}
 					commands.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
 					auto device = RenderGraphRuntime::Get().Host()->GetDesc().device;
 					const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
@@ -244,21 +281,22 @@ namespace DCLF
 					const auto& families = Extensions::DrawFamilies();
 					static const std::shared_ptr<const void> kNothing;  // a face's draw has no prepared state: its pipeline is the shape's
 					for (std::uint32_t f = 0; f < a_prepared.faces; ++f) {
-						std::array<rhi::ColorAttachment, 2> colours{};
+						std::array<rhi::ColorAttachment, 3> colours{};
 						rhi::PassBeginInfo begin{};
 						if (mode == DrawMode::Faces) {
 							colours[0].rtv = a_recording.Resolve(a_prepared.colours[f]);
 							colours[0].loadOp = rhi::LoadOp::Load;
 							colours[0].storeOp = rhi::StoreOp::Store;
 							begin.colors = { colours.data(), 1 };
-						} else if (mode == DrawMode::Colour) {
-							for (std::uint32_t i = 0; i < 2; ++i) {
+						} else if (mode == DrawMode::Colour || mode == DrawMode::Octants) {
+							const std::uint32_t count = mode == DrawMode::Octants ? 3u : 2u;
+							for (std::uint32_t i = 0; i < count; ++i) {
 								colours[i].rtv = a_recording.Resolve(a_prepared.colours[i]);
 								colours[i].loadOp = rhi::LoadOp::Load;
 								colours[i].storeOp = rhi::StoreOp::Store;
 								colours[i].resource = a_recording.Resolve(a_bindings.colours[i].Resource()).GetHandle();
 							}
-							begin.colors = { colours.data(), 2 };
+							begin.colors = { colours.data(), count };
 						}
 						rhi::DepthAttachment depth{};
 						depth.dsv = a_recording.Resolve(a_prepared.depth);
@@ -268,7 +306,7 @@ namespace DCLF
 							depth.clear.type = rhi::ClearValueType::DepthStencil;
 							depth.clear.format = rhi::Format::D24_UNorm_S8_UInt;
 							depth.clear.depthStencil = { 1.0f, 0 };
-						} else {
+						} else if (mode != DrawMode::Octants) {
 							depth.stencilLoad = rhi::LoadOp::Load;
 							depth.stencilStore = rhi::StoreOp::Store;
 						}
@@ -277,7 +315,9 @@ namespace DCLF
 						begin.height = frame.height;
 						begin.minDepth = 0.0f;
 						begin.maxDepth = frame.depthRange;
-						begin.debugName = mode == DrawMode::Faces ? "DCLF reflection face" : mode == DrawMode::Colour ? "DCLF first person" : "DCLF first-person depth";
+						begin.debugName = mode == DrawMode::Octants ? "DCLF environment probe octant" : mode == DrawMode::Faces ? "DCLF reflection face" :
+						                                                                            mode == DrawMode::Colour    ? "DCLF first person" :
+						                                                                                                          "DCLF first-person depth";
 						commands.BeginPass(begin);
 						commands.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
 						commands.BindLayout(frame.indirect.zLayout);
@@ -308,7 +348,6 @@ namespace DCLF
 				std::shared_ptr<ViewResources> resources;
 				DrawMode mode;
 			};
-
 
 			struct ForwardBindings
 			{
@@ -438,6 +477,11 @@ namespace DCLF
 					if (resources->depth)
 						Register(a_graph, id("depth"), resources->depth);
 					Register(a_graph, id(traits.target), resources->target);
+					if (traits.kind == ViewKind::EnvironmentProbe) {
+						Register(a_graph, id("radial-distance"), resources->probeAttachments[0]);
+						Register(a_graph, id("normals"), resources->probeAttachments[1]);
+						Register(a_graph, id("reversed-depth"), resources->probeAttachments[2]);
+					}
 					for (std::size_t d = 0; d < Extensions::kDrawFamilies && traits.trees; ++d)
 						if (Extensions::DrawFamilyHasFaces(static_cast<Api::DrawFamily>(d)))
 							for (std::uint32_t f = 0; f < traits.faces; ++f)
@@ -464,8 +508,7 @@ namespace DCLF
 				const auto& resources = a_context.View();
 				return MakeLatchedCopiesPass([resources] { return ViewLatchedTargets(*resources); }, [kind = resources->traits->kind](const org::PassPrepareContext& a_preparation) {
 					const auto frame = CurrentViewFrame(a_preparation, kind);
-					return frame ? LatchedSource{ frame->generation, frame, frame->latched } : LatchedSource{};
-				});
+					return frame ? LatchedSource{ frame->generation, frame, frame->latched } : LatchedSource{}; });
 			}
 
 			std::shared_ptr<org::RenderPass> BuildDraws(const Api::PassContext& a_context)
@@ -479,7 +522,14 @@ namespace DCLF
 			std::shared_ptr<org::RenderPass> FacesDraw(const Api::PassContext& a_context)
 			{
 				const auto& resources = a_context.View();
-				return !resources->traits->depthPass ? std::make_shared<DrawPass>(resources, DrawMode::Faces) : nullptr;
+				if (resources->traits->depthPass)
+					return nullptr;
+				return std::make_shared<DrawPass>(resources, resources->traits->kind == ViewKind::EnvironmentProbe ? DrawMode::Octants : DrawMode::Faces);
+			}
+
+			std::shared_ptr<org::RenderPass> DirectOctants(const Api::PassContext& a_context)
+			{
+				return std::make_shared<DrawPass>(a_context.View(), DrawMode::DirectOctants);
 			}
 
 			std::shared_ptr<org::RenderPass> DepthDraw(const Api::PassContext& a_context)
@@ -523,8 +573,9 @@ namespace DCLF
 
 			// Named with the view's prefix (ViewTraits::prefix).
 			constexpr Api::PassDef kViewPasses[] = {
-				{ .key = "view.latched-copies", .passName = "{view}.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies },
+				{ .key = "view.latched-copies", .passName = "{view}.latched-copies", .kind = PassKind::Copy, .make = &LatchedCopies, .cpuPipeline = true },
 				{ .key = "view.build-draws", .passName = "{view}.build-draws", .make = &BuildDraws },
+				{ .key = "view.probe-direct", .passName = "{view}.direct", .kind = Api::PassKind::Render, .make = &DirectOctants, .cpuPipeline = true, .recordAtExecution = true },
 				{ .key = "view.faces", .passName = "{view}.faces", .kind = PassKind::Render, .make = &FacesDraw },
 				{ .key = "view.depth", .passName = "{view}.depth", .kind = PassKind::Render, .make = &DepthDraw },
 				{ .key = "view.forward-sort", .passName = "{view}.forward-sort", .make = &ForwardSort },

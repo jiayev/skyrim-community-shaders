@@ -2,6 +2,10 @@
 #include "Rendering/EnvironmentProbe/Geometry.h"
 #include "Rendering/EnvironmentProbe/Scene.h"
 #include "Rendering/EnvironmentProbe/Shadows.h"
+#if defined(CS_HAS_DCLF)
+#	include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
+#	include "Features/DrawcallLimitFix/Features/EnvironmentProbe/EnvironmentProbe.h"
+#endif
 
 #include "Deferred.h"
 #include "Features/Effects11/D3D11StateBackup.h"
@@ -210,6 +214,10 @@ namespace EnvironmentProbe
 			uint32_t geometryMask = 0;
 			uint32_t cullBackface = 0;
 			uint32_t reusedPasses = 0;
+#if defined(CS_HAS_DCLF)
+			std::shared_ptr<const DCLF::SetSnapshot> probeClaims;
+			uint32_t dclfGeometry = 0;
+#endif
 			uint32_t nativeDirty = UINT32_MAX;
 			bool bindingsReady = false;
 			bool writesDepth = true;
@@ -351,6 +359,12 @@ namespace EnvironmentProbe
 					return;
 				auto* capture = active.load();
 				if (capture && a_process->camera == capture->camera) {
+#if defined(CS_HAS_DCLF)
+					if (capture->probeClaims && (capture->probeClaims->PhasesOf(&a_geometry) & DCLF::Features::EnvironmentProbe::kPhase)) {
+						++capture->dclfGeometry;
+						return;
+					}
+#endif
 					const auto& request = capture->request;
 					const auto& bound = a_geometry.worldBound;
 					const float distance = (bound.center - request.position).Length();
@@ -958,6 +972,45 @@ namespace EnvironmentProbe
 				globals::d3d::context->PSSetConstantBuffers(3, 1, &strict);
 			}
 
+			auto shared = state.sharedDataSnapshot;
+			shared.CameraData = { a_request.farDistance, a_request.nearDistance, a_request.farDistance - a_request.nearDistance, a_request.farDistance * a_request.nearDistance };
+			shared.BufferDim = { float(size), float(size), 1.f / size, 1.f / size };
+			shared.MipBias = 0;
+			shared.WaterSystemHeight -= data.worldOriginDelta.z;
+			for (int x = -2; x <= 2; ++x)
+				for (int y = -2; y <= 2; ++y)
+					shared.WaterData[(x + 2) + (y + 2) * 5] = Util::TryGetWaterData(float(x) * 4096, float(y) * 4096);
+
+#if defined(CS_HAS_DCLF)
+			// The camera pass owns base-mip atlases. Other public API requests keep
+			// their native view semantics until the graph supports their formats.
+			if (DCLF::ShellState::Running() && !a_request.cullDynamic && a_request.radiance && a_request.depth && a_request.normals) {
+				D3D11_RENDER_TARGET_VIEW_DESC colour{}, distance{}, normal{};
+				a_request.radiance->GetDesc(&colour);
+				a_request.depth->GetDesc(&distance);
+				a_request.normals->GetDesc(&normal);
+				if (colour.Format == DXGI_FORMAT_R16G16B16A16_FLOAT && !colour.Texture2D.MipSlice && !distance.Texture2D.MipSlice && !normal.Texture2D.MipSlice) {
+					namespace Port = DCLF::Features::EnvironmentProbe;
+					Port::Capture inputs{};
+					inputs.targets = { static_cast<ID3D11Texture2D*>(radianceResource), static_cast<ID3D11Texture2D*>(depthResource), static_cast<ID3D11Texture2D*>(normalResource), resources.depth.get() };
+					inputs.textures = { llf.loaded && llf.lights ? llf.lights->srv.get() : nullptr,
+						llf.loaded && llf.probeLightMasks ? llf.probeLightMasks->srv.get() : nullptr, capture.sunShadowMap, Shadows::Map() };
+					inputs.shared = std::as_bytes(std::span(&shared, 1));
+					inputs.usesShadowParameters = data.sunCascadeCount != 0;
+					std::array<CaptureData, Port::kOctants> octants;
+					for (uint32_t f = 0; f < Port::kOctants; ++f) {
+						if (!(a_request.faces & (1u << f)))
+							continue;
+						inputs.cameras[f] = resources.Camera(f, a_request);
+						octants[f] = data;
+						octants[f].faceMask = 1u << f;
+						octants[f].faceSign = { f & 1 ? -1.f : 1.f, f & 2 ? -1.f : 1.f, f & 4 ? -1.f : 1.f };
+						inputs.parameters[f] = std::as_bytes(std::span(&octants[f], 1));
+					}
+					capture.probeClaims = Port::Draw(inputs);
+				}
+			}
+#endif
 			// Reuse the engine's cull -> accumulate -> opaque/alpha/decal Forward dispatch.
 			// These are the same SE/AE functions used by BSCubeMapCamera, without its cameras,
 			// cubemap render targets, reflection flags, or face loop.
@@ -1011,17 +1064,17 @@ namespace EnvironmentProbe
 			shadowData.stateUpdateFlags.set(RE::BSGraphics::DIRTY_DEPTH_MODE);
 			BeforeDraw();
 			*globals::game::currentAccumulator = reinterpret_cast<RE::BSGraphics::BSShaderAccumulator*>(draw);
-			auto shared = state.sharedDataSnapshot;
-			shared.CameraData = { a_request.farDistance, a_request.nearDistance, a_request.farDistance - a_request.nearDistance, a_request.farDistance * a_request.nearDistance };
-			shared.BufferDim = { float(size), float(size), 1.f / size, 1.f / size };
-			shared.MipBias = 0;
-			shared.WaterSystemHeight -= data.worldOriginDelta.z;
-			for (int x = -2; x <= 2; ++x)
-				for (int y = -2; y <= 2; ++y)
-					shared.WaterData[(x + 2) + (y + 2) * 5] = Util::TryGetWaterData(float(x) * 4096, float(y) * 4096);
 			resources.sharedCB->Update(shared);
 			draw->FinishAccumulatingPreResolveDepth(8);
 			draw->FinishAccumulatingPostResolveDepth(8);
+#if defined(CS_HAS_DCLF)
+			static bool reportedProbeDraw = false;
+			if (capture.probeClaims && capture.dclfGeometry && (!reportedProbeDraw || (state.IsDeveloperMode() && state.frameCount % 127 == 0))) {
+				reportedProbeDraw = true;
+				logger::info("[DCLF] environment probe frame {} octants {:#04x}: {} claimed geometry registrations skipped, {} residual native draws",
+					state.frameCount, a_request.faces, capture.dclfGeometry, capture.draws);
+			}
+#endif
 			if (state.IsDeveloperMode() && state.frameCount % 127 == 0)
 				logger::info("[EnvironmentProbeReuse] roots={} geometry={} materials={} draws={}", roots.size(), capture.geometryFaces.size(), capture.reusedPasses, capture.draws);
 

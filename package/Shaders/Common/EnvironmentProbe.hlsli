@@ -3,7 +3,13 @@
 
 namespace EnvironmentProbe
 {
+	// PS b8 is a per-object binding in DCLF. Keep capture parameters on a frame
+	// binding so every indirect draw of an octant reads the same block.
+#if defined(DCLF_BINDLESS_DRAW) && defined(PSHADER)
+	cbuffer Capture : register(b9)
+#else
 	cbuffer Capture : register(b8)
+#endif
 	{
 		float3 FaceSign;
 		uint FaceMask;

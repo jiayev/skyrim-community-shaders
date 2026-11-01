@@ -1240,7 +1240,7 @@ namespace DCLF
 
 		/** @brief A forward pipeline. A second target (first-person motion vectors) is written unblended: those members are opaque. */
 		static org::services::PipelinePayload BuildForward(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const ShaderPrograms::ForwardProgram* a_program,
-			ForwardTargets a_targets, rhi::CullMode a_cull, bool a_frontCCW);
+			ForwardTargets a_targets, rhi::CullMode a_cull, bool a_frontCCW, bool a_probe);
 
 		/**
 		 * @brief A ForwardOrDecal family key's pipelines (Api::ProgramBuild::ForwardOrDecal: the Effect port's keys), following Build's

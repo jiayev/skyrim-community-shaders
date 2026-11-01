@@ -21,7 +21,8 @@ namespace DCLF
 			{ &S::projectedUv, Switch::ProjectedUv, kOn, "projected", {}, "Projected UV", nullptr, true, {} },
 			{ &S::plainSnowSparkle, Switch::PlainSnowSparkle, kOn, "plain snow sparkle", {}, "Sparkle on plain snow layers",
 				"Glacier and ice snow layers carry a material without sparkle values, so the engine reads whatever memory follows it (in practice no "
-				"sparkle). On: DCLF gives them the snow material's default sparkle. Off: no sparkle.", false, {} },
+				"sparkle). On: DCLF gives them the snow material's default sparkle. Off: no sparkle.",
+				false, {} },
 			// (Features/Landscape's "terrain", then Integrations/TerrainBlending's "terrain under TB", follow the projected's here; then
 			// Features/Forward's "forward", Features/Effects' "effects" after it, and Features/Forward's "refraction" after that.)
 			// (Features/Particles', Features/Billboards' and Features/SwitchNodes' toggles follow the refraction's here, then Features/Lod's
@@ -48,7 +49,7 @@ namespace DCLF
 		constexpr std::uint16_t kCadenceMask = static_cast<std::uint16_t>(((1u << Direct::kViewTypes) - 1u) & ~(1u << static_cast<std::uint32_t>(Direct::ViewType::Main)));
 
 		constexpr std::string_view kCpuViewNames[] = { "main", "decal", "forward", "refraction", "sun", "spot", "point", "sky", "precipitation", "reflection",
-			"first-person" };
+			"first-person", "environment-probe" };
 		static_assert(std::size(kCpuViewNames) == Direct::kViewTypes);
 
 		// The features' toggles (RegisterToggle), in registration order: their strings (the table's entries view them), their anchors and
@@ -98,13 +99,15 @@ namespace DCLF
 		{
 			ToggleSet set;
 			const auto& cull = SwitchValue(Switch::Cull);
-			set.cullMode = (cull.empty() || cull == "occlusion") ? 2 : cull == "frustum" ? 1 : 0;
+			set.cullMode = (cull.empty() || cull == "occlusion") ? 2 : cull == "frustum" ? 1 :
+			                                                                               0;
 			if (const auto& pipeline = SwitchValue(Switch::CpuPipeline); !pipeline.empty() && !ApplyPipeline(set, pipeline))
 				logger::warn("[DCLF] CS_DCLF_PIPELINE={}: not a pipeline (auto, manual, gpu, cpu); auto", pipeline);
 			set.cpuRecord = SwitchValue(Switch::CpuRecord) == "parallel" ? static_cast<std::uint8_t>(Direct::RecordMode::Parallel) : static_cast<std::uint8_t>(Direct::RecordMode::Serial);
 			if (const auto& cadence = SwitchValue(Switch::CpuCadence); !cadence.empty() && !ApplyCpuCadence(set, cadence))
-				logger::warn("[DCLF] CS_DCLF_CPU_CADENCE={}: a view or value it names is unknown (views: main, decal, forward, refraction, sun, spot, point, sky, "
-							 "precipitation, reflection, first-person; values: frame, snapshot)",
+				logger::warn(
+					"[DCLF] CS_DCLF_CPU_CADENCE={}: a view or value it names is unknown (views: main, decal, forward, refraction, sun, spot, point, sky, "
+					"precipitation, reflection, first-person; values: frame, snapshot)",
 					cadence);
 			for (const auto& toggle : Table()) {
 				const auto& value = SeedValue(toggle);
@@ -145,7 +148,7 @@ namespace DCLF
 		 * @brief The features' toggles whose a_anchor names a_name, in registration order, each with the toggles anchored at it around it
 		 * (those before it first, those after it next), onto a_table. a_listed marks the toggles placed.
 		 */
-		void ListAnchoredAt(std::vector<ToggleInfo>& a_table, std::vector<std::uint8_t>& a_listed, std::string RegisteredToggle::*a_anchor, std::string_view a_name)
+		void ListAnchoredAt(std::vector<ToggleInfo>& a_table, std::vector<std::uint8_t>& a_listed, std::string RegisteredToggle::* a_anchor, std::string_view a_name)
 		{
 			const auto& registered = RegisteredToggles();
 			for (std::size_t i = 0; i < registered.size(); ++i)

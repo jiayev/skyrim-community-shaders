@@ -4,43 +4,43 @@
 // volk must precede every Vulkan header in this translation unit.
 #include <rhi_interop_vulkan.h>
 
-#include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/EngineStates.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/EngineStates.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
-#include "RenderGraph/RenderGraphRuntime.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/SpirvReflection.h"
-#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
-#include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
-#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Lookups.h"
+#include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Shading/VertexInput.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 #include "ShaderCache.h"
 
 #include <Tracy/Tracy.hpp>
 
-#include <OpenRenderGraph/GraphHost.h>
 #include <ORGModuleServices/PipelineService.h>
+#include <OpenRenderGraph/GraphHost.h>
 #include <rhi_helpers.h>
 
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesImpl.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 #include <algorithm>
 #include <atomic>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
-#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesImpl.h"
 
 namespace DCLF
 {
@@ -138,11 +138,7 @@ namespace DCLF
 			return BuildRefraction(device, layout, &a_program, format, depthFormat, writeMask, frontCCW);
 		};
 		recipe.build = [build, program] { return build(*program); };
-		auto live = MakeLive(recipe.id, ShaderPrograms::SourcePathOf(*input->refractionUtility), *program,
-			[utility = input->refractionUtility](ShaderPrograms::Rebuilt<ShaderPrograms::ShadowProgram> a_done) {
-				ShaderPrograms::Get().RebuildShadow(kRefractionTechnique, *utility, std::move(a_done));
-			},
-			build);
+		auto live = MakeLive(recipe.id, ShaderPrograms::SourcePathOf(*input->refractionUtility), *program, [utility = input->refractionUtility](ShaderPrograms::Rebuilt<ShaderPrograms::ShadowProgram> a_done) { ShaderPrograms::Get().RebuildShadow(kRefractionTechnique, *utility, std::move(a_done)); }, build);
 		r.requested = true;
 		r.format = format;
 		(void)service.Request(std::move(recipe),
@@ -187,27 +183,25 @@ namespace DCLF
 			return;
 		}
 		const ForwardTargets forwardTargets = *keyTargets;
-		const auto cull = (a_key.flags & ForwardPipelineKey::kForwardTwoSided) ? rhi::CullMode::None : cullBack ? rhi::CullMode::Back : rhi::CullMode::Front;
+		const auto cull = (a_key.flags & ForwardPipelineKey::kForwardTwoSided) ? rhi::CullMode::None : cullBack ? rhi::CullMode::Back :
+		                                                                                                          rhi::CullMode::Front;
 		org::services::PipelineRecipe recipe;
 		recipe.id = familyKey ? fmt::format("dclf.forward.{}", Extensions::DrawFamilyOf(family).keyName) :
 		                        fmt::format("dclf.forward.{:08X}.{:08X}.{:X}", a_key.vertexDescriptor, a_key.pixelDescriptor, a_key.flags);
 		recipe.shaderKey = ModuleHash(program->vertex) ^ ModuleHash(program->pixel) * 0x9E3779B97F4A7C15ull;
 		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&forwardTargets, sizeof(forwardTargets)) ^
 		                          static_cast<std::uint64_t>(cull) * 0x9E3779B97F4A7C15ull;
-		const auto build = [device = device, zLayout = zLayout->GetHandle(), forwardTargets, cull, frontCCW = *input->frontCCW](const ShaderPrograms::ForwardProgram& a_program) {
-			return BuildForward(device, zLayout, &a_program, forwardTargets, cull, frontCCW);
+		const auto build = [device = device, zLayout = zLayout->GetHandle(), forwardTargets, cull, frontCCW = *input->frontCCW, probe = view == Api::EngineView::EnvironmentProbe](const ShaderPrograms::ForwardProgram& a_program) {
+			return BuildForward(device, zLayout, &a_program, forwardTargets, cull, frontCCW, probe);
 		};
 		recipe.build = [build, program] { return build(*program); };
 		// Its program as the lane made it: a draw family's forward descriptor's, or the Lighting pair's.
 		const RE::BSShader* shader = familyKey ? input->drawFamilySource[d] : input->lighting;
-		auto live = MakeLive(recipe.id, ShaderPrograms::SourcePathOf(*shader), *program,
-			[family, familyKey, shader, key = a_key](ShaderPrograms::Rebuilt<ShaderPrograms::ForwardProgram> a_done) {
+		auto live = MakeLive(recipe.id, ShaderPrograms::SourcePathOf(*shader), *program, [family, familyKey, shader, key = a_key](ShaderPrograms::Rebuilt<ShaderPrograms::ForwardProgram> a_done) {
 				if (familyKey)
 					ShaderPrograms::Get().RebuildDrawFamilyForward(family, *shader, std::move(a_done));
 				else
-					ShaderPrograms::Get().RebuildForward(key.vertexDescriptor, key.pixelDescriptor, *shader, std::move(a_done));
-			},
-			build);
+					ShaderPrograms::Get().RebuildForward(key.vertexDescriptor, key.pixelDescriptor, *shader, std::move(a_done)); }, build);
 		f.entries.try_emplace(a_key).first->second.requested = true;
 		(void)service.Request(std::move(recipe),
 			[completions = completions, key = a_key, generation = f.generation, live = std::move(live)](const org::services::PipelineArtifact& a_artifact) {
@@ -260,7 +254,7 @@ namespace DCLF
 	}
 
 	org::services::PipelinePayload DrawPipelines::Impl::BuildForward(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const ShaderPrograms::ForwardProgram* a_program,
-		ForwardTargets a_targets, rhi::CullMode a_cull, bool a_frontCCW)
+		ForwardTargets a_targets, rhi::CullMode a_cull, bool a_frontCCW, bool a_probe)
 	{
 		auto stages = Parse<2>({ &a_program->vertex, &a_program->pixel });
 		CheckPulledBindings(stages[0], false);
@@ -269,15 +263,18 @@ namespace DCLF
 		PipelineDesc desc(a_zLayout, a_program->vertex, a_program->pixel, a_targets.depth);
 		desc.raster.rs.cull = a_cull;
 		desc.raster.rs.frontCCW = a_frontCCW;
-		// The engine's depth mode 3 for the face's LOD: test and write, LESS_EQUAL.
+		// The octahedral capture projects near/w. The other views use conventional depth.
 		desc.depth.ds.depthEnable = true;
 		desc.depth.ds.depthWrite = true;
-		desc.depth.ds.depthFunc = rhi::CompareOp::LessEqual;
+		desc.depth.ds.depthFunc = a_probe ? rhi::CompareOp::GreaterEqual : rhi::CompareOp::LessEqual;
 		// No blending, every channel written (the engine's write mask there is stale state; the cube's alpha is not read).
 		desc.Colour(a_targets.colour);
 		if (a_targets.colour2 != DXGI_FORMAT_UNKNOWN)
 			desc.Colour(a_targets.colour2);
-		desc.Create(a_device, *built, desc.targets.rt.count > 1 ? "first-person forward" : "forward");
+		if (a_probe)
+			desc.Colour(DXGI_FORMAT_R16G16_UNORM);
+		desc.Create(a_device, *built, a_probe ? "environment probe" : desc.targets.rt.count > 1 ? "first-person forward" :
+																								  "forward");
 		return built;
 	}
 

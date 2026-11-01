@@ -5,8 +5,8 @@
 
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
 
-#include "Features/DrawcallLimitFix/Core/Render/Readback/Readbacks.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/CullSimd.h"
+#include "Features/DrawcallLimitFix/Core/Render/Readback/Readbacks.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
@@ -238,14 +238,16 @@ namespace DCLF::Direct
 		Simd::FrustumFn WideFrustum()
 		{
 			const Simd::Level level = Simd::Chosen();
-			return level == Simd::Level::Avx512 ? &Simd::FrustumAvx512 : level == Simd::Level::Avx2 ? &Simd::FrustumAvx2 : nullptr;
+			return level == Simd::Level::Avx512 ? &Simd::FrustumAvx512 : level == Simd::Level::Avx2 ? &Simd::FrustumAvx2 :
+			                                                                                          nullptr;
 		}
 
 		/** @brief The wide paraboloid kernel kExpCullWide takes, null: the SSE pre-pass (kExpParabolicPass) and the per-lane test. */
 		Simd::ParabolicFn WideParabolic()
 		{
 			const Simd::Level level = Simd::Chosen();
-			return level == Simd::Level::Avx512 ? &Simd::ParabolicAvx512 : level == Simd::Level::Avx2 ? &Simd::ParabolicAvx2 : nullptr;
+			return level == Simd::Level::Avx512 ? &Simd::ParabolicAvx512 : level == Simd::Level::Avx2 ? &Simd::ParabolicAvx2 :
+			                                                                                            nullptr;
 		}
 
 		std::uint32_t ParabolicFlagsOf(const CullView& a_view)
@@ -591,8 +593,7 @@ namespace DCLF::Direct
 					lanes[firsts[std::size_t(programOf[i]) + 1]++] = static_cast<std::uint16_t>(i);
 			// firsts[p + 1] is now program p's end, firsts[p] its first.
 			for (std::uint32_t p = 0; p < programs; ++p)
-				if (const std::uint32_t first = firsts[p], end = firsts[std::size_t(p) + 1]; end > first)
-				{
+				if (const std::uint32_t first = firsts[p], end = firsts[std::size_t(p) + 1]; end > first) {
 					a_frame.portalTestBatch(a_frame.programs, p, a_spheres.x, a_spheres.y, a_spheres.z, a_spheres.r, lanes.data() + first, end - first, a_rejected);
 					// kExpCullProfile: the batch's calls, one a program it holds lanes of (the report's "portal tests").
 					portalCalls += profilePortals ? 1u : 0u;
@@ -627,8 +628,26 @@ namespace DCLF::Direct
 		/** @brief kExpCullProfile: CullBatch's sections' TSC cycles and its lanes, by view type (TakeCullProfileLine). */
 		struct CullProfile
 		{
-			enum Section { kFrustum, kPortal, kGather, kKeep, kLod, kWord, kSections };
-			enum Count { kLanes, kPassed, kKeptTest, kKept, kPortalCalls, kPortalCycles, kCounts };
+			enum Section
+			{
+				kFrustum,
+				kPortal,
+				kGather,
+				kKeep,
+				kLod,
+				kWord,
+				kSections
+			};
+			enum Count
+			{
+				kLanes,
+				kPassed,
+				kKeptTest,
+				kKept,
+				kPortalCalls,
+				kPortalCycles,
+				kCounts
+			};
 			std::atomic<std::uint64_t> cycles[kViewTypes][kSections]{};
 			std::atomic<std::uint64_t> counts[kViewTypes][kCounts]{};
 		};
@@ -811,7 +830,8 @@ namespace DCLF::Direct
 
 		const char* NameOf(Level a_level)
 		{
-			return a_level == Level::Avx512 ? "AVX-512" : a_level == Level::Avx2 ? "AVX2" : "SSE";
+			return a_level == Level::Avx512 ? "AVX-512" : a_level == Level::Avx2 ? "AVX2" :
+			                                                                       "SSE";
 		}
 
 		Level Chosen()
@@ -909,7 +929,7 @@ namespace DCLF::Direct
 		const bool parabolicDecided = PassOf(a_batch, spheres, count, a_view, pass.data());
 		lap(CullProfile::kFrustum);
 		const bool mainCamera = MainCamera(a_view.type);
-		const bool mainFamily = mainCamera || a_view.type == ViewType::Reflection || a_view.type == ViewType::FirstPerson;
+		const bool mainFamily = mainCamera || a_view.type == ViewType::EnvironmentProbe || a_view.type == ViewType::Reflection || a_view.type == ViewType::FirstPerson;
 		// A lane outside the frustum is kept by no view (MainCameraKept and ViewKept both drop it, and only a lane inside stamps); a view
 		// without the frustum pass has every lane passed.
 		const bool early = ExperimentOn(kExpCullEarly);
@@ -1020,8 +1040,9 @@ namespace DCLF::Direct
 				continue;
 			// Each section's cycles a lane: gather and the keep test per lane passed, the LOD mask per lane the test kept, the word per lane kept.
 			const auto per = [](std::uint64_t a_cycles, std::uint64_t a_n) { return a_n ? static_cast<double>(a_cycles) / static_cast<double>(a_n) : 0.0; };
-			line += fmt::format("{}{}: {} lanes, {} passed, {} kept by the test, {} kept; Mcycles frustum {:.1f}, portal {:.1f}, lanes/gather {:.1f}, keep {:.1f}, lod {:.1f}, word {:.1f}; "
-								"cycles a lane: gather {:.0f}, keep {:.0f}, lod {:.0f}, word {:.0f}; portal tests {}, {:.0f} cycles each",
+			line += fmt::format(
+				"{}{}: {} lanes, {} passed, {} kept by the test, {} kept; Mcycles frustum {:.1f}, portal {:.1f}, lanes/gather {:.1f}, keep {:.1f}, lod {:.1f}, word {:.1f}; "
+				"cycles a lane: gather {:.0f}, keep {:.0f}, lod {:.0f}, word {:.0f}; portal tests {}, {:.0f} cycles each",
 				line.empty() ? "" : " | ", CpuViewName(v), counts[CullProfile::kLanes], counts[CullProfile::kPassed], counts[CullProfile::kKeptTest], counts[CullProfile::kKept],
 				cycles[CullProfile::kFrustum] / 1e6, cycles[CullProfile::kPortal] / 1e6, cycles[CullProfile::kGather] / 1e6, cycles[CullProfile::kKeep] / 1e6, cycles[CullProfile::kLod] / 1e6,
 				cycles[CullProfile::kWord] / 1e6, per(cycles[CullProfile::kGather], counts[CullProfile::kPassed]), per(cycles[CullProfile::kKeep], counts[CullProfile::kPassed]),
@@ -1054,9 +1075,9 @@ namespace DCLF::Direct
 		struct VisibilityDiff
 		{
 			std::atomic<bool> running{ false };
-			std::vector<std::uint32_t> objectReported;                    // kReportedValid | the bits last reported
+			std::vector<std::uint32_t> objectReported;                   // kReportedValid | the bits last reported
 			std::vector<std::pair<std::uint32_t, std::uint32_t>> roots;  // the generation and the bits last reported
-			std::atomic<bool> pendingReset{ false };  // a skipped frame was a reset: the next diff resets
+			std::atomic<bool> pendingReset{ false };                     // a skipped frame was a reset: the next diff resets
 			std::atomic<std::uint64_t> diffs{ 0 }, skipped{ 0 };
 		};
 		VisibilityDiff visibilityDiff;

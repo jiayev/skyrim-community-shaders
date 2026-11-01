@@ -33,6 +33,7 @@
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
 #include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
+#include "Features/DrawcallLimitFix/Features/EnvironmentProbe/EnvironmentProbe.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
 #include "Features/DrawcallLimitFix/Features/Lod/Lod.h"
 #include "Features/DrawcallLimitFix/Features/OcclusionMaps/OcclusionMaps.h"
@@ -329,12 +330,14 @@ namespace DCLF::Features
 			OcclusionMaps::kSetOccluderPrecipitation,
 			Reflection::kSetReflection,
 			FirstPerson::kSetFirstPerson,
+			EnvironmentProbe::kPhase,
 		};
 		constexpr std::uint32_t kViewBits[] = {
 			OcclusionMaps::kViewSkyOccluder,
 			OcclusionMaps::kViewPrecipOccluder,
 			Reflection::kViewReflection,
 			FirstPerson::kViewFirstPerson,
+			EnvironmentProbe::kViewBit,
 		};
 
 		constexpr bool ViewBitsValid(const std::uint32_t* a_bits, std::size_t a_count, std::uint32_t a_core, std::uint32_t a_space)
@@ -436,6 +439,7 @@ namespace DCLF::Features
 	// occlusion maps' have no HLSL mirror (the faces' and the maps' culls read their latch's view bits as data).
 	static_assert(FirstPerson::kViewFirstPerson == 1u << 11, "FirstPerson's view bit is not BuildDrawsCS's kViewFirstPerson");
 	// The reflection's faces: Core's per-view capacity (ViewEpoch.h).
+	static_assert(EnvironmentProbe::kOctants <= Draws::kMaxViewFaces);
 	static_assert(Reflection::kFaces <= Draws::kMaxViewFaces, "the reflection's faces are past Core's kMaxViewFaces");
 	// The feature block: BindlessObject and BindlessShading are the C++ mirrors of the frozen DCLFObjects.hlsli (DCLFObjectRecord words 4-11,
 	// DCLFShadingRow words 16-23), so neither size nor the block's place moves.

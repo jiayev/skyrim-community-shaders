@@ -3,15 +3,15 @@
 
 #include "Internal.h"
 
-
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
-#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Features/EnvironmentProbe/EnvironmentProbe.h"
 
 #include <algorithm>
 #include <atomic>
@@ -49,11 +49,25 @@ namespace DCLF::Scene
 			return static_cast<std::uint8_t>((drawable ? Extensions::ViewEntryOf(view).phase : 0u) & a_drawn);
 		}
 		std::uint32_t phases = 0;
-		if (!(flags & kObjectShadowOnly))
+		if (!(flags & kObjectShadowOnly)) {
 			phases |= kSetMain;
+			const auto probe = Extensions::Views().worldLightingPhases & a_drawn;
+			const auto p = tables.objects[a_slot].pipelineIndex;
+			if (probe && p < tables.pipelines.size() && Features::EnvironmentProbe::SupportsPipeline(tables.pipelines[p].rasterFlags) &&
+				!(flags & (kObjectDecal | kObjectForward)) && a_slot < tables.objectGeometry.size()) {
+				const auto leaf = mirror.Leaf(tables.objectGeometry[a_slot]);
+				const auto* property = leaf ? SceneCapture::LeafView::Lighting(leaf.property) : nullptr;
+				// The opaque capture pipeline tests and writes Z, and takes the probe's sun shadows.
+				// Other states are drawn by the capture accumulator with their own state.
+				using F = RE::BSShaderProperty::EShaderPropertyFlag;
+				constexpr auto required = std::uint64_t(F::kZBufferWrite) | std::uint64_t(F::kZBufferTest) | std::uint64_t(F::kReceiveShadows);
+				if (property && (property->flags & required) == required)
+					phases |= probe;
+			}
+		}
 		// The LodTechniques views draw the LOD techniques (the reflection's faces: dclf-architecture.md, "Water reflections").
 		if (const auto p = tables.objects[a_slot].pipelineIndex; !(flags & kObjectShadowOnly) && p < tables.pipelines.size() &&
-			LodLightingTechnique(tables.pipelines[p].passDescriptor))
+																 LodLightingTechnique(tables.pipelines[p].passDescriptor))
 			phases |= Extensions::Views().lodPhases;
 		if (!(flags & kObjectNoShadow))
 			phases |= kSetCaster | kSetCasterPoint;
@@ -153,10 +167,11 @@ namespace DCLF::Scene
 		}
 		if (!a_partner || !(a_lost & kSetMain) || a_slot >= tables.objects.size())
 			return;
-		const std::uint32_t partner = tables.IsLayer(a_slot) ? tables.layerBase[a_slot] : a_slot < tables.layerOf.size() ? tables.layerOf[a_slot] : kNoObjectSlot;
+		const std::uint32_t partner = tables.IsLayer(a_slot) ? tables.layerBase[a_slot] : a_slot < tables.layerOf.size() ? tables.layerOf[a_slot] :
+		                                                                                                                   kNoObjectSlot;
 		if (partner == kNoObjectSlot || partner >= tables.objects.size())
 			return;
-		const auto mainPhases = static_cast<std::uint8_t>(kSetMain | Extensions::Views().lodPhases);
+		const auto mainPhases = static_cast<std::uint8_t>(kSetMain | Extensions::Views().lodPhases | Extensions::Views().worldLightingPhases);
 		if (PhasesIn(tables, partner) & mainPhases) {
 			tables.setPhases[partner] = 0;
 			tables.objects[partner].flags &= ~kObjectMember;
@@ -328,7 +343,7 @@ namespace DCLF::Scene
 				main = false;
 			}
 			if (!main)
-				phases &= ~kSetMain;
+				phases &= ~(kSetMain | views.worldLightingPhases);
 		}
 		// The views', in the decision's order (Extensions::ViewSet::decideOrder: the CategoryRoot views, then the rest). Reason 8: a
 		// forward pipeline.
@@ -374,7 +389,9 @@ namespace DCLF::Scene
 				phases &= ~phase;
 			}
 		}
-		if (phases == participation) {
+		// The probe has its own residual accumulator. A pending probe pipeline
+		// must not revoke a ready main or shadow draw for the same object.
+		if (((phases ^ participation) & ~views.worldLightingPhases) == 0) {
 			d.phases = phases;
 			return d;
 		}
@@ -404,9 +421,9 @@ namespace DCLF::Scene
 		if (everything) {
 			++setStats.resyncs;
 			logger::info("[DCLF] set resync at frame {} ({} objects, scene {}): {}", sceneFrame, objects, live ? "built" : "not built",
-				drawn != setPhaseMask                                 ? fmt::format("phases {:#x} -> {:#x}", setPhaseMask, drawn) :
+				drawn != setPhaseMask                                    ? fmt::format("phases {:#x} -> {:#x}", setPhaseMask, drawn) :
 				!setCursor.Continues(tables.changeLog, tablesGeneration) ? std::string("new tables or a change log the cursor cannot read on") :
-				                                                          std::string("fewer objects"));
+																		   std::string("fewer objects"));
 		}
 		setPhaseMask = drawn;
 		if (everything) {
@@ -564,11 +581,11 @@ namespace DCLF::Scene
 			++(a_phases ? setStats.joined : setStats.left);
 		if (before && !a_phases) {
 			const std::uint8_t participation = live ? SetParticipation(a_slot, drawn) : std::uint8_t{ 0 };
-			const std::size_t cause = !live                                                    ? 0 :
-			                          !participation                                           ? 1 :
-			                          ((participation & kSetMain) && !IsResidentSlot(a_slot))  ? 2 :
-			                          (a_slot < setWaitCause.size() && setWaitCause[a_slot])   ? 3 :
-			                                                                                     4;
+			const std::size_t cause = !live                                                   ? 0 :
+			                          !participation                                          ? 1 :
+			                          ((participation & kSetMain) && !IsResidentSlot(a_slot)) ? 2 :
+			                          (a_slot < setWaitCause.size() && setWaitCause[a_slot])  ? 3 :
+			                                                                                    4;
 			++setStats.leftBy[cause];
 			if (cause == 3 && a_slot < setWaitWhy.size())
 				++setStats.leftWaiting[(std::min<std::size_t>)(setWaitWhy[a_slot], setStats.leftWaiting.size() - 1)];
@@ -604,7 +621,8 @@ namespace DCLF::Scene
 			if (slot >= objects)
 				continue;
 			// A base and its layer are main-phase members together (the engine's main passes of both are the base geometry's).
-			const std::uint32_t partner = tables.IsLayer(slot) ? tables.layerBase[slot] : slot < tables.layerOf.size() ? tables.layerOf[slot] : kNoObjectSlot;
+			const std::uint32_t partner = tables.IsLayer(slot) ? tables.layerBase[slot] : slot < tables.layerOf.size() ? tables.layerOf[slot] :
+			                                                                                                             kNoObjectSlot;
 			bool wait = false, partial = false;
 			std::uint8_t phases = CommitDecideSlot(slot, a_commit, wait, &partial);
 			if (setPartialMark.size() < objects)
@@ -868,7 +886,7 @@ namespace DCLF::Scene
 				const auto root = static_cast<std::uint8_t>(tables.setPhases[a_slot] & views.rootPhases);
 				const bool rootMember = root && !(flags & kObjectNoBindings) && draws.FitsScene(&tables, a_slot, false);
 				const std::uint8_t others = draws.FitsScene(&tables, a_slot, true) ? static_cast<std::uint8_t>(tables.setPhases[a_slot] & ~(kSetMain | views.phases)) : 0;
-				drawn = static_cast<std::uint8_t>((main ? (kSetMain | views.lodPhases) : 0u) | (rootMember ? root : 0u) | others);
+				drawn = static_cast<std::uint8_t>((main ? (kSetMain | views.lodPhases | views.worldLightingPhases) : 0u) | (rootMember ? root : 0u) | others);
 			}
 			// A structural change (shapes made without it) or any undrawn phase revokes the whole claim.
 			const std::uint8_t lost = ((same && a_structure) || (claimed & ~drawn)) ? claimed : std::uint8_t{ 0 };

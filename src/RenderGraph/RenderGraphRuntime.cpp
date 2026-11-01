@@ -1,49 +1,49 @@
 #if defined(CS_HAS_RENDER_GRAPH)
 
 // volk must precede every Vulkan header in this translation unit.
-#include <rhi_interop_vulkan.h>
+#	include <rhi_interop_vulkan.h>
 
-#include "RenderGraphRuntime.h"
+#	include "RenderGraphRuntime.h"
 
-#include "Aftermath.h"
-#include "DxvkLoader.h"
-#include "Features/Upscaling/DXVKInteropInterfaces.h"
-#include "Globals.h"
-#include "Profiler.h"
-#include "RenderGraph/DxvkOrgInterop.h"
-#include "Features/RemoteControl/GpuTimestamps.h"
-#include "Features/RemoteControl/NvPerf.h"
-#include "Features/DrawcallLimitFix.h"
-#include "GpuIdleTrace.h"
-#include "State.h"
-#include "Utils/FileRename.h"
+#	include "Aftermath.h"
+#	include "DxvkLoader.h"
+#	include "Features/DrawcallLimitFix.h"
+#	include "Features/RemoteControl/GpuTimestamps.h"
+#	include "Features/RemoteControl/NvPerf.h"
+#	include "Features/Upscaling/DXVKInteropInterfaces.h"
+#	include "Globals.h"
+#	include "GpuIdleTrace.h"
+#	include "Profiler.h"
+#	include "RenderGraph/DxvkOrgInterop.h"
+#	include "State.h"
+#	include "Utils/FileRename.h"
 #	include "Vram/Debug.h"
 
-#include <OpenRenderGraph/GraphHost.h>
+#	include <OpenRenderGraph/GraphHost.h>
 // This module exports the contributor ABI's table (ORG_GetRenderGraphAPI, below).
-#define ORG_RENDER_GRAPH_HOST_EXPORTS
-#include <OpenRenderGraph/ContributorHost.h>
-#if defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include <ORGModuleServices/PipelineRegistry.h>
-#endif
-#if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
-#	include <ORGModuleServices/ShaderCompiler.h>
-#endif
-#include <Resources/Resource.h>
+#	define ORG_RENDER_GRAPH_HOST_EXPORTS
+#	include <OpenRenderGraph/ContributorHost.h>
+#	if defined(CS_HAS_ORG_MODULE_SERVICES)
+#		include <ORGModuleServices/PipelineRegistry.h>
+#	endif
+#	if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
+#		include <ORGModuleServices/ShaderCompiler.h>
+#	endif
+#	include <Resources/Resource.h>
 
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <filesystem>
-#include <semaphore>
+#	include <algorithm>
+#	include <array>
+#	include <atomic>
+#	include <filesystem>
+#	include <semaphore>
 
-#include <tbb/concurrent_queue.h>
-#include <map>
-#include <mutex>
-#include <chrono>
-#include <cstring>
-#include <thread>
-#include <vector>
+#	include <chrono>
+#	include <cstring>
+#	include <map>
+#	include <mutex>
+#	include <tbb/concurrent_queue.h>
+#	include <thread>
+#	include <vector>
 
 namespace
 {
@@ -65,7 +65,7 @@ namespace
 	// Diagnostics (the submission dump): DescribeResource(s) since the last dump, their objects and time.
 	std::atomic<std::uint64_t> describeCalls{ 0 }, describeObjects{ 0 }, describeNs{ 0 };
 }
-#include <fmt/ranges.h>
+#	include <fmt/ranges.h>
 
 namespace
 {
@@ -246,9 +246,9 @@ struct RenderGraphRuntime::Impl
 	PFN_dxvkUntrackInteropResources untrackResources = nullptr;
 	PFN_dxvkPollInteropRelocations pollRelocations = nullptr;
 	PFN_dxvkReleaseInteropStorage releaseStorage = nullptr;
-#if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
+#	if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
 	std::unique_ptr<org::services::ShaderCompiler> shaderCompiler;
-#endif
+#	endif
 	PFN_vkQueueSubmit2 queueSubmit2 = nullptr;
 	PFN_dxvkEmitCommandBufferCallback emitCommandBufferCallback = nullptr;  // diagnostics: SetSkippedEpochWorkerLoad
 	PFN_dxvkEmitExternalCommands emitExternalCommands = nullptr;            // optional: EmitExternalCommands
@@ -407,15 +407,15 @@ struct RenderGraphRuntime::Impl
 	// SignalFramePace / WaitFramePace: a timeline DXVK's stream signals with each paced frame's number. Lives as long as the
 	// device (its last signal may still sit in DXVK's stream at a teardown).
 	VkSemaphore framePace = VK_NULL_HANDLE;
-	uint64_t framePaceValue = 0;  // the last value enqueued
+	uint64_t framePaceValue = 0;                       // the last value enqueued
 	uint64_t framePaceWaits = 0, framePaceWaited = 0;  // waits that blocked, and their total time (us)
-	uint32_t frameLatency = 2;    // CS_FRAME_LATENCY
-	bool framePaceSignalled = false;  // this frame enqueued one
+	uint32_t frameLatency = 2;                         // CS_FRAME_LATENCY
+	bool framePaceSignalled = false;                   // this frame enqueued one
 	std::shared_ptr<rhi::DevicePtr> device = std::make_shared<rhi::DevicePtr>();
 	std::unique_ptr<org::GraphHost> host;
 	// The contributor ABI's host (OpenRenderGraph/ContributorAPI.h): other modules' passes, in the epochs named after the segments.
 	std::unique_ptr<org::contributor::ContributorHost> contributors;
-	rhi::PipelineLayoutPtr contributorLayout;  // the pipeline service's layout: bindless, 16 root constants
+	rhi::PipelineLayoutPtr contributorLayout;             // the pipeline service's layout: bindless, 16 root constants
 	std::shared_ptr<rhi::TimelinePtr> frameWaitTimeline;  // FrameWaitTimeline
 	std::atomic<bool> faulted = false;
 
@@ -842,6 +842,8 @@ struct RenderGraphRuntime::Impl
 			return "DrawcallLimitFix::First-person depth / " + a_pass;
 		case Segment::FirstPerson:
 			return "DrawcallLimitFix::First person / " + a_pass;
+		case Segment::EnvironmentProbe:
+			return "EnvironmentProbe::DCLF / " + a_pass;
 		}
 		return "RenderGraph::" + a_pass;
 	}
@@ -865,8 +867,8 @@ struct RenderGraphRuntime::Impl
 			const auto& t = host->LastFrameTimings();
 			const auto& e = t.execute;
 			const std::array<double, kEpochPhases> phases = t.async ?
-				std::array<double, kEpochPhases>{ t.ticketWaitUs, t.releaseUs, t.beforePrepareUs, t.checkUs, flushUs, completionsUs, closeUs, t.uploadsUs, t.submitUs, t.postUs, t.buildUs, 0.0 } :
-				std::array<double, kEpochPhases>{ t.waitUs, t.releaseUs, t.beforePrepareUs, t.updateUs, e.retireUs, e.admissionUs, e.acquireUs, e.recordUs, e.submitUs, e.commitUs, t.signalUs, 0.0 };
+			                                                    std::array<double, kEpochPhases>{ t.ticketWaitUs, t.releaseUs, t.beforePrepareUs, t.checkUs, flushUs, completionsUs, closeUs, t.uploadsUs, t.submitUs, t.postUs, t.buildUs, 0.0 } :
+			                                                    std::array<double, kEpochPhases>{ t.waitUs, t.releaseUs, t.beforePrepareUs, t.updateUs, e.retireUs, e.admissionUs, e.acquireUs, e.recordUs, e.submitUs, e.commitUs, t.signalUs, 0.0 };
 			double accounted = 0.0;
 			for (std::size_t i = 0; i + 1 < kEpochPhases; ++i) {
 				stats.phaseUs[i] += phases[i];
@@ -906,10 +908,11 @@ struct RenderGraphRuntime::Impl
 		}
 		if (asyncEpochs) {
 			const auto async = host->TakeAsyncStats();
-			logger::info("[ORG] Async epochs: {} submitted, {} waited for their ticket, {} prepared again after the feature's inputs changed, {} carried uploads ({} lists recorded ahead by their producers; "
-						 "{} copies recorded on the queue that first uses them, {} other-queue batches spared the graphics uploads' wait); "
-						 "{} completions left to the host's next GPU wake-up instead of a signal; {} backing changes, {} of them waited out a ticket preparation, {} preparations held off for one, {} tickets stale only by a changed backing; "
-						 "recordings: {} made ({} kept), {} tickets took a kept one, {} stale tickets adopted one",
+			logger::info(
+				"[ORG] Async epochs: {} submitted, {} waited for their ticket, {} prepared again after the feature's inputs changed, {} carried uploads ({} lists recorded ahead by their producers; "
+				"{} copies recorded on the queue that first uses them, {} other-queue batches spared the graphics uploads' wait); "
+				"{} completions left to the host's next GPU wake-up instead of a signal; {} backing changes, {} of them waited out a ticket preparation, {} preparations held off for one, {} tickets stale only by a changed backing; "
+				"recordings: {} made ({} kept), {} tickets took a kept one, {} stale tickets adopted one",
 				async.submitted, async.waited, async.stale, async.uploads, async.recordedUploadLists, async.queueUploadCopies, async.sparedUploadWaits,
 				async.wakesSkipped, async.backingMutations, async.backingWaits,
 				async.preparationWaits, async.staleBacking, async.recorded, async.kept, async.reused, async.adopted);
@@ -1033,6 +1036,8 @@ struct RenderGraphRuntime::Impl
 			return "cs.first-person-depth";
 		case Segment::FirstPerson:
 			return "cs.first-person";
+		case Segment::EnvironmentProbe:
+			return "cs.environment-probe";
 		default:
 			return "cs.unknown";
 		}
@@ -1045,7 +1050,8 @@ struct RenderGraphRuntime::Impl
 		try {
 			const rhi::PushConstantRangeDesc constants{ .visibility = rhi::ShaderStage::All, .num32BitValues = 16 };
 			if ((*device)->CreatePipelineLayout(rhi::PipelineLayoutDesc{ .pushConstants = { &constants, 1 },
-					.flags = rhi::PipelineLayoutFlags::PF_None }, contributorLayout) != rhi::Result::Ok)
+													.flags = rhi::PipelineLayoutFlags::PF_None },
+					contributorLayout) != rhi::Result::Ok)
 				throw std::runtime_error("the contributor pipeline layout could not be created");
 			org::contributor::ContributorHost::Desc desc{};
 			desc.id = "cs";
@@ -1113,6 +1119,8 @@ struct RenderGraphRuntime::Impl
 			return "CS DCLF: first-person depth";
 		case Segment::FirstPerson:
 			return "CS DCLF: first person";
+		case Segment::EnvironmentProbe:
+			return "CS DCLF: environment probe";
 		}
 		return "CS render graph";
 	}
@@ -1140,6 +1148,8 @@ struct RenderGraphRuntime::Impl
 			return "CS DCLF: first-person depth inputs";
 		case Segment::FirstPerson:
 			return "CS DCLF: first-person inputs";
+		case Segment::EnvironmentProbe:
+			return "CS DCLF: environment probe inputs";
 		}
 		return "CS render graph: feature inputs";
 	}
@@ -1362,10 +1372,12 @@ bool RenderGraphRuntime::Initialize()
 	if (!onBuffers) {
 		// The one cause seen in practice, named so the menu does not leave it to be guessed.
 		if (::GetModuleHandleW(L"renderdoc.dll"))
-			return disable("DXVK runs on legacy descriptor sets: RenderDoc is loaded, and its DXVK capture config turns off descriptor buffers, which the "
-						   "render graph needs. Turn off RenderDoc capture to use the render graph.");
-		return disable("DXVK did not grant descriptor buffers with mutable descriptors: it runs on legacy descriptor sets, or on a model BasicRHI cannot "
-					   "use on this device (see the binding model negotiation above and DXVK's 'Binding model' and 'Interop feature denied' log lines)");
+			return disable(
+				"DXVK runs on legacy descriptor sets: RenderDoc is loaded, and its DXVK capture config turns off descriptor buffers, which the "
+				"render graph needs. Turn off RenderDoc capture to use the render graph.");
+		return disable(
+			"DXVK did not grant descriptor buffers with mutable descriptors: it runs on legacy descriptor sets, or on a model BasicRHI cannot "
+			"use on this device (see the binding model negotiation above and DXVK's 'Binding model' and 'Interop feature denied' log lines)");
 	}
 	logger::info("[ORG] Binding model: descriptor buffer (VK_EXT_descriptor_buffer + VK_EXT_mutable_descriptor_type)");
 
@@ -1519,11 +1531,11 @@ bool RenderGraphRuntime::Initialize()
 	// a shader reload replaced up to it released (on this thread: the host's, with async epochs).
 	state->host->SetRetiredCallback([](std::uint64_t a_submissions) {
 		DrawcallLimitFix::OnGraphSubmissionsRetired(a_submissions);
-#if defined(CS_HAS_ORG_MODULE_SERVICES)
+#	if defined(CS_HAS_ORG_MODULE_SERVICES)
 		PipelineRegistry()->Retire(a_submissions);
-#endif
+#	endif
 	});
-#if defined(CS_HAS_ORG_MODULE_SERVICES)
+#	if defined(CS_HAS_ORG_MODULE_SERVICES)
 	// Shader hot reload's safe point (docs/development/dclf-hot-reload.md): every build of the graph publishes what the registry staged.
 	// There the host's thread is stopped and the old graph's work waited for, so no recording or preparation reads a slot while it
 	// changes, and every recording after it is of the new build (each epoch, revision-driven or live, records again). The extension
@@ -1534,7 +1546,7 @@ bool RenderGraphRuntime::Initialize()
 				PipelineRegistry()->Generation());
 		return {};
 	});
-#endif
+#	endif
 	state->CreateContributorHost();
 	if (state->asyncEpochs) {
 		try {
@@ -1564,7 +1576,7 @@ bool RenderGraphRuntime::Initialize()
 	logger::info("[ORG] Render graph adopted DXVK's Vulkan device (queue family {}, index {}); submissions {}",
 		info.graphicsQueueFamily, info.graphicsQueueIndex,
 		impl->enqueueSubmission ? "go through DXVK's command stream" : "flush DXVK each epoch");
-#if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
+#	if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
 	{
 		// DXC ships beside the DXVK DLLs; load it from there, not by name (another dxcompiler.dll,
 		// without SPIR-V support, may already be in the process).
@@ -1578,7 +1590,7 @@ bool RenderGraphRuntime::Initialize()
 		if (!impl->shaderCompiler->Available())
 			impl->shaderCompiler.reset();
 	}
-#endif
+#	endif
 	IndirectCommandsFeatureInfo indirect{};
 	if ((*impl->device)->QueryFeatureInfo(&indirect.header) == rhi::Result::Ok) {
 		logger::info("[ORG] Indirect commands: generated commands {}, index buffer arguments {}, pipeline sets {} (up to {} pipelines); game resource export {}{}{}",
@@ -1618,10 +1630,10 @@ void RenderGraphRuntime::Shutdown()
 	} catch (const std::exception& e) {
 		logger::error("[ORG] Render graph shutdown failed: {}", e.what());
 	}
-#if defined(CS_HAS_ORG_MODULE_SERVICES)
+#	if defined(CS_HAS_ORG_MODULE_SERVICES)
 	// The pipelines a shader reload replaced or staged, while the device is still there (its work is done).
 	PipelineRegistry()->DrainRetired();
-#endif
+#	endif
 	if (state->streamPoint) {
 		// Every point was waited for by a compute submission the graph's timelines have seen complete.
 		VkSemaphoreWaitInfo wait{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
@@ -1875,8 +1887,7 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<voi
 				const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(l.us);
 				while (std::chrono::steady_clock::now() < until) {
 				}
-				l.reached.store(true, std::memory_order_release);
-			}, &load);
+				l.reached.store(true, std::memory_order_release); }, &load);
 			if (sync) {
 				globals::d3d::context->Flush();
 				while (!load.reached.load(std::memory_order_acquire))
@@ -2062,22 +2073,22 @@ void RenderGraphRuntime::ReportGpuTimings(std::uint32_t a_frames, bool a_log)
 
 org::services::ShaderCompiler* RenderGraphRuntime::ShaderCompiler()
 {
-#if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
+#	if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
 	return impl ? impl->shaderCompiler.get() : nullptr;
-#else
+#	else
 	return nullptr;
-#endif
+#	endif
 }
 
 org::services::PipelineRegistry* RenderGraphRuntime::PipelineRegistry()
 {
-#if defined(CS_HAS_ORG_MODULE_SERVICES)
+#	if defined(CS_HAS_ORG_MODULE_SERVICES)
 	// Never destroyed: a rebuild may complete while the process tears down (Shutdown releases what it holds of the device's).
 	static auto* registry = new org::services::PipelineRegistry;
 	return registry;
-#else
+#	else
 	return nullptr;
-#endif
+#	endif
 }
 
 void RenderGraphRuntime::RequestTimestampDump(std::uint32_t a_epochs)
@@ -2130,19 +2141,19 @@ void RenderGraphRuntime::SetEarlyFlush(int a_flush)
 
 void RenderGraphRuntime::RequestShaderReload(std::string_view a_changedFile, bool a_force)
 {
-#if defined(CS_HAS_ORG_MODULE_SERVICES)
+#	if defined(CS_HAS_ORG_MODULE_SERVICES)
 	logger::info("[ORG] shader reload asked: {}{}", a_changedFile.empty() ? std::string("every live pipeline") : fmt::format("the live pipelines built from {}", a_changedFile),
 		a_force ? ", each swapped even if unchanged" : "");
 	PipelineRegistry()->RequestReload(a_changedFile, a_force);
-#else
+#	else
 	(void)a_changedFile;
 	(void)a_force;
-#endif
+#	endif
 }
 
 void RenderGraphRuntime::ServicePipelineReload()
 {
-#if defined(CS_HAS_ORG_MODULE_SERVICES)
+#	if defined(CS_HAS_ORG_MODULE_SERVICES)
 	auto& registry = *PipelineRegistry();
 	const auto result = registry.Service();
 	if (result.finished) {
@@ -2161,7 +2172,7 @@ void RenderGraphRuntime::ServicePipelineReload()
 	} else if (registry.Publish(0)) {
 		registry.Retire(~0ull);
 	}
-#endif
+#	endif
 }
 
 const std::vector<std::filesystem::path>& RenderGraphRuntime::ShaderSourceFiles()
@@ -2172,11 +2183,11 @@ const std::vector<std::filesystem::path>& RenderGraphRuntime::ShaderSourceFiles(
 	static std::shared_ptr<const std::vector<std::filesystem::path>> current;
 	static std::uint64_t scannedFor = ~0ull;
 	thread_local std::shared_ptr<const std::vector<std::filesystem::path>> held;
-#if defined(CS_HAS_ORG_MODULE_SERVICES)
+#	if defined(CS_HAS_ORG_MODULE_SERVICES)
 	const std::uint64_t generation = PipelineRegistry()->SourcesGeneration();
-#else
+#	else
 	const std::uint64_t generation = 0;
-#endif
+#	endif
 	std::scoped_lock lock(mutex);
 	if (!current || scannedFor != generation) {
 		auto found = std::make_shared<std::vector<std::filesystem::path>>();

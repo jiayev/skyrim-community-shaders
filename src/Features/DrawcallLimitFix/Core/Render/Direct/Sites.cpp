@@ -2,14 +2,14 @@
 // site that records the site's uploads, pre-work and direct draws into DXVK's command buffer on its CS thread.
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
-#include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/DrawHelpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/IndexPool.h"
@@ -22,10 +22,10 @@
 #include <Render/RenderGraph/ExternalEpochExecution.h>
 #include <Render/Runtime/ScopedActiveGraphServices.h>
 #include <Resources/Buffers/Buffer.h>
+#include <Tracy/Tracy.hpp>
 #include <rhi.h>
 #include <rhi_interop.h>
 #include <rhi_interop_vulkan.h>
-#include <Tracy/Tracy.hpp>
 
 #include <TlHelp32.h>
 #include <intrin.h>
@@ -519,7 +519,8 @@ namespace DCLF::Direct::detail
 		recording->viewIndex = a_view.view.viewIndex;
 		recording->identity = identity;
 		recording->set = a_slot.set;
-		recording->version = bindings.main ? bindings.main->version : bindings.shadow ? bindings.shadow->version : nullptr;
+		recording->version = bindings.main ? bindings.main->version : bindings.shadow ? bindings.shadow->version :
+		                                                                                nullptr;
 		recording->lists = std::make_unique<ListPool>(TakeResetPool());
 		s.snapshots.push_back(recording);
 		a_view.snapshot = std::move(recording);
@@ -861,7 +862,7 @@ namespace DCLF::Direct::detail
 		thread_local SiteRun* executing = nullptr;
 	}
 
-	bool RecordExecutingSite(Site a_site, rhi::CommandList& a_list)
+	bool RecordExecutingSite(Site a_site, rhi::CommandList& a_list, const rhi::PassBeginInfo* a_probe)
 	{
 		auto* run = executing;
 		if (!run || run->site != a_site || !run->valid)
@@ -885,6 +886,11 @@ namespace DCLF::Direct::detail
 		case Site::Forward:
 			RecordForwardSite(out, *run);
 			break;
+		case Site::EnvironmentProbe:
+			if (!a_probe)
+				return false;
+			RecordProbeSite(out, *run, *a_probe);
+			break;
 		case Site::FirstPerson:
 			RecordFirstPersonSite(out, *run);
 			break;
@@ -905,7 +911,7 @@ namespace DCLF::Direct::detail
 		const std::size_t site = static_cast<std::size_t>(run.site);
 		// The site and its record mode (RecordMode's order).
 		static constexpr std::string_view kSiteNames[kSites][2] = { { "shadow serial", "shadow parallel" }, { "depth serial", "depth parallel" },
-			{ "colour serial", "colour parallel" }, { "forward serial", "forward parallel" }, { "first person serial", "first person parallel" } };
+			{ "colour serial", "colour parallel" }, { "forward serial", "forward parallel" }, { "first person serial", "first person parallel" }, { "probe serial", "probe parallel" } };
 		ZoneScopedN("CS.DCLF.Cpu.Site");
 		const auto siteName = kSiteNames[site][run.record == RecordMode::Parallel ? 1 : 0];
 		ZoneText(siteName.data(), siteName.size());
@@ -922,8 +928,10 @@ namespace DCLF::Direct::detail
 			if (!run.recordedDraws && !std::exchange(S().loggedNoLatePass, true))
 				logger::error("[DCLF] CPU pipeline: the {} site's epoch was executed without its late pass (no draws pass in its recording): it draws nothing", site);
 		} else if (!std::exchange(S().loggedNotAdopted, true)) {
-			logger::error("[DCLF] CPU pipeline: DXVK's command buffer could not be adopted, the site's targets have no views, or its epoch gave no execution: "
-						  "the {} site draws nothing", site);
+			logger::error(
+				"[DCLF] CPU pipeline: DXVK's command buffer could not be adopted, the site's targets have no views, or its epoch gave no execution: "
+				"the {} site draws nothing",
+				site);
 		}
 		// Every view's queue empty for the slot's next frame, whatever was recorded.
 		for (auto* view : run.views)
@@ -985,7 +993,7 @@ namespace DCLF::Direct::detail
 			}
 		}
 		static constexpr const char* kLabels[kSites] = { "DCLF direct shadow", "DCLF direct depth", "DCLF direct colour", "DCLF direct forward",
-			"DCLF direct first person" };
+			"DCLF direct first person", "DCLF direct environment probe" };
 		const bool queued = RenderGraphRuntime::Get().EmitExternalCommands(&SiteCallback, &a_run, waits, signals, true, kLabels[static_cast<std::size_t>(a_run.site)], true);
 		// Not queued: what the execution's signals would have completed, completed without its work (the graph waits for them).
 		if (!queued && a_run.execution && host)

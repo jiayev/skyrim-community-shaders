@@ -1,6 +1,9 @@
 #include "Rendering/EnvironmentProbe/Scene.h"
 
 #include "Globals.h"
+#if defined(CS_HAS_DCLF)
+#	include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
+#endif
 #include "Rendering/EnvironmentProbe/Capture.h"
 #include "State.h"
 #include <atomic>
@@ -140,11 +143,23 @@ namespace EnvironmentProbe::Scene
 
 	void RequestCapture()
 	{
+#if defined(CS_HAS_DCLF)
+		// DCLF can omit whole primary-cull entries. A frontier recorded from those
+		// jobs cannot describe the unclaimed geometry for an independent probe view.
+		if (DCLF::ShellState::Running()) {
+			requestedFrame.store(UINT32_MAX, std::memory_order_relaxed);
+			return;
+		}
+#endif
 		requestedFrame.store(globals::state->frameCountAtomic.load(std::memory_order_relaxed), std::memory_order_relaxed);
 	}
 
 	RE::BSTArray<RE::NiPointer<RE::NiAVObject>> Roots(RE::NiAVObject* scene)
 	{
+#if defined(CS_HAS_DCLF)
+		if (DCLF::ShellState::Running())
+			return {};
+#endif
 		std::scoped_lock lock(mutex);
 		if (frame.number != globals::state->frameCountAtomic.load(std::memory_order_relaxed) || frame.scene != scene)
 			return {};

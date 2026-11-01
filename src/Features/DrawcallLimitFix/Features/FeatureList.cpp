@@ -7,8 +7,9 @@
 #include "Features/DrawcallLimitFix/Features/Billboards/Billboards.h"
 #include "Features/DrawcallLimitFix/Features/Decals/Decals.h"
 #include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
-#include "Features/DrawcallLimitFix/Features/Fades/Fades.h"
+#include "Features/DrawcallLimitFix/Features/EnvironmentProbe/EnvironmentProbe.h"
 #include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
+#include "Features/DrawcallLimitFix/Features/Fades/Fades.h"
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPerson.h"
 #include "Features/DrawcallLimitFix/Features/Forward/Forward.h"
 #include "Features/DrawcallLimitFix/Features/GpuOcclusion/GpuOcclusion.h"
@@ -131,6 +132,7 @@ namespace DCLF::Features
 			Faces::Feature(),
 			FirstPerson::Feature(),
 			Fades::Feature(),
+			EnvironmentProbe::Feature(),
 		};
 		return kFeatures;
 	}

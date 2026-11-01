@@ -168,7 +168,7 @@ namespace DCLF::Direct::detail
 		bool used = false;         // a frame used it since its last Release
 		std::unique_ptr<Worker[]> workers;
 		std::uint32_t workerCount = 0;
-		Worker cs;  // DXVK's CS thread's
+		Worker cs;                                         // DXVK's CS thread's
 		std::vector<std::unique_ptr<CulledQueue>> queues;  // reused: an EventQueue's ring is never freed
 		std::size_t queuesUsed = 0;
 		std::deque<SiteView> views;
@@ -207,8 +207,8 @@ namespace DCLF::Direct::detail
 		bool deviceSet = false;
 		std::shared_ptr<rhi::TimelinePtr> timeline;
 		VkSemaphore semaphore = VK_NULL_HANDLE;
-		std::uint64_t signalled = 0;  // the timeline's last value queued
-		std::uint64_t submitted = 0;  // the last value known submitted (SubmitQueued's flush, or a frame's own work after it)
+		std::uint64_t signalled = 0;      // the timeline's last value queued
+		std::uint64_t submitted = 0;      // the last value known submitted (SubmitQueued's flush, or a frame's own work after it)
 		std::uint64_t hostSubmitted = 0;  // the host's submissions made at SubmitQueued's last flush
 		std::vector<std::unique_ptr<FrameSlot>> slots;
 		std::uint64_t frames = 0;
@@ -336,7 +336,7 @@ namespace DCLF::Direct::detail
 	 * (its epoch's CPU pipeline passes write memory the graph does not track, by address). False: no run of a_site is being executed,
 	 * or its inputs are incomplete.
 	 */
-	bool RecordExecutingSite(Site a_site, rhi::CommandList& a_list);
+	bool RecordExecutingSite(Site a_site, rhi::CommandList& a_list, const rhi::PassBeginInfo* a_probe = nullptr);
 
 	// ---- The site files' hooks ----
 
@@ -345,6 +345,7 @@ namespace DCLF::Direct::detail
 	// ViewSites.cpp: the depth site's hosted views, after main depth (their runs' views, rendered into their own targets); the first-person
 	// colour site's callback body (Site::FirstPerson).
 	void RecordHostedDepthViews(SiteOut& a_out, SiteRun& a_run);
+	void RecordProbeSite(SiteOut& a_out, SiteRun& a_run, const rhi::PassBeginInfo& a_begin);
 	void RecordFirstPersonSite(SiteOut& a_out, SiteRun& a_run);
 	// Families.cpp: the depth and colour sites' families (render thread, from NewRun's main commit: what their draws bind); their draws in
 	// the callback, after the site's main pass (a pass of their own: a_depthPass, the depth site's).

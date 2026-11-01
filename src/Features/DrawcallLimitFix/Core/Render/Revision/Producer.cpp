@@ -2,14 +2,14 @@
 // revision's shapes and latches from a publication and the frame's posted RevisionInputs, then AssembleRevision seals them. Also the
 // main shape's plans (shared with the commits).
 
-#include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
@@ -305,11 +305,7 @@ namespace DCLF
 			// The features' scene resources' latched buffers (Api::SceneResources::latched: Features/TreeLod's draw row and list header), the
 			// depth commit's.
 			if (a_depthOnly)
-				Extensions::LatchSceneResources(a_resources.scene->sceneResources,
-					[](void* a_add, const std::shared_ptr<org::Buffer>& a_buffer, const Versioned& a_versioned, std::size_t a_bytes) {
-						(*static_cast<decltype(add)*>(a_add))(a_versioned ? a_versioned->Key() : a_buffer.get(), a_bytes, 0);
-					},
-					&add);
+				Extensions::LatchSceneResources(a_resources.scene->sceneResources, [](void* a_add, const std::shared_ptr<org::Buffer>& a_buffer, const Versioned& a_versioned, std::size_t a_bytes) { (*static_cast<decltype(add)*>(a_add))(a_versioned ? a_versioned->Key() : a_buffer.get(), a_bytes, 0); }, &add);
 			add(a_resources.count.get(), a_depthOnly ? sizeof(kZeroCounts) : sizeof(std::uint32_t), 0);
 			if (a_depthOnly)
 				add(a_resources.retestDispatch.get(), sizeof(kRetestDispatchReset), 0);
@@ -400,7 +396,7 @@ namespace DCLF
 				if (a_in.classPlan)
 					frame->classes = a_in.classPlan->classes;
 				frame->terrainCapacity = a_in.terrainCapacity;
-				frame->forwardCapacity = a_in.forwardCapacity;  // the colour segment's and the forward epoch's
+				frame->forwardCapacity = a_in.forwardCapacity;        // the colour segment's and the forward epoch's
 				frame->refractionCapacity = a_in.refractionCapacity;  // likewise
 			}
 			frame->width = a_in.viewport.width;
@@ -718,7 +714,10 @@ namespace DCLF
 			if (a_old.latch != a_new.latch)
 				return fmt::format("latch block {} -> {}", fmt::ptr(a_old.latch.get()), fmt::ptr(a_new.latch.get()));
 			for (std::size_t l = 0; l < a_old.latched.size(); ++l)
-				if (auto d = LatchedDifference(l == 0 ? "latched (from latch)" : l == 1 ? "latched (zeros)" : "latched (frame)", a_old.latched[l], a_new.latched[l]); !d.empty())
+				if (auto d = LatchedDifference(l == 0 ? "latched (from latch)" : l == 1 ? "latched (zeros)" :
+																						  "latched (frame)",
+						a_old.latched[l], a_new.latched[l]);
+					!d.empty())
 					return d;
 			for (auto d : { HandleDifference("resourceHeap", a_old.resourceHeap, a_new.resourceHeap), HandleDifference("samplerHeap", a_old.samplerHeap, a_new.samplerHeap),
 					 IndirectDifference(a_old.indirect, a_new.indirect), ValueDifference("width", a_old.width, a_new.width), ValueDifference("height", a_old.height, a_new.height),
@@ -756,7 +755,10 @@ namespace DCLF
 			if (a_old.latch != a_new.latch)
 				return fmt::format("latch block {} -> {}", fmt::ptr(a_old.latch.get()), fmt::ptr(a_new.latch.get()));
 			for (std::size_t l = 0; l < a_old.latched.size(); ++l)
-				if (auto d = LatchedDifference(l == 0 ? "latched (from latch)" : l == 1 ? "latched (zeros)" : "latched (commit)", a_old.latched[l], a_new.latched[l]); !d.empty())
+				if (auto d = LatchedDifference(l == 0 ? "latched (from latch)" : l == 1 ? "latched (zeros)" :
+																						  "latched (commit)",
+						a_old.latched[l], a_new.latched[l]);
+					!d.empty())
 					return d;
 			for (auto d : { HandleDifference("resourceHeap", a_old.resourceHeap, a_new.resourceHeap), HandleDifference("samplerHeap", a_old.samplerHeap, a_new.samplerHeap),
 					 ValueDifference("indirect valid", a_old.indirect.valid, a_new.indirect.valid), HandleDifference("indirect layout", a_old.indirect.layout, a_new.indirect.layout) })
@@ -1066,6 +1068,8 @@ namespace DCLF
 			}
 			if (!view.resources || (traits.depthPass && !viewOn[v]))
 				continue;
+			if (kind == ViewKind::EnvironmentProbe && (!viewOn[v] || !view.width || !view.height))
+				continue;
 			// A view's own frame values (the faces': its frame buffers' copies, then its frame constants'): its latch's frame region holds them
 			// at the depth commit's block sizes, grown by a page (another layout: a new block at the seal).
 			if (OwnsFrameConstants(traits) && view.resources->frameConstants && producer.latches.viewsLaidOut[v]) {
@@ -1178,6 +1182,8 @@ namespace DCLF
 				viewLatches = { a_sealed.Latch(handles.views[v]), a_sealed.Latch(handles.viewZeros[v]), latches.views[v] };
 			const bool ready = traits.depthPass ? viewOn[v] && inputs.mainKnown[kColourShape] && viewLatches.latch : inputs.claims && inputs.scene;
 			if (!view.resources || !indirect.valid || !ready)
+				continue;
+			if (slot.view == ViewKind::EnvironmentProbe && (!viewOn[v] || !view.width || !view.height || !viewLatches.latch))
 				continue;
 			ViewShapeInputs in;
 			PlanViewBuckets(traits, a_layout, &a_make.lookups, indirect, viewRevisionPipelines[v], traits.forwardPart ? std::span<const std::uint8_t>(viewForwardSlots) : std::span<const std::uint8_t>{}, in.plan);

@@ -709,17 +709,17 @@ ID3D11ShaderResourceView* LightLimitFix::BuildProbeLightGrid(ID3D11Buffer* a_cap
 	}
 	if (!probeLightMasks) {
 		constexpr uint32_t count = 16 * 16 * 24 * 33;
-		auto desc = StructuredBufferDesc<uint32_t>(count, false);
-		desc.CPUAccessFlags = 0;
-		probeLightMasks = std::make_unique<Buffer>(desc, nullptr, "LightLimitFix::Octahedral Light Masks");
+		const auto desc = StructuredBufferDesc<uint32_t>(count, true, false);
+		auto masks = std::make_unique<Buffer>(desc, nullptr, "LightLimitFix::Octahedral Light Masks");
 		D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
 		srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
 		srv.Buffer.NumElements = count;
-		probeLightMasks->CreateSRV(srv);
+		masks->CreateSRV(srv);
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uav{};
 		uav.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
 		uav.Buffer.NumElements = count;
-		probeLightMasks->CreateUAV(uav);
+		masks->CreateUAV(uav);
+		probeLightMasks = std::move(masks);
 	}
 	auto* context = globals::d3d::context;
 	ID3D11ShaderResourceView* nullSRV = nullptr;

@@ -36,8 +36,8 @@ namespace DCLF::Direct
 	{
 		std::uint32_t family = 0;  // Api::DrawFamily
 		std::uint32_t face = 0;
-		std::uint64_t row = 0;          // the face's row (ViewResources::faceRowsAddress)
-		rhi::ResourceHandle list{};     // the face's list, the adopted set's version (its cull is the site's pre-work)
+		std::uint64_t row = 0;           // the face's row (ViewResources::faceRowsAddress)
+		rhi::ResourceHandle list{};      // the face's list, the adopted set's version (its cull is the site's pre-work)
 		rhi::PipelineHandle pipeline{};  // the shape's (ViewFrame::faces)
 		rhi::CommandSignatureHandle signature{};
 	};
@@ -45,7 +45,7 @@ namespace DCLF::Direct
 	/** @brief A hosted view's commit (CommitHostedView, inside the depth commit): what its site draws from. */
 	struct HostedViewCommit
 	{
-		ViewType type = ViewType::Reflection;  // Reflection or FirstPerson
+		ViewType type = ViewType::Reflection;           // Reflection or FirstPerson
 		std::shared_ptr<const Draws::ViewFrame> shape;  // the revision's shape it committed against
 		std::shared_ptr<Draws::ViewResources> resources;
 		std::span<const CullView> faces;  // per drawn face, from the latch its commit wrote (viewIndex: the face)
@@ -64,6 +64,7 @@ namespace DCLF::Direct
 	 * this frame's first-person depth (its culled batches); its callback queued after the body. False: no first-person depth this frame.
 	 */
 	bool FirstPersonColourReached();
+	bool ProbeReached(const std::shared_ptr<const Draws::ViewFrame>& shape, std::span<const CullView> faces);
 }
 
 namespace DCLF::Direct::detail

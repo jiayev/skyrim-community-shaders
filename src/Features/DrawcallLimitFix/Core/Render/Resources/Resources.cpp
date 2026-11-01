@@ -816,10 +816,15 @@ namespace DCLF
 				}
 			}
 		}
-		state->blocks = DeviceBuffer(std::uint64_t(traits.faces) * kViewBlockBytes, name(traits.blocks).c_str());
+		state->blocks = DeviceBuffer(std::uint64_t(traits.faces) * ViewBlockBytes(a_kind), name(traits.blocks).c_str());
 		state->blocksAddress = AddressOf(device, *state->blocks);
 		if (!state->blocksAddress)
 			return fail("blocks have no device address");
+		if (a_kind == ViewKind::EnvironmentProbe) {
+			for (std::uint32_t f = 0; f < traits.faces; ++f)
+				if (!(state->probeBlocks[f] = FrameBlockViews::Create(device, state->blocks, f)))
+					return fail("octant constant descriptors could not be created");
+		}
 		// A view drawing with frame constants of its own (the faces'): laid out as the main ones, written by its commit, with its copies of
 		// the main frame buffers.
 		if (OwnsFrameConstants(traits)) {
@@ -840,6 +845,57 @@ namespace DCLF
 		logger::info("[DCLF] {} graph resources created", traits.name);
 		PostRevisionInputs();
 		return true;
+	}
+
+	bool IndirectDraws::ImportProbeTargets(const std::array<ID3D11Texture2D*, 4>& a_textures)
+	{
+		constexpr auto kind = Api::EngineView::EnvironmentProbe;
+		const auto* slot = ViewState(kind);
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!slot || !slot->resources || !host)
+			return false;
+		auto& r = *slot->resources;
+		if (!r.rebuildPending && r.probeTextures && std::ranges::equal(a_textures, *r.probeTextures, {}, std::identity{}, [](auto& texture) { return texture.get(); }))
+			return true;
+		constexpr DXGI_FORMAT formats[]{ DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_UNORM, DXGI_FORMAT_D32_FLOAT };
+		constexpr const char* names[]{ "radiance", "radial-distance", "normals", "reversed-depth" };
+		std::array<std::shared_ptr<org::ExternalTextureResource>, 4> imports;
+		std::uint32_t size = 0;
+		for (std::size_t i = 0; i < imports.size(); ++i) {
+			DxvkOrgInteropResourceInfo info{};
+			if (!a_textures[i] || !RenderGraphRuntime::Get().DescribeResource(a_textures[i], info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE ||
+				info.image.extent.width != info.image.extent.height || (i && info.image.extent.width != size))
+				return false;
+			size = info.image.extent.width;
+			org::TextureDescription desc{};
+			desc.imageDimensions.push_back({ size, size, 0, 0 });
+			desc.format = rhi::helpers::ToRHI(formats[i]);
+			desc.channels = i == 0 ? 4 : i == 2 ? 2 :
+			                                      1;
+			if (i == 3) {
+				desc.hasDSV = true;
+				desc.dsvFormat = desc.format;
+			} else {
+				desc.hasRTV = true;
+				desc.rtvFormat = desc.format;
+			}
+			imports[i] = ImportImage(host->GetDesc().device, info.image, desc, names[i]);
+			if (!imports[i])
+				return false;
+		}
+		r.target = imports[0];
+		for (std::size_t i = 0; i < r.probeAttachments.size(); ++i)
+			r.probeAttachments[i] = imports[i + 1];
+		auto sources = std::make_shared<ViewResources::ProbeTextures>();
+		for (std::size_t i = 0; i < a_textures.size(); ++i)
+			(*sources)[i].copy_from(a_textures[i]);
+		r.probeTextures = std::move(sources);
+		r.width = r.height = size;
+		r.rebuildPending = false;
+		const auto id = kViewSlots[ViewIndex(kind)].extensionId;
+		host->AddExtension(id, [resources = slot->resources, id] { return Diagnostics::ScheduleDumped(id, MakeViewExtension(resources)); });
+		impl->PostRevisionInputs();
+		return false;  // The newly imported targets must first enter a revision.
 	}
 
 	bool IndirectDraws::Impl::ImportViewColourTarget(ViewKind a_kind, ID3D11Texture2D* a_texture)

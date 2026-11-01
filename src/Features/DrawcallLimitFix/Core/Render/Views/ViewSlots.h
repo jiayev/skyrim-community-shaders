@@ -22,6 +22,7 @@ namespace DCLF::Draws
 	inline constexpr std::array<ViewSlot, kViews> kViewSlots = { {
 		{ ViewKind::Reflection, ImplProducer::kKeyReflection, kReflectionExtensionId },
 		{ ViewKind::FirstPerson, ImplProducer::kKeyFirstPerson, kFirstPersonExtensionId },
+		{ ViewKind::EnvironmentProbe, ImplProducer::kKeyEnvironmentProbe, "cs.dclf.environment-probe" },
 	} };
 	static_assert(kViewSlots[ViewIndex(ViewKind::Reflection)].view == ViewKind::Reflection && kViewSlots[ViewIndex(ViewKind::FirstPerson)].view == ViewKind::FirstPerson,
 		"kViewSlots is by view");

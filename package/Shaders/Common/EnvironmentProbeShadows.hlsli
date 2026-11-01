@@ -8,7 +8,12 @@ namespace EnvironmentProbe
 
 	// First four registers of Utility's native PerGeometry buffer, snapshotted
 	// before the engine reuses it. No GPU readback or duplicate INI bias formula.
+	// DCLF keeps directional lighting at PS b13 during forward shading.
+#if defined(DCLF_BINDLESS_DRAW)
+	cbuffer SunShadowParameters : register(b10)
+#else
 	cbuffer SunShadowParameters : register(b13)
+#endif
 	{
 		float4 SunDebugColor;
 		float4 SunPropertyColor;

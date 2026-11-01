@@ -1,10 +1,10 @@
 // The CPU-driven pipeline's recorder (Recorder.h): a culled batch's direct draws, one plain indexed draw a resident sequence.
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
-#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Recorder.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/IndexPool.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
@@ -45,10 +45,10 @@ namespace DCLF::Direct
 			const auto& bindings = a_context.bindings;
 			auto& list = a_context.list;
 			const bool shadowLayout = a_context.pass == RecordPass::Shadow || a_context.pass == RecordPass::Refraction;
-			list.BindLayout(a_main                                     ? bindings.main->layout :
-			                a_context.pass == RecordPass::Shadow       ? bindings.shadow->layout :
-			                a_context.pass == RecordPass::Refraction   ? bindings.main->refractionLayout :
-			                                                             bindings.main->zLayout);
+			list.BindLayout(a_main                                   ? bindings.main->layout :
+							a_context.pass == RecordPass::Shadow     ? bindings.shadow->layout :
+							a_context.pass == RecordPass::Refraction ? bindings.main->refractionLayout :
+																	   bindings.main->zLayout);
 			if (shadowLayout)
 				list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kShadowPushWords, bindings.shadowPush.data());
 			else
@@ -316,6 +316,7 @@ namespace DCLF::Direct
 	{
 		switch (a_view) {
 		case ViewType::Main:
+		case ViewType::EnvironmentProbe:
 		case ViewType::Reflection:
 		case ViewType::FirstPerson:
 			return a_depthPass ? RecordPass::Depth : RecordPass::Colour;
@@ -339,7 +340,7 @@ namespace DCLF::Direct
 		const auto& bindings = a_context.bindings;
 		if (a_context.pass == RecordPass::Shadow ? !bindings.shadow || !bindings.shadow->valid : !bindings.main || !bindings.main->valid)
 			return false;
-		const rhi::PipelineLayoutHandle layout = a_context.pass == RecordPass::Shadow ? bindings.shadow->layout :
+		const rhi::PipelineLayoutHandle layout = a_context.pass == RecordPass::Shadow     ? bindings.shadow->layout :
 		                                         a_context.pass == RecordPass::Refraction ? bindings.main->refractionLayout :
 		                                                                                    bindings.main->zLayout;
 		if (!layout.valid() || (a_context.pass == RecordPass::Refraction && !bindings.main->refraction.valid()))
@@ -348,9 +349,10 @@ namespace DCLF::Direct
 		list.SetDescriptorHeaps(bindings.resourceHeap, bindings.samplerHeap);
 		list.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
 		// A colour list binds the main layout at its first bucket with a colour pipeline (BindBucket).
-		a_context.pushedColour = bindings.main && bindings.main->layout.valid() &&
+		// Probe buckets write radiance, distance and normals. The main colour pipeline cannot replace their capture shader.
+		a_context.pushedColour = a_context.view != ViewType::EnvironmentProbe && bindings.main && bindings.main->layout.valid() &&
 		                         ((a_context.pass == RecordPass::Colour && ExperimentOn(kExpPushedColour) && !bindings.main->colour.empty()) ||
-		                          (a_context.pass == RecordPass::Depth && ExperimentOn(kExpPushedDepth) && !bindings.offsetDepth && !bindings.main->depth.empty()));
+									 (a_context.pass == RecordPass::Depth && ExperimentOn(kExpPushedDepth) && !bindings.offsetDepth && !bindings.main->depth.empty()));
 		BindListLayout(a_context, false);
 		list.SetIndexBuffer(rhi::IndexBufferView{ bindings.indexPool, 0, 0, rhi::Format::R16_UInt });  // the whole buffer
 		if (a_context.pass == RecordPass::Refraction) {
@@ -379,7 +381,8 @@ namespace DCLF::Direct
 
 	void RecordTerrainGroup(RecordContext& a_context, std::uint32_t a_group, std::span<const CulledBatch* const> a_batches)
 	{
-		const std::uint32_t flag = a_group == 1 ? kLaneTerrainGroup1 : a_group == 2 ? kLaneTerrainGroup2 : 0u;
+		const std::uint32_t flag = a_group == 1 ? kLaneTerrainGroup1 : a_group == 2 ? kLaneTerrainGroup2 :
+		                                                                              0u;
 		if (!flag)
 			return;
 		const std::uint32_t before = a_context.drawn;

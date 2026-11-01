@@ -77,9 +77,9 @@ namespace DCLF
 			// recording is of the build it was made on, so every epoch is recorded again).
 			std::shared_ptr<const org::async::RevisionFragment> versionsFragment;
 			std::shared_ptr<const NamedVersions> versionsFragmentSet;  // the sealed set versionsFragment was made for
-			std::uint64_t graphBuilds = ~0ull;  // the build versionsFragment was made for (RevisionInputs::buildGeneration)
-			std::uint64_t growthWaits = 0;  // makes whose set was pending (a growth batch in flight), since the last report
-			std::uint64_t buildWaits = 0;   // makes that sealed nothing for a graph build asked of the frame (RevisionProducer::buildWanted)
+			std::uint64_t graphBuilds = ~0ull;                         // the build versionsFragment was made for (RevisionInputs::buildGeneration)
+			std::uint64_t growthWaits = 0;                             // makes whose set was pending (a growth batch in flight), since the last report
+			std::uint64_t buildWaits = 0;                              // makes that sealed nothing for a graph build asked of the frame (RevisionProducer::buildWanted)
 			// The builder's report counters.
 			std::uint64_t seals = 0, versionSets = 0, sealFailures = 0;
 			// The versions and layout the last sealed revision names (the builder's): what its snapshot's draws embed.
@@ -127,10 +127,11 @@ namespace DCLF
 			kKeyBound,
 			kKeyReflection,
 			kKeyFirstPerson,
+			kKeyEnvironmentProbe,
 			kKeyGroups
 		};
 		static constexpr std::array<const char*, kKeyGroups> kKeyGroupNames = { "named set", "pipelines", "lookups", "main latch and captures", "shadow latch and layouts",
-			"casting bound outgrown", "reflection", "first person" };
+			"casting bound outgrown", "reflection", "first person", "environment probe" };
 		using ShapesKey = std::array<std::uint64_t, kKeyGroups>;
 		ShapesKey revisionShapesKey{};
 		std::array<std::uint64_t, kKeyGroups> shapesMadeBy{};  // since the last report: makes by the group whose inputs moved
