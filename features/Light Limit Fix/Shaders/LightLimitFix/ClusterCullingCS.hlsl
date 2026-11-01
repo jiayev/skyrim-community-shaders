@@ -18,7 +18,7 @@ RWStructuredBuffer<uint> lightIndexCounter : register(u0);
 RWStructuredBuffer<uint> lightIndexList : register(u1);
 RWStructuredBuffer<LightGrid> lightGrid : register(u2);
 
-groupshared Light sharedLights[GROUP_SIZE];
+groupshared float4 sharedLightsVS[GROUP_SIZE];
 
 bool LightIntersectsCluster(float3 position, float radiusSquared, ClusterAABB cluster)
 {
@@ -30,6 +30,13 @@ bool LightIntersectsCluster(float3 position, float radiusSquared, ClusterAABB cl
 
 [numthreads(NUMTHREAD_X, NUMTHREAD_Y, NUMTHREAD_Z)] void main(
 	uint3 groupId : SV_GroupID, uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupThreadID, uint groupIndex : SV_GroupIndex) {
+	if (groupIndex < LightCount) {
+		Light light = lights[groupIndex];
+		sharedLightsVS[groupIndex] = float4(FrameBuffer::WorldToView(light.positionWS.xyz), light.radius * light.radius);
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+
 	if (any(dispatchThreadId >= uint3(ClusterSize.x, ClusterSize.y, ClusterSize.z)))
 		return;
 
@@ -41,29 +48,17 @@ bool LightIntersectsCluster(float3 position, float radiusSquared, ClusterAABB cl
 
 	ClusterAABB cluster = clusters[clusterIndex];
 
-	if (groupIndex < LightCount) {
-		uint lightIndex = groupIndex;
-		Light light = lights[lightIndex];
-		sharedLights[groupIndex] = light;
-	}
-
-	GroupMemoryBarrierWithGroupSync();
-
 	// Counted first, then written straight into lightIndexList, rather than staged through a local
 	// uint[MAX_CLUSTER_LIGHTS]. That array is indexed by a runtime value, which no GPU can keep in
 	// registers: on RDNA2 it became 1024 bytes of scratch memory per thread (measured with Radeon
 	// GPU Analyzer against gfx1035), read and written in the hottest loop this shader has. Testing
-	// each light twice is a buffer load and a handful of ALU; the scratch traffic it replaces is far
+	// each light twice is a handful of ALU; the scratch traffic it replaces is far
 	// more expensive, and the second pass is exact rather than conservative because neither the
 	// light set nor the cluster changes between the two.
 	for (uint i = 0; i < LightCount; i++) {
-		Light light = lights[i];
+		float4 lightVS = sharedLightsVS[i];
 
-		float radiusSquared = light.radius * light.radius;
-
-		float3 positionVS = FrameBuffer::WorldToView(light.positionWS.xyz);
-
-		[branch] if (LightIntersectsCluster(positionVS, radiusSquared, cluster))
+		[branch] if (LightIntersectsCluster(lightVS.xyz, lightVS.w, cluster))
 		{
 			visibleLightCount++;
 			if (visibleLightCount >= MAX_CLUSTER_LIGHTS)
@@ -82,13 +77,9 @@ bool LightIntersectsCluster(float3 position, float radiusSquared, ClusterAABB cl
 	uint written = 0;
 
 	for (uint k = 0; k < LightCount && written < visibleLightCount; k++) {
-		Light light = lights[k];
+		float4 lightVS = sharedLightsVS[k];
 
-		float radiusSquared = light.radius * light.radius;
-
-		float3 positionVS = FrameBuffer::WorldToView(light.positionWS.xyz);
-
-		[branch] if (LightIntersectsCluster(positionVS, radiusSquared, cluster))
+		[branch] if (LightIntersectsCluster(lightVS.xyz, lightVS.w, cluster))
 		{
 			lightIndexList[offset + written] = k;
 			written++;
