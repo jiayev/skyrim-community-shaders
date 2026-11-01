@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace RE
@@ -25,7 +26,7 @@ namespace DCLF::Features::Faces
 	 * morphing"): the "Face morphing" job of the "Main post render" stage (AE 0x1406d36b0), which runs one job
 	 * per BSFaceGenNiNode (FUN_1404334e0 -> FUN_140432550) that resets and morphs every shape of that head,
 	 * then joins them (JobList::Finish). Two thunks publish from there:
-	 * - after a head's job has morphed it (0x1404334f3), on that job's thread: a copy of every shape of the
+	 * - after a head's entire job (0x1404334e0) returns, on that job's thread: a copy of every shape of the
 	 *   head DCLF registered, published as one snapshot;
 	 * - after the stage's join (0x1406d36fd), when no morph job can run: a first snapshot of the heads that
 	 *   asked for one (new, rebuilt, or never animated, which the stage never queues).
@@ -59,35 +60,38 @@ namespace DCLF::Features::Faces
 		/** @brief Installs the two thunks in the engine's face morphing. Main thread, at the feature's install. */
 		void Install();
 		/**
-		 * @brief Install's two calls, before any hook is written (HookSites): CALLs, as both thunks chain. Both or neither: the stage join is
-		 * what frees the retired snapshots' engine references.
+		 * @brief Check the per-head job entry and the stage's join call before installing either hook.
 		 */
 		static void Preflight();
 
-		/** @brief A face shape's positions in the snapshot the walk holds: float4 per vertex. */
+		struct Positions
+		{
+			std::uint64_t generation = 0;
+			std::shared_ptr<const std::vector<float>> owner;
+		};
+
+		// One registration has one immutable shape layout. Draws may retain it
+		// across scene publications while its vertices continue to animate.
+		class HeadStream
+		{
+		public:
+			void Publish(Positions a_positions);
+			const Positions& ForFrame(std::uint32_t a_frame) const;
+
+		private:
+			mutable std::mutex mutex;
+			Positions latest;  // scene walk publishes, render thread latches
+			mutable Positions latched;
+			mutable std::uint32_t frame = 0;
+		};
+
 		struct ShapeView
 		{
 			const float* positions = nullptr;
 			std::uint32_t vertexCount = 0;
-			std::uint64_t generation = 0;  // unique across heads: a new snapshot of any head has a new one
-			// Pins the complete head update, including every sibling shape. The writer
-			// replaces a recycled slot's backing while any view still owns this version.
-			std::shared_ptr<const std::vector<float>> owner;
-		};
-		struct HeadView
-		{
-			struct ShapeRange
-			{
-				std::uint32_t ordinal = 0;
-				std::uint32_t offsetFloats = 0;
-				std::uint32_t vertexCount = 0;
-			};
-			// A new registration/rebuild gets a fresh ID; an engine head pointer is
-			// only a lookup key and cannot be used as a durable group identity.
-			std::uint64_t recordId = 0;
 			std::uint64_t generation = 0;
-			std::vector<ShapeRange> shapes;
 			std::shared_ptr<const std::vector<float>> owner;
+			std::shared_ptr<const HeadStream> group;
 		};
 
 		// ---- The scene walk (one thread at a time).
@@ -124,8 +128,6 @@ namespace DCLF::Features::Faces
 		 * update of a kept face stream. Empty when the head has no record or no snapshot, or the record does not hold the shape.
 		 */
 		ShapeView View(const RE::BSGeometry* a_shape, const RE::BSFaceGenNiNode* a_head);
-		/** @brief Complete immutable head capture of the head's current snapshot. */
-		HeadView HeadSnapshot(const RE::BSFaceGenNiNode& a_head);
 		/** @brief The head's last face shape left the scene: its record is retired. */
 		void Release(const RE::BSFaceGenNiNode* a_head);
 		/** @brief The walk's periodic statistics. */
@@ -133,10 +135,10 @@ namespace DCLF::Features::Faces
 
 		struct Stats
 		{
-			std::uint32_t heads = 0;           // live records
-			std::uint32_t acquired = 0;        // heads with a fresh snapshot this walk
-			std::uint32_t withoutSnapshot = 0; // heads the walk saw with none yet
-			std::uint32_t rebuilt = 0;         // records rebuilt this walk (a head's shapes changed)
+			std::uint32_t heads = 0;            // live records
+			std::uint32_t acquired = 0;         // heads with a fresh snapshot this walk
+			std::uint32_t withoutSnapshot = 0;  // heads the walk saw with none yet
+			std::uint32_t rebuilt = 0;          // records rebuilt this walk (a head's shapes changed)
 			std::uint32_t retired = 0, freed = 0;
 		};
 		Stats TakeStats();

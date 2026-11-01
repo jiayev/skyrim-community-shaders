@@ -36,8 +36,7 @@ namespace DCLF::Api
 		std::uint64_t generation = 0;      // its vertices' version: uploaded on a new one
 		const float* vertices = nullptr;   // float4 per vertex, valid while owner is held
 		std::shared_ptr<const std::vector<float>> owner;
-		// The feature's, carried with the row (Features/Faces: its head's complete capture, for a future consistency-group publication);
-		// Core reads none.
+		// The feature's live stream for this layout (Faces latches one pose per head and frame).
 		std::shared_ptr<const void> group;
 		// The entry the row is of (its BSGeometry), as a key: the row's release names it (SceneTables::streamRowsReleased).
 		const void* source = nullptr;

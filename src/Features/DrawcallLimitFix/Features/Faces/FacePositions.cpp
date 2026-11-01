@@ -2,7 +2,6 @@
 // vertex stream's first; its graph registration, each revision's requirement from the stream rows and its fit), and the commits' uploads
 // of the face shapes' rows into it.
 
-#include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
@@ -10,7 +9,10 @@
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Versioned.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBufferSet.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Features/Faces/FaceSnapshots.h"
+#include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
 
 #include <Resources/Buffers/Buffer.h>
 #include <rhi.h>
@@ -95,9 +97,8 @@ namespace DCLF::Features::Faces
 			a_select.buffer = &a_select.State<FacePositions>().positions;
 		}
 
-		// A commit's face uploads (render thread): a region at a time, and only when the head's snapshot is not the one the version the
-		// adopted set names holds (a version it did not fill holds none). The snapshot stays the walk's until its next walk, which is after
-		// the commit. A region past that version's vertices waits for the requirement that grows it.
+		// The adopted rows locate the shapes. Upload a region when this buffer version
+		// has not received the head pose latched for this frame.
 		std::uint32_t Upload(const Api::VertexStreamUpload& a_upload)
 		{
 			auto& uploaded = a_upload.State<FacePositions>().uploaded;
@@ -106,15 +107,26 @@ namespace DCLF::Features::Faces
 				uploaded.regions.clear();
 				uploaded.version.Filled(version);
 			}
+			const auto frame = Scene::FrameView::Get().GetFrame();
 			std::uint32_t count = 0;
 			for (const auto& stream : a_upload.rows) {
 				if (stream.object == Api::VertexStreamRow::kNoObject || std::uint64_t(stream.first) + stream.count > version.units)
 					continue;
+				auto generation = stream.generation;
+				const float* vertices = stream.vertices;
+				if (const auto* group = static_cast<const FaceSnapshots::HeadStream*>(stream.group.get())) {
+					const auto& pose = group->ForFrame(frame);
+					if (pose.owner) {
+						// This registration keeps each shape at the same offset for its lifetime.
+						vertices = pose.owner->data() + (stream.vertices - stream.owner->data());
+						generation = pose.generation;
+					}
+				}
 				auto& region = uploaded.regions[stream.first];
-				if (region == stream.generation)
+				if (region == generation)
 					continue;
-				a_upload.uploads(a_upload.buffer, stream.vertices, std::size_t(stream.count) * Draws::kStreamVertexBytes, std::uint64_t(stream.first) * Draws::kStreamVertexBytes);
-				region = stream.generation;
+				a_upload.uploads(a_upload.buffer, vertices, std::size_t(stream.count) * Draws::kStreamVertexBytes, std::uint64_t(stream.first) * Draws::kStreamVertexBytes);
+				region = generation;
 				++count;
 			}
 			return count;

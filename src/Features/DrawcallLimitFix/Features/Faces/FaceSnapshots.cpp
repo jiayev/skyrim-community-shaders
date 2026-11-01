@@ -49,7 +49,7 @@ namespace DCLF::Features::Faces
 			};
 
 			RE::NiPointer<RE::BSFaceGenNiNode> head;
-			std::uint64_t recordId = 0;
+			std::shared_ptr<HeadStream> group = std::make_shared<HeadStream>();
 			std::vector<Shape> shapes;  // immutable once the record is in the table
 			std::uint32_t floats = 0;   // a slot's size: four per vertex of every shape
 			org::async::LeasedArraySlots<float, 3> storage;
@@ -67,7 +67,6 @@ namespace DCLF::Features::Faces
 			std::uint32_t seenWalk = 0;
 			bool staleReported = false;
 			std::uint64_t retiredAtStage = 0;
-
 		};
 
 		struct Entry
@@ -78,7 +77,6 @@ namespace DCLF::Features::Faces
 
 		std::array<Entry, kCapacity> table;
 		std::atomic<std::uint64_t> generation{ 0 };
-		std::uint64_t nextRecordId = 1; // scene-walk thread only
 		std::atomic<std::uint64_t> stagesCompleted{ 0 };
 		std::atomic<std::uint32_t> jobCaptures{ 0 }, stageCaptures{ 0 }, mismatches{ 0 }, stages{ 0 };
 
@@ -242,16 +240,17 @@ namespace DCLF::Features::Faces
 		return hooksInstalled;
 	}
 
-	/** @brief After a head's morph job has reset and morphed its shapes (FUN_140432550), on that job's thread. */
+	/** @brief Publish the finished job, including any morphs supplied by other plugins. */
 	struct FaceSnapshots::MorphHook
 	{
-		static void thunk(RE::BSFaceGenNiNode* a_head, std::uint8_t a_flag)
+		static void thunk(RE::BSFaceGenNiNode* a_head)
 		{
-			func(a_head, a_flag);
-			if (!a_head)
-				return;
 			auto& impl = *Get().impl;
-			if (auto* record = impl.Lookup(a_head); record && impl.Capture(*record))
+			// The job releases its head. A registered record holds its own reference
+			// and remains alive until the stage joins, even if the walk retires it.
+			auto* record = impl.Lookup(a_head);
+			func(a_head);
+			if (record && impl.Capture(*record))
 				impl.jobCaptures.fetch_add(1, std::memory_order_relaxed);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -277,15 +276,14 @@ namespace DCLF::Features::Faces
 
 	namespace
 	{
-		// The per-head job FUN_1404334e0 calls FUN_140432550 at +0x13; Job_Face_morphing (RELOCATION_ID 38139, 39096)
-		// calls JobList::Finish (FUN_140cf6810) at +0x4D (SE: the same offsets).
-		constexpr Engine::Offset kMorphCallSite{ { 26999, 0x13 }, { 26418, 0x13 } };
+		// The job's internal morph call can be replaced after PostPostLoad (SMPFixes).
+		constexpr Engine::Offset kMorphJob{ { 26999 }, { 26418 } };
 		constexpr Engine::Offset kJoinCallSite{ { 39096, 0x4d }, { 38139, 0x4d } };
 	}
 
 	void FaceSnapshots::Preflight()
 	{
-		HookSites::RequireCall("the face morphing's per-head morph call", REL::Offset(kMorphCallSite).address());
+		HookSites::RequireEntry("the face morphing's per-head job", REL::Offset(kMorphJob).address());
 		HookSites::RequireCall("the face morphing's stage join", REL::Offset(kJoinCallSite).address());
 	}
 
@@ -293,10 +291,11 @@ namespace DCLF::Features::Faces
 	{
 		if (hooksInstalled)
 			return;
-		// Chained onto whatever the calls hold (Preflight required CALLs).
-		const auto morphCall = REL::Offset(kMorphCallSite).address();
 		const auto joinCall = REL::Offset(kJoinCallSite).address();
-		stl::write_thunk_call<MorphHook>(morphCall);
+		stl::detour_thunk<MorphHook>(REL::Offset(kMorphJob).address());
+		HookSites::NoteDetour("the face morphing's per-head job", MorphHook::func.address());
+		if (!MorphHook::func.address())
+			return;
 		stl::write_thunk_call<StageJoinHook>(joinCall);
 		hooksInstalled = true;
 		logger::info("[DCLF] face snapshots installed on the face morphing stage");
@@ -311,6 +310,7 @@ namespace DCLF::Features::Faces
 			if (record->latest.load(std::memory_order_relaxed) & kFresh) {
 				const auto previous = record->latest.exchange(record->readSlot, std::memory_order_acq_rel);
 				record->readSlot = previous & kSlotMask;
+				record->group->Publish({ record->slotGeneration[record->readSlot], record->storage.Acquire(record->readSlot) });
 				++d.stats.acquired;
 				a_published.push_back(record->head.get());
 			}
@@ -336,7 +336,7 @@ namespace DCLF::Features::Faces
 				continue;
 			auto owner = record->storage.Acquire(record->readSlot);
 			const float* positions = owner->data() + shape.offset;
-			return { positions, shape.vertexCount, generation, std::move(owner) };
+			return { positions, shape.vertexCount, generation, std::move(owner), record->group };
 		}
 		return {};
 	}
@@ -376,7 +376,6 @@ namespace DCLF::Features::Faces
 					return {};
 				}
 				auto* rebuilt = new Impl::Record();
-				rebuilt->recordId = d.nextRecordId++;
 				rebuilt->head.reset(a_head);
 				rebuilt->shapes = d.scratch;
 				for (const auto& shape : rebuilt->shapes)
@@ -415,7 +414,7 @@ namespace DCLF::Features::Faces
 				continue;
 			auto owner = record->storage.Acquire(record->readSlot);
 			const float* positions = owner->data() + shape.offset;
-			return { positions, shape.vertexCount, generation, std::move(owner) };
+			return { positions, shape.vertexCount, generation, std::move(owner), record->group };
 		}
 		return {};
 	}
@@ -432,28 +431,22 @@ namespace DCLF::Features::Faces
 		d.released.clear();
 	}
 
-	FaceSnapshots::HeadView FaceSnapshots::HeadSnapshot(const RE::BSFaceGenNiNode& a_head)
+	void FaceSnapshots::HeadStream::Publish(Positions a_positions)
 	{
-		auto& d = *impl;
-		const auto* record = d.Lookup(&a_head);
-		if (!record || !record->recordId)
-			return {};
-		const auto generation = record->slotGeneration[record->readSlot];
-		if (!generation)
-			return {};
-		auto owner = record->storage.Acquire(record->readSlot);
-		if (!owner || owner->size() != record->floats)
-			return {};
-		HeadView captured;
-		captured.recordId = record->recordId;
-		captured.generation = generation;
-		captured.owner = std::move(owner);
-		captured.shapes.reserve(record->shapes.size());
-		for (std::uint32_t i = 0; i < record->shapes.size(); ++i) {
-			const auto& shape = record->shapes[i];
-			captured.shapes.push_back({ i, shape.offset, shape.vertexCount });
+		std::lock_guard lock(mutex);
+		latest = std::move(a_positions);
+	}
+
+	const FaceSnapshots::Positions& FaceSnapshots::HeadStream::ForFrame(std::uint32_t a_frame) const
+	{
+		// Only the render thread uses the latch. Depth, shadow and colour must
+		// use the same pose even if the next walk publishes between passes.
+		if (frame != a_frame || !latched.owner) {
+			std::lock_guard lock(mutex);
+			latched = latest;
+			frame = a_frame;
 		}
-		return captured;
+		return latched;
 	}
 
 	void FaceSnapshots::EndWalk()
@@ -462,8 +455,9 @@ namespace DCLF::Features::Faces
 		if (d.walk % kStatsInterval == 0 && (!d.live.empty() || d.stats.retired)) {
 			const auto stats = TakeStats();
 			const auto writer = TakeWriterStats();
-			logger::info("[DCLF] face snapshots: {} heads, {} taken fresh, {} seen without one, {} rebuilt, {} retired, {} freed; "
-			             "captured by jobs {}, at the join {}, {} mismatches, over {} stages",
+			logger::info(
+				"[DCLF] face snapshots: {} heads, {} taken fresh, {} seen without one, {} rebuilt, {} retired, {} freed; "
+				"captured by jobs {}, at the join {}, {} mismatches, over {} stages",
 				stats.heads, stats.acquired, stats.withoutSnapshot, stats.rebuilt, stats.retired, stats.freed, writer.jobCaptures, writer.stageCaptures,
 				writer.mismatches, writer.stages);
 		}

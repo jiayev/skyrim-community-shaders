@@ -2,8 +2,8 @@
 // and applied as the delta walk schedules, each written shape's snapshot, region of the positions buffer and vertex stream row
 // (SceneTables::streamRows), and the regions freed as the walk ends.
 
-#include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
 #include "Features/DrawcallLimitFix/Features/Faces/FaceSnapshots.h"
+#include "Features/DrawcallLimitFix/Features/Faces/Faces.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/SceneMirror.h"
@@ -30,8 +30,6 @@ namespace DCLF::Features::Faces
 		 */
 		struct FaceShapes
 		{
-			// Keys valid for this walk only; the captured recordId is durable.
-			ankerl::unordered_dense::map<const RE::BSFaceGenNiNode*, std::shared_ptr<const FaceSnapshots::HeadView>> capturedFaceHeads;
 			struct FaceRegion
 			{
 				std::uint32_t first = 0, count = 0;
@@ -143,8 +141,6 @@ namespace DCLF::Features::Faces
 				const auto it = a_state.faceHeads.find(head);
 				if (it == a_state.faceHeads.end())
 					continue;
-				std::shared_ptr<const FaceSnapshots::HeadView> headView;
-				bool headTaken = false;
 				for (auto* geometry : it->second) {
 					const auto entry = a_context.TrackedWriteOf(geometry);
 					if (!entry.tracked)
@@ -165,14 +161,9 @@ namespace DCLF::Features::Faces
 						++a_scheduling.written;
 						continue;
 					}
-					if (!headTaken) {
-						headTaken = true;
-						if (auto snapshot = snapshots.HeadSnapshot(*head); snapshot.recordId && snapshot.generation && snapshot.owner)
-							headView = std::make_shared<const FaceSnapshots::HeadView>(std::move(snapshot));
-					}
 					stream.vertices = view.positions;
 					stream.generation = view.generation;
-					stream.group = headView && headView->generation == view.generation && headView->owner == view.owner ? headView : nullptr;
+					stream.group = std::move(view.group);
 					stream.owner = std::move(view.owner);
 					++a_scheduling.updated;
 				}
@@ -187,7 +178,6 @@ namespace DCLF::Features::Faces
 		void WalkBegun(const Api::CoordinatorComponentContext& a_context)
 		{
 			auto& state = a_context.State<FaceShapes>();
-			state.capturedFaceHeads.clear();
 			if (FaceSnapshots::Enabled()) {
 				FaceSnapshots::Get().BeginWalk(state.facePublished, state.faceStale);
 				std::vector<RE::NiRefObject*> released;
@@ -351,28 +341,16 @@ namespace DCLF::Features::Faces
 		// The shape's stream row at its slot (in place when it has one, else at a free index), with its head's complete capture.
 		void Streamed(const Api::CoordinatorComponentContext& a_context, std::uint32_t a_slot, Api::EntryWrite& a_write)
 		{
-			auto& state = a_context.State<FaceShapes>();
-			std::shared_ptr<const FaceSnapshots::HeadView> headView;
-			const auto* head = static_cast<const RE::BSFaceGenNiNode*>(a_write.source);  // the entry's
-			if (head) {
-				auto [headEntry, inserted] = state.capturedFaceHeads.try_emplace(head);
-				if (inserted) {
-					auto snapshot = FaceSnapshots::Get().HeadSnapshot(*head);
-					if (snapshot.recordId && snapshot.generation && snapshot.owner)
-						headEntry->second = std::make_shared<const FaceSnapshots::HeadView>(std::move(snapshot));
-				}
-				headView = headEntry->second;
-			}
-			if (headView && (headView->generation != a_write.generation || headView->owner != a_write.owner))
-				headView.reset();
+			const auto* head = static_cast<const RE::BSFaceGenNiNode*>(a_write.source);
+			auto face = FaceSnapshots::Get().View(&a_write.geometry, head);
 			a_context.tables.SetStreamRow(a_slot, { .object = a_slot,
-				.first = a_write.region,
-				.count = a_write.vertexCount,
-				.generation = a_write.generation,
-				.vertices = a_write.positions,
-				.owner = a_write.owner,
-				.group = std::move(headView),
-				.source = &a_write.geometry });
+													  .first = a_write.region,
+													  .count = a_write.vertexCount,
+													  .generation = a_write.generation,
+													  .vertices = a_write.positions,
+													  .owner = a_write.owner,
+													  .group = face.owner == a_write.owner ? std::move(face.group) : nullptr,
+													  .source = &a_write.geometry });
 		}
 	}
 
