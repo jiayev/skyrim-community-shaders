@@ -13,6 +13,7 @@
 // brings back is appended to its draw slot's range after phase 1's (GrassArgsCS's phase 2 draws start at phase 1's count).
 //
 // The depth commit zeroes the header; GrassArgsCS's colour mode zeroes the counts after it has read them.
+#include "DrawcallLimitFix/CullEye.hlsli"
 #include "DrawcallLimitFix/HzbTest.hlsli"
 
 // Must match GrassCullConstants (Features/Grass/GrassTables.h).
@@ -69,7 +70,7 @@ static const uint kRowCull = 256;
 static const float kPi = 3.1415926535897932;
 static const float kTau = 6.2831853071795864;
 
-// The depth segment's view-projection (camera translation folded in), as BuildDrawsCS's.
+// The depth segment's camera-relative view-projection, as BuildDrawsCS's. A world position projects less the latch's eye.
 float4x4 LatchViewProj()
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
@@ -77,13 +78,14 @@ float4x4 LatchViewProj()
 		asfloat(latch.Load4(LatchOffset + 64)), asfloat(latch.Load4(LatchOffset + 80)));
 }
 
-// The cull's sphere test against the main camera's frustum, as TreeLodCullCS's InView: its planes normalised; NoNearPlane (the
-// latch's cull flags, bit 9) drops the near plane.
+// The cull's sphere test against the main camera's frustum, as TreeLodCullCS's InView: its planes normalised, the centre relative to
+// the latch's eye; NoNearPlane (the latch's cull flags, bit 9) drops the near plane.
 bool InView(float4x4 a_viewProj, float3 a_centre, float a_radius)
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
 	const uint cullFlags = latch.Load(LatchOffset + 16);
 	const float4 r0 = a_viewProj[0], r1 = a_viewProj[1], r2 = a_viewProj[2], r3 = a_viewProj[3];
+	const precise float3 centre = a_centre - LatchCullEye(latch, LatchOffset).xyz;
 	float4 planes[6] = { r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2 };
 	[unroll] for (uint p = 0; p < 6; ++p) {
 		if (p == 4 && (cullFlags & 0x200u) != 0)
@@ -91,7 +93,7 @@ bool InView(float4x4 a_viewProj, float3 a_centre, float a_radius)
 		const float length = sqrt(dot(planes[p].xyz, planes[p].xyz));
 		if (length <= 0.0f)
 			continue;
-		if ((dot(planes[p].xyz, a_centre) + planes[p].w) / length < -a_radius)
+		if ((dot(planes[p].xyz, centre) + planes[p].w) / length < -a_radius)
 			return false;
 	}
 	return true;
@@ -105,6 +107,7 @@ bool Occluded(float4x4 a_viewProj, float3 a_centre, float a_radius, uint a_cullF
 		return false;
 	HzbView view;
 	view.ViewProj = a_viewProj;
+	view.Eye = LatchCullEye(latch, LatchOffset).xyz;
 	view.Index = HzbIndex;
 	view.BaseSize = HzbUnpackSize(HzbSizePacked);
 	view.Mips = HzbMips;
@@ -308,9 +311,11 @@ uint Tier(Cull a_cull, float a_projPx, float a_dither, uint a_bucketFlags)
 	const uint4 raw0 = instances.Load4(index * kInstanceBytes);
 	const uint4 raw1 = instances.Load4(index * kInstanceBytes + 16);
 	const float2 localXY = Halfs(raw0.x);
-	const float3 world = origin + float3(localXY, f16tof32(raw0.y & 0xFFFF));
+	const float3 local = float3(localXY, f16tof32(raw0.y & 0xFFFF));
+	const float3 world = origin + local;
 	const float3 eye = asfloat(draw.Load3(kRowEye));
-	const float3 dv = world - eye;
+	// The eye comes off the origin first, so the distance skips the rounding of the absolute position.
+	const float3 dv = (origin - eye) + local;
 	const float distSq = dot(dv, dv);
 	const float dist = sqrt(distSq);
 
@@ -330,7 +335,9 @@ uint Tier(Cull a_cull, float a_projPx, float a_dither, uint a_bucketFlags)
 	// The pixel size by camera depth (clip w over the projection's w row), so it stays consistent across the view.
 	const float sizeVariance = f16tof32(raw1.z >> 16);
 	const float instanceRadius = asfloat(buckets.Load(bucketBase + 60)) * (1.0 + max(sizeVariance, 0.0));
-	const float4 clip = mul(viewProj, float4(world, 1.0));
+	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+	const precise float3 worldRelative = world - LatchCullEye(latch, LatchOffset).xyz;
+	const float4 clip = mul(viewProj, float4(worldRelative, 1.0));
 	const float projPx = (instanceRadius * length(viewProj[3].xyz) / max(clip.w, 1e-4)) * cull.ProjScale;
 
 	// The tier first (dithered by the global slot: stable while the shape lives), then its mesh's cost bias, ramped in past its start

@@ -14,16 +14,31 @@ namespace DCLF::Draws
 {
 	/**
 	 * @brief Folds the camera translation into the view-projection, so that a bound's absolute world
-	 * position can be projected without carrying the camera separately.
+	 * position can be projected without carrying the camera separately. For CPU readers (the set parity,
+	 * the direct path's forward sort). The shaders project eye-relative positions (LatchCullCamera).
 	 *
-	 * The draws are camera-relative (the engine's posAdjust), and a bound is absolute: the camera is subtracted
-	 * here, one matrix column, instead of from every bound, which is exact and keeps the camera out of a
-	 * push-constant block at Vulkan's guaranteed 128 bytes.
+	 * The draws are camera-relative (the engine's posAdjust), and a bound is absolute. The fold is computed in
+	 * double, but it is not exact: its column 3 is rounded to float, and projecting with it cancels large
+	 * terms in float. At positions around 2^18 the clip position is off by a few times 1/32 unit, so a test
+	 * that culls from it needs a margin.
 	 *
 	 * Row-major, as the shader's `mul(M, v)` reads it: M'(p,1) = M(p-e,1) needs only column 3 changed,
 	 * by subtracting M's upper-left 3x3 applied to the camera.
 	 */
 	void FoldEyeIntoViewProj(const std::array<float, 16>& a_viewProj, const RE::NiPoint3& a_eye, float (&a_out)[16]);
+
+	/**
+	 * @brief Writes a view's culling camera into its latch: the camera-relative view-projection, the eye it is relative to and the
+	 * margin for tests on absolute planes (BuildDrawsLatch::viewProj, cullEye).
+	 */
+	inline void LatchCullCamera(BuildDrawsLatch& a_latch, const std::array<float, 16>& a_viewProj, const RE::NiPoint3& a_eye)
+	{
+		std::memcpy(a_latch.viewProj, a_viewProj.data(), sizeof(a_latch.viewProj));
+		a_latch.cullEye[0] = a_eye.x;
+		a_latch.cullEye[1] = a_eye.y;
+		a_latch.cullEye[2] = a_eye.z;
+		a_latch.cullEye[3] = CullPlaneMargin(a_eye.x, a_eye.y, a_eye.z);
+	}
 
 	// MainPayload::objectState values besides the Skip reasons.
 	constexpr std::uint8_t kObjectStateDrawable = 0xF0;

@@ -2034,8 +2034,9 @@ each group in the engine's order (Features/Decals; `CS_DCLF_DECALS`, `CS_DCLF_LA
     no decal pipeline carries rasterizer bias: device-generated commands switch the pipelines, and an execution set's pipelines may
     change shaders only, so a pipeline's own bias is not guaranteed to be drawn. Instead a decal's key has
     `kRasterDecalNudge` (not an opaque effect in decal group 1; a first-person forward decal too), its record `kRecordDecalNudge`,
-    and the Lighting and Effect vertex stages move its clip position toward the eye by 2^-20 of the depth range
-    (`DCLFDecalNudged`, `DCLFObjects.hlsli`), in the depth variant as in the colour one. It also settles a bias-free decal's exact
+    and the Lighting and Effect vertex stages move its clip position toward the eye by 2^-20 of the depth range, or by 4 float steps
+    of its translation in world units where that is more (`DCLFDecalNudged`, `DCLFObjects.hlsli`), in the depth variant as in the colour
+    one. The engine's slope-scaled bias (`-0.65` and up to `-1.2` per unit of slope) has no equivalent yet. It also settles a bias-free decal's exact
     depth tie with its host (an interior's `AlphaMoss` sub-shapes of a floor's NIF), which the engine keeps by running both through
     the same vertex math: DCLF's host depth is its Z-prepass module's and the decal's its colour module's, the same pulled math
     (`DCLFPulledInput`) but two modules.

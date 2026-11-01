@@ -233,7 +233,7 @@ namespace DCLF
 		const auto shape = fragment->Value<ViewFrame>();
 		const auto& traits = TraitsOf(a_view);
 		const auto type = a_view == Api::EngineView::Reflection ? Direct::ViewType::Reflection : Direct::ViewType::FirstPerson;
-		// Each drawn face's cull, from what its latch carries (CommitView's BuildDrawsLatch: its view-projection with the eye folded in,
+		// Each drawn face's cull, from what its latch carries (CommitView's BuildDrawsLatch: its view-projection and eye,
 		// the frustum alone or nothing, the frame's stamp).
 		std::vector<Direct::CullView> faces;
 		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
@@ -243,7 +243,7 @@ namespace DCLF
 			BuildDrawsLatch latch{};
 			latch.cullFlags = traits.frustumCull ? 1u : 0u;
 			latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;
-			FoldEyeIntoViewProj(a_faces[f].viewProj, a_faces[f].eye, latch.viewProj);
+			LatchCullCamera(latch, a_faces[f].viewProj, a_faces[f].eye);
 			faces.push_back(type == Direct::ViewType::Reflection ? Direct::ReflectionCullView(f, latch) : Direct::FirstPersonCullView(latch));
 		}
 		// A trees view's draw families per drawn face (the faces' draw: the shape's pipeline, the face's row and its list's version).

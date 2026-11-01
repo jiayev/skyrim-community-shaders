@@ -388,7 +388,7 @@ namespace DCLF
 			latch.fadeSeedsIndex = CullBindingIndex(Api::CullBindingSlot::RootSeeds, *scene, frameNumber, Adopted());
 			// The frame's scene list: the installed payload (a covered frame has a ready one).
 			PayloadLatch(*InstalledPayload(), latch);
-			FoldEyeIntoViewProj(face.viewProj, face.eye, latch.viewProj);
+			LatchCullCamera(latch, face.viewProj, face.eye);
 			latch.bucketMapOffset = region + layout.MapOffset();
 			latch.bucketTableOffset = region + layout.TableOffset(f);
 			latch.classMapOffset = classMap ? region + layout.ClassMapOffset() : 0u;

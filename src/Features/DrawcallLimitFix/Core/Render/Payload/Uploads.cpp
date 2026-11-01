@@ -294,8 +294,11 @@ namespace DCLF
 				};
 				a_latch.hzbUvScalePacked = scale(shape.width, resources->hzbWidth * 2) | (scale(shape.height, resources->hzbHeight * 2) << 16);
 			}
-			FoldEyeIntoViewProj(a_cull.viewProj, a_commit.capture.eye, a_latch.viewProj);
-			std::copy(std::begin(a_latch.viewProj), std::end(a_latch.viewProj), a_commit.payload.cullViewProj.begin());
+			LatchCullCamera(a_latch, a_cull.viewProj, a_commit.capture.eye);
+			// The set parity projects absolute bounds: it keeps the folded form.
+			float foldedViewProj[16];
+			FoldEyeIntoViewProj(a_cull.viewProj, a_commit.capture.eye, foldedViewProj);
+			std::copy(std::begin(foldedViewProj), std::end(foldedViewProj), a_commit.payload.cullViewProj.begin());
 			a_commit.payload.culled = a_latch.cullFlags != 0;
 			Diagnostics::Notify(Diagnostics::MainCullViewProj{ a_latch, shape.width, shape.height, frameNumber, depthOnly, a_commit.tables });
 			// The depth segment: the fade test's camera (kObjectFadeTest).

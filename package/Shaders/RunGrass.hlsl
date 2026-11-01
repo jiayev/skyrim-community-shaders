@@ -405,30 +405,31 @@ VS_OUTPUT DCLFGrassVertex(VS_INPUT input, float3 a_origin, uint4 a_frame, uint a
 	instancePosition.x = dot(input.InstanceData2.xyz, inputPosition);
 	instancePosition.y = dot(input.InstanceData3.xyz, inputPosition);
 	instancePosition.z = dot(float3(input.InstanceData4.x, input.InstanceData2.w, input.InstanceData3.w), inputPosition);
-	precise float3 msPosition = (input.InstanceData1.xyz + instancePosition) + a_origin;
+	precise float3 localPosition = input.InstanceData1.xyz + instancePosition;
+	// The origin is made eye-relative first. Everything below adds to that small value, so nothing rounds at world magnitude.
+	precise float3 relativeOrigin = a_origin - FrameBuffer::CameraPosAdjust.xyz;
+	precise float3 eyeRel = relativeOrigin + localPosition;
 
 #		if !defined(RENDER_DEPTH)
-	precise float3 previousMsPosition = msPosition;
+	precise float3 previousEyeRel = (a_origin - FrameBuffer::CameraPreviousPosAdjust.xyz) + localPosition;
 #		endif
 
 #		ifdef GRASS_COLLISION
 	[branch] if ((a_frame.w & kDCLFGrassInCollisionRange) != 0 && DCLFGrassDrawUint(kDCLFGrassCollisionIndex) != kDCLFGrassNone)
 	{
 		DCLFGrassCollisionStatics();
-		precise float3 collisionPos = msPosition - FrameBuffer::CameraPosAdjust.xyz;
-		precise float3 collisionCentre = input.InstanceData1.xyz + a_origin - FrameBuffer::CameraPosAdjust.xyz;
+		precise float3 collisionCentre = relativeOrigin + input.InstanceData1.xyz;
 		precise float3 displacement, previousDisplacement;
-		GrassCollision::GetDisplacedPosition(input, collisionPos, collisionCentre, displacement, previousDisplacement);
-		msPosition += displacement;
+		GrassCollision::GetDisplacedPosition(input, eyeRel, collisionCentre, displacement, previousDisplacement);
+		eyeRel += displacement;
 #			if !defined(RENDER_DEPTH)
-		previousMsPosition += previousDisplacement;
+		previousEyeRel += previousDisplacement;
 #			endif
 	}
 #		endif
 
 	precise float vertexTerm = WindVector.z * (0.5 * (input.Color.w * input.Color.w));
-	msPosition += float3(WindVector.xy, 0) * (windCur * vertexTerm);
-	precise float3 eyeRel = msPosition - FrameBuffer::CameraPosAdjust.xyz;
+	eyeRel += float3(WindVector.xy, 0) * (windCur * vertexTerm);
 	precise float4 projSpacePosition = mul(FrameBuffer::CameraViewProj, float4(eyeRel, 1.0));
 	vsout.HPosition = projSpacePosition;
 
@@ -436,14 +437,14 @@ VS_OUTPUT DCLFGrassVertex(VS_INPUT input, float3 a_origin, uint4 a_frame, uint a
 	vsout.Depth = projSpacePosition.zw;
 	vsout.Fade = fade;
 #		else
-	previousMsPosition += float3(WindVector.xy, 0) * (windPrev * vertexTerm);
+	previousEyeRel += float3(WindVector.xy, 0) * (windPrev * vertexTerm);
 	vsout.Color = float4(input.InstanceData1.www * input.Color.xyz, fade);
 #			ifndef GRASS_LIGHTING
 	float3 instanceNormal = float3(input.InstanceData2.z, input.InstanceData3.zw);
 	vsout.DirLightAngle = saturate(dot(DirLightDirection.xyz, instanceNormal));
 #			endif
 	vsout.WorldPosition = eyeRel;
-	vsout.PreviousWorldPosition = previousMsPosition - FrameBuffer::CameraPreviousPosAdjust.xyz;
+	vsout.PreviousWorldPosition = previousEyeRel;
 	vsout.IsFar = (a_frame.w & kDCLFGrassSimpleShading) != 0 ? 1.0 : 0.0;
 	vsout.LodTier = float(a_frame.w & kDCLFGrassTierMask);
 #			ifdef GRASS_LIGHTING

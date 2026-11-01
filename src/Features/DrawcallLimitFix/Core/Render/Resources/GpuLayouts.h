@@ -5,6 +5,8 @@
 
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -409,8 +411,8 @@ namespace DCLF::Draws
 		std::uint32_t visibilityStamp;   // marks the verdicts as this frame's; see BuildDrawsCS.hlsl
 		std::uint32_t hzbUvScalePacked;  // rendered area over the area the HZB covers, 16-bit fixed point
 		std::uint32_t cullPlaneMask;     // which of cullPlanes are tested; 0 for the main camera
-		// Row-major, as the shader's float4x4 with mul(M, v), camera translation folded in so an absolute world position projects
-		// directly.
+		// Row-major, as the shader's float4x4 with mul(M, v). Camera-relative, as the draws' is: a reader projects a world position less
+		// cullEye.
 		float viewProj[16];
 		// A shadow view's caster volume as the engine culls it: its culling process's custom planes
 		// (NiCullingProcess::customCullPlanes), absolute world space, (normal, constant), inside where dot(normal, p) - constant >= 0.
@@ -488,12 +490,17 @@ namespace DCLF::Draws
 		// The latches of the main rows: the device address and rows of the frame's per-object rows (Api::PassDef::frameRows: Features/Fades'
 		// object rows), which that pass writes from the latch (0: none this frame).
 		std::uint32_t frameRowsLo, frameRowsHi, frameRowsCount;
+		// The eye viewProj is relative to: this view's own, where fadeEye is the main camera's in every view. In w, the radius margin for
+		// tests on absolute positions and planes (CullPlaneMargin). The shaders read it by byte offset (CullEye.hlsli).
+		float cullEye[4];
 	};
 	// BuildDrawsLatch::focusRoot for a target that is no listed root: no input's root word is its - 1.
 	constexpr std::uint32_t kFocusRootNone = 0xFFFFFFFFu;
 	// BuildDrawsLatch::portalProgramsIndex's byte offset (BuildDrawsCS, FadeStateCS and PortalBatchCS read it as kLatchPortalPrograms).
 	constexpr std::uint32_t kLatchPortalProgramsOffset = 320;
-	static_assert(sizeof(BuildDrawsLatch) == 368 && offsetof(BuildDrawsLatch, animatedRowsLo) == 348 && offsetof(BuildDrawsLatch, frameRowsLo) == 356 && offsetof(BuildDrawsLatch, spare) == 344 && offsetof(BuildDrawsLatch, slotLayoutsOffset) == 336 && offsetof(BuildDrawsLatch, minCasterRadius) == 340 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
+	// BuildDrawsLatch::cullEye's byte offset (CullEye.hlsli's kLatchCullEye).
+	constexpr std::uint32_t kLatchCullEyeOffset = 368;
+	static_assert(sizeof(BuildDrawsLatch) == 384 && offsetof(BuildDrawsLatch, cullEye) == kLatchCullEyeOffset && offsetof(BuildDrawsLatch, animatedRowsLo) == 348 && offsetof(BuildDrawsLatch, frameRowsLo) == 356 && offsetof(BuildDrawsLatch, spare) == 344 && offsetof(BuildDrawsLatch, slotLayoutsOffset) == 336 && offsetof(BuildDrawsLatch, minCasterRadius) == 340 && offsetof(BuildDrawsLatch, portalProgramsIndex) == kLatchPortalProgramsOffset &&
 				  offsetof(BuildDrawsLatch, lightContextsIndex) == 324 && offsetof(BuildDrawsLatch, strictContext) == 332 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, classTableOffset) == 292 &&
 				  offsetof(BuildDrawsLatch, classMapOffset) == 296 && offsetof(BuildDrawsLatch, focusRoot) == 268 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 288 && offsetof(BuildDrawsLatch, inputsIndex) == 256 &&
 				  offsetof(BuildDrawsLatch, viewBits) == 264 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
@@ -505,6 +512,31 @@ namespace DCLF::Draws
 				  offsetof(BuildDrawsLatch, fadeStatesIndex) == 240 && offsetof(BuildDrawsLatch, phaseTwoBucketTableOffset) == 244 &&
 				  offsetof(BuildDrawsLatch, bucketMapOffset) == 248 && offsetof(BuildDrawsLatch, placementsIndex) == 252 &&
 				  offsetof(BuildDrawsLatch, materialRowsHi) == 276 && offsetof(BuildDrawsLatch, stageWord) == 300);  // the stage's shader
+	/**
+	 * @brief The radius margin that keeps rounding from culling in a test on absolute positions and planes: 4 to 8 ulps of the eye's
+	 * largest component. A float's ulp is at most its value * 2^-23, and more than half that. These tests happen around the eye, so its size
+	 * sets their rounding. A bound much farther out rounds more, but there that error is well under a pixel.
+	 */
+	inline float CullPlaneMargin(float a_x, float a_y, float a_z)
+	{
+		return std::max({ std::abs(a_x), std::abs(a_y), std::abs(a_z) }) * 0x1p-21f;
+	}
+
+	/**
+	 * @brief A camera-relative view-projection made to take absolute positions: M'(p,1) = M(p-e,1) changes only column 3. Computed in
+	 * double. Row-major. a_out is float, or double for a reader that keeps the precision.
+	 */
+	template <class T>
+	inline void FoldCullEye(const float* a_viewProj, const float* a_eye, T (&a_out)[16])
+	{
+		for (std::uint32_t row = 0; row < 4; ++row) {
+			const float* m = a_viewProj + row * 4;
+			for (std::uint32_t column = 0; column < 3; ++column)
+				a_out[row * 4 + column] = static_cast<T>(m[column]);
+			a_out[row * 4 + 3] = static_cast<T>(double(m[3]) - (double(m[0]) * double(a_eye[0]) + double(m[1]) * double(a_eye[1]) + double(m[2]) * double(a_eye[2])));
+		}
+	}
+
 	// BuildDrawsLatch::bucketMapOffset: a pipeline slot without a bucket (BuildDrawsCS's kNoPipeline).
 	constexpr std::uint32_t kNoBucket = 0xFFFFFFFFu;
 	// A first-person forward slot's map word, its range's table entry in the low bits (BuildDrawsCS's kBucketForward).

@@ -71,6 +71,7 @@ namespace DCLF
 		StageDump,
 		TraceTexturePaths,
 		Census,
+		PrecisionCensus,
 		MirrorWatch,
 		TableStart,
 		DepthTrace,
