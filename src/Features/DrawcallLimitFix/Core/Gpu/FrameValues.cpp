@@ -1444,10 +1444,9 @@ namespace DCLF
 	{
 		if ((a_item.firstPerson && a_item.itemClass == Api::FrameValueItemClass::None) || a_item.slot >= a_rows || !a_item.geometry || listed[a_item.slot])
 			return;
-		// Skins are kept movers. An older write or settling item can outlive its skin's membership, while its
-		// palette block is already reused by another actor. Validate against the applied plans before marking
-		// either the slot or the block: different block starts can still overlap a recycled allocation.
-		if (a_settles && a_item.boneRows && a_item.itemClass == Api::FrameValueItemClass::None) {
+		// Skins and particle systems share this allocator. A queued write from
+		// either can overlap a new owner's block even when their starts differ.
+		if (a_settles && a_item.boneRows) {
 			const auto owner = moverAt.find(a_item.geometry.get());
 			if (owner == moverAt.end())
 				return;
