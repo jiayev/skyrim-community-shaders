@@ -194,7 +194,7 @@ namespace
 		std::shared_ptr<Resources> resources;
 	};
 
-	// ClusterBuildingCS: one group per cluster; also resets the culling counter.
+	// ClusterBuildingCS: 64 clusters a group; also resets the culling counter.
 	struct BuildBindings
 	{
 		org::DeclaredViewToken clusters, counter;
@@ -226,9 +226,10 @@ namespace
 				return frame;
 			frame.program = resources->build;
 			frame.constants = BaseConstants(*resources, *shape, offsetof(LLFLatch, cameraProjInverse));
-			frame.groups[0] = shape->clusterSize[0];
-			frame.groups[1] = shape->clusterSize[1];
-			frame.groups[2] = shape->clusterSize[2];
+			// ClusterBuildingCS runs 64 clusters a group, along one line.
+			frame.groups[0] = (shape->clusterSize[0] * shape->clusterSize[1] * shape->clusterSize[2] + 63) / 64;
+			frame.groups[1] = 1;
+			frame.groups[2] = 1;
 			frame.latchStride = resources->latch->Stride();
 			frame.latchSlots = resources->latch->Slots();
 			return frame;
