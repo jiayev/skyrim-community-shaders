@@ -5,8 +5,9 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
-#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
+#include "Features/LinearLighting.h"
 
 #include <algorithm>
 #include <bit>
@@ -26,13 +27,9 @@ namespace DCLF::GeometryPort
 
 		// Engine::Offsets (Address Library ids) (SetupGeometry, AE 0x1414dd040, reads each).
 		constexpr Engine::Offset kVec3NormalizeImport{ { 417053 }, { 228300 } };  // D3DXVec3Normalize's IAT slot (the thunk at 0x14153d3da)
-		constexpr std::size_t kImageSpaceHdr = 0xe0;
-		constexpr std::size_t kBSLightNiLight = 0x48;     // BSLight -> NiLight*
-		constexpr std::size_t kNiLightDiffuse = 0x11c;    // NiColor
-		constexpr std::size_t kNiLightFade = 0x134;
-		constexpr std::size_t kNiLightDirection = 0x140;  // NiDirectionalLight's world direction
-		constexpr Engine::Offset kDirectionalAmbient{ { 390984 }, { 513243 } };  // BSShaderManager::State+0xc8
-		constexpr Engine::Offset kCurrentAccumulator{ { 414600 }, { 527650 } };  // FUN_141480b20's
+		constexpr std::size_t kNiLightDirection = 0x140;                          // NiDirectionalLight's world direction
+		constexpr Engine::Offset kDirectionalAmbient{ { 390984 }, { 513243 } };   // BSShaderManager::State+0xc8
+		constexpr Engine::Offset kCurrentAccumulator{ { 414600 }, { 527650 } };   // FUN_141480b20's
 		constexpr std::size_t kAccumulatorEye = 0x16c;
 		constexpr Engine::Offset kPosAdjust{ { 388909 }, { 524862 } };  // RendererShadowState (0x14202ab70) +0x35c
 		constexpr Engine::Offset kSsrX{ { 391427 }, { 513554 } };       // Setting values (ConfigureR)
@@ -150,14 +147,13 @@ namespace DCLF::GeometryPort
 		// The sun: ShadowSceneNode[0]->sunLight, the template pass's sceneLights[0]; SetupGeometry reads it through BSLight+0x48.
 		auto* sceneNode = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
 		const RE::BSLight* sun = sceneNode ? sceneNode->GetRuntimeData().sunLight : nullptr;
-		const auto* light = sun ? At<const std::byte* const>(sun, kBSLightNiLight) : nullptr;
-		const auto* imageSpace = Global<const std::byte* const>(Engine::Address::kImageSpaceManager);
-		if (light && imageSpace) {
+		const auto* light = sun ? sun->light.get() : nullptr;
+		if (light && globals::game::imageSpaceManager) {
 			frame.sun = true;
-			// DirLightColor (0x1414dd5d5): the fade times the HDR multiplier, then each channel.
-			const float scale = At<const float>(light, kNiLightFade) * At<const float>(imageSpace, kImageSpaceHdr);
-			for (std::uint32_t c = 0; c < 3; ++c)
-				frame.dirLightColor[c] = scale * At<const float>(light, kNiLightDiffuse + c * sizeof(float));
+			const auto color = globals::features::linearLighting.DirectionalColorToWorking(light);
+			frame.dirLightColor[0] = color.red;
+			frame.dirLightColor[1] = color.green;
+			frame.dirLightColor[2] = color.blue;
 			// DirLightDirection (0x1414dd622): the direction negated (a sign flip, xorps 0x141ad3130; SE multiplies by -1.0, the same bits), through the engine's own
 			// D3DXVec3Normalize import, so the result is the same bits on this machine.
 			const float negated[3] = { -At<const float>(light, kNiLightDirection), -At<const float>(light, kNiLightDirection + 4),

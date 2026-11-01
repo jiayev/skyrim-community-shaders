@@ -305,6 +305,11 @@ RE::NiColor LinearLighting::LightColorToWorking(const RE::NiLight* light, bool e
 	return color;
 }
 
+RE::NiColor LinearLighting::DirectionalColorToWorking(const RE::NiLight* light, bool effect) const
+{
+	return LightColorToWorking(light, effect) * (light->GetLightRuntimeData().fade * GetSunlightScale(light));
+}
+
 bool LinearLighting::IsSunlightOverridden(const RE::NiLight* light) const
 {
 	return light && light == workingSunlight && light->GetLightRuntimeData().diffuse == workingSunlightColor;
@@ -419,7 +424,7 @@ namespace
 		const auto* light = skyrim_cast<RE::NiDirectionalLight*>(pass->sceneLights[0]->light.get());
 		auto& ll = globals::features::linearLighting;
 		if (light && (ll.IsLinearLightingActive() || ll.IsSunlightOverridden(light)))
-			WriteRGB(Group::PerGeometry, index, ll.LightColorToWorking(light, effect) * (light->GetLightRuntimeData().fade * ll.GetSunlightScale(light)));
+			WriteRGB(Group::PerGeometry, index, ll.DirectionalColorToWorking(light, effect));
 	}
 
 	struct LightingMaterialUpload
