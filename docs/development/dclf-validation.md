@@ -123,7 +123,7 @@ Each compares a live path with a reference built from scratch and flags every mi
 | `CS_DCLF_PROFILE` | `1`: scene-phase timings in the report. The profile perturbs what it measures. |
 | `CS_DCLF_CENSUS` | `1`: the registration census, every report, with or without `CS_DCLF_STATS`. |
 | `CS_DCLF_PRECISION_CENSUS` | `1`: every 300 frames, what the engine's float translations lose against their parent chains composed in double, by distance from the origin, for rows and bones. |
-| `CS_DCLF_SHADER_DEBUG` | Default on: SPIR-V with debug info, and the HLSL sources copied beside the log. `0`: without. It inflates the depth pipeline groups. |
+| `CS_DCLF_SHADER_DEBUG` | Default on (off in the release profile, where `1` turns it on): SPIR-V with debug info, and the HLSL sources copied beside the log. `0`: without. It inflates the depth pipeline groups. |
 | `CS_DCLF_SHADER_SOURCE_DIR` | Where `CS_DCLF_SHADER_DEBUG` copies the HLSL sources. |
 | `CS_DCLF_TARGET_PROBE` | `x,y`: the G-buffer targets at a pixel where the opaque pass ends, and the objects whose bound covers it. |
 | `CS_DCLF_SHADOW_DEBUG_OUTPUT` | `1`: Lighting.hlsl writes the sun's shadow terms into the Diffuse target, native and DCLF alike. |

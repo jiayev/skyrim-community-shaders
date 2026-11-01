@@ -37,6 +37,11 @@ list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 # ########################################################################################################################
 message("Options:")
 option(
+    CS_RELEASE_PROFILE
+    "Shipping defaults: no SPIR-V debug info and no render graph pass timestamps or their readback. The Release preset sets this, turns off Aftermath, DevBench and NvPerf, and keeps Tracy's on-demand zones."
+    OFF
+)
+option(
     AFTERMATH
     "Integrate the NVIDIA Nsight Aftermath SDK so a GPU fault writes a decodable crash dump instead of a bare device-lost. Requires the SDK; pass -DAFTERMATH=OFF to build without it."
     ON
@@ -247,6 +252,7 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
 target_compile_definitions(
     ${PROJECT_NAME}
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
+    PRIVATE "$<$<BOOL:${CS_RELEASE_PROFILE}>:CS_RELEASE_PROFILE>"
     PRIVATE "$<$<BOOL:${ENABLE_ENB_EXTENDER}>:ENABLE_ENB_EXTENDER>"
 )
 

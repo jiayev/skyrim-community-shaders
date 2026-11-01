@@ -21,6 +21,7 @@
 
 #include <OpenRenderGraph/GraphHost.h>
 #include <OpenRenderGraph/Runtime.h>
+#include <Render/Runtime/OpenRenderGraphSettings.h>
 // This module exports the contributor ABI's table (ORG_GetRenderGraphAPI, below).
 #define ORG_RENDER_GRAPH_HOST_EXPORTS
 #include <OpenRenderGraph/ContributorHost.h>
@@ -1645,6 +1646,13 @@ bool RenderGraphRuntime::Initialize()
 				EpochOf(Segment::SkyOcclusion), EpochOf(Segment::LightCulling), EpochOf(Segment::MainOpaque), EpochOf(Segment::Forward), EpochOf(Segment::FirstPerson) };
 		if (!desc.epochOrder.empty())
 			logger::info("[ORG] epoch order: {}", fmt::join(desc.epochOrder, ","));
+#if defined(CS_RELEASE_PROFILE)
+		// No pass timestamps and no readback of them: the statistics take this when the runtime below creates them.
+		auto settings = org::runtime::GetOpenRenderGraphSettings();
+		settings.collectPassStatistics = false;
+		settings.collectPipelineStatistics = false;
+		org::runtime::SetOpenRenderGraphSettings(settings);
+#endif
 		// The runtime's slots: the host's frame slots (frames in flight times epochs), which its upload pages and statistics follow.
 		state->orgRuntime = org::Runtime::Create({ .device = state->device->Get(), .backend = rhi::Backend::Vulkan,
 			.slots = desc.framesInFlight * (std::max)(static_cast<uint32_t>(desc.epochOrder.size()), 1u) });
