@@ -28,6 +28,7 @@ namespace DCLF::Features::Grass
 		winrt::com_ptr<ID3D11Buffer> vertexBuffer, indexBuffer;  // held from the sink until the render thread leases them
 		std::uint64_t vertexDesc = 0;
 		std::uint32_t indexCount = 0;
+		float canopyHeight = 1.0f;  // a LOD mesh's (the LOD library's)
 	};
 
 	/**
@@ -56,14 +57,13 @@ namespace DCLF::Features::Grass
 	/** @brief A bucket's material, as the capture read it (the textures referenced while the bucket lives). */
 	struct BucketSource
 	{
-		RE::NiPointer<RE::NiSourceTexture> diffuse, normal, rmaos, features0;
+		RE::NiPointer<RE::NiSourceTexture> diffuse, normal, rmaos, features0, features1, emissive;
 		float boundCenter[3]{};
 		float modelRadius = 0.0f;
 		float wavePeriod = 1.0f;
 		std::uint32_t triangleCount = 0;
 		std::uint32_t pbrFlags = 0;
-		float roughnessScale = 1.0f, specularLevel = 0.0f;
-		float subsurface[4]{};
+		float pbrParams1[3]{}, pbrParams2[4]{}, pbrParams3[4]{}, pbrParams4[4]{};
 	};
 
 	/**

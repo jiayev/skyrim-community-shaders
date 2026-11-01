@@ -89,19 +89,25 @@ namespace DCLF::GrassInstances
 		float scaleMask[3]{};
 		std::uint32_t pad = 0;
 		DescriptorIndex normalIndex, rmaosIndex, featuresIndex, pbrSampler;
-		float pbrParams1[4]{};  // roughness scale, specular level, 0, 0
+		float pbrParams1[4]{};  // roughness scale, specular level, emissive scale, 0
 		float pbrParams2[4]{};  // subsurface colour rgb, opacity
 		float windDirection[2]{ 0.0f, 1.0f };  // the vertex stage's WindVector.xy: the shapes' model Y axis in world space
 		float lodMeshCost[2]{ 1.0f, 1.0f };    // tiers 1 and 2's sqrt(cost) (tier 0's minPixelScale where the tier has no mesh)
+		float pbrParams3[4]{};                 // fuzz colour rgb, weight
+		float pbrParams4[4]{};                 // subsurface balance, front and back specular weights, back roughness scale
+		DescriptorIndex fuzzIndex, emissiveIndex;
+		float canopyHeight[kTiers]{ 1.0f, 1.0f, 1.0f };  // the mesh's model-space height, by tier
+		std::uint32_t pad2[3]{};
 	};
-	static_assert(sizeof(BucketRow) == 160);
+	static_assert(sizeof(BucketRow) == 224);
 	static_assert(offsetof(BucketRow, flags) == 12 && offsetof(BucketRow, visibleBase) == 16 && offsetof(BucketRow, instanceCount) == 28 &&
 				  offsetof(BucketRow, diffuseIndex) == 32 && offsetof(BucketRow, alphaRef) == 44 && offsetof(BucketRow, boundCenter) == 48 &&
 				  offsetof(BucketRow, modelRadius) == 60 && offsetof(BucketRow, wavePeriod) == 64 && offsetof(BucketRow, distScale) == 68 &&
 				  offsetof(BucketRow, minPixelScale) == 72 && offsetof(BucketRow, pbrFlags) == 76 && offsetof(BucketRow, scaleMask) == 80 &&
 				  offsetof(BucketRow, normalIndex) == 96 && offsetof(BucketRow, pbrSampler) == 108 && offsetof(BucketRow, pbrParams1) == 112 &&
 				  offsetof(BucketRow, pbrParams2) == 128 && offsetof(BucketRow, windDirection) == 144 &&
-				  offsetof(BucketRow, lodMeshCost) == 152);
+				  offsetof(BucketRow, lodMeshCost) == 152 && offsetof(BucketRow, pbrParams3) == 160 && offsetof(BucketRow, pbrParams4) == 176 &&
+				  offsetof(BucketRow, fuzzIndex) == 192 && offsetof(BucketRow, emissiveIndex) == 196 && offsetof(BucketRow, canopyHeight) == 200);
 
 	// InstanceFrame::flags: the tier, whether the instance is in the collision's range, whether it is shaded simply (far).
 	inline constexpr std::uint32_t kFrameTierMask = 3u;
