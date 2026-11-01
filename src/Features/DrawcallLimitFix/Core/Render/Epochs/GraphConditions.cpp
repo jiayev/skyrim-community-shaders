@@ -86,7 +86,11 @@ namespace DCLF::Draws
 		current = next;
 		builtForCpu.store(current.cpuPipeline, std::memory_order_release);
 		latchedRecordCut.store(("," + current.cuts + ",").find(",~latched-record,") != std::string::npos, std::memory_order_relaxed);
-		a_host.RequestRebuild();
+		// The conditions are Drawcall Limit Fix's: its epochs' graphs are built again, the others' (Light Limit Fix's light culling)
+		// keep theirs. A hosted segment has no graph of its own (its host's carries its passes).
+		for (std::uint32_t segment = 0; segment < static_cast<std::uint32_t>(RenderGraphRuntime::Segment::Count); ++segment)
+			if (static_cast<RenderGraphRuntime::Segment>(segment) != RenderGraphRuntime::Segment::LightCulling)
+				a_host.RequestRebuild(RenderGraphRuntime::EpochOf(static_cast<RenderGraphRuntime::Segment>(segment)));
 	}
 
 	const GraphConditions& CurrentGraphConditions()

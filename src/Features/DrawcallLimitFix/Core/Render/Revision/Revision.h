@@ -40,8 +40,10 @@ namespace DCLF::Draws
 		std::uint64_t mainGeneration = 0;
 		std::shared_ptr<ShadowResources> shadow;
 		std::shared_ptr<SceneBuffers> scene;
-		// BuildPoint: the graph's build (GraphHost::BuildGeneration) and the heaps every recording binds (the graph's own).
+		// BuildPoint: the graphs' build (GraphHost::BuildGeneration: any epoch's), each segment's own epoch's build
+		// (GraphHost::BuildGeneration(epoch): what its recordings are of), and the heaps every recording binds (the graphs' own).
 		std::uint64_t buildGeneration = 0;
+		std::array<std::uint64_t, static_cast<std::size_t>(RenderGraphRuntime::Segment::Count)> epochBuilds{};
 		rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 		// The pipeline generations a catalog's sets must be built for (GetIndirectState, GetShadowIndirectState, CatalogFamilyPipelines).
 		std::uint32_t targetsGeneration = 0;
