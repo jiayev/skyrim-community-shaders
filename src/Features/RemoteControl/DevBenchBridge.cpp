@@ -809,7 +809,7 @@ namespace
 
 	void TraceToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
-		RunHandler(&BuildTraceResult, a_argsJson, a_sink, a_write);
+		RunHandler("communityshaders.trace", &BuildTraceResult, a_argsJson, a_sink, a_write);
 	}
 
 	/**
@@ -845,7 +845,7 @@ namespace
 
 	void PipelinesToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
-		RunHandler(&BuildPipelinesResult, a_argsJson, a_sink, a_write);
+		RunHandler("communityshaders.pipelines", &BuildPipelinesResult, a_argsJson, a_sink, a_write);
 	}
 
 	/**
@@ -893,7 +893,7 @@ namespace
 
 	void ScheduleToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
-		RunHandler(&BuildScheduleResult, a_argsJson, a_sink, a_write);
+		RunHandler("communityshaders.schedule", &BuildScheduleResult, a_argsJson, a_sink, a_write);
 	}
 
 	/** @brief Drawcall Limit Fix's test harness commands (TestHarness.h), queued for the next Present. */
@@ -918,7 +918,7 @@ namespace
 
 	void DclfToolHandler(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
-		RunHandler(&BuildDclfResult, a_argsJson, a_sink, a_write);
+		RunHandler("communityshaders.dclf", &BuildDclfResult, a_argsJson, a_sink, a_write);
 	}
 
 	/**
