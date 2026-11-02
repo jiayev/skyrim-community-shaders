@@ -219,11 +219,11 @@ void AdvancedSettingsRenderer::RenderLoggingSection()
 
 	ImGui::Spacing();
 
-	if (Icons::LabeledButton("##DumpIni", Icons::TI(ICON_TI_FILE_EXPORT), T("menu.advanced.dump_ini_settings", "Dump Ini Settings")))
+	if (Util::LabeledButton("##DumpIni", Icons::TI(ICON_TI_FILE_EXPORT), T("menu.advanced.dump_ini_settings", "Dump Ini Settings")))
 		Util::DumpSettingsOptions();
 	if (const auto logPath = Util::PathHelpers::GetLogPath(); !logPath.empty()) {
 		ImGui::SameLine();
-		if (Icons::LabeledButton("##OpenLogs", Icons::TI(MenuIcons::kLogs), T("menu.advanced.open_logs", "Open Logs")))
+		if (Util::LabeledButton("##OpenLogs", Icons::TI(MenuIcons::kLogs), T("menu.advanced.open_logs", "Open Logs")))
 			ShellExecuteA(NULL, "open", logPath.string().c_str(), NULL, NULL, SW_SHOWNORMAL);
 	}
 }
@@ -357,7 +357,7 @@ void AdvancedSettingsRenderer::RenderActiveShadersSection()
 								  .c_str());
 
 	// Static variables to maintain table filter state
-	static char filterText[256] = "";
+	static std::string filterText;
 	static int searchColumn = 0;        // 0 = All Columns, then one per column: Type, Class, Descriptor, Frame %, Key
 	static size_t sortColumn = 3;       // Default sort by Frame % (draw calls)
 	static bool sortAscending = false;  // Descending by default (highest usage first)
@@ -464,7 +464,7 @@ void AdvancedSettingsRenderer::RenderActiveShadersSection()
 	Util::TableFilterState<ShaderRow> filterState(getFilterableFields);
 
 	// Initialize filter state from existing variables
-	filterState.filterText = std::string(filterText, filterText + strlen(filterText));
+	filterState.filterText = filterText;
 	filterState.searchColumn = searchColumn;
 
 	// Define input events for row interactions
@@ -491,8 +491,7 @@ void AdvancedSettingsRenderer::RenderActiveShadersSection()
 		0.0f);
 
 	// Update static variables with modified filter state
-	strncpy_s(filterText, filterState.filterText.c_str(), sizeof(filterText) - 1);
-	filterText[sizeof(filterText) - 1] = '\0';
+	filterText = filterState.filterText;
 	searchColumn = filterState.searchColumn;
 }
 
@@ -526,7 +525,7 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 		"Automatically recompile shaders on file change. "
 		"Intended for developing."));
 
-	if (Icons::LabeledButton("##DumpDefaults", Icons::TI(ICON_TI_FILE_EXPORT), T("menu.advanced.dump_feature_defaults", "Dump All Feature Defaults to JSON"))) {
+	if (Util::LabeledButton("##DumpDefaults", Icons::TI(ICON_TI_FILE_EXPORT), T("menu.advanced.dump_feature_defaults", "Dump All Feature Defaults to JSON"))) {
 		if (const auto path = state->DumpFeatureDefaults(); !path.empty())
 			Util::FileHelpers::OpenWithShell(path);
 	}
@@ -536,10 +535,7 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 
 	// Engine object addresses, for attaching a debugger; each button copies its address
 	ImGui::Spacing();
-	{
-		MenuFonts::FontRoleGuard heading(Menu::FontRole::Subheading);
-		ImGui::SeparatorText(T("menu.advanced.addresses", "Addresses"));
-	}
+	Util::SeparatorTextWithFont(T("menu.advanced.addresses", "Addresses"), Menu::FontRole::Subheading);
 	{
 		auto Renderer = globals::game::renderer;
 		auto BSShaderAccumulator = *globals::game::currentAccumulator.get();
@@ -743,7 +739,7 @@ void AdvancedSettingsRenderer::RenderTestingSection()
 		FeatureIssues::Test::DrawDeveloperModeTestingUI();
 
 		ImGui::Spacing();
-		if (Icons::LabeledButton("##TestConditions", Icons::TI(MenuIcons::kTestScene), T("menu.advanced.test_conditions", "Test Conditions")))
+		if (Util::LabeledButton("##TestConditions", Icons::TI(MenuIcons::kTestScene), T("menu.advanced.test_conditions", "Test Conditions")))
 			RunTestConditions();
 		Util::AddTooltip(GetTestConditionsTooltip());
 	}
