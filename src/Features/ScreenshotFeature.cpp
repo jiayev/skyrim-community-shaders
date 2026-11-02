@@ -341,7 +341,7 @@ namespace
 			if (!hdr.hdrTexture || !hdr.outputTexture || !hdr.hdrDataCB || !hdr.GetHDROutputCS())
 				return src;
 
-			if (Menu::GetSingleton()->IsEnabled && hdr.outputTexture && hdr.outputTexture->srv) {
+			if (Menu::GetSingleton()->IsOpen() && hdr.outputTexture && hdr.outputTexture->srv) {
 				ID3D11ShaderResourceView* sceneSRV =
 					(forCapture && hdr.IsCleanSceneCaptureFresh()) ? hdr.cleanSceneCapture->srv.get() :
 																	 (hdr.hdrTexture ? hdr.hdrTexture->srv.get() : nullptr);
@@ -388,7 +388,7 @@ namespace
 	// Paired with ImDrawCallback_ResetRenderState queued by Subrect::DrawEditor.
 	void OpaquePreviewBlendCallback(const ImDrawList*, const ImDrawCmd*)
 	{
-		const bool writeAlpha = IsFlatHdrScreenshotCapture() && Menu::GetSingleton()->IsEnabled;
+		const bool writeAlpha = IsFlatHdrScreenshotCapture() && Menu::GetSingleton()->IsOpen();
 
 		static winrt::com_ptr<ID3D11BlendState> rgbBlend;
 		static winrt::com_ptr<ID3D11BlendState> rgbaBlend;
@@ -851,7 +851,7 @@ void ScreenshotFeature::EnsurePreviewCache(ID3D11Texture2D* sourceTexture)
 
 void ScreenshotFeature::Reset()
 {
-	if (previewCacheTexture && !Menu::GetSingleton()->IsEnabled) {
+	if (previewCacheTexture && !Menu::GetSingleton()->IsOpen()) {
 		previewCacheSRV = nullptr;
 		previewCacheTexture = nullptr;
 	}
