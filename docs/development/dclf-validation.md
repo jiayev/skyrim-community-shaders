@@ -809,6 +809,7 @@ withheld and drawn by nobody. Before reading parity or timing, check in each run
     -   `dclf:define=<NAME>[=<value>],...` adds defines to every DCLF stage compiled from then on (empty: none). With
         `dclf:reload-shaders=<file>` and `dclf:wait=reload` after it, a shader A/B is an `#if` in the source compared in one launch.
     -   `dclf:mark=<label>` marks a phase's boundary in the log; `dclf:gpu-window=<label>` makes the GPU event timers
+    -   `dclf:telemetry=<label>` starts a BasicTelemetry session for a phase, and `dclf:telemetry=off` ends the last. Each writes per-Present frame times, scope totals and off-CPU stalls to `<log directory>/dclf-telemetry`, and a frame time summary to the log.
         (`CS_GPU_EVENT_TIMERS`, with an interval too large to reach) log the frames from there to the next window as one block,
         frames in flight included ("[GpuEvents] window '<label>'"; `-` is not logged).
     -   `dclf:nvperf=<range>|<range>...[#<samples>]` starts an NvPerf capture at that frame.

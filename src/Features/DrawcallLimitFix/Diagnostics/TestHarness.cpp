@@ -11,6 +11,7 @@
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
+#include "Features/DrawcallLimitFix/Diagnostics/TelemetryProfile.h"
 #include "Features/PostProcessing.h"
 #include "Features/RemoteControl/NvPerf.h"
 #include "Features/ScreenshotFeature.h"
@@ -302,6 +303,11 @@ namespace DCLF
 					// "dclf:mark[=<label>]": nothing but this line in the log, a phase's boundary for the run's analysis.
 					if (command == "dclf:mark" || command.rfind("dclf:mark=", 0) == 0)
 						return;
+					// "dclf:telemetry=<label>": a BasicTelemetry session for this phase, in place of the running one, whose files it writes. "=off": none.
+					if (command.rfind("dclf:telemetry=", 0) == 0) {
+						Diagnostics::TelemetryPhase(std::string_view(command).substr(15));
+						return;
+					}
 					// "dclf:shot=<label>": this frame's back buffer saved as <log directory>/dclf-shots/<label>.png (the Screenshot feature's
 					// format, at this Present), so a run's captures are tied to the frames its commands ran at; "Saved screenshot to" marks each
 					// written.
@@ -768,6 +774,7 @@ namespace DCLF
 
 	void RunTestHarness(std::string_view a_feature)
 	{
+		Diagnostics::TelemetryFrame();
 		if (Harness().feature.empty())
 			Harness().feature = a_feature;
 		{
