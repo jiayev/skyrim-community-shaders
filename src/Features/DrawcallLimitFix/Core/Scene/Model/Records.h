@@ -279,13 +279,11 @@ namespace DCLF
 	{
 		kRasterTwoSided = 1u << 0,
 		kRasterDecalGroupShift = 1,  // 2 bits: ObjectDecalGroup
-		// A decal's draw (a decal group's but an opaque effect's, a first-person forward decal's): the vertex stage moves it toward the
-		// eye (the record's kRecordDecalNudge, LightingConstants.h), in place of the depth bias below, which a device-generated command's
-		// pipeline switch does not carry (VK_EXT_device_generated_commands: an execution set's pipelines change shaders only). Not an
-		// engine state index: RasterStateBits leaves it out.
+		// A decal's draw (a decal group's but an opaque effect's, a first-person forward decal's): its pipelines draw with the depth bias
+		// below, and the vertex stage also moves it toward the eye (the record's kRecordDecalNudge, LightingConstants.h). Not an engine
+		// state index: RasterStateBits leaves it out.
 		kRasterDecalNudge = 1u << 3,
-		// 4 bits: rasterStateDepthBiasMode (0-11). The engine's; its bias is not drawn (kRasterDecalNudge), the index keeps the key the
-		// engine's state.
+		// 4 bits: rasterStateDepthBiasMode (0-11). The engine's; only a kRasterDecalNudge key draws its bias.
 		kRasterDepthBiasShift = 4,
 		kRasterBlendModeShift = 8,   // 3 bits: alphaBlendMode (0-6)
 		kRasterAlphaToCoverage = 1u << 11,

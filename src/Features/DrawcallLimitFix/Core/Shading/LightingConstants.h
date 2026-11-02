@@ -293,8 +293,8 @@ namespace DCLF
 	}
 	/**
 	 * @brief A decal's draw (kRasterDecalNudge): the vertex stage moves its clip position toward the eye (DCLFObjects.hlsli,
-	 * DCLFDecalNudged), in place of the engine's decal depth bias, which a device-generated command's pipeline switch does not carry,
-	 * and over the exact depth tie a bias-free decal (interiors) has with its host, which DCLF's two vertex modules do not keep.
+	 * DCLFDecalNudged), on top of the engine's decal depth bias: over the float steps a decal and its host sit apart far from the
+	 * origin, and the exact depth tie a bias-free decal (interiors) has with its host, which DCLF's two vertex modules do not keep.
 	 */
 	inline constexpr std::uint32_t kRecordDecalNudge = 1u << 8;
 	/** @brief The kRecordDecalNudge bit of an object drawn with a_key. */

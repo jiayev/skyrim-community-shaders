@@ -664,10 +664,13 @@ namespace DCLF
 			depth.depthWrite = !depthOnly && write;
 			depth.depthEnable = depthOnly || test || write;
 			depth.depthFunc = (depthOnly || test) ? rhi::CompareOp::LessEqual : rhi::CompareOp::Always;
-			// Decal rules: LESS_EQUAL; only the opaque group's depth variant writes depth. No rasterizer bias: these pipelines are switched
-			// by device-generated commands, whose execution sets may change shaders only (VK_EXT_device_generated_commands); the vertex
-			// stage moves a decal toward the eye instead (kRasterDecalNudge), a first-person effect decal drawn forward
-			// (Coordinator::ViewDecalForward) too.
+			// Decal rules: LESS_EQUAL; only the opaque group's depth variant writes depth. A decal (kRasterDecalNudge), a first-person effect
+			// decal drawn forward (Coordinator::ViewDecalForward) too, draws with the engine's bias.
+			if (a_key.rasterFlags & kRasterDecalNudge) {
+				desc.raster.rs.depthBias = a_state.depthBias;
+				desc.raster.rs.depthBiasClamp = a_state.depthBiasClamp;
+				desc.raster.rs.slopeScaledDepthBias = a_state.slopeScaledDepthBias;
+			}
 			if (decalGroup) {
 				depth.depthEnable = true;
 				depth.depthWrite = depthOnly && decalGroup == 1;
@@ -737,9 +740,13 @@ namespace DCLF
 			desc.flags.flags = DrawPipelines::Get().IndirectBindable() ? rhi::PipelineFlags_IndirectBindable : rhi::PipelineFlags_None;
 			auto& raster = desc.raster.rs;
 			raster.cull = (a_key.rasterFlags & kRasterTwoSided) ? rhi::CullMode::None : rhi::CullMode::Back;
-			// No rasterizer bias for a decal: its variants are switched by device-generated commands, whose execution sets may change
-			// shaders only (VK_EXT_device_generated_commands). The vertex stage moves a decal toward the eye instead (kRasterDecalNudge,
-			// DCLFDecalNudged), in its depth variant as in its colour one.
+			// A decal draws with the engine's bias, in its depth variant as in its colour one. An execution set's pipelines must share it, so
+			// a bias makes its own state class (StateClassKey). The vertex stage also moves the decal toward the eye (DCLFDecalNudged).
+			if (a_key.rasterFlags & kRasterDecalNudge) {
+				raster.depthBias = a_state.depthBias;
+				raster.depthBiasClamp = a_state.depthBiasClamp;
+				raster.slopeScaledDepthBias = a_state.slopeScaledDepthBias;
+			}
 			// The engine's winding (EngineFrontCCW); RasterState::frontCCW means the same on every backend.
 			raster.frontCCW = a_frontCCW;
 			auto& depth = desc.depth.ds;
