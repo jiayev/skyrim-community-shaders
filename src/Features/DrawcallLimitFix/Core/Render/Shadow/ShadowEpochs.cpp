@@ -37,7 +37,7 @@ namespace DCLF
 			latch.visibilityStamp = a_frame & 0x0FFFFFFFu;  // 28 bits: BuildDrawsCS keeps flags below it
 			latch.placementsIndex = FrameValues::Get().PlacementsIndex();
 			latch.fadeSeedsIndex = a_seedsIndex;
-			FoldEyeIntoViewProj(a_view.viewProj, a_view.eye, latch.viewProj);
+			LatchCullCamera(latch, a_view.viewProj, a_view.eye);
 			return latch;
 		}
 
@@ -47,7 +47,7 @@ namespace DCLF
 			 * @brief A sun view's least caster radius in world units for a_minTexels (kCullMinTexels; 0: no test). A cascade's projection is
 			 * orthographic (row 3 is (0, 0, 0, 1): clip w 1), so a sphere of radius r spans r * |row 0's xyz| of NDC either side of its centre,
 			 * and NDC's 2 units span the viewport's width: r * |row 0's xyz| * width / 2 texels, row 1 and the height likewise. The radius is
-			 * the threshold over the larger axis' texels per world unit (a caster either axis resolves is kept). The eye fold moves only the
+			 * the threshold over the larger axis' texels per world unit (a caster either axis resolves is kept). The eye only ever moves the
 			 * rows' w. A projection that is not orthographic has no one texel size: not tested.
 			 */
 			float SunCasterMinRadius(const float (&a_viewProj)[16], std::uint32_t a_width, std::uint32_t a_height, float a_minTexels)

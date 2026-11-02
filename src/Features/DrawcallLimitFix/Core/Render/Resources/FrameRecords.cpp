@@ -5,6 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
+#include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 
 namespace DCLF::Draws
@@ -54,7 +55,10 @@ namespace DCLF::Draws
 	{
 		// The frame lighting, every commit: latching it only on change would change the frame's shape.
 		const auto& frameCapture = Scene::FrameView::Get().GetFrameCapture();
-		a_latched(a_target, frameCapture.lighting.data(), sizeof(frameCapture.lighting), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes);
+		auto lighting = frameCapture.lighting;
+		// PS b13 c0.w shares the sun direction row. Forward fog needs the current frame's range.
+		lighting[3] = FrameGlobals::Current().technique.invFrameBufferRange;
+		a_latched(a_target, lighting.data(), sizeof(lighting), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes);
 		// The LOD fades' frame inputs after the lighting (PS b13, c6): the draws fade specular and envmap by distance.
 		const LodFadeFrame lodFadeFrame = SampleLodFadeFrame();
 		a_latched(a_target, &lodFadeFrame, sizeof(lodFadeFrame), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting));

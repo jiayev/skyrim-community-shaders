@@ -140,9 +140,28 @@
                 "ZIP_TO_DIST": "OFF",
                 "AIO_ZIP_TO_DIST": "OFF"
             }
+        },
+        {
+            "name": "Release",
+            "description": "The release profile: ALL's LTCG build with Aftermath, DevBench, NvPerf, SPIR-V debug info and pass timestamps off, and Tracy on demand",
+            "inherits": "ALL",
+            "cacheVariables": {
+                "CS_RELEASE_PROFILE": "ON",
+                "AFTERMATH": "OFF",
+                "DEVBENCH_BRIDGE": "OFF",
+                "NVPERF_SUPPORT": "OFF",
+                "TRACY_SUPPORT": "ON"
+            }
         }
     ],
     "buildPresets": [
+        {
+            "name": "Release",
+            "description": "The release profile: optimized, diagnostics off, AIO folder in build/Release/aio and its package in dist",
+            "configurePreset": "Release",
+            "configuration": "Release",
+            "targets": ["Package-AIO-Manual"]
+        },
         {
             "name": "Dev",
             "description": "Default build preset for developers, generate an AIO folder thats ready to copy",

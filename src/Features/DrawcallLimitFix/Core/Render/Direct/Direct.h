@@ -334,8 +334,8 @@ namespace DCLF::Direct
 	{
 		ViewType type = ViewType::Main;
 		std::uint32_t viewIndex = 0;  // the instance (a shadow slot, a reflection face)
-		std::array<float, 16> viewProj{};
-		std::array<std::array<float, 4>, 6> planes{};  // world space, inward
+		std::array<float, 16> viewProj{};  // the latch's with its eye folded in: an absolute position projects directly
+		std::array<std::array<float, 4>, 6> planes{};  // world space, inward, moved out by planeMargin (ApplyPlaneMargin)
 		std::uint32_t planeMask = 0;
 		std::uint32_t cullFlags = 0;  // the kCull* bits (GpuLayouts.h)
 		std::array<float, 3> eye{};
@@ -345,10 +345,13 @@ namespace DCLF::Direct
 		std::uint32_t frame = 0;      // the frustum stamp's
 		bool frustumCull = true;      // false: first person draws every member
 		// Added for Cull.cpp (BuildDrawsLatch's other words; Cull.h's builders fill them from the latch):
-		// The view-projection's six clip planes in world space (normalised, inward: -x, +x, -y, +y, near, far), tested as spheres.
+		// The view-projection's six clip planes in world space (normalised, inward: -x, +x, -y, +y, near, far), tested as spheres, moved
+		// out by planeMargin.
 		std::array<std::array<float, 4>, 6> clipPlanes{};
-		float treeHeightBase = 0.0f;      // BSTreeNode::OnVisible's height test: base (treeHeight is its limit; +infinity off)
-		float minCasterRadius = 0.0f;     // kCullMinTexels
+		// BuildDrawsLatch::cullEye's w: what a test on absolute positions and planes adds to a bound's radius, so rounding can't cull.
+		float planeMargin = 0.0f;
+		float treeHeightBase = 0.0f;  // BSTreeNode::OnVisible's height test: base (treeHeight is its limit; +infinity off)
+		float minCasterRadius = 0.0f;  // kCullMinTexels
 		std::uint32_t strictContext = 0;  // a portal-strict point light's atlas entry + 1 (0: not gated)
 		bool sunTest = false;             // the colour pass's sun test (kSunTestOn)
 		// The main camera's lists (Main, Decal, Forward, Refraction) culled only for their verdicts (kAccumulated): a per-snapshot list's

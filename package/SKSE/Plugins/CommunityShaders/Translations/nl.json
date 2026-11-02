@@ -6,11 +6,11 @@
         "language": "Nederlands",
         "locale": "nl"
     },
-    "common.active": "Actief",
-    "common.inactive": "Inactief",
     "cs_editor.actions": "Acties",
     "cs_editor.active": "Actief:",
     "cs_editor.add_new_marker": "Voeg een nieuwe marker toe",
     "cs_editor.apply": "Toepassen",
-    "cs_editor.apply_changes": "Pas veranderingen toe op het spel"
+    "cs_editor.apply_changes": "Pas veranderingen toe op het spel",
+    "common.active": "Actief",
+    "common.inactive": "Inactief"
 }

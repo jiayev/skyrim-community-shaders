@@ -98,6 +98,11 @@ void SetupRenderTarget(RE::RENDER_TARGET target, const char* name, D3D11_TEXTURE
 
 	if (texDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS)
 		DX::ThrowIfFailed(device->CreateUnorderedAccessView(data.texture, &uavDesc, &data.UAV));
+
+	Util::SetResourceName(data.texture, "%s", name);
+	Util::SetResourceName(data.SRV, "%s SRV", name);
+	Util::SetResourceName(data.RTV, "%s RTV", name);
+	Util::SetResourceName(data.UAV, "%s UAV", name);
 }
 
 void Deferred::SetupResources()
@@ -394,6 +399,7 @@ void Deferred::DeferredPasses()
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
+		ID3D11ShaderResourceView* skylightingProbes = skylighting.loaded && skylighting.texProbeArray ? skylighting.texProbeArray->srv.get() : nullptr;
 		ID3D11ShaderResourceView* srvs[]{
 			specular.SRV,                                                                                   // t0  SpecularTexture
 			albedo.SRV,                                                                                     // t1  AlbedoTexture
@@ -403,7 +409,7 @@ void Deferred::DeferredPasses()
 			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,                                             // t5  ReflectanceTexture
 			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,                       // t6  EnvTexture
 			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,            // t7  EnvReflectionsTexture
-			dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,  // t8  SkylightingProbeArray
+			dynamicCubemaps.loaded ? skylightingProbes : nullptr,  // t8  SkylightingProbeArray
 			ssgiOutput,                                                                                     // t9  SsgiTexture / SH0
 			ssgiSH1Output,                                                                                  // t10 SsgiSH1Texture
 			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                            // t11 EnvIBLTexture

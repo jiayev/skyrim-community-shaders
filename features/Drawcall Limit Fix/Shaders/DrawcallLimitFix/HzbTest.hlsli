@@ -7,8 +7,9 @@
 
 struct HzbView
 {
-	// The main pass's view-projection with the camera translation folded in, so an absolute world position projects directly.
+	// The main pass's camera-relative view-projection, and the eye a world position is made relative to (BuildDrawsLatch::cullEye).
 	float4x4 ViewProj;
+	float3 Eye;
 	uint Index;       // Texture2D<float>: the HZB; 0 when there is none to test against
 	uint2 BaseSize;   // mip 0's
 	uint Mips;
@@ -23,12 +24,12 @@ float2 HzbUnpackUvScale(uint a_packed) { return float2(a_packed & 0xFFFF, a_pack
 // The bounding sphere's screen-space extent and its nearest depth, in the same clip space the draws use.
 // Returns false when the projection cannot be trusted - a corner behind the near plane - so that the
 // object is kept.
-bool HzbScreenExtent(float4x4 a_viewProj, float3 boundCentre, float boundRadius, out float2 uvMin, out float2 uvMax, out float nearestZ)
+bool HzbScreenExtent(float4x4 a_viewProj, float3 a_eye, float3 boundCentre, float boundRadius, out float2 uvMin, out float2 uvMax, out float nearestZ)
 {
 	uvMin = float2(1, 1);
 	uvMax = float2(0, 0);
 	nearestZ = 1;
-	const float3 centre = boundCentre;
+	const precise float3 centre = boundCentre - a_eye;
 	float2 ndcMin = float2(1e30, 1e30);
 	float2 ndcMax = float2(-1e30, -1e30);
 	float minZ = 1e30;
@@ -78,7 +79,7 @@ HzbResult HzbTest(HzbView a_view, float3 boundCentre, float boundRadius)
 		return result;
 	float2 uvMin, uvMax;
 	float nearestZ;
-	if (!HzbScreenExtent(a_view.ViewProj, boundCentre, boundRadius, uvMin, uvMax, nearestZ))
+	if (!HzbScreenExtent(a_view.ViewProj, a_view.Eye, boundCentre, boundRadius, uvMin, uvMax, nearestZ))
 		return result;
 	if (nearestZ <= 0.0)
 		return result;  // in front of the near plane: nothing can occlude it

@@ -52,22 +52,23 @@ float3 IntersectionZPlane(float3 B, float z_dist)
 	return result;
 }
 
-[numthreads(1, 1, 1)] void main(uint3 groupId : SV_GroupID,
-	uint3 dispatchThreadId : SV_DispatchThreadID,
-	uint3 groupThreadId : SV_GroupThreadID,
-	uint groupIndex : SV_GroupIndex) {
+[numthreads(64, 1, 1)] void main(uint3 dispatchThreadId : SV_DispatchThreadID) {
 	LLF_DECLARE_RESOURCES
+
+	uint clusterIndex = dispatchThreadId.x;
 
 #if defined(LLF_ORG_BINDLESS)
 	// The ORG graph has no separate clear pass: building runs before culling, so it
 	// resets the culling pass's append counter.
-	if (all(groupId == 0))
+	if (clusterIndex == 0)
 		lightIndexCounter[0] = 0;
 #endif
 
-	uint clusterIndex = groupId.x +
-	                    groupId.y * ClusterSize.x +
-	                    groupId.z * (ClusterSize.x * ClusterSize.y);
+	if (clusterIndex >= ClusterSize.x * ClusterSize.y * ClusterSize.z)
+		return;
+
+	uint sliceSize = ClusterSize.x * ClusterSize.y;
+	uint3 groupId = uint3(clusterIndex % ClusterSize.x, (clusterIndex % sliceSize) / ClusterSize.x, clusterIndex / sliceSize);
 
 	float2 clusterSize = rcp(float2(ClusterSize.x, ClusterSize.y));
 

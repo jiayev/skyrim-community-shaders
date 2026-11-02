@@ -24,6 +24,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
@@ -260,12 +261,15 @@ namespace DCLF::Features::Fades
 		/** @brief The root's cull test (the fade query: PreparePortalQueries' choice, then PortalTestAt through its program). */
 		bool RootInView(const CpuStageInput& a_input, std::uint32_t a_program, const FadeRootStatic& a_root, const float a_centre[3], float a_radius)
 		{
+			// Both tests are on absolute planes: the margin keeps rounding from culling. A zero radius stays, which the portal test culls.
+			const float margin = ::DCLF::Draws::CullPlaneMargin(a_input.fadeEye[0], a_input.fadeEye[1], a_input.fadeEye[2]);
+			const float radius = a_radius > 0.0f ? a_radius + margin : a_radius;
 			const std::uint32_t count = a_input.programs.size() > kPortalSetBytes / 4 ? a_input.programs[kPortalSetBytes / 4] : 0u;
 			if (a_program >= count || (a_root.bits & kFadeRootPreprocessed))
-				return CameraInView(a_input, a_root.bits, a_centre, a_radius);
+				return CameraInView(a_input, a_root.bits, a_centre, radius);
 			const std::uint32_t flags = ((a_root.bits & kFadeRootAlwaysDraw) ? 1u << 11 : 0u) | ((a_root.bits & kFadeRootPreprocessed) ? 1u << 12 : 0u) |
 			                            ((a_root.bits & kFadeRootPreprocessHidden) ? 1u << 20 : 0u);
-			return ::DCLF::Portals::PortalTestCpu(a_input.programs, a_program, a_centre, a_radius, flags) == 1;
+			return ::DCLF::Portals::PortalTestCpu(a_input.programs, a_program, a_centre, radius, flags) == 1;
 		}
 
 		/** @brief The verdicts a root's members' culls read (Direct::RootWord), from the state they take. */

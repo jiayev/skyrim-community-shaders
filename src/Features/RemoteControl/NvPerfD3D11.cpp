@@ -2,7 +2,7 @@
 
 #ifdef NVPERF_ENABLED
 
-#	include "Globals.h"
+#	include "Features/RemoteControl/NvPerfHost.h"
 
 #	include <nvperf_d3d11_host.h>
 #	include <nvperf_d3d11_target.h>
@@ -70,7 +70,7 @@ namespace NvPerf::detail
 
 		ID3D11DeviceContext* Context()
 		{
-			return globals::d3d::context;
+			return Host::Context();
 		}
 
 		NVPW_MetricsEvaluator* CreateEvaluator(std::vector<std::uint8_t>& a_scratch, const char* a_chipName, const std::vector<std::uint8_t>* a_image)
@@ -468,7 +468,7 @@ namespace NvPerf::detail
 			bool Probe(DeviceInfo& a_device) override
 			{
 				auto& device = a_device;
-				if (!globals::d3d::device) {
+				if (!Host::Device()) {
 					device.error = "the D3D11 device is not created yet";
 					return false;
 				}
@@ -485,7 +485,7 @@ namespace NvPerf::detail
 				}
 				device.available = true;
 				NVPW_D3D11_Device_GetDeviceIndex_Params index{ NVPW_D3D11_Device_GetDeviceIndex_Params_STRUCT_SIZE };
-				index.pDevice = globals::d3d::device;
+				index.pDevice = Host::Device();
 				if (Failed(NVPW_D3D11_Device_GetDeviceIndex(&index), "NVPW_D3D11_Device_GetDeviceIndex")) {
 					device.error = "the D3D11 device is not an NVIDIA GPU the profiler knows";
 					return false;

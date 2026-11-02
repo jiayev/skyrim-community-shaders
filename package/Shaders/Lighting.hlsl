@@ -377,7 +377,8 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Position = viewPos;
 #	if defined(DCLF_BINDLESS)
 	// A decal's depth toward the eye (DCLFObjects.hlsli, DCLFDecalNudged): the engine's decal bias, which DCLF's draws cannot carry.
-	vsout.Position = DCLFDecalNudged(vsout.Position, DCLFObjectIndex);
+	// The view has no translation, so this entry of the matrix is the projection's: about -near.
+	vsout.Position = DCLFDecalNudged(vsout.Position, DCLFObjectIndex, abs(FrameBuffer::CameraViewProj[2][3]));
 #	endif
 
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
@@ -948,6 +949,7 @@ cbuffer PerGeometry : register(b2)
 cbuffer DCLFFrameLighting : register(b13)
 {
 	float3 DirLightDirection : packoffset(c0);
+	float DCLFInvFrameBufferRange : packoffset(c0.w);
 	float3 DirLightColor : packoffset(c1);
 	row_major float3x4 DirectionalAmbient : packoffset(c2);
 	float4 AmbientSpecularTintAndFresnelPower : packoffset(c5);  // Fresnel power in z, color in xyz
@@ -1043,7 +1045,7 @@ float GetRimLightMultiplier(float3 L, float3 V, float3 N)
 #	if !defined(TRUE_PBR)
 float ProcessSparkleColor(float color)
 {
-	return exp2(SparkleParams.y * log2(min(1, abs(color))));
+	return SparkleParams.y > 0 ? exp2(SparkleParams.y * log2(min(1, abs(color)))) : 1.0;
 }
 #	endif
 
@@ -3814,8 +3816,14 @@ PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
 			fogColor = 0.0;
 		}
 		if ((FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z) || inReflection) {
+#				if defined(DCLF_BINDLESS)
+			float fogFade = inReflection ? 1.0 : DCLFInvFrameBufferRange;
+#				else
+			float fogFade = inReflection ? 1.0 : FogColor.w;
+#				endif
 #				if defined(EXP_HEIGHT_FOG)
 			if (SharedData::exponentialHeightFogSettings.enabled) {
+				fogFade = ExponentialHeightFog::GetVanillaFogFade(fogFade);
 				if (!ExponentialHeightFog::ShouldDisableVanillaFog()) {
 					color.xyz = lerp(color.xyz, vanillaFogColor, vanillaFogFactor);
 				}
@@ -3826,6 +3834,7 @@ PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
 #				else
 			color.xyz = lerp(color.xyz, fogColor, fogFactor);
 #				endif
+			color.xyz *= fogFade;
 		}
 	}
 #			endif  // !ENVIRONMENT_PROBE: surface radiance without fog or scene encoding

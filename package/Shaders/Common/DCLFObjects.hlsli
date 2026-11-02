@@ -297,13 +297,25 @@ static const uint kDCLFRecordEffectBillboard = 1u << 4;
 // depth range. The engine's decal depth bias is pipeline state, which a device-generated command's pipeline switch does not carry, and
 // where the engine's bias is none (interiors' modes 7 and 11) the decal sits on its host by an exact depth tie, which DCLF's two vertex
 // modules (the host's pulled Z-prepass, the decal's colour draw) do not keep to the bit. 2^-20: 16 steps of a D24 depth.
+// That is too little up close and far from the origin, where a decal and its host can sit several float steps apart: the census
+// (CS_DCLF_PRECISION_CENSUS) measured 1.5 steps lost per object, so a pair can differ by 4 once each is rounded. The nudge is at least that
+// distance, in world units, along the view. Depth is about 1 - near / w, so a distance d is near * d / w of clip z. a_near is the view's
+// near plane.
 static const uint kDCLFRecordDecalNudge = 1u << 8;
 static const float kDCLFDecalDepthNudge = 1.0 / 1048576.0;
-float4 DCLFDecalNudged(float4 a_position, uint a_object)
+static const float kDCLFDecalFloatSteps = 4.0;
+float4 DCLFDecalNudged(float4 a_position, uint a_object, float a_near)
 {
-	if (DCLFObjects[a_object].DCLFRecordFlags & kDCLFRecordDecalNudge)
-		a_position.z -= kDCLFDecalDepthNudge * a_position.w;
-	return a_position;
+	if (!(DCLFObjects[a_object].DCLFRecordFlags & kDCLFRecordDecalNudge))
+		return a_position;
+	const DCLFPlacement placement = DCLFPlacements[a_object];
+	const float largest = max(abs(placement.World[0].w), max(abs(placement.World[1].w), abs(placement.World[2].w)));
+	// The float step at that size: its exponent alone, less the 23 mantissa bits.
+	const float floatStep = asfloat(asuint(largest) & 0x7F800000u) / 8388608.0;
+	precise float offset = max(kDCLFDecalDepthNudge * a_position.w, a_near * kDCLFDecalFloatSteps * floatStep / max(a_position.w, a_near));
+	precise float4 position = a_position;
+	position.z -= offset;
+	return position;
 }
 
 // The node's world rotation as NiBillboardNode::OnVisible makes it for a camera (0x140d3e650: R0 times the turn its face mode makes from
@@ -388,17 +400,19 @@ float3x3 DCLFBillboardRotation(float3x3 a_base, float3 a_pivot, uint a_mode, flo
 }
 
 // A billboard's world for a camera: its unturned world (World: the node's base times the leaf's transform relative to it) turned about the
-// pivot by G = the node's turned rotation (DCLFBillboardRotation) times R0's transpose (the base rotation undone); absolute.
+// pivot by G = the node's turned rotation (DCLFBillboardRotation) times R0's transpose (the base rotation undone); relative to a_eye.
+// The translation takes both differences first, so it never holds an absolute position. Precise here, as precise does not reach into a
+// called function.
 float3x4 DCLFBillboardWorld(uint a_object, float3 a_forward, float3 a_up, float3 a_right, float3 a_eye)
 {
 	const DCLFPlacement placement = DCLFPlacements[a_object];
 	const float3x3 base = float3x3(placement.PreviousWorld[0].xyz, placement.PreviousWorld[1].xyz, placement.PreviousWorld[2].xyz);
 	const float3 pivot = placement.Bound.xyz;
 	const uint mode = (DCLFObjects[a_object].DCLFRecordFlags >> 5) & 7u;
-	const float3x3 g = mul(DCLFBillboardRotation(base, pivot, mode, a_forward, a_up, a_right, a_eye), transpose(base));
+	precise float3x3 g = mul(DCLFBillboardRotation(base, pivot, mode, a_forward, a_up, a_right, a_eye), transpose(base));
 	const float3x4 unturned = float3x4(placement.World[0], placement.World[1], placement.World[2]);
-	const float3x3 rotation = mul(g, (float3x3)unturned);
-	const float3 translation = mul(g, float3(unturned[0].w, unturned[1].w, unturned[2].w) - pivot) + pivot;
+	precise float3x3 rotation = mul(g, (float3x3)unturned);
+	precise float3 translation = mul(g, float3(unturned[0].w, unturned[1].w, unturned[2].w) - pivot) + (pivot - a_eye);
 	return float3x4(float4(rotation[0], translation.x), float4(rotation[1], translation.y), float4(rotation[2], translation.z));
 }
 

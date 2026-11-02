@@ -16,13 +16,6 @@ namespace DCLF
 		// Render thread: the submissions of each epoch outside its trigger (SubmitRevisionRecording), the first logged.
 		std::array<std::uint64_t, kMaxEpochs> outsideTrigger{};
 
-		// Revision shapes' generations (their passes' invocation revisions): apart from the live shapes'.
-		std::uint64_t NextRevisionGeneration()
-		{
-			static std::uint64_t generation = 1ull << 48;
-			return ++generation;
-		}
-
 		/** @brief a_made, unless a_old is the same shape (then a_old: its fragment, and its recording, stand). */
 		template <class Frame>
 		std::shared_ptr<const Frame> Kept(const std::shared_ptr<const Frame>& a_old, const std::shared_ptr<const Frame>& a_made, bool& a_changed)
@@ -30,9 +23,8 @@ namespace DCLF
 			if (a_old && a_made && a_old->SameShape(*a_made))
 				return a_old;
 			a_changed = true;
-			auto copy = std::make_shared<Frame>(*a_made);
-			copy->generation = NextRevisionGeneration();
-			return copy;
+			// A copy: the revision's shape is never the live one, whose identity the live recordings are prepared for.
+			return std::make_shared<const Frame>(*a_made);
 		}
 
 		/** @brief The recordings of one epoch's request, completed on ORG's host thread: the fragment resolves once all are recorded. */
@@ -43,7 +35,7 @@ namespace DCLF
 			std::atomic<std::uint32_t> remaining = 0;
 			std::atomic<bool> failed = false;
 			std::uint32_t hosted = 0;  // the hosted epochs recorded with their shapes, a bit each (RevisionRecordings::hosted)
-			// The build the revision's versions are of (RevisionInputs::buildGeneration): a recording of another is none of its.
+			// The build of the epoch's graph the revision is of (RevisionInputs::epochBuilds): a recording of another is none of its.
 			std::uint64_t buildGeneration = 0;
 			// The epoch's counters (SceneRevisions::EpochStats), the failures logged, and the recordings outstanding (Impl::recordingsOutstanding).
 			std::atomic<std::uint64_t>*recorded = nullptr, *failedCount = nullptr, *droppedCount = nullptr, *shapes = nullptr;
@@ -187,7 +179,7 @@ namespace DCLF
 		 */
 		std::shared_ptr<RevisionFragment> RequestRecordings(org::GraphHost& a_host, Revisions& a_rv, std::atomic<std::uint32_t>& a_outstanding, std::uint32_t a_epoch,
 			const std::shared_ptr<const NamedVersions>& a_versions, std::span<const std::shared_ptr<const RevisionFragment>> a_inputs, std::uint32_t a_hosted,
-			std::uint64_t a_builds)
+			const RevisionInputs& a_frame)
 		{
 			using R = Revisions;
 			const std::uint32_t e = a_epoch;
@@ -240,7 +232,7 @@ namespace DCLF
 			work->hosted = traits.shape == ShapeKind::Main ? a_hosted : 0u;
 			work->recordings.resize(requests.size());
 			work->remaining.store(static_cast<std::uint32_t>(requests.size()), std::memory_order_relaxed);
-			work->buildGeneration = a_builds;
+			work->buildGeneration = a_frame.epochBuilds[static_cast<std::size_t>(traits.segment)];
 			work->recorded = &a_rv.epochs[e].recorded;
 			work->failedCount = &a_rv.epochs[e].failed;
 			work->droppedCount = &a_rv.epochs[e].dropped;
@@ -344,7 +336,7 @@ namespace DCLF
 				draft.Set(slot, nullptr);
 				continue;
 			}
-			auto fragment = RequestRecordings(*host, rv, recordingsOutstanding, e, versions, inputs, hosted, builds);
+			auto fragment = RequestRecordings(*host, rv, recordingsOutstanding, e, versions, inputs, hosted, producer.inputs);
 			if (!fragment) {
 				// Async epochs stopped under it: what was asked settles the fragment, which this revision does not name.
 				++rv.epochs[e].refused;

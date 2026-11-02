@@ -86,7 +86,11 @@ namespace DCLF
 		// and DCLF draws nothing.
 		bool ShaderDebug()
 		{
+#if defined(CS_RELEASE_PROFILE)
+			return SwitchValue(Switch::ShaderDebug) == "1";
+#else
 			return SwitchValue(Switch::ShaderDebug) != "0";
+#endif
 		}
 
 		// The shader tree as the game sees it through MO2's virtual file system, copied to a real

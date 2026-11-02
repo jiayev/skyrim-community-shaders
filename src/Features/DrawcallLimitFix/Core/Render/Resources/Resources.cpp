@@ -114,7 +114,7 @@ namespace DCLF::Draws
 		name = a_name;
 		buffer = MakeVersioned(DeviceBuffer(std::uint64_t(std::max(a_rows, 1u)) * stride, a_name),
 			{ .extent = { 0, a_stride, 0 }, .policy = a_policy, .contents = a_contents, .capture = std::move(a_capture) });
-		return AddressOf(host->GetDesc().device, *buffer->Get()) != 0;
+		return AddressOf(host->Device(), *buffer->Get()) != 0;
 	}
 
 	namespace
@@ -340,7 +340,7 @@ namespace DCLF
 			resources->graphBuffers == graphBuffers)
 			return true;
 
-		auto device = host->GetDesc().device;
+		auto device = host->Device();
 		auto state = std::make_shared<Resources>();
 		// The targets first: a setup retried every frame until they can be imported does not make its buffers and programs each time.
 		if (!ImportMainTargets(*state, a_capture, device, target, targets))
@@ -693,7 +693,7 @@ namespace DCLF
 		auto* host = RenderGraphRuntime::Get().Host();
 		if (!host)
 			return ShadowNotReady(0, "no render graph");
-		auto device = host->GetDesc().device;
+		auto device = host->Device();
 		auto state = std::make_shared<ShadowResources>();
 		state->constants = DeviceBuffer(kShadowConstantBytes, "cs.dclf.shadow.constants");
 		// The shadow commit latches into the constants alone, known before any graph declares the pass.
@@ -770,7 +770,7 @@ namespace DCLF
 		if (!host)
 			return false;
 		const auto& traits = TraitsOf(a_kind);
-		auto device = host->GetDesc().device;
+		auto device = host->Device();
 		const auto name = [&](std::string_view a_name) { return fmt::format("{}.{}", traits.prefix, a_name); };
 		auto fail = [&](const char* a_what) {
 			v.setupFailed = true;
@@ -882,7 +882,7 @@ namespace DCLF
 				desc.hasRTV = true;
 				desc.rtvFormat = desc.format;
 			}
-			imports[i] = ImportImage(host->GetDesc().device, info.image, desc, names[i]);
+			imports[i] = ImportImage(host->Device(), info.image, desc, names[i]);
 			if (!imports[i])
 				return false;
 		}
@@ -921,7 +921,7 @@ namespace DCLF
 		desc.channels = 4;
 		desc.hasRTV = true;
 		desc.rtvFormat = desc.format;
-		auto cube = ImportImage(host->GetDesc().device, info.image, desc, fmt::format("DCLF {} {}", traits.name, traits.target).c_str());
+		auto cube = ImportImage(host->Device(), info.image, desc, fmt::format("DCLF {} {}", traits.name, traits.target).c_str());
 		if (!cube) {
 			static std::uint32_t logged = 0;
 			if (logged++ < 4)
@@ -976,7 +976,7 @@ namespace DCLF
 			desc.hasDSV = true;
 			desc.dsvFormat = desc.format;
 			const auto& traits = TraitsOf(a_kind);
-			auto imported = ImportImage(host->GetDesc().device, info.image, desc, fmt::format("DCLF {} depth (kPOST_ZPREPASS_COPY)", traits.name).c_str());
+			auto imported = ImportImage(host->Device(), info.image, desc, fmt::format("DCLF {} depth (kPOST_ZPREPASS_COPY)", traits.name).c_str());
 			if (!imported) {
 				static std::uint32_t logged = 0;
 				if (logged++ < 4)
@@ -1029,7 +1029,7 @@ namespace DCLF
 		static constexpr const char* kNames[kFirstOcclusionTarget] = { "DCLF shadow maps (ESRAM)", "DCLF shadow maps", "DCLF volumetric shadow maps (ESRAM)" };
 		const char* name = a_index == kProbeSunTarget ? "DCLF probe sun shadow" : IsOcclusionTarget(a_index) ? Extensions::OcclusionMapOf(a_index - kFirstOcclusionTarget).targetName.c_str() :
 		                                                                                                       kNames[a_index];
-		auto imported = ImportImage(host->GetDesc().device, info.image, desc, name);
+		auto imported = ImportImage(host->Device(), info.image, desc, name);
 		if (!imported)
 			return ShadowNotReady(5, "the shadow map could not be imported (not in the general layout?)");
 		shadow->depth[a_index] = std::move(imported);

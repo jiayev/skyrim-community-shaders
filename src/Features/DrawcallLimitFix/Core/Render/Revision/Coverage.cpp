@@ -97,6 +97,8 @@ namespace DCLF
 		next.scene = scene;
 		if (auto* host = RenderGraphRuntime::Get().Host()) {
 			next.buildGeneration = host->BuildGeneration();
+			for (std::size_t segment = 0; segment < next.epochBuilds.size(); ++segment)
+				next.epochBuilds[segment] = host->BuildGeneration(RenderGraphRuntime::EpochOf(static_cast<RenderGraphRuntime::Segment>(segment)));
 			if (auto* descriptors = host->Descriptors()) {
 				next.resourceHeap = descriptors->GetSRVDescriptorHeap().GetHandle();
 				next.samplerHeap = descriptors->GetSamplerDescriptorHeap().GetHandle();

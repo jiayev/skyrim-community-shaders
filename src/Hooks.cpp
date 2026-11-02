@@ -129,8 +129,8 @@ struct BSShader_LoadShaders
 
 		auto state = globals::state;
 		auto shaderCache = globals::shaderCache;
-		if (shaderCache->IsDiskCache() || shaderCache->IsDump()) {
-			if (shaderCache->IsDiskCache()) {
+		if ((shaderCache->IsDiskCache() && !shaderCache->backgroundCompilation) || shaderCache->IsDump()) {
+			if (shaderCache->IsDiskCache() && !shaderCache->backgroundCompilation) {
 				Feature::ForEachLoadedFeature("GenerateShaderPermutations", [shader](Feature* feature) {
 					feature->GenerateShaderPermutations(shader);
 				});
@@ -149,7 +149,7 @@ struct BSShader_LoadShaders
 				auto pixelShaderDescriptor = entry->id;
 				NormalizeLegacyUtilityDescriptors(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
-				shaderCache->GetVertexShader(*shader, vertexShaderDesriptor);
+				shaderCache->GetVertexShader(*shader, vertexShaderDesriptor, true);
 			}
 			for (const auto& entry : shader->pixelShaders) {
 				if (entry->shader && shaderCache->IsDump()) {
@@ -163,19 +163,20 @@ struct BSShader_LoadShaders
 				auto pixelShaderDescriptor = entry->id;
 				NormalizeLegacyUtilityDescriptors(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
-				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
+				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor, true);
 				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor, true);
-				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
+				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor, true);
 			}
 
 			if (shaderCache->IsDiskCache() && shader->shaderType.get() == RE::BSShader::Type::Effect) {
 				constexpr auto sharedRuntimeUnionDescriptor =
 					static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::MultBlend) |
 					static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::MotionVectorsNormals);
-				shaderCache->GetPixelShader(*shader, sharedRuntimeUnionDescriptor);
+				shaderCache->GetPixelShader(*shader, sharedRuntimeUnionDescriptor, true);
 				shaderCache->GetPixelShader(*shader,
 					sharedRuntimeUnionDescriptor |
-						static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::Deferred));
+						static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::Deferred),
+					true);
 			}
 		}
 		BSShaderHooks::hk_LoadShaders(shader, stream);
@@ -216,8 +217,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		auto probeVertexDescriptor = vertexDescriptor;
 		auto probePixelDescriptor = pixelDescriptor;
 		state->ModifyShaderLookup(*shader, probeVertexDescriptor, probePixelDescriptor);
-		auto* vertex = shaderCache->GetVertexShader(*shader, probeVertexDescriptor, asyncProbeShaders);
-		auto* pixel = shaderCache->GetPixelShader(*shader, probePixelDescriptor, asyncProbeShaders);
+		auto* vertex = shaderCache->GetVertexShader(*shader, probeVertexDescriptor, false, asyncProbeShaders);
+		auto* pixel = shaderCache->GetPixelShader(*shader, probePixelDescriptor, false, asyncProbeShaders);
 		if (!vertex || !pixel) {
 			vertexDescriptor &= ~landscapeSeamsFlag;
 			pixelDescriptor &= ~landscapeSeamsFlag;
@@ -240,8 +241,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	state->ModifyShaderLookup(*shader, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor);
 	if (EnvironmentProbe::IsRendering()) {
 		// Request both stages in the same frame; neither may fall back to a world-view shader.
-		auto* vertex = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor, asyncProbeShaders);
-		auto* pixel = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor, asyncProbeShaders);
+		auto* vertex = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor, false, asyncProbeShaders);
+		auto* pixel = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor, false, asyncProbeShaders);
 		if (!vertex || !pixel) {
 			const auto failed = [&](SIE::ShaderClass stage, uint32_t descriptor) {
 				return shaderCache->GetShaderStatus(SIE::ShaderCompilationTask(stage, *shader, descriptor).GetString()) == SIE::ShaderCompilationTask::Failed;
@@ -470,6 +471,8 @@ namespace WeatherExtensions
 					// compound on every call Sky has not recomputed colors for.
 					Effects11::DirectionalAmbientColors overridden = DirectionalAmbientColors;
 					globals::features::effects11.OverrideAmbientLighting(overridden);
+					if (auto* sky = globals::game::sky; sky && &DirectionalAmbientColors.directionalAmbientColors[0][0] == &sky->directionalAmbientColors[0][0])
+						globals::features::effects11.BlendGradedAmbient(sky, overridden);
 					func(overridden, AmbientSpecularTint, AmbientSpecularFresnel);
 					return;
 				}

@@ -325,17 +325,19 @@ namespace SharedData
 		float CloudsEdgeMoonMultiplier;
 
 		uint EnableProceduralSun;
-		float ProceduralSunDiskRadiusSq;
-		float ProceduralSunDiskEdgeScale;
-		float ProceduralSunGlowIntensity;
+		float ProceduralSunDiskCos;
+		float ProceduralSunDiskRadiance;
+		float ProceduralSunEdgeSoftness;
 
-		float ProceduralSunCoronaFalloff;
-		float ProceduralSunCoronaScale;
+		float ProceduralSunHaloCos;
+		float ProceduralSunHaloIntensity;
 		uint UseProceduralGradientWeights;
 		float ProceduralGradientWeightCurve;
 
 		float LightSpriteCurve;
-		float3 pad1;
+		float ProceduralSunHaloFalloff;
+		float ProceduralSunRadianceLimit;
+		float pad1;
 
 		float ParticleIntensity;
 		float ParticleLightingInfluence;
@@ -525,6 +527,7 @@ namespace SharedData
 		float pad3;
 		float3 volumetricFogNoiseVelocity;
 		float pad0;
+		float4 originalFogColorOverride;
 	};
 
 	struct TruePBRSettings
@@ -772,9 +775,9 @@ namespace SharedData
 	// Returns water data for the tile containing worldPosition (camera-relative XY).
 	float4 GetWaterData(float3 worldPosition)
 	{
-		float2 cellF = (((worldPosition.xy + FrameBuffer::CameraPosAdjust.xy)) / 4096.0) + 64.0;  // always positive
+		float2 cellF = (worldPosition.xy + FrameBuffer::CameraPosAdjust.xy) / 4096.0;
+		float2 cellFrac = cellF - floor(cellF);  // floor keeps this in [0, 1] for negative coordinates too
 		int2 cellInt;
-		float2 cellFrac = modf(cellF, cellInt);
 
 		cellF = worldPosition.xy / float2(4096.0, 4096.0);  // remap to cell scale
 		cellF += 2.5;                                       // 5x5 cell grid

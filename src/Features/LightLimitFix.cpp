@@ -3,6 +3,7 @@
 #include "DrawcallLimitFix.h"
 #include "Effects11.h"
 #include "LightLimitFix/Common.h"
+#include "LightLimitFix/LightAttach.h"
 #include "LightLimitFix/ORGLightCulling.h"
 #include "LinearLighting.h"
 #include "PhysicalSky.h"
@@ -13,7 +14,6 @@
 #include "Menu/ThemeManager.h"
 #include "Shadercache.h"
 #include "State.h"
-#include "Utils/ExternalEmittance.h"
 
 #include <bit>
 #include <numbers>
@@ -30,7 +30,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LocalShadowSlots,
 	LocalShadowResolution,
 	LocalShadowSamples,
-	LocalShadowFilterScale)
+	LocalShadowFilterScale,
+	SkipRedundantLightAttach)
 
 static constexpr uint CLUSTER_MAX_LIGHTS = 128;
 
@@ -107,6 +108,18 @@ void LightLimitFix::DrawLocalShadowSettings()
 	ImGui::Spacing();
 }
 
+void LightLimitFix::DrawLightAttachSettings()
+{
+	Util::DisableGuard disableUnsupported(!LightAttach::IsSupported());
+	ImGui::Checkbox(T(TKEY("skip_redundant_light_attach"), "Skip Redundant Light Updates"), &settings.SkipRedundantLightAttach);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s",
+			T(TKEY("skip_redundant_light_attach_tooltip"),
+				"The game re-checks every dynamic light's nearby geometry each frame, which costs milliseconds in scenes with hundreds of lights. "
+				"With this on, a light that has not moved or changed is only re-checked every 60 frames."));
+	}
+}
+
 namespace
 {
 	bool OrgParityEnabled()
@@ -150,6 +163,10 @@ void LightLimitFix::DrawSettings()
 	auto shaderCache = globals::shaderCache;
 
 	ImGui::Checkbox(T(TKEY("enable_particle_lights"), "Enable Particle Lights"), &settings.EnableParticleLights);
+
+	ImGui::Spacing();
+
+	DrawLightAttachSettings();
 
 	ImGui::Spacing();
 
@@ -555,6 +572,7 @@ void LightLimitFix::PostPostLoad()
 {
 	particleLightConfigs.Load();
 	Hooks::Install();
+	LightAttach::Install();
 	if (settings.EnableLocalShadows && LocalShadowsBlockedByDCLF())
 		logger::info("[LLF] Local light shadows stay off: Drawcall Limit Fix is loaded");
 	else if (settings.EnableLocalShadows) {
@@ -752,7 +770,8 @@ void LightLimitFix::UpdateLights()
 			strictLightDataTemp.WorldEyePosition = { eyePosition.x, eyePosition.y, eyePosition.z, 0.0f };
 	}
 
-	eastl::vector<LightData> lightsData{};
+	static eastl::vector<LightData> lightsData;
+	lightsData.clear();
 	lightsData.reserve(MAX_LIGHTS);
 
 	// Process point lights
@@ -1010,7 +1029,7 @@ void LightLimitFix::UpdateStructure()
 
 		context->CSSetShader(clusterBuildingCS, nullptr, 0);
 		globals::profiler->BeginPass("LightLimitFix::ClusterBuild");
-		context->Dispatch(clusterSize[0], clusterSize[1], clusterSize[2]);
+		context->Dispatch((clusterSize[0] * clusterSize[1] * clusterSize[2] + 63) / 64, 1, 1);
 		globals::profiler->EndPass();
 
 		ID3D11UnorderedAccessView* null_uav = nullptr;
@@ -1065,7 +1084,6 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
 	func(This, Pass, RenderFlags);
-	ExternalEmittance::UpdatePermutation(Pass);
 	auto& singleton = globals::features::lightLimitFix;
 	singleton.BSLightingShader_SetupGeometry_Before(Pass);
 	singleton.BSLightingShader_SetupGeometry_After(Pass);
@@ -2187,7 +2205,7 @@ bool LightLimitFix::EnsureLocalShadowCopyShader()
 		std::vector<std::pair<const char*, const char*>> defines;
 		localShadowCopyCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\LocalShadowCopyCS.hlsl", defines, "cs_5_0");
 		if (!localShadowCopyCB)
-			localShadowCopyCB = new ConstantBuffer(ConstantBufferDesc<LocalShadowCopyCB>());
+			localShadowCopyCB = new ConstantBuffer(ConstantBufferDesc<LocalShadowCopyCB>(), "LightLimitFix::LocalShadowCopyCB");
 	}
 	return localShadowCopyCS && localShadowCopyCB;
 }

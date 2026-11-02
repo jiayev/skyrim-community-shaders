@@ -150,10 +150,13 @@ namespace DCLF::Direct::detail
 		bool executedSecondaries = false;
 		// Its execution's late pass recorded its draws (RecordExecutingSite).
 		bool recordedDraws = false;
+		// Its views' draw count when its execution's first segment began (SiteCallback runs once per segment).
+		std::uint32_t drawnBefore = 0;
 		// The site file's own state for this run (ShadowSite.cpp's views and maps, ViewSites.cpp's hosted views, Families.cpp's draws), by
 		// file; released with the run at the slot's retirement.
 		std::shared_ptr<void> shadowState, viewState, familyState;
 		rhi::CommandListPtr adopted;  // DXVK's buffer, wrapped: kept to the slot's retirement (what its recording allocated)
+		std::vector<rhi::CommandListPtr> adoptedEarlier;  // the same for its execution's earlier segments
 	};
 
 	/** @brief A frame slot: everything a CPU frame's sites made, kept until the frame's signal completes. */

@@ -27,7 +27,8 @@ namespace DCLF::Draws
 
 		EventReadbackBindings Declare(org::PassBuilder& a_builder) { return { a_builder.CopySource(*events) }; }
 
-		void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const { a_out.push_back(NamedSerial(a_preparation, events)); }
+		// The list's version is the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>&) const {}
 
 		EventReadbackPrepared Prepare(const EventReadbackBindings&, const org::PassPrepareContext& a_preparation) const
 		{
@@ -101,7 +102,8 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const { a_out.push_back(source(a_preparation).generation); }
+		// The source's shape is the revision's (the ticket's host data).
+		void Revision(std::vector<std::uint64_t>&) const {}
 
 		CounterReadbackPrepared Prepare(const CounterReadbackBindings&, const org::PassPrepareContext& a_preparation) const
 		{
@@ -151,7 +153,6 @@ namespace DCLF::Draws
 			const auto frame = shapes ? shapes->shadow : nullptr;
 			if (!frame)
 				return out;
-			out.generation = frame->generation;
 			out.latch = frame->latch;
 			for (const auto& view : frame->views)
 				out.copies.push_back({ view.slot, view.slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)) });

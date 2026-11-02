@@ -19,7 +19,7 @@ namespace DCLF
 			static const std::uint32_t max = [] {
 				::IndirectCommandsFeatureInfo indirect{};
 				auto* host = RenderGraphRuntime::Get().Host();
-				if (!host || host->GetDesc().device.QueryFeatureInfo(&indirect.header) != rhi::Result::Ok)
+				if (!host || host->Device().QueryFeatureInfo(&indirect.header) != rhi::Result::Ok)
 					return 0u;
 				logger::info("[DCLF] indirect draws: up to {} sequences per call", indirect.maxSequenceCount);
 				return indirect.maxSequenceCount;

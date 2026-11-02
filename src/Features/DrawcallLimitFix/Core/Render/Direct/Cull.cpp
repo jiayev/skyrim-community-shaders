@@ -333,12 +333,13 @@ namespace DCLF::Direct
 		std::uint32_t LocalShadowMask(const CullView& a_view, const float a_bound[4], bool a_landscape, std::uint32_t a_object)
 		{
 			std::uint32_t mask = 0;
+			const float radius = a_bound[3] + a_view.planeMargin;
 			for (std::uint32_t v = 0; v < a_view.shadowVolumeCount; ++v) {
 				const auto& volume = a_view.shadowVolumes[v];
 				if ((mask & volume.maskBit) || (a_landscape && !volume.affectsLand))
 					continue;
 				const float dx = a_bound[0] - volume.sphere[0], dy = a_bound[1] - volume.sphere[1], dz = a_bound[2] - volume.sphere[2];
-				const float reach = volume.sphere[3] + a_bound[3];
+				const float reach = volume.sphere[3] + radius;
 				if (dx * dx + dy * dy + dz * dz > reach * reach)
 					continue;
 				bool inside = true;
@@ -346,10 +347,10 @@ namespace DCLF::Direct
 					if (!((p < 6 ? volume.masks[0] : volume.masks[1]) & (1u << (p % 6))))
 						continue;
 					const float* plane = volume.planes[p];
-					inside = plane[0] * a_bound[0] + plane[1] * a_bound[1] + plane[2] * a_bound[2] - plane[3] >= -a_bound[3];
+					inside = plane[0] * a_bound[0] + plane[1] * a_bound[1] + plane[2] * a_bound[2] - plane[3] >= -radius;
 				}
 				if (inside && volume.portalContext && a_view.strict && a_view.strict->rejects &&
-					a_view.strict->rejects(*a_view.strict, volume.portalContext - 1, a_object, a_bound, a_bound[3]))
+					a_view.strict->rejects(*a_view.strict, volume.portalContext - 1, a_object, a_bound, radius))
 					inside = false;
 				if (inside)
 					mask |= volume.maskBit;
@@ -360,7 +361,7 @@ namespace DCLF::Direct
 		bool InSunCascades(const CullView& a_view, const float a_bound[4])
 		{
 			for (std::uint32_t c = 0; c < a_view.cascadeCount; ++c)
-				if (Draws::InSunCascade(a_view.cascades[c], a_bound, a_bound[3]))
+				if (Draws::InSunCascade(a_view.cascades[c], a_bound, a_bound[3] + a_view.planeMargin))
 					return true;
 			return false;
 		}
@@ -389,17 +390,24 @@ namespace DCLF::Direct
 		thread_local bool profilePortals = false;
 		thread_local std::uint64_t portalCalls = 0, portalCycles = 0;
 
-		bool PortalRejected(const CullFrame& a_frame, std::uint32_t a_root, const float a_bound[4])
+		/** @brief A bound's radius for a portal test, with the view's margin. Only a positive one grows: the test culls a zero radius, and a negative one is unknown. */
+		float PortalRadius(float a_radius, float a_margin)
+		{
+			return a_radius > 0.0f ? a_radius + a_margin : a_radius;
+		}
+
+		bool PortalRejected(const CullFrame& a_frame, std::uint32_t a_root, const float a_bound[4], float a_margin)
 		{
 			if (a_root == kNoRoot || a_root >= a_frame.rootPrograms.size() || a_frame.programs.empty() || !a_frame.portalTest)
 				return false;
 			const std::uint32_t program = a_frame.rootPrograms[a_root];
 			if (program == kNoProgram)
 				return false;
+			const float radius = PortalRadius(a_bound[3], a_margin);
 			if (!profilePortals)
-				return a_frame.portalTest(a_frame.programs, program, a_bound, a_bound[3], 0u) != 1;
+				return a_frame.portalTest(a_frame.programs, program, a_bound, radius, 0u) != 1;
 			const std::uint64_t start = __rdtsc();
-			const bool rejected = a_frame.portalTest(a_frame.programs, program, a_bound, a_bound[3], 0u) != 1;
+			const bool rejected = a_frame.portalTest(a_frame.programs, program, a_bound, radius, 0u) != 1;
 			portalCycles += __rdtsc() - start;
 			++portalCalls;
 			return rejected;
@@ -488,9 +496,12 @@ namespace DCLF::Direct
 			const bool volumetric = (a_lane.flags & kLaneVolumetricOnly) != 0;
 			if (((a_view.cullFlags & Draws::kCullCastersOnly) && volumetric) || ((a_view.cullFlags & Draws::kCullVolumetricOnly) && !volumetric))
 				return true;
-			if ((a_view.cullFlags & Draws::kCullSunEntry) && a_view.sunEntryCount && a_lane.object < a_frame.sunEntry.size() &&
-				Draws::OutsideSunEntryProcesses(std::span(a_view.sunEntry, a_view.sunEntryCount), a_frame.sunEntry[a_lane.object].data()))
-				return true;
+			if ((a_view.cullFlags & Draws::kCullSunEntry) && a_view.sunEntryCount && a_lane.object < a_frame.sunEntry.size()) {
+				const auto& entry = a_frame.sunEntry[a_lane.object];
+				const float grown[4]{ entry[0], entry[1], entry[2], entry[3] + a_view.planeMargin };
+				if (Draws::OutsideSunEntryProcesses(std::span(a_view.sunEntry, a_view.sunEntryCount), grown))
+					return true;
+			}
 			const bool radiusKnown = a_lane.bound[3] >= 0.0f;
 			if ((a_view.cullFlags & Draws::kCullMinRadius) && radiusKnown && a_lane.bound[3] <= kOcclusionMinRadius)
 				return true;
@@ -509,7 +520,7 @@ namespace DCLF::Direct
 		 */
 		bool MainCameraKept(const CullView& a_view, const CullFrame& a_frame, const Lane& a_lane, bool a_inFrustum, bool a_live, const std::uint8_t* a_portalRejected)
 		{
-			const bool portalPassed = a_inFrustum && !(a_portalRejected ? *a_portalRejected != 0 : PortalRejected(a_frame, a_lane.root, a_lane.bound));
+			const bool portalPassed = a_inFrustum && !(a_portalRejected ? *a_portalRejected != 0 : PortalRejected(a_frame, a_lane.root, a_lane.bound, a_view.planeMargin));
 			bool fadeHidden = false;
 			// Only a per-frame cull stamps: a per-snapshot one's verdicts are not the frame's (its lists get a stamp-only pass a frame).
 			if (portalPassed && a_live)
@@ -545,7 +556,7 @@ namespace DCLF::Direct
 			if (rejected)
 				return false;
 			if (a_view.strictContext && a_view.strict && a_view.strict->rejects && a_lane.bound[3] >= 0.0f &&
-				a_view.strict->rejects(*a_view.strict, a_view.strictContext - 1, a_lane.object, a_lane.bound, a_lane.bound[3]))
+				a_view.strict->rejects(*a_view.strict, a_view.strictContext - 1, a_lane.object, a_lane.bound, a_lane.bound[3] + a_view.planeMargin))
 				return false;
 			return true;
 		}
@@ -554,7 +565,7 @@ namespace DCLF::Direct
 		 * @brief The main camera lists' portal tests over a batch's lanes in the frustum (kExpPortalBatch): PortalRejected's verdict by lane
 		 * into a_rejected, the lanes grouped by their root's program (a counting sort) and each group handed to portalTestBatch.
 		 */
-		void PortalPass(const CullFrame& a_frame, const ViewBatch& a_batch, const Spheres& a_spheres, const std::uint8_t* a_pass, std::uint32_t a_count,
+		void PortalPass(const CullFrame& a_frame, const ViewBatch& a_batch, const Spheres& a_spheres, const std::uint8_t* a_pass, std::uint32_t a_count, float a_margin,
 			std::uint8_t* a_rejected)
 		{
 			std::memset(a_rejected, 0, a_count);
@@ -591,10 +602,16 @@ namespace DCLF::Direct
 			for (std::uint32_t i = 0; i < a_count; ++i)
 				if (programOf[i] < programs)
 					lanes[firsts[std::size_t(programOf[i]) + 1]++] = static_cast<std::uint16_t>(i);
+			// The lanes' radii with the view's margin (PortalRadius).
+			thread_local std::vector<float> radii;
+			radii.resize(a_count);
+			for (std::uint32_t i = 0; i < a_count; ++i)
+				radii[i] = PortalRadius(a_spheres.r[i], a_margin);
 			// firsts[p + 1] is now program p's end, firsts[p] its first.
 			for (std::uint32_t p = 0; p < programs; ++p)
-				if (const std::uint32_t first = firsts[p], end = firsts[std::size_t(p) + 1]; end > first) {
-					a_frame.portalTestBatch(a_frame.programs, p, a_spheres.x, a_spheres.y, a_spheres.z, a_spheres.r, lanes.data() + first, end - first, a_rejected);
+				if (const std::uint32_t first = firsts[p], end = firsts[std::size_t(p) + 1]; end > first)
+				{
+					a_frame.portalTestBatch(a_frame.programs, p, a_spheres.x, a_spheres.y, a_spheres.z, radii.data(), lanes.data() + first, end - first, a_rejected);
 					// kExpCullProfile: the batch's calls, one a program it holds lanes of (the report's "portal tests").
 					portalCalls += profilePortals ? 1u : 0u;
 				}
@@ -938,7 +955,7 @@ namespace DCLF::Direct
 		const bool portalBatch = mainCamera && a_frame.portalTestBatch && ExperimentOn(kExpPortalBatch);
 		if (portalBatch) {
 			portalRejected.resize(count);
-			PortalPass(a_frame, a_batch, spheres, pass.data(), count, portalRejected.data());
+			PortalPass(a_frame, a_batch, spheres, pass.data(), count, a_view.planeMargin, portalRejected.data());
 			lap(CullProfile::kPortal);
 			if (ExperimentOn(kExpPortalCheck)) {
 				std::uint64_t checked = 0, mismatches = 0;
@@ -946,7 +963,7 @@ namespace DCLF::Direct
 					if (pass[i]) {
 						const Lane lane = LaneOf(a_batch, spheres, i);
 						++checked;
-						mismatches += PortalRejected(a_frame, lane.root, lane.bound) != (portalRejected[i] != 0) ? 1u : 0u;
+						mismatches += PortalRejected(a_frame, lane.root, lane.bound, a_view.planeMargin) != (portalRejected[i] != 0) ? 1u : 0u;
 					}
 				portalChecked.fetch_add(checked, std::memory_order_relaxed);
 				portalMismatches.fetch_add(mismatches, std::memory_order_relaxed);
@@ -1153,24 +1170,47 @@ namespace DCLF::Direct
 
 	namespace
 	{
-		/** @brief The view-projection's clip planes in world space (row-major, mul(M, v)): -x, +x, -y, +y, near (z >= 0), far (z <= w), normalised. */
-		std::array<std::array<float, 4>, 6> ClipPlanesOf(const float a_viewProj[16])
+		/**
+		 * @brief The view-projection's clip planes in world space (row-major, mul(M, v)): -x, +x, -y, +y, near (z >= 0), far (z <= w), normalised.
+		 * a_viewProj has the eye folded in. Made in double, so a plane is rounded only once, to float.
+		 */
+		std::array<std::array<float, 4>, 6> ClipPlanesOf(const double a_viewProj[16])
 		{
-			const auto row = [&](std::uint32_t a_r) { return std::array<float, 4>{ a_viewProj[a_r * 4], a_viewProj[a_r * 4 + 1], a_viewProj[a_r * 4 + 2], a_viewProj[a_r * 4 + 3] }; };
+			const auto row = [&](std::uint32_t a_r) { return std::array<double, 4>{ a_viewProj[a_r * 4], a_viewProj[a_r * 4 + 1], a_viewProj[a_r * 4 + 2], a_viewProj[a_r * 4 + 3] }; };
 			const auto r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
-			const auto add = [](const std::array<float, 4>& a, const std::array<float, 4>& b, float s) {
-				return std::array<float, 4>{ a[0] + s * b[0], a[1] + s * b[1], a[2] + s * b[2], a[3] + s * b[3] };
+			const auto add = [](const std::array<double, 4>& a, const std::array<double, 4>& b, double s) {
+				return std::array<double, 4>{ a[0] + s * b[0], a[1] + s * b[1], a[2] + s * b[2], a[3] + s * b[3] };
 			};
-			const std::array<std::array<float, 4>, 6> raw{ add(r3, r0, 1.0f), add(r3, r0, -1.0f), add(r3, r1, 1.0f), add(r3, r1, -1.0f), r2, add(r3, r2, -1.0f) };
+			const std::array<std::array<double, 4>, 6> raw{ add(r3, r0, 1.0), add(r3, r0, -1.0), add(r3, r1, 1.0), add(r3, r1, -1.0), r2, add(r3, r2, -1.0) };
 			std::array<std::array<float, 4>, 6> planes{};
 			for (std::size_t p = 0; p < 6; ++p) {
-				const float length = std::sqrt(raw[p][0] * raw[p][0] + raw[p][1] * raw[p][1] + raw[p][2] * raw[p][2]);
-				if (!(length > 0.0f))
+				const double length = std::sqrt(raw[p][0] * raw[p][0] + raw[p][1] * raw[p][1] + raw[p][2] * raw[p][2]);
+				if (!(length > 0.0))
 					continue;  // a degenerate plane tests nothing (FadeStateCS's InView)
 				// (n, d) with the bound outside where dot(n, c) - d < -r: the clip plane's dot(n, c) + w over its length.
-				planes[p] = { raw[p][0] / length, raw[p][1] / length, raw[p][2] / length, -raw[p][3] / length };
+				planes[p] = { static_cast<float>(raw[p][0] / length), static_cast<float>(raw[p][1] / length), static_cast<float>(raw[p][2] / length),
+					static_cast<float>(-raw[p][3] / length) };
 			}
 			return planes;
+		}
+
+		/**
+		 * @brief Moves a view's absolute planes out by its margin, which every kernel then sees: the same as adding it to each bound's radius.
+		 * A paraboloid's: its sphere grows. Its plane moves only for the back hemisphere, the one whose test a bound near the plane can fail
+		 * (ParabolicKept); moved for the front one, a zero radius on the moved plane would be rejected.
+		 */
+		void ApplyPlaneMargin(CullView& a_view)
+		{
+			if (a_view.cullFlags & Draws::kCullParabolic) {
+				a_view.planes[0][3] += a_view.planeMargin;
+				if (a_view.cullFlags & Draws::kCullParabolicBack)
+					a_view.planes[1][3] += a_view.planeMargin;
+				return;
+			}
+			for (std::size_t p = 0; p < 6; ++p) {
+				a_view.planes[p][3] -= a_view.planeMargin;
+				a_view.clipPlanes[p][3] -= a_view.planeMargin;
+			}
 		}
 	}
 
@@ -1179,7 +1219,10 @@ namespace DCLF::Direct
 		CullView view;
 		view.type = a_type;
 		view.viewIndex = a_viewIndex;
-		std::copy(std::begin(a_latch.viewProj), std::end(a_latch.viewProj), view.viewProj.begin());
+		double folded[16];
+		Draws::FoldCullEye(a_latch.viewProj, a_latch.cullEye, folded);
+		for (std::size_t i = 0; i < 16; ++i)
+			view.viewProj[i] = static_cast<float>(folded[i]);
 		for (std::size_t p = 0; p < 6; ++p)
 			std::copy(std::begin(a_latch.cullPlanes[p]), std::end(a_latch.cullPlanes[p]), view.planes[p].begin());
 		view.planeMask = a_latch.cullPlaneMask;
@@ -1192,7 +1235,9 @@ namespace DCLF::Direct
 		view.frame = a_latch.visibilityStamp;
 		// Cull mode 0 (no view-projection this frame): nothing is frustum-tested (BuildDrawsCS's CullMode() == 0).
 		view.frustumCull = (a_latch.cullFlags & 0xFu) != 0;
-		view.clipPlanes = ClipPlanesOf(a_latch.viewProj);
+		view.clipPlanes = ClipPlanesOf(folded);
+		view.planeMargin = a_latch.cullEye[3];
+		ApplyPlaneMargin(view);
 		view.minCasterRadius = a_latch.minCasterRadius;
 		view.strictContext = a_latch.lightContextsIndex && a_latch.strictGatesIndex ? a_latch.strictContext : 0u;
 		view.sunTest = (a_latch.sunState & Draws::kSunTestOn) != 0;

@@ -28,6 +28,7 @@ namespace DCLF::Features::Grass
 		winrt::com_ptr<ID3D11Buffer> vertexBuffer, indexBuffer;  // held from the sink until the render thread leases them
 		std::uint64_t vertexDesc = 0;
 		std::uint32_t indexCount = 0;
+		float canopyHeight = 1.0f;  // a LOD mesh's (the LOD library's)
 	};
 
 	/**
@@ -62,11 +63,7 @@ namespace DCLF::Features::Grass
 		float wavePeriod = 1.0f;
 		std::uint32_t triangleCount = 0;
 		std::uint32_t pbrFlags = 0;
-		float roughnessScale = 1.0f, specularLevel = 0.0f;
-		float emissiveScale = 1.0f;
-		float fuzz[4]{};
-		float thinSurface[4]{};
-		float subsurface[4]{};
+		float pbrParams1[3]{}, pbrParams2[4]{}, pbrParams3[4]{}, pbrParams4[4]{};
 	};
 
 	/**

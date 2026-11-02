@@ -181,7 +181,7 @@ namespace DCLF::Draws
 		// The frame's textures (t16 and up) the drawn pipelines read, which only the commit can resolve (into the frame
 		// record): the commit counts the ones it could not. The depth segment's resolves none.
 		std::array<std::uint64_t, 2> frameRegisters{};
-		// The culling's ViewProj (the latch's, the eye folded in) when the commit culled: set parity tests the live bounds with it.
+		// The culling's ViewProj (the latch's with its eye folded in) when the commit culled: set parity tests the live bounds with it.
 		std::array<float, 16> cullViewProj{};
 		bool culled = false;
 		// The build's one-off counts, the primary segment's alone (the other's are zero), merged into IndirectDraws::Stats by the commit.

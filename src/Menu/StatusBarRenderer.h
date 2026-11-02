@@ -10,7 +10,7 @@
  * The left end holds the Settings and Profiling page buttons (with the bar turned off they sit at the bottom of the left
  * pane instead, see RenderPageButtons). Next to them the left side shows what needs attention, each part only while it applies: unsaved changes,
  * shader compile progress, failed shaders and feature issues. The right side shows the GPU, the
- * game runtime and version, and the D3D12 swap chain state, ellipsized when the left side needs
+ * game runtime and version, ellipsized when the left side needs
  * the room.
  */
 namespace StatusBarRenderer

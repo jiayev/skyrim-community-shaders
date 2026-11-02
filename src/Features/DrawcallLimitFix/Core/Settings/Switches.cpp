@@ -103,7 +103,10 @@ namespace DCLF
 			// (Features/Fades' CS_DCLF_EMPTY_FADE_NODE is listed here, before CS_ORG_EPOCHS.)
 			{ OrgEpochs, "CS_ORG_EPOCHS", F, Reduced::Zero, true, "0: the render graph runs without epochs, and DCLF does not install" },
 			{ OrgAsyncEpochs, "CS_ORG_ASYNC_EPOCHS", F, Reduced::Zero, true, "0: epochs are recorded on the render thread" },
-			{ OrgClosed, "CS_ORG_CLOSED", F, Reduced::Zero, true, "0: epochs do not return their resources to their home states" },
+			{ OrgClosed, "CS_ORG_CLOSED", F, N, true,
+				"1: epochs return every resource to its home state and start with a full barrier (closed executions, an interop fallback)" },
+			{ OrgExternalHome, "CS_ORG_EXTERNAL_HOME", F, Reduced::Zero, true,
+				"0: epochs do not return DXVK's images to their home state on the graphics queue (unsafe: DXVK expects them there)" },
 			{ OrgBatchSubmit, "CS_ORG_BATCH_SUBMIT", F, Reduced::Zero, true, "0: an epoch's submissions go to DXVK one at a time" },
 			{ OrgEarlyFlush, "CS_ORG_EARLY_FLUSH", F, N, true, "1: DXVK's pending work is flushed when an epoch starts (a second DXVK list per epoch)" },
 
@@ -126,7 +129,7 @@ namespace DCLF
 			{ Stats, "CS_DCLF_STATS", D, N, false, "1: the periodic report" },
 			{ PassStats, "CS_DCLF_PASS_STATS", D, N, false, "1: per-pass counts in the report" },
 			{ Profile, "CS_DCLF_PROFILE", D, N, false, "1: scene-phase timings in the report" },
-			{ ShaderDebug, "CS_DCLF_SHADER_DEBUG", D, N, false, "default on: SPIR-V with debug info, and the HLSL sources copied beside the log; 0: without" },
+			{ ShaderDebug, "CS_DCLF_SHADER_DEBUG", D, N, false, "default on (off in the release profile, 1 turns it on): SPIR-V with debug info, and the HLSL sources copied beside the log; 0: without" },
 			{ ShaderSourceDir, "CS_DCLF_SHADER_SOURCE_DIR", D, N, false, "where CS_DCLF_SHADER_DEBUG copies the HLSL sources" },
 			{ StageDump, "CS_DCLF_STAGE_DUMP", D, N, false,
 				"<dir>: every DCLF stage request's compile inputs, the Lighting programs' descriptor pairs and the pulled rewrite's options, as JSON "
@@ -135,6 +138,7 @@ namespace DCLF
 			// (Features/TreeLod's CS_DCLF_TREE_LOD_AUDIT is listed here, after CS_DCLF_TRACE_TEXTURE_PATHS.)
 			{ Census, "CS_DCLF_CENSUS", D, N, false,
 				"1: T7a's census, every report: what the engine still draws (the passes registered and not withheld) per view and class (DCLF's verdict for Lighting geometry; shader type and RTTI otherwise)" },
+			{ PrecisionCensus, "CS_DCLF_PRECISION_CENSUS", D, N, false, "1: every 300 frames, what the engine's float translations lose against their parent chains composed in double, by distance from the origin" },
 			{ MirrorWatch, "CS_DCLF_MIRROR_WATCH", D, N, false, "1|<name>|node:|geometry:|transform:|fade:|fadetype:|alpha:|alphas:<form ID>|...|missed:<field>|parity...: hardware watchpoints, with the writers' callers, name the writers the mirror misses (MirrorWatch.h)" },
 			{ TableStart, "CS_DCLF_TABLE_START", D, N, false, "small: the growable GPU tables start with a few rows, so that growth runs early and often" },
 			// (Features/OcclusionMaps' CS_DCLF_SKYLIGHT_DUMP_DIR is listed here, after CS_DCLF_TABLE_START.)

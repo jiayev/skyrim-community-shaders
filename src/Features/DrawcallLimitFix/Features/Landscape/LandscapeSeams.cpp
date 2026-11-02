@@ -4,9 +4,11 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Features/Landscape/Landscape.h"
 
+#include <array>
 #include <cstring>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace DCLF::Features::Landscape
 {
@@ -76,6 +78,7 @@ namespace DCLF::Features::Landscape
 				previous.source = std::move(source);
 				previous.views = views;
 				std::array<float, Api::kShadingFieldValueFloats> value{};
+				static_assert(sizeof(indices) <= sizeof(value));
 				if (valid)
 					std::memcpy(value.data(), indices.data(), sizeof(indices));
 				a_capture.Put(slot, value, textures.Seal(owners));

@@ -173,14 +173,15 @@ cbuffer IndexedTexcoordBuffer : register(b11)
 // CS_DCLF_BILLBOARDS (Billboards.h): a billboard's row is its unturned world and its node's base and pivot, turned here to this
 // draw's camera as NiBillboardNode::OnVisible turns the node for the culling camera (DCLFObjects.hlsli, DCLFBillboardWorld): the camera's
 // axes are CameraView's rows (c0-c2, as SetCameraData copies the camera's world rotation: right, up, forward) and its eye the posAdjust
-// above. Its previous world is the same turn (the row holds no previous base): no motion of its own.
+// above. Its previous world is the same turn (the row holds no previous base): no motion of its own. The turn comes back relative to the
+// eye, and the previous world moves it by the eye's change, so neither passes through an absolute position.
 #		if defined(DCLF_PULLED)
 // A plain draw's object word is its sequence's, which main reads first: these are assigned there (DCLFVertexObjectStatics).
 static bool DCLFBillboard;
 #		else
 static const bool DCLFBillboard = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & kDCLFRecordEffectBillboard) != 0;
 #		endif
-// The billboard's turned world for this draw's camera (absolute).
+// The billboard's turned world for this draw's camera, relative to its eye.
 float3x4 DCLFEffectBillboardWorld() { return DCLFBillboardWorld(DCLFObjectIndex, ScreenProj[2].xyz, ScreenProj[1].xyz, ScreenProj[0].xyz, BonesPivot); }
 float3x4 DCLFEyeRelative(float3x4 a_world, float3 a_eye)
 {
@@ -196,8 +197,10 @@ float3x4 DCLFPlacementWorld(bool a_previous)
 float3x4 DCLFEffectWorld(bool a_previous)
 {
 	const float3 eye = a_previous ? PreviousBonesPivot : BonesPivot;
-	if (DCLFBillboard)
-		return DCLFEyeRelative(DCLFEffectBillboardWorld(), eye);
+	if (DCLFBillboard) {
+		const float3x4 world = DCLFEffectBillboardWorld();
+		return a_previous ? DCLFEyeRelative(world, PreviousBonesPivot - BonesPivot) : world;
+	}
 	return DCLFEyeRelative(DCLFPlacementWorld(a_previous), eye);
 }
 #		if defined(DCLF_PULLED)
@@ -207,10 +210,10 @@ void DCLFVertexObjectStatics()
 {
 	DCLFBillboard = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & kDCLFRecordEffectBillboard) != 0;
 	if (DCLFBillboard) {
-		// One turn for both (DCLFEffectWorld's), made relative to each eye.
+		// One turn for both (DCLFEffectWorld's), already relative to the eye.
 		const float3x4 world = DCLFEffectBillboardWorld();
-		World = DCLFEyeRelative(world, BonesPivot);
-		PreviousWorld = DCLFEyeRelative(world, PreviousBonesPivot);
+		World = world;
+		PreviousWorld = DCLFEyeRelative(world, PreviousBonesPivot - BonesPivot);
 	} else {
 		World = DCLFEyeRelative(DCLFPlacementWorld(false), BonesPivot);
 		PreviousWorld = DCLFEyeRelative(DCLFPlacementWorld(true), PreviousBonesPivot);
@@ -352,7 +355,8 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Position = viewPos;
 #	if defined(DCLF_BINDLESS)
 	// A decal's depth toward the eye (DCLFObjects.hlsli, DCLFDecalNudged): the engine's decal bias, which DCLF's draws cannot carry.
-	vsout.Position = DCLFDecalNudged(vsout.Position, DCLFObjectIndex);
+	// The view has no translation, so this entry of the matrix is the projection's: about -near.
+	vsout.Position = DCLFDecalNudged(vsout.Position, DCLFObjectIndex, abs(FrameBuffer::CameraViewProj[2][3]));
 #	endif
 
 #	if defined(SKINNED)

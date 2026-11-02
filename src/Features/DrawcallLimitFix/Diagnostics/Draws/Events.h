@@ -89,7 +89,7 @@ namespace DCLF::Diagnostics
 		std::uint32_t& base;
 	};
 
-	/** @brief A main commit's culling ViewProj (latch.viewProj, the eye folded in), with the shape's size. */
+	/** @brief A main commit's culling ViewProj (latch.viewProj, relative to latch.cullEye), with the shape's size. */
 	struct MainCullViewProj
 	{
 		const Draws::BuildDrawsLatch& latch;

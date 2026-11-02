@@ -122,7 +122,8 @@ Each compares a live path with a reference built from scratch and flags every mi
 | `CS_DCLF_PASS_STATS` | `1`: per-pass counts in the report. |
 | `CS_DCLF_PROFILE` | `1`: scene-phase timings in the report. The profile perturbs what it measures. |
 | `CS_DCLF_CENSUS` | `1`: the registration census, every report, with or without `CS_DCLF_STATS`. |
-| `CS_DCLF_SHADER_DEBUG` | Default on: SPIR-V with debug info, and the HLSL sources copied beside the log. `0`: without. It inflates the depth pipeline groups. |
+| `CS_DCLF_PRECISION_CENSUS` | `1`: every 300 frames, what the engine's float translations lose against their parent chains composed in double, by distance from the origin, for rows and bones. |
+| `CS_DCLF_SHADER_DEBUG` | Default on (off in the release profile, where `1` turns it on): SPIR-V with debug info, and the HLSL sources copied beside the log. `0`: without. It inflates the depth pipeline groups. |
 | `CS_DCLF_SHADER_SOURCE_DIR` | Where `CS_DCLF_SHADER_DEBUG` copies the HLSL sources. |
 | `CS_DCLF_TARGET_PROBE` | `x,y`: the G-buffer targets at a pixel where the opaque pass ends, and the objects whose bound covers it. |
 | `CS_DCLF_SHADOW_DEBUG_OUTPUT` | `1`: Lighting.hlsl writes the sun's shadow terms into the Diffuse target, native and DCLF alike. |
@@ -177,7 +178,7 @@ Read from the environment only.
 | `CS_ORG_UPLOAD_QUEUE` | `RenderGraphRuntime.cpp` | `0`: no spare transfer queue for uploads. |
 | `CS_ORG_SUBMIT` | `RenderGraphRuntime.cpp` | `flush`: each epoch flushes and waits for DXVK's command stream instead of enqueuing its submission. |
 | `CS_ORG_REUSE_RECORDINGS` | `RenderGraphRuntime.cpp` | `0`: epochs are prepared again instead of replaying kept recordings. Kept recordings carry no Tracy GPU zones, so turn it off to see the epochs' passes in Tracy. |
-| `CS_ORG_RECORDING_TIMESTAMPS` | `RenderGraphRuntime.cpp` | `1`: the recordings kept across frames carry pass and barrier timestamps (`PersistentGraphHost::SetRecordingTimestamps`), as a timestamp trace turns on; the others are always timed. |
+| `CS_ORG_RECORDING_TIMESTAMPS` | `RenderGraphRuntime.cpp` | `1`: the recordings kept across frames carry pass and barrier timestamps (`GraphHost::SetRecordingTimestamps`), as a timestamp trace turns on; the others are always timed. |
 | `CS_ORG_EPOCH_STATS` | `RenderGraphRuntime.cpp` | `1`: render-thread CPU time per epoch, and the tickets prepared again after their inputs changed. |
 | `CS_ORG_DETAILED_CHECKPOINTS` | `RenderGraphRuntime.cpp` | `1`: ORG records detailed command checkpoints for Aftermath. |
 | `CS_ORG` | `RenderGraphRuntime.cpp` | `0`: no render graph; `features`: the interop device features are requested but no graph is made. |

@@ -35,20 +35,18 @@ namespace DCLF::Draws
 		rhi::CommandSignatureHandle a_signature, std::uint32_t a_latchOffset, org::PassRecordContext& a_recording);
 
 	/**
-	 * @brief What a latched copies pass copies, as of the shape its preparation is for: the shape's generation, the shape (held), its lists;
+	 * @brief What a latched copies pass copies, as of the shape its preparation is for: the shape (held) and its lists;
 	 * and in an epoch hosting others' (Api::EpochDef::hostedBy: the depth epoch, the reflection's and first person's depth), each hosted
 	 * shape's, one entry per hosted view in the host's order: its own when the preparation names it (its recordings with that view's
-	 * passes' work), else none (generation 0, no lists), copied after the epoch's own.
+	 * passes' work), else none (no lists), copied after the epoch's own.
 	 */
 	struct LatchedSource
 	{
 		struct Hosted
 		{
-			std::uint64_t generation = 0;
 			std::shared_ptr<const void> shape;
 			std::span<const LatchedList> lists;
 		};
-		std::uint64_t generation = 0;
 		std::shared_ptr<const void> shape;
 		std::span<const LatchedList> lists;
 		std::vector<Hosted> hosted;
@@ -131,25 +129,24 @@ namespace DCLF::Draws
 		a_commands.ExecuteIndirect(a_signature, a_sequences, first + kSequenceDrawOffset, a_counts, std::uint64_t(a_bucket) * sizeof(std::uint32_t), a_capacity);
 	}
 
-	/** @brief A pass's colour attachments, loaded and stored: a_count of a_views, each with its resource (a_tokens). */
+	/** @brief A pass's colour attachments, loaded and stored: a_count of the declared render target views a_tokens, each with its resource. */
 	template <std::size_t N>
-	std::array<rhi::ColorAttachment, N> LoadedColours(org::PassRecordContext& a_recording, const std::array<org::PreparedDescriptorReference, N>& a_views,
-		const std::array<org::DeclaredViewToken, N>& a_tokens, std::uint32_t a_count)
+	std::array<rhi::ColorAttachment, N> LoadedColours(org::PassRecordContext& a_recording, const std::array<org::DeclaredViewToken, N>& a_tokens, std::uint32_t a_count)
 	{
 		std::array<rhi::ColorAttachment, N> out{};
 		for (std::uint32_t i = 0; i < a_count; ++i) {
-			out[i].rtv = a_recording.Resolve(a_views[i]);
+			out[i].rtv = a_recording.View(a_tokens[i]);
 			out[i].loadOp = rhi::LoadOp::Load;
 			out[i].storeOp = rhi::StoreOp::Store;
 			out[i].resource = a_recording.Resolve(a_tokens[i].Resource()).GetHandle();
 		}
 		return out;
 	}
-	/** @brief A pass's depth attachment through a_view, depth and stencil loaded and stored. */
-	inline rhi::DepthAttachment LoadedDepth(org::PassRecordContext& a_recording, const org::PreparedDescriptorReference& a_view)
+	/** @brief A pass's depth attachment through the declared depth view a_view, depth and stencil loaded and stored. */
+	inline rhi::DepthAttachment LoadedDepth(org::PassRecordContext& a_recording, const org::DeclaredViewToken& a_view)
 	{
 		rhi::DepthAttachment depth{};
-		depth.dsv = a_recording.Resolve(a_view);
+		depth.dsv = a_recording.View(a_view);
 		depth.depthLoad = rhi::LoadOp::Load;
 		depth.depthStore = rhi::StoreOp::Store;
 		depth.stencilLoad = rhi::LoadOp::Load;

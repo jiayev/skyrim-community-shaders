@@ -44,6 +44,7 @@ namespace DCLF
 		OrgEpochs,
 		OrgAsyncEpochs,
 		OrgClosed,
+		OrgExternalHome,
 		OrgBatchSubmit,
 		OrgEarlyFlush,
 
@@ -70,6 +71,7 @@ namespace DCLF
 		StageDump,
 		TraceTexturePaths,
 		Census,
+		PrecisionCensus,
 		MirrorWatch,
 		TableStart,
 		DepthTrace,

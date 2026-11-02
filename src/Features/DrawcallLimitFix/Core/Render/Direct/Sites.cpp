@@ -917,23 +917,37 @@ namespace DCLF::Direct::detail
 		ZoneScopedN("CS.DCLF.Cpu.Site");
 		const auto siteName = kSiteNames[site][run.record == RecordMode::Parallel ? 1 : 0];
 		ZoneText(siteName.data(), siteName.size());
-		std::uint32_t drawnBefore = 0;
-		for (const auto* view : run.views)
-			drawnBefore += std::atomic_ref<std::uint32_t>(slot.counters.drawn[static_cast<std::size_t>(view->type)]).load(std::memory_order_relaxed);
+		// One call per segment of the execution, in order (Emit; one when it has none): the draws are counted from the first, the views
+		// drained after the last.
+		const std::size_t segment = run.execution ? run.execution->ExecutedSegments() : 0;
+		const std::size_t segments = run.execution ? (std::max<std::size_t>)(run.execution->segments.size(), 1) : 1;
+		const bool lastSegment = segment + 1 >= segments;
+		if (segment == 0) {
+			run.drawnBefore = 0;
+			for (const auto* view : run.views)
+				run.drawnBefore += std::atomic_ref<std::uint32_t>(slot.counters.drawn[static_cast<std::size_t>(view->type)]).load(std::memory_order_relaxed);
+		}
+		if (run.adopted)
+			run.adoptedEarlier.push_back(std::move(run.adopted));
 		run.adopted = rhi::vulkan::AdoptCommandBuffer(run.device, a_commandBuffer, rhi::QueueKind::Graphics);
 		if (run.adopted && run.valid && run.execution) {
 			// The epoch's ORG execution: the commits' uploads, its CPU pipeline passes, then its late pass, which records the draws
 			// (RecordExecutingSite), with ORG's barriers, its entry and exit full (the external queue boundary).
 			executing = &run;
-			run.execution->Execute(run.adopted.Get());
+			if (segment < run.execution->segments.size())
+				run.execution->Execute(segment, run.adopted.Get());
 			executing = nullptr;
-			if (!run.recordedDraws && !std::exchange(S().loggedNoLatePass, true))
+			if (lastSegment && !run.recordedDraws && !std::exchange(S().loggedNoLatePass, true))
 				logger::error("[DCLF] CPU pipeline: the {} site's epoch was executed without its late pass (no draws pass in its recording): it draws nothing", site);
 		} else if (!std::exchange(S().loggedNotAdopted, true)) {
 			logger::error(
 				"[DCLF] CPU pipeline: DXVK's command buffer could not be adopted, the site's targets have no views, or its epoch gave no execution: "
 				"the {} site draws nothing",
 				site);
+		}
+		if (!lastSegment) {
+			Add(slot.counters.recordUs[site], MicrosecondsSince(start));
+			return;
 		}
 		// Every view's queue empty for the slot's next frame, whatever was recorded.
 		for (auto* view : run.views)
@@ -945,7 +959,7 @@ namespace DCLF::Direct::detail
 		for (const auto* view : run.views)
 			drawnAfter += std::atomic_ref<std::uint32_t>(slot.counters.drawn[static_cast<std::size_t>(view->type)]).load(std::memory_order_relaxed);
 		Add(slot.siteRuns[site], 1u);
-		if (drawnAfter == drawnBefore && !run.executedSecondaries)
+		if (drawnAfter == run.drawnBefore && !run.executedSecondaries)
 			Add(slot.siteEmpty[site], 1u);
 		Add(slot.counters.recordUs[site], MicrosecondsSince(start));
 	}
@@ -965,47 +979,44 @@ namespace DCLF::Direct::detail
 		const auto wait = FrameValues::Get().FrameWaitPoint();
 		auto& waits = s.emitWaits;
 		auto& signals = s.emitSignals;
-		waits.clear();
-		signals.clear();
-		if (wait.semaphore)
-			waits.push_back({ wait.semaphore, wait.value, 0 });
-		// The execution's: what its ticket's batches would have waited for (the frame values among them) and its value on the graph's
-		// graphics timeline (with its passes' own signals), on the submission of DXVK's command list it lands in.
-		if (const auto& execution = a_run.execution) {
-			const auto native = [](const rhi::TimelinePoint& a_point) -> RenderGraphRuntime::ExternalCommandsWait {
-				const auto timeline = RenderGraphRuntime::Get().FrameWaitTimeline();
-				rhi::Timeline object(a_point.t);
-				if (timeline && *timeline) {
-					object.impl = timeline->Get().impl;
-					object.vt = timeline->Get().vt;
-				}
-				rhi::VulkanTimelineInfo info{};
-				if (!object || !rhi::QueryNativeTimeline(object, rhi::RHI_IID_VK_TIMELINE, &info, sizeof(info)))
-					return {};
-				return { static_cast<VkSemaphore_T*>(info.timeline), a_point.value, 0 };
-			};
-			for (const auto& point : execution->waits)
-				if (const auto converted = native(point); converted.semaphore)
-					waits.push_back(converted);
-			for (const auto& point : execution->signals) {
-				const auto converted = native(point);
-				if (!converted.semaphore)
-					stl::report_and_fail("Drawcall Limit Fix: an ORG execution's signal has no Vulkan semaphore");
-				signals.push_back(converted);
-			}
-		}
 		static constexpr const char* kLabels[kSites] = { "DCLF direct shadow", "DCLF direct depth", "DCLF direct colour", "DCLF direct forward",
 			"DCLF direct first person", "DCLF direct environment probe" };
-		const bool queued = RenderGraphRuntime::Get().EmitExternalCommands(&SiteCallback, &a_run, waits, signals, true, kLabels[static_cast<std::size_t>(a_run.site)], true);
-		// Not queued: what the execution's signals would have completed, completed without its work (the graph waits for them).
-		if (!queued && a_run.execution && host)
-			host->SignalExternalExecutionUnexecuted(*a_run.execution);
-		if (!queued) {
+		// A callback per segment of the execution (one when it has none), each with what its batches would have waited for (the frame
+		// values among them) and their values on the graph's graphics timeline (with its passes' own signals), on the submission of
+		// DXVK's command list it lands in. DXVK's list is ended first for a segment marked split.
+		const auto& execution = a_run.execution;
+		const std::size_t count = execution ? (std::max<std::size_t>)(execution->segments.size(), 1) : 1;
+		for (std::size_t index = 0; index < count; ++index) {
+			waits.clear();
+			signals.clear();
+			if (index == 0 && wait.semaphore)
+				waits.push_back({ wait.semaphore, wait.value, 0 });
+			if (execution && index < execution->segments.size()) {
+				const auto& segment = execution->segments[index];
+				if (segment.split && index)
+					globals::d3d::context->Flush();
+				for (const auto& point : segment.waits)
+					if (const auto converted = RenderGraphRuntime::NativeTimelinePoint(point); converted.semaphore)
+						waits.push_back(converted);
+				for (const auto& point : segment.signals) {
+					const auto converted = RenderGraphRuntime::NativeTimelinePoint(point);
+					if (!converted.semaphore)
+						stl::report_and_fail("Drawcall Limit Fix: an ORG execution's signal has no Vulkan semaphore");
+					signals.push_back(converted);
+				}
+			}
+			if (RenderGraphRuntime::Get().EmitExternalCommands(&SiteCallback, &a_run, waits, signals, true, kLabels[static_cast<std::size_t>(a_run.site)], true))
+				continue;
+			// Not queued: what the rest of the execution's signals would have completed, completed without its work (the graph waits for
+			// them).
+			if (execution && host)
+				host->SignalExternalExecutionUnexecuted(*execution, index);
 			++s.window.notQueued;
 			if (!std::exchange(s.loggedNoCallback, true))
 				logger::error("[DCLF] CPU pipeline: DXVK took no external commands (dxvkEmitExternalCommands missing): its sites draw nothing");
+			return false;
 		}
-		return queued;
+		return true;
 	}
 
 	/** @brief Render thread: a slot's last frame's state released (its signal completed), its counters into the window. */

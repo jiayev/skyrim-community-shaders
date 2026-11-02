@@ -48,12 +48,12 @@ namespace DCLF::Draws
 					const auto frame = CurrentFrame(a_preparation, segment);
 					if (!frame)
 						return LatchedSource{};
-					LatchedSource source{ frame->generation, frame, std::span(&frame->latched, 1) };
+					LatchedSource source{ frame, std::span(&frame->latched, 1) };
 					if (const auto* shapes = views.empty() ? nullptr : RevisionShapesOf(a_preparation))
 						for (const auto view : views) {
 							auto& out = source.hosted.emplace_back();
 							if (const auto& viewFrame = shapes->views[ViewIndex(view)])
-								out = { viewFrame->generation, viewFrame, viewFrame->latched };
+								out = { viewFrame, viewFrame->latched };
 						}
 					return source;
 				},
@@ -79,7 +79,7 @@ namespace DCLF::Draws
 				if (const auto* shapes = RevisionShapesOf(a_preparation); shapes && shapes->depthWithoutIndexPool)
 					return IndexPoolPass::LatchOf{};
 				const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
-				return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
+				return IndexPoolPass::LatchOf{ frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
 			}));
 		}
 
@@ -142,8 +142,8 @@ namespace DCLF::Draws
 			return MakeForwardSortPass(resources->sequences, { nullptr, resources->classCounts }, [main = resources](const org::PassPrepareContext& a_preparation) {
 				const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::MainOpaque);
 				if (!frame || !BuildsDraws(a_preparation, *main, RenderGraphRuntime::Segment::MainOpaque))
-					return ForwardSortSource{ frame ? frame->generation : 0 };
-				ForwardSortSource source{ frame->generation, main->forwardSort };
+					return ForwardSortSource{};
+				ForwardSortSource source{ main->forwardSort };
 				constexpr auto kWord = static_cast<std::uint32_t>(sizeof(std::uint32_t));
 				// The decal buckets' pairs (CS_DCLF_DECAL_PLAIN; keyed by their engine ordinal), ranked into firstInstance for the plain draw.
 				if (frame->classPlan)

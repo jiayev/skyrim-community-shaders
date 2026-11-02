@@ -66,6 +66,8 @@ namespace DCLF::Integrations::TruePBR
 		constexpr std::uint16_t kRimLightPower = Off(offsetof(RE::BSLightingShaderMaterialBase, rimLightPower));
 
 		constexpr std::uint16_t kPbrFlags = Off(offsetof(PBR, pbrFlags));
+		constexpr std::uint16_t kSubsurfaceBalance = Off(offsetof(PBR, subsurfaceBalance));
+		constexpr std::uint16_t kThinSurfaceParameters = Off(offsetof(PBR, thinSurfaceParameters));
 		constexpr std::uint16_t kCoatRoughness = Off(offsetof(PBR, coatRoughness));
 		constexpr std::uint16_t kCoatSpecularLevel = Off(offsetof(PBR, coatSpecularLevel));
 		constexpr std::uint16_t kFuzzColor = Off(offsetof(PBR, fuzzColor));
@@ -234,6 +236,16 @@ namespace DCLF::Integrations::TruePBR
 				a_out[2] = a_snapshot.At<float>(a_offset + 8);
 				a_out[3] = a_snapshot.At<float>(a_fourth);
 			};
+
+			if (!has(PBRFlags::TwoLayer) && !has(PBRFlags::HairMarschner)) {
+				if (has(PBRFlags::ThinSurface))
+					set(PBRShaderFlags::ThinSurface);
+				if (has(PBRFlags::Foliage))
+					set(PBRShaderFlags::Foliage);
+			}
+			const float lightingEffectParams[4]{ a_snapshot.At<float>(kSubsurfaceBalance), a_snapshot.At<float>(kThinSurfaceParameters),
+				a_snapshot.At<float>(kThinSurfaceParameters + 4), a_snapshot.At<float>(kThinSurfaceParameters + 8) };
+			a_write.PS(ps.LightingEffectParams, lightingEffectParams, 4);
 
 			if (has(PBRFlags::TwoLayer)) {
 				set(PBRShaderFlags::TwoLayer);

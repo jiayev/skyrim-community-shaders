@@ -120,13 +120,15 @@ namespace DCLF::Diagnostics
 		auto pass = Draws::MakeCounterReadbackPass(Draws::CullCounterView::kColour, { resources->count }, [](const org::PassPrepareContext& a_preparation) {
 			Draws::CounterSource out;
 			if (const auto frame = Draws::CurrentFrame(a_preparation, RenderGraphRuntime::Segment::MainOpaque); frame && frame->latch) {
-				out.generation = frame->generation;
 				out.latch = frame->latch;
 				out.copies.push_back({ 0, 0 });
 			}
 			return out;
 		});
-		a_passes.out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.cull-counters", std::move(pass)).Epoch(a_passes.epoch));
+		// On the graphics queue, after the draws it counts: on the copy queue its wait on them would split DXVK's command list.
+		a_passes.out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.cull-counters", std::move(pass))
+				.PreferQueue(org::QueueKind::Graphics)
+				.Epoch(a_passes.epoch));
 	}
 
 	void NoteCullLatch(const CullLatchWritten& a_written)

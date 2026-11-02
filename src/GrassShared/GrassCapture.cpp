@@ -67,19 +67,22 @@ namespace GrassShared
 		void ReadPbr(AddEvent::Pbr& out, RE::BSShaderMaterial* material)
 		{
 			const auto* pbr = static_cast<const BSLightingShaderMaterialPBR*>(material);
-			const auto constants = TruePBR::GetGrassPBRConstants(pbr);
+			const auto& defaults = globals::game::graphicsState->GetRuntimeData();
+			const RE::NiSourceTexture* white = defaults.defaultTextureWhite.get();
+			const RE::NiSourceTexture* black = defaults.defaultTextureBlack.get();
+
 			out.normal = pbr->normalTexture.get();
 			out.rmaos = pbr->rmaosTexture.get();
-			out.features0 = pbr->featuresTexture0.get();
-			out.features1 = pbr->featuresTexture1.get();
-			out.emissive = pbr->emissiveTexture.get();
+			out.features0 = (pbr->featuresTexture0 && pbr->featuresTexture0.get() != white) ? pbr->featuresTexture0.get() : nullptr;
+			out.features1 = (pbr->featuresTexture1 && pbr->featuresTexture1.get() != white) ? pbr->featuresTexture1.get() : nullptr;
+			out.emissive = (pbr->emissiveTexture && pbr->emissiveTexture.get() != black) ? pbr->emissiveTexture.get() : nullptr;
+
+			const auto constants = TruePBR::GetGrassPBRConstants(pbr);
 			out.flags = constants.flags;
-			out.roughnessScale = constants.params1[0];
-			out.specularLevel = constants.params1[1];
-			out.emissiveScale = constants.params1[2];
-			std::copy_n(constants.params2, 4, out.subsurface);
-			std::copy_n(constants.params3, 4, out.fuzz);
-			std::copy_n(constants.params4, 4, out.thinSurface);
+			std::copy_n(constants.params1, 3, out.params1);
+			std::copy_n(constants.params2, 4, out.params2);
+			std::copy_n(constants.params3, 4, out.params3);
+			std::copy_n(constants.params4, 4, out.params4);
 		}
 
 		/**

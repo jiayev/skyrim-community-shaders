@@ -28,7 +28,6 @@ namespace org
 {
 	class Buffer;
 	class RenderPassBuilder;
-	struct FramePreparationContext;
 	struct ResourceBindingToken;
 }
 
@@ -92,13 +91,12 @@ namespace DCLF::Api
 	};
 
 	/**
-	 * @brief A main pass execution's revision (each preparation): the preparation, the scene's tables, and the slot's pipelines as the
-	 * lane published them (null: none yet), which the execution draws with.
+	 * @brief A main pass's revision (TypedRenderGraphPass::Revision, which no preparation is handed): the scene's tables, and the slot's
+	 * pipelines the execution draws with (null: the shape's, which the revision's recording is prepared for).
 	 */
 	class DrawFamilyRevision
 	{
 	public:
-		const org::FramePreparationContext& preparation;
 		const Draws::SceneBuffers& scene;
 		const std::shared_ptr<const void>& pipelines;
 	};

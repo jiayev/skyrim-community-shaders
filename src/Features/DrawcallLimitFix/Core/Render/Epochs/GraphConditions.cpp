@@ -80,13 +80,25 @@ namespace DCLF::Draws
 		logger::info("[DCLF] graph conditions: {} cell, {}, {} pipeline{}{}; the graph is rebuilt", next.interior ? "interior" : "exterior",
 				next.twoPassOcclusion ? "two-pass occlusion" : "no occlusion pass (portal and frustum culling)", next.cpuPipeline ? "CPU" : "GPU",
 				next.cuts.empty() ? "" : ", passes cut: ", next.cuts);
-		// The epochs the CPU pipeline's sites execute themselves (their passes before the draws), before the build the change requests.
-		if (next.cpuPipeline != current.cpuPipeline)
-			a_host.SetExternalEpochs(next.cpuPipeline ? CpuPipelineEpochs() : std::vector<std::uint32_t>{});
+		// The epochs the CPU pipeline's sites execute themselves (their passes before the draws), before the build the change requests,
+		// with the ones executed in DXVK's stream (RenderGraphRuntime::InStreamEpochs).
+		if (next.cpuPipeline != current.cpuPipeline) {
+			auto external = RenderGraphRuntime::Get().InStreamEpochs();
+			if (next.cpuPipeline)
+				for (const auto epoch : CpuPipelineEpochs())
+					if (std::ranges::find(external, epoch) == external.end())
+						external.push_back(epoch);
+			std::ranges::sort(external);
+			a_host.SetExternalEpochs(std::move(external));
+		}
 		current = next;
 		builtForCpu.store(current.cpuPipeline, std::memory_order_release);
 		latchedRecordCut.store(("," + current.cuts + ",").find(",~latched-record,") != std::string::npos, std::memory_order_relaxed);
-		a_host.RequestRebuild();
+		// The conditions are Drawcall Limit Fix's: its epochs' graphs are built again, the others' (Light Limit Fix's light culling)
+		// keep theirs. A hosted segment has no graph of its own (its host's carries its passes).
+		for (std::uint32_t segment = 0; segment < static_cast<std::uint32_t>(RenderGraphRuntime::Segment::Count); ++segment)
+			if (static_cast<RenderGraphRuntime::Segment>(segment) != RenderGraphRuntime::Segment::LightCulling)
+				a_host.RequestRebuild(RenderGraphRuntime::EpochOf(static_cast<RenderGraphRuntime::Segment>(segment)));
 	}
 
 	const GraphConditions& CurrentGraphConditions()

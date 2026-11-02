@@ -29,6 +29,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <unordered_map>
 
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"

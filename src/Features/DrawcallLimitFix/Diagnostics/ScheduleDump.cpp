@@ -39,7 +39,7 @@ namespace DCLF::Diagnostics
 			void Initialize(org::RenderGraph& a_graph) override { inner->Initialize(a_graph); }
 			void Shutdown(org::RenderGraph& a_graph) override { inner->Shutdown(a_graph); }
 			void OnRegistryReset(org::ResourceRegistry* a_registry) override { inner->OnRegistryReset(a_registry); }
-			void GatherFramePasses(org::RenderGraph& a_graph, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override { inner->GatherFramePasses(a_graph, a_out); }
+			void AfterExecute(org::RenderGraph& a_graph) override { inner->AfterExecute(a_graph); }
 
 			void GatherStructuralPasses(org::RenderGraph& a_graph, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override
 			{

@@ -4,8 +4,6 @@
         "locale": "sp",
         "auto_generated": true
     },
-    "common.active": "Activo",
-    "common.inactive": "Inactivo",
     "cs_editor.actions": "Acciones",
     "cs_editor.active": "Activo:",
     "cs_editor.add_new_marker": "Agregar nuevo marcador",
@@ -104,5 +102,7 @@
     "cs_editor.directional_z": "Direccional Z",
     "cs_editor.drag_colours_here": "Arrastre colores aquí para guardar como favoritos.",
     "cs_editor.drag_to_favourites": "Arrastre un color aquí para añadir a favoritos",
-    "cs_editor.edit_current_cell_lighting": "Editar Iluminación de Celda Actual"
+    "cs_editor.edit_current_cell_lighting": "Editar Iluminación de Celda Actual",
+    "common.active": "Activo",
+    "common.inactive": "Inactivo"
 }

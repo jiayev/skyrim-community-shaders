@@ -44,15 +44,6 @@ namespace DCLF::Draws
 		return a_preparation.preparationData ? a_preparation.preparationData->Get<RevisionShapes>() : nullptr;
 	}
 	/**
-	 * @brief The serial of the version of a_buffer a_preparation's revision names (0: none): what a pass's invocation revision
-	 * takes for each versioned buffer it binds.
-	 */
-	inline std::uint64_t NamedSerial(const org::PassPrepareContext& a_preparation, const Versioned& a_buffer)
-	{
-		const auto* sealed = a_preparation.preparationData ? a_preparation.preparationData->Get<NamedVersions>() : nullptr;
-		return sealed && a_buffer && sealed->Names(*a_buffer) ? sealed->Of(*a_buffer).serial : 0;
-	}
-	/**
 	 * @brief The units of a_buffer's version a_preparation's revision names (0: none): what its passes size their dispatches and
 	 * lists by, for the versions it binds.
 	 */

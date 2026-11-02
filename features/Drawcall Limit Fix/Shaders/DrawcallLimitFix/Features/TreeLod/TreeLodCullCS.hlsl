@@ -11,6 +11,7 @@
 //
 // The colour pass draws both phases' (its arguments count every append). The depth commit zeroes the counts; the dispatch covers
 // every record the tables hold, and the draw row bounds the slots.
+#include "DrawcallLimitFix/CullEye.hlsli"
 #include "DrawcallLimitFix/HzbTest.hlsli"
 
 // Must match TreeLodCullConstants (Features/TreeLod/TreeLodTables.h).
@@ -41,7 +42,7 @@ static const uint kColourInstances = 36;
 static const uint kRetestCount = 48;
 static const uint kVisibleHeaderBytes = 64;
 
-// The depth segment's view-projection (camera translation folded in), as BuildDrawsCS's.
+// The depth segment's camera-relative view-projection, as BuildDrawsCS's. A world position projects less the latch's eye.
 float4x4 LatchViewProj()
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
@@ -49,13 +50,14 @@ float4x4 LatchViewProj()
 		asfloat(latch.Load4(LatchOffset + 64)), asfloat(latch.Load4(LatchOffset + 80)));
 }
 
-// The cull's sphere test against the main camera's frustum, as FadeStateCS's InView: its planes normalised; NoNearPlane (the
-// latch's cull flags, bit 9) drops the near plane.
+// The cull's sphere test against the main camera's frustum, as FadeStateCS's InView: its planes normalised, the centre relative to
+// the latch's eye; NoNearPlane (the latch's cull flags, bit 9) drops the near plane.
 bool InView(float4x4 a_viewProj, float3 a_centre, float a_radius)
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
 	const uint cullFlags = latch.Load(LatchOffset + 16);
 	const float4 r0 = a_viewProj[0], r1 = a_viewProj[1], r2 = a_viewProj[2], r3 = a_viewProj[3];
+	const precise float3 centre = a_centre - LatchCullEye(latch, LatchOffset).xyz;
 	float4 planes[6] = { r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2 };
 	[unroll] for (uint p = 0; p < 6; ++p) {
 		if (p == 4 && (cullFlags & 0x200u) != 0)
@@ -63,7 +65,7 @@ bool InView(float4x4 a_viewProj, float3 a_centre, float a_radius)
 		const float length = sqrt(dot(planes[p].xyz, planes[p].xyz));
 		if (length <= 0.0f)
 			continue;
-		if ((dot(planes[p].xyz, a_centre) + planes[p].w) / length < -a_radius)
+		if ((dot(planes[p].xyz, centre) + planes[p].w) / length < -a_radius)
 			return false;
 	}
 	return true;
@@ -77,6 +79,7 @@ bool Occluded(float4x4 a_viewProj, float3 a_centre, float a_radius)
 		return false;
 	HzbView view;
 	view.ViewProj = a_viewProj;
+	view.Eye = LatchCullEye(latch, LatchOffset).xyz;
 	view.Index = HzbIndex;
 	view.BaseSize = HzbUnpackSize(HzbSizePacked);
 	view.Mips = HzbMips;
