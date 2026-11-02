@@ -240,9 +240,17 @@ namespace DCLF
 	void ShadowEngine::RequireShadowSequences(ImplProducer& a_producer, GrowthBuild& a_build)
 	{
 		const auto& producer = a_producer.producer;
-		const std::uint32_t draws = producer.drawBound.Draws();
+		// A view draws in one mode: the most any mode can cast, over every caster key (ShadowBoundsOf counts only those with a slot).
+		std::uint64_t casting = 0;
+		for (const auto& keys : producer.drawBound.modeKeyDraws) {
+			std::uint64_t mode = 0;
+			for (const auto& [key, keyDraws] : keys)
+				mode += keyDraws;
+			casting = std::max(casting, mode);
+		}
+		const auto draws = static_cast<std::uint32_t>(std::min<std::uint64_t>(casting, UINT32_MAX));
 		CheckSequenceLimits("a shadow view", draws, false);
-		// Every slot the frame made (as posted) holds the scene's draw bound: a view's claims always fit the slot they draw in.
+		// Every slot the frame made (as posted) holds the scene's casting bound: a view's claims always fit the slot they draw in.
 		UnitGroup slots;
 		if (const auto& slotBuffers = producer.inputs.shadowSlots)
 			for (const auto& sequences : slotBuffers->sequences)

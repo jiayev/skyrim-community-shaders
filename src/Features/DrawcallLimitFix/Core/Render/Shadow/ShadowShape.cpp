@@ -64,7 +64,7 @@ namespace DCLF
 		/**
 		 * @brief A view's buckets, back to back in the slot's sequences, each sized for its key slots' draws. A bucket keeps its
 		 * previous capacity while the draws fit and grows to a power of two past it, so recordings change only on growth. The
-		 * slot holds twice the scene's draw bound (RequireShadowSequences); past that, exact sizes fit.
+		 * slot holds half again the scene's casting bound (ShadowSlotSequences); past that, exact sizes fit.
 		 */
 		std::vector<ShadowBucket> SizeShadowBuckets(const RowBuckets& a_row, std::span<const std::uint32_t> a_slotDraws, const ShadowFrameView* a_previous,
 			std::uint64_t a_slotSequences)
@@ -149,7 +149,7 @@ namespace DCLF
 			return out;
 		}
 
-		/** @brief A view's max count. The slot holds the scene's draw bound (RequireShadowSequences): past it is a defect, not a drop. */
+		/** @brief A view's max count. The slot holds the scene's casting bound (RequireShadowSequences): past it is a defect, not a drop. */
 		std::uint32_t ShadowViewCapacity(std::uint32_t a_previous, std::uint32_t a_draws, std::uint32_t a_slotDraws)
 		{
 			if (a_draws > a_slotDraws)
@@ -274,14 +274,14 @@ namespace DCLF
 					total += merged[k];
 				}
 				const std::uint32_t boundDraws = std::max(draws, a_in.bounds->modeDraws[m]);
-				if (boundDraws <= sizing.sequenceDraws && total <= std::uint64_t(kShadowClasses) * sizing.sequenceDraws) {
+				if (boundDraws <= sizing.sequenceDraws && total <= ShadowSlotSequences(sizing.sequenceDraws)) {
 					slotDraws = std::move(merged);
 					draws = boundDraws;
 				}
 			}
 			const std::uint32_t capacity = ShadowViewCapacity(previous ? previous->capacity : 0, draws, sizing.sequenceDraws);
 			auto& out = frame->views.emplace_back(FrameViewOf(view, capacity, a_resources, sizing, viewBlocks));
-			out.buckets = SizeShadowBuckets(rows[v], slotDraws, previous, std::uint64_t(kShadowClasses) * sizing.sequenceDraws);
+			out.buckets = SizeShadowBuckets(rows[v], slotDraws, previous, ShadowSlotSequences(sizing.sequenceDraws));
 		}
 		// Latched copies per view: blocks from the latch, draw and bucket counts zeroed; then the commit's values.
 		if (a_in.zeros) {

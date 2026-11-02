@@ -28,6 +28,8 @@ namespace DCLF::Draws
 	// twice; an interior two hemispheres per shadow-casting point light). These and the following capacities are grown before the
 	// epoch (ShadowEngine::ReserveShadowLatch). Key slots: Lookups::shadowSlotKeys, one per caster key, one per occlusion key.
 	constexpr std::uint32_t kInitialShadowViewSlots = 8;
+	// A slot's sequences: half again the draws its views can make, which lets their buckets round up to powers of two (SizeShadowBuckets).
+	inline constexpr std::uint64_t ShadowSlotSequences(std::uint64_t a_draws) { return a_draws + a_draws / 2; }
 	inline constexpr std::uint32_t OcclusionSlot(std::uint32_t a_view) { return a_view; }
 	constexpr std::uint32_t kFirstShadowViewSlot = kOcclusionViews;
 	constexpr std::uint32_t kInitialShadowKeySlots = 1024;
