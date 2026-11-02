@@ -31,6 +31,7 @@
 #include "Utils/Notifications.h"
 #include "Utils/UI.h"
 #include "Utils/UIAnim.h"
+#include "Utils/UISurface.h"
 #include "Weather/LightingTemplateWidget.h"
 #include "WeatherPickerWindow.h"
 #include "WeatherUtils.h"
@@ -299,7 +300,6 @@ namespace
 void EditorWindow::DrawBrowserSidebar(bool compact)
 {
 	const auto& style = ImGui::GetStyle();
-	const float scale = Util::GetUIScale();
 	const float rowHeight = ImGui::GetFrameHeight();
 	const auto categories = GetBrowserCategories();
 	const char* groupNames[] = {
@@ -357,7 +357,7 @@ void EditorWindow::DrawBrowserSidebar(bool compact)
 				if (hovered)
 					ImGui::SetTooltip("%s", category.label);
 			} else {
-				const float edgeInset = std::max(style.FramePadding.x, ThemeManager::Constants::ANIM_SELECTED_BAR_WIDTH * scale);
+				const float edgeInset = Util::Surface::ListHighlightTextInset();
 				const float iconX = min.x + edgeInset;
 				Icons::DrawCenteredGlyph(drawList, ImVec2(iconX, iconY), ImVec2(iconBox, iconBox), category.icon, iconColor);
 
