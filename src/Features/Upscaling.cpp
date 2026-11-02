@@ -577,7 +577,7 @@ void Upscaling::ApplyHardwareDefaults()
 		}
 	}
 
-	// Reflex is no longer switched on by default (see Streamline::Initialize: it loads only with CS_STREAMLINE_REFLEX=1).
+	// The hardware defaults leave Reflex's low-latency mode off. Streamline::Initialize still loads the feature, for frame generation.
 }
 
 Upscaling::FrameGenMethod Upscaling::GetFrameGenMethod() const

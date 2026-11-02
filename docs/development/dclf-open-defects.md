@@ -421,10 +421,18 @@ The cache's per-light `LocalShadow` flag, its `FirstPerson` / `WorldEyePosition`
     opcode contexts do not match the verified 1.5.97/1.6.1170 sequences" and installs no blur adapters, with or without DCLF.
     **Next:** compare the opcode contexts against the SE executable.
 
+-   **A second run of the renderer's setup crashes or collapses with DCLF on.** With a synthetic Alt key sent to the focused game,
+    the window re-initialised at the second monitor's 2560x1440 (Effects11, render targets, every graph epoch rebuilt) about 70 s
+    later. With frame generation on, each of 3 runs then crashed in the driver (`nvoglv64.dll+0E5A9FD`, null read) under
+    `DCLF::Draws::ShadowViewPass` recording, and the scene pump stopped. With it off, the run lived, but fell to 4-13 fps as DXVK's
+    device memory grew from 5.9 to 11.3 GB. A run focused without the key had none of this. **Next:** find what calls
+    `BSGraphics::Renderer::InitD3D` again, and check a real Alt+Tab.
+-   **FSR-FG hung once at startup.** One of 7 runs presented nothing from the wrap on, with a forced focus change in the same second
+    as the swapchain recreate. Not reproduced, and no stacks were taken. **Next:** dump stacks if it recurs.
 -   **Frame generation is not separated from graph epochs.** `Streamline::EvaluateFSRFrameGen` and the DLSS-G path do not call
-    `Upscaling::SeparateFromGraphEpochs()` (`render-graph.md`, "Hazard: external Vulkan work directly after a graph epoch"). Frame
-    generation was off in every inn run. **Next:** call it before those evaluates, and run the inn reproduction
-    (`coc RiverwoodSleepingGiantInn`, DCLF on) with frame generation on. The hazard's cause is also unproven. The workaround stays
+    `Upscaling::SeparateFromGraphEpochs()` (`render-graph.md`, "Hazard: external Vulkan work directly after a graph epoch"). The inn
+    (`coc RiverwoodSleepingGiantInn`, DCLF on) showed no corruption in screen grabs with either method, on 2026-11-01. That is a few
+    sampled frames, so the hazard is not ruled out. **Next:** watch the inn in motion before calling it clear. The hazard's cause is also unproven. The workaround stays
     until one of these resolves it: Streamline without `VK_EXT_descriptor_heap`, the graph's last command buffer resetting the
     descriptor-heap state, a capture with a tool that supports descriptor heaps, or a standalone reproduction for NVIDIA.
 -   **Streamline's depth subresource on D32S8 (AMD).** The RX580 backs the game's D24S8 depth with `D32_SFLOAT_S8_UINT` (DXVK's

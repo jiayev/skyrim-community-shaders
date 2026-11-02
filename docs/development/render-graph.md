@@ -179,7 +179,8 @@ upscaler output").
 
 -   **The upscaler evaluate:** covered. `Upscaling::Upscale` calls `SeparateFromGraphEpochs()` before `EvaluateDLSS`/`EvaluateFSR`/XeSS.
 -   **Frame generation:** *not covered*. That is `Streamline::EvaluateFSRFrameGen` (`Upscaling/Streamline.cpp`) and the DLSS-G path.
-    Frame generation was off in every run of the investigation.
+    Frame generation was off in every run of the investigation. A later check of the inn with it on showed no corruption in a few
+    screen grabs, which does not rule the hazard out.
 -   **Epochs that can end up last before the upscaler or Present.**
     -   DCLF's first-person colour epoch (`RenderFirstPersonView`) is the one that triggered this. It is the only epoch with no DXVK
         work after it before the upscaler.

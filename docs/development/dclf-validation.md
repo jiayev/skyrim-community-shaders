@@ -183,7 +183,8 @@ Read from the environment only.
 | `CS_ORG_DETAILED_CHECKPOINTS` | `RenderGraphRuntime.cpp` | `1`: ORG records detailed command checkpoints for Aftermath. |
 | `CS_ORG` | `RenderGraphRuntime.cpp` | `0`: no render graph; `features`: the interop device features are requested but no graph is made. |
 | `CS_UPSCALE_SUBMIT` | registry | `direct`: upscaling's ring submissions wait for DXVK's command stream. |
-| `CS_STREAMLINE_REFLEX` | registry | `1`: Streamline loads Reflex, and with it DLSS-G. |
+| `CS_STREAMLINE_REFLEX` | registry | `0`: Streamline does not load Reflex, PCL or DLSS-G, for Nsight Graphics captures. FSR-FG then holds 32 frames of input copies in VRAM. |
+| `CS_VK_DRIVER_TRACE` | `VkDriverTrace.cpp` | `1`: logs the real present rate and each module's device memory, as the driver sees them, every 5 s. The overlay's DLSS-G "true" rate is an estimate, so this is how to confirm frames are generated. |
 | `CS_GPU_CRASH_ANALYSIS` | `Aftermath.cpp`, `DxvkLoader.cpp` | `1`: the device is created with DXVK's hang mode. See [Crash triage](#crash-triage). |
 | `CS_GPU_EVENT_TIMERS` | `GpuEventTimers.cpp` | `<frames>`: GPU time per engine event, logged every that many frames. Works with DCLF off. |
 | `CS_GPU_IDLE_TRACE` | `GpuIdleTrace.cpp` | `<frames>`: GPU idle attribution, one summary per that many analysed frames. |
@@ -808,8 +809,8 @@ withheld and drawn by nobody. Before reading parity or timing, check in each run
         done) and `signal:<name>` (a remote client's `dclf:signal=<name>`).
     -   `dclf:define=<NAME>[=<value>],...` adds defines to every DCLF stage compiled from then on (empty: none). With
         `dclf:reload-shaders=<file>` and `dclf:wait=reload` after it, a shader A/B is an `#if` in the source compared in one launch.
-    -   `dclf:mark=<label>` marks a phase's boundary in the log; `dclf:gpu-window=<label>` makes the GPU event timers
     -   `dclf:telemetry=<label>` starts a BasicTelemetry session for a phase, and `dclf:telemetry=off` ends the last. Each writes per-Present frame times, scope totals and off-CPU stalls to `<log directory>/dclf-telemetry`, and a frame time summary to the log.
+    -   `dclf:mark=<label>` marks a phase's boundary in the log; `dclf:gpu-window=<label>` makes the GPU event timers
         (`CS_GPU_EVENT_TIMERS`, with an interval too large to reach) log the frames from there to the next window as one block,
         frames in flight included ("[GpuEvents] window '<label>'"; `-` is not logged).
     -   `dclf:nvperf=<range>|<range>...[#<samples>]` starts an NvPerf capture at that frame.

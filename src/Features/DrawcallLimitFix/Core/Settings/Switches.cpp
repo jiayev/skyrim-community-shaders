@@ -162,7 +162,7 @@ namespace DCLF
 			{ TestExit, "CS_DCLF_TEST_EXIT", T, N, false, "<frame>: the game exits at once after that many frames (startup loops)" },
 
 			{ UpscaleSubmit, "CS_UPSCALE_SUBMIT", O, N, false, "direct: upscaling's ring submissions wait for DXVK's command stream" },
-			{ StreamlineReflex, "CS_STREAMLINE_REFLEX", O, N, false, "1: Streamline loads Reflex (and with it DLSS-G)" },
+			{ StreamlineReflex, "CS_STREAMLINE_REFLEX", O, N, false, "0: Streamline does not load Reflex, PCL or DLSS-G (for Nsight captures)" },
 		};
 		static_assert(std::size(kRegistry) == static_cast<std::size_t>(Switch::Count));
 		static_assert([] {

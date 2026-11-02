@@ -460,9 +460,11 @@ bool Streamline::Initialize()
 	// The controller keeps at most one frame-generation feature loaded at runtime.
 	dlssgHardware = ProbeDLSSGHardware();
 
-	// Reflex and PCL make the interposer enable VK_NV_low_latency on DXVK's device, which Nsight Graphics refuses to capture. For
-	// now they load only on request, CS_STREAMLINE_REFLEX=1, and DLSS-G (which needs Reflex) with them.
-	const bool reflexRequested = Util::SwitchFile::Enabled("CS_STREAMLINE_REFLEX");
+	// Frame generation needs Reflex and PCL. DLSS-G does not load without Reflex. FSR-FG needs PCL's present marker: without it
+	// sl.common never recycles the input copies it makes each frame, and holds 32 frames of them (3.3 GB at 4K, past the budget of
+	// a 16 GB card). They do make the interposer enable VK_NV_low_latency on DXVK's device, which Nsight Graphics refuses to capture,
+	// so CS_STREAMLINE_REFLEX=0 leaves them out for a capture.
+	const bool reflexRequested = Util::SwitchFile::Value("CS_STREAMLINE_REFLEX") != "0";
 	std::vector<sl::Feature> featuresToLoad = { sl::kFeatureDLSS, sl::kFeatureFSR, sl::kFeatureFSR_G, sl::kFeatureXeSS };
 	if (reflexRequested) {
 		featuresToLoad.push_back(sl::kFeatureReflex);
@@ -470,7 +472,10 @@ bool Streamline::Initialize()
 	}
 	if (dlssgHardware && reflexRequested)
 		featuresToLoad.push_back(sl::kFeatureDLSS_G);
-	logger::info("[Streamline] Reflex {} (CS_STREAMLINE_REFLEX=1 loads Reflex, PCL and DLSS-G)", reflexRequested ? "requested" : "not loaded");
+	if (reflexRequested)
+		logger::info("[Streamline] Reflex, PCL and DLSS-G loaded (CS_STREAMLINE_REFLEX=0 leaves them out)");
+	else
+		logger::warn("[Streamline] CS_STREAMLINE_REFLEX=0: no Reflex, PCL or DLSS-G; FSR-FG would hold 32 frames of input copies in VRAM");
 
 	sl::Preferences pref{};
 	pref.renderAPI = sl::RenderAPI::eVulkan;
