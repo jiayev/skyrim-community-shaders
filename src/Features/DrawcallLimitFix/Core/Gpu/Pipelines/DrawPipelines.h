@@ -434,6 +434,8 @@ namespace DCLF
 	public:
 		static constexpr std::uint32_t kNotReady = ~0u;
 		static constexpr std::uint32_t kMaxPipelines = 4096;
+		// What a state class's indirect sets are first made to hold; they double past it, up to kMaxPipelines.
+		static constexpr std::uint32_t kFirstClassSetPipelines = 32;
 
 		struct Stats
 		{

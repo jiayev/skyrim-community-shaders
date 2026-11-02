@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
@@ -493,7 +494,15 @@ namespace DCLF
 					return static_cast<const Built*>(l.setPipelines[members[a_member]].get())->pipelines[variant]->GetHandle();
 				};
 				const auto name = fmt::format("DCLF indirect pipelines class {}{}", c, variant == kDepthVariant ? " (depth)" : "");
-				if (!ApplyToSet(sets.sets[variant], sets.applied, count, name.c_str(), handleOf, [&] { return CreateSignature(sets, variant); }))
+				// A set's memory follows what it can hold, and most classes hold few. Nothing else references this version, so a class
+				// that outgrew its set is simply made again.
+				if (sets.sets[variant] && count > sets.capacity[variant]) {
+					sets.signatures[variant] = {};
+					sets.sets[variant] = {};
+				}
+				if (!sets.sets[variant])
+					sets.capacity[variant] = std::min(std::bit_ceil(std::max(count, kFirstClassSetPipelines)), kMaxPipelines);
+				if (!ApplyToSet(sets.sets[variant], sets.applied, count, sets.capacity[variant], name.c_str(), handleOf, [&] { return CreateSignature(sets, variant); }))
 					return false;
 				auto& written = sets.written[variant];
 				for (auto m = static_cast<std::uint32_t>(written.size()); m < count; ++m)
