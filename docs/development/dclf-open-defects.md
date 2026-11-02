@@ -135,6 +135,17 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
 -   **Havok null write in `FUN_140b660c0` at uGridsToLoad 21** (the Whiterun stress save under `CS_DCLF_TEST_MOVE`). Radius 21 is
     unstable on its own, so runs there are judged by the report lines written before the crash.
 
+## Open hangs
+
+-   **The first save load never finishes, with `set resync` flooding the log.** It happened once in about 35 launches, on 2026-11-02
+    (run `clean1`, killed by the runner's 170 s timeout). The run's scripted VRAM snapshots were never written. Presents stayed at
+    60 fps with no true frames, and dedicated VRAM held at 8,359 MiB. `CommitMembershipEvents` logged 6,276,331 lines, about 770 per
+    scene frame (frame 8176 at the end). The lines sampled read `0 objects, scene not built: new tables or a change log the cursor
+    cannot read on`. Four other runs of the same build loaded normally. The flood may be a symptom, and the cause is undetermined.
+    The build includes the shadow slot sizing change, which that path does not touch, but one occurrence cannot clear it. **Next:**
+    if it recurs, keep the log and take a dump with procdump to see what the load is waiting on, and why the set commits so many
+    times a frame with no scene. The log line should also be rate limited, since this run wrote 900 MB.
+
 ## Frames with DCLF's objects missing under standing claims
 
 -   **A resolution or upscaler change leaves one colour pass undrawn.** After a graph build or a main-resource change, the frame
