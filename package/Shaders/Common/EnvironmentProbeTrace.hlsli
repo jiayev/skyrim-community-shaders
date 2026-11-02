@@ -43,7 +43,7 @@ bool ProbeSampleDepth(float3 position, uint2 dimensions, out float gap, out floa
 	return true;
 }
 
-bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance, float thickness,
+bool TraceEnvironmentProbeWithOffset(float3 origin, float3 direction, float startDistance, float thickness, float stepOffset,
 	out float3 radiance, out float hitDistance
 #ifdef PROBE_TRACE_VISIBILITY
 	,
@@ -84,8 +84,8 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 	}
 #endif
 	uint steps = clamp(ProbeMaxSteps, 8u, 128u);
-	float stepScale = pow(end / begin, rcp(float(steps)));
-	float distance = begin;
+	float rcpSteps = rcp(float(steps));
+	stepOffset = saturate(stepOffset);
 	float previousDistance = begin;
 	float previousGap, footprint;
 	float2 uv;
@@ -94,11 +94,12 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 	bool clear = previousValid && previousGap < 0;
 	uint2 previousPixel = min(uint2(saturate(uv) * dimensions), dimensions - 1);
 #endif
-	// A fixed angular resolution needs a world step that grows with radial
-	// distance. Geometric spacing covers the whole interval at every range.
+	// Quadratic spacing spends the finite budget close to the screen exit. A
+	// front-surface crossing is refined in world ray distance, never in octahedral UV.
 	[loop] for (uint i = 1; i <= steps; ++i)
 	{
-		distance = i == steps ? end : min(end, distance * stepScale);
+		float fraction = i == steps ? 1.0 : min((float(i) + stepOffset - 0.5) * rcpSteps, 1.0);
+		float distance = lerp(begin, end, fraction * fraction);
 		float gap;
 		bool valid = ProbeSampleDepth(origin + direction * distance, dimensions, gap, footprint, uv);
 #ifdef PROBE_TRACE_VISIBILITY
@@ -109,24 +110,32 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 		clear = clear && valid && previousValid && previousGap < 0 && gap < 0 && all(pixel == previousPixel);
 		previousPixel = pixel;
 #endif
-		if (valid && previousValid && previousGap <= 0 && gap >= 0) {
+		float hitTolerance = max(thickness, 0.5) + footprint;
+#ifdef PROBE_TRACE_COARSE_HITS
+		hitTolerance += distance - previousDistance;
+#endif
+		bool hitCandidate = previousValid && previousGap <= 0;
+#ifdef PROBE_TRACE_COARSE_HITS
+		hitCandidate = hitCandidate || gap <= hitTolerance;
+#endif
+		if (valid && gap >= 0 && hitCandidate) {
 			float hitT = distance;
 			float hitGap = gap;
 			float hitFootprint = footprint;
 			float2 hitUV = uv;
-			if (hitGap > max(thickness, 0.5) + hitFootprint) {
+			if (hitGap > hitTolerance) {
 				float fraction = saturate(previousGap / min(previousGap - gap, -1e-6));
 				float refinedDistance = lerp(previousDistance, distance, fraction);
 				float refinedGap, refinedFootprint;
 				float2 refinedUV;
-				if (ProbeSampleDepth(origin + direction * refinedDistance, dimensions, refinedGap, refinedFootprint, refinedUV)) {
+				if (ProbeSampleDepth(origin + direction * refinedDistance, dimensions, refinedGap, refinedFootprint, refinedUV) && refinedGap >= 0) {
 					hitT = refinedDistance;
 					hitGap = refinedGap;
 					hitFootprint = refinedFootprint;
 					hitUV = refinedUV;
 				}
 			}
-			if (hitGap >= 0 && hitGap <= max(thickness, 0.5) + hitFootprint) {
+			if (hitGap >= 0 && hitGap <= hitTolerance) {
 				float3 color = EnvironmentProbe::SampleRadiance(ProbeRadianceTexture, PROBE_TRACE_SAMPLER, hitUV, dimensions);
 				if (all(isfinite(color))) {
 					radiance = max(color, 0);  // already scene-linear, without pre-exposure
@@ -147,6 +156,30 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 	unobstructed = clear;
 #endif
 	return false;
+}
+
+bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance, float thickness,
+	out float3 radiance, out float hitDistance
+#ifdef PROBE_TRACE_VISIBILITY
+	,
+	out bool unobstructed
+#endif
+#ifdef PROBE_TRACE_NORMALS
+	,
+	out float3 sourceNormal
+#endif
+)
+{
+	return TraceEnvironmentProbeWithOffset(origin, direction, startDistance, thickness, 0.5, radiance, hitDistance
+#ifdef PROBE_TRACE_VISIBILITY
+		,
+		unobstructed
+#endif
+#ifdef PROBE_TRACE_NORMALS
+		,
+		sourceNormal
+#endif
+	);
 }
 
 #endif

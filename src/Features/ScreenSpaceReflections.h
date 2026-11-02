@@ -75,7 +75,7 @@ struct ScreenSpaceReflections : Feature
 		bool UseDynamicCubemapsAsFallback = true;
 		float SpecCubemapMult = 1.0f;
 		bool UseEnvironmentProbe = true;
-		uint ProbeMaxSteps = 16;
+		uint ProbeMaxSteps = 32;
 		bool ProbePreciseTrace = false;
 
 		float HitDistA = 210.0f;

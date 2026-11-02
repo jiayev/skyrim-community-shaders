@@ -100,7 +100,7 @@ void ScreenSpaceReflections::DrawSettings()
 			ImGui::Separator();
 			ImGui::SliderInt(T(TKEY("max_steps"), "Max Steps"), (int*)&settings.SpecMaxSteps, 1, 256);
 			if (settings.UseEnvironmentProbe) {
-				ImGui::SliderInt(T(TKEY("probe_max_steps"), "Probe Max Steps"), (int*)&settings.ProbeMaxSteps, 8, settings.ProbePreciseTrace ? 64 : 16, "%d", ImGuiSliderFlags_AlwaysClamp);
+				ImGui::SliderInt(T(TKEY("probe_max_steps"), "Probe Max Steps"), (int*)&settings.ProbeMaxSteps, 8, settings.ProbePreciseTrace ? 64 : 32, "%d", ImGuiSliderFlags_AlwaysClamp);
 				if (ImGui::Checkbox(T(TKEY("probe_hierarchical_trace"), "Hierarchical Probe Trace"), &settings.ProbePreciseTrace))
 					resetReblurHistory = true;
 				if (auto _tt = Util::HoverTooltipWrapper())
@@ -529,7 +529,7 @@ void ScreenSpaceReflections::UpdateSB()
 	if (data.SpecUseEnvironmentProbe)
 		data.SpecUseDynamicCubemap = settings.UseDynamicCubemapsAsFallback;
 	data.ProbeValidFaces = data.SpecUseEnvironmentProbe && probe.Radiance() && probe.Depth() ? probe.ValidFaces() : 0;
-	data.ProbeMaxSteps = std::clamp(settings.ProbeMaxSteps, 8u, settings.ProbePreciseTrace ? 64u : 16u);
+	data.ProbeMaxSteps = std::clamp(settings.ProbeMaxSteps, 8u, settings.ProbePreciseTrace ? 64u : 32u);
 	data.ProbeFarDistance = probe.FarDistance;
 	data.ProbeBoundsRadius = probe.FarDistance;
 	const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();

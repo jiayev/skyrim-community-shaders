@@ -19,7 +19,11 @@
 SamplerState LinearSampler : register(s1);
 
 #if defined(PROBE_CONTINUATION)
+#	ifndef PROBE_HIERARCHY
+#		define PROBE_TRACE_COARSE_HITS
+#	endif
 #	include "ScreenSpaceReflections/probeTrace.hlsli"
+#	undef PROBE_TRACE_COARSE_HITS
 #endif
 #if defined(IBL) && !defined(PROBE_CONTINUATION)
 #	include "IBL/IBL.hlsli"
@@ -457,7 +461,12 @@ float SSRT_ValidateHit(float3 hit,
 			if (left_screen)
 				startDistance = ProbeScreenExitDistance(mul(FrameBuffer::CameraProj, float4(view_space_ray, 1)),
 					mul(FrameBuffer::CameraProj, float4(view_space_reflected_direction, 0)));
+#	if defined(PROBE_HIERARCHY)
 			probeHit = TraceEnvironmentProbe(worldOrigin, worldDirection, startDistance, thickness, probeColor, probeDistance);
+#	else
+			float stepOffset = Random::InterleavedGradientNoise(fullResCoords, SharedData::FrameCount);
+			probeHit = TraceEnvironmentProbeWithOffset(worldOrigin, worldDirection, startDistance, thickness, stepOffset, probeColor, probeDistance);
+#	endif
 		}
 		float3 fallbackColor = 0;
 		if (probeHit) {
