@@ -1053,6 +1053,8 @@ namespace DCLF
 		 * textures requested or released.
 		 */
 		void UpdateSharedBindings();
+		/** @brief The shared bindings naming an import a move superseded ask for the new storage's. */
+		void FollowRelocatedSharedTextures();
 		/** @brief UpdateSharedBindings' answers drained into arrived and the cache; returns the kinds that waited on them. */
 		std::uint32_t DrainSharedReplies();
 		/** @brief UpdateSharedBindings' fixed bindings (null texture, samplers) taken from GpuTextures::Fixed where they moved. */

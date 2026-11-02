@@ -86,6 +86,7 @@ namespace DCLF::Features::Grass
 		float prevTimeBase = 0.0f;
 		bool countsZeroed = false, owned = false;
 		std::uint32_t bindingGeneration = ~0u;
+		std::uint64_t relocationCursor = 0;  // GpuTextures::RelocatedViews
 		std::vector<std::uint32_t> unbound;
 		// The mirror's slots as the tables hold them (the last commit that sent its changes): what a commit the mirror has outgrown
 		// draws until the growth is adopted.

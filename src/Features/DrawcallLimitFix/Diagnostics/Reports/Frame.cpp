@@ -301,6 +301,7 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 						 "(written by the GPU); buffers: {} entries moved, {} moves of no entry, {} prefetched descriptions superseded (tree LOD's: {} moved, {} of none)",
 				moves.images, moves.buffers, moves.storagesHeld, textures.superseded, textures.pinned, gpu.relocated, gpu.relocationsIgnored, gpu.prefetchSuperseded,
 				treeGpu.relocated, treeGpu.relocationsIgnored);
+			logger::info("[DCLF] superseded imports: {}", GpuTextures::Get().DescribeSuperseded());
 		}
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
 		logger::info("[DCLF] pass capture: {} registrations from {} threads ({} overflowed)", capture.captured, capture.threads, capture.overflowed);

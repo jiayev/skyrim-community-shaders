@@ -231,6 +231,7 @@ namespace DCLF
 			// the old storage once superseded).
 			std::uint64_t cookie = 0, storageSerial = 0;
 			bool pinned = false;
+			std::uint32_t sourceTag = ~0u;  // who first asked for it (ResolveBinding's tags), for DescribeSuperseded
 			std::weak_ptr<ImportedBacking> backing;
 			// The fields above are the importing thread's until it stores the state (release); a lookup reads it first.
 			std::atomic<State> state{ State::Pending };
@@ -455,6 +456,7 @@ namespace DCLF
 		// its view into ORG's heap. Any thread; the entry is the caller's until Settle.
 		static Reject Import(Entry& a_entry, const ImportContext& a_context, Counters& a_counters, [[maybe_unused]] std::uint32_t a_sourceTag)
 		{
+			a_entry.sourceTag = a_sourceTag;
 			auto* view = a_entry.view.get();
 			D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
 			view->GetDesc(&viewDesc);
@@ -976,6 +978,28 @@ namespace DCLF
 	bool GpuTextures::Superseded(const void* a_owner)
 	{
 		return a_owner && static_cast<const Impl::Entry*>(a_owner)->superseded.load(std::memory_order_acquire);
+	}
+
+	std::string GpuTextures::DescribeSuperseded() const
+	{
+		const auto registry = impl->registry;
+		if (!registry)
+			return {};
+		std::map<std::uint32_t, std::uint32_t> counts;
+		std::uint32_t total = 0;
+		std::scoped_lock lock(registry->mutex);
+		for (const auto& [cookie, entries] : registry->byCookie) {
+			for (const auto& weak : entries) {
+				if (const auto entry = weak.lock(); entry && entry->superseded.load(std::memory_order_acquire)) {
+					++counts[entry->sourceTag];
+					++total;
+				}
+			}
+		}
+		std::string text = std::format("{} alive, by first requester's tag:", total);
+		for (const auto& [tag, count] : counts)
+			text += std::format(" {}={}", tag, count);
+		return text;
 	}
 
 	GpuTextures::Stats GpuTextures::GetStats() const

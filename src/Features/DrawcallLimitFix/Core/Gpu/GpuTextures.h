@@ -97,6 +97,9 @@ namespace DCLF
 
 		static GpuTextures& Get();
 
+		/** @brief The superseded imports still alive, each holding an old storage and its chunk: who asked for them. */
+		std::string DescribeSuperseded() const;
+
 		/** @brief Resolve with CPU ownership of this exact import and descriptor slot, importing inline if needed. */
 		// sourceTag is diagnostic only: material t0-t15, feature 16+, projected 32+,
 		// pipeline mask 48, frame tN as 64+N, shadow diffuse 192.

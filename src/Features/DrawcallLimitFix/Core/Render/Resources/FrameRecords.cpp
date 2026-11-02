@@ -137,7 +137,8 @@ namespace DCLF::Draws
 			}
 			return a_nullIndex;  // the shared lookup root already owns the null descriptor
 		}
-		if (a_heldView != a_view || !a_held.owner || a_held.index == GpuTextures::kInvalid) {
+		// A superseded import holds its old storage, and that storage's chunk, for as long as it is held here.
+		if (a_heldView != a_view || !a_held.owner || a_held.index == GpuTextures::kInvalid || GpuTextures::Superseded(a_held.owner.get())) {
 			a_heldView = a_view;
 			a_held = GpuTextures::Get().ResolveBinding(a_view, 64 + a_register);
 		}
