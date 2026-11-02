@@ -26,6 +26,8 @@ struct VRAMBudget : Feature
 	}
 
 	virtual bool IsCore() const override { return true; }
+	/** @brief On by default, unlike other pre-release core features. */
+	virtual bool IsDisabledByDefault() const override { return false; }
 
 	/** @brief Draws the threshold setting and the current VRAM use. */
 	virtual void DrawSettings() override;
