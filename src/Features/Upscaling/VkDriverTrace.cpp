@@ -19,8 +19,13 @@ namespace VkDriverTrace
 		PFN_vkAllocateMemory realAllocate = nullptr;
 		PFN_vkFreeMemory realFree = nullptr;
 		PFN_vkQueuePresentKHR realPresent = nullptr;
+		PFN_vkSetDeviceMemoryPriorityEXT realSetPriority = nullptr;
+		PFN_vkGetPhysicalDeviceMemoryProperties2 getMemory2 = nullptr;
+		VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 
 		VkPhysicalDeviceMemoryProperties memory{};
+		// CS_VK_PRIORITY=module=priority,...: replaces the residency priority of that module's device memory.
+		std::map<std::string, float> priorities;
 		std::atomic<uint64_t> presents = 0;
 
 		struct Allocation
@@ -67,6 +72,8 @@ namespace VkDriverTrace
 				const uint32_t heap = memory.memoryTypes[a_info->memoryTypeIndex].heapIndex;
 				const bool deviceLocal = (memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
 				auto name = CallerModule();
+				if (const auto found = priorities.find(name); deviceLocal && realSetPriority && found != priorities.end())
+					realSetPriority(a_device, *a_memory, found->second);
 				std::lock_guard guard(lock);
 				const auto entry = owners.try_emplace(std::move(name)).first;
 				(deviceLocal ? entry->second.deviceLocal : entry->second.other) += a_info->allocationSize;
@@ -91,6 +98,12 @@ namespace VkDriverTrace
 			realFree(a_device, a_memory, a_callbacks);
 		}
 
+		VKAPI_ATTR void VKAPI_CALL SetPriority(VkDevice a_device, VkDeviceMemory a_memory, float a_priority)
+		{
+			const auto found = priorities.find(CallerModule());
+			realSetPriority(a_device, a_memory, found != priorities.end() ? found->second : a_priority);
+		}
+
 		VKAPI_ATTR VkResult VKAPI_CALL Present(VkQueue a_queue, const VkPresentInfoKHR* a_info)
 		{
 			presents.fetch_add(1, std::memory_order_relaxed);
@@ -105,6 +118,13 @@ namespace VkDriverTrace
 				const uint64_t now = presents.load(std::memory_order_relaxed);
 				std::string line = std::format("[VkTrace] driver presents {:.1f}/s;", static_cast<double>(now - last) / 5.0);
 				last = now;
+				if (getMemory2) {
+					VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT };
+					VkPhysicalDeviceMemoryProperties2 properties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2, &budget };
+					getMemory2(physicalDevice, &properties);
+					for (uint32_t i = 0; i < memory.memoryHeapCount; ++i)
+						line += std::format(" heap {}: usage {} of budget {} MB;", i, budget.heapUsage[i] >> 20, budget.heapBudget[i] >> 20);
+				}
 				{
 					std::lock_guard guard(lock);
 					for (const auto& [name, owner] : owners)
@@ -136,6 +156,21 @@ namespace VkDriverTrace
 		realAllocate = reinterpret_cast<PFN_vkAllocateMemory>(getDeviceProc(a_device, "vkAllocateMemory"));
 		realFree = reinterpret_cast<PFN_vkFreeMemory>(getDeviceProc(a_device, "vkFreeMemory"));
 		realPresent = reinterpret_cast<PFN_vkQueuePresentKHR>(getDeviceProc(a_device, "vkQueuePresentKHR"));
+		realSetPriority = reinterpret_cast<PFN_vkSetDeviceMemoryPriorityEXT>(getDeviceProc(a_device, "vkSetDeviceMemoryPriorityEXT"));
+		getMemory2 = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(getInstanceProc(a_instance, "vkGetPhysicalDeviceMemoryProperties2"));
+		physicalDevice = a_physicalDevice;
+
+		char list[256] = {};
+		if (GetEnvironmentVariableA("CS_VK_PRIORITY", list, sizeof(list))) {
+			std::string text = list;
+			for (size_t at = 0; at < text.size();) {
+				const size_t end = std::min(text.find(',', at), text.size());
+				const size_t equals = text.find('=', at);
+				if (equals != std::string::npos && equals < end)
+					priorities[text.substr(at, equals - at)] = std::stof(text.substr(equals + 1, end - equals - 1));
+				at = end + 1;
+			}
+		}
 		if (!realAllocate || !realFree || !realPresent) {
 			logger::warn("[VkTrace] the driver's entry points did not resolve");
 			return;
@@ -146,6 +181,8 @@ namespace VkDriverTrace
 		(void)DetourAttach(reinterpret_cast<PVOID*>(&realAllocate), reinterpret_cast<PVOID>(Allocate));
 		(void)DetourAttach(reinterpret_cast<PVOID*>(&realFree), reinterpret_cast<PVOID>(Free));
 		(void)DetourAttach(reinterpret_cast<PVOID*>(&realPresent), reinterpret_cast<PVOID>(Present));
+		if (realSetPriority && !priorities.empty())
+			(void)DetourAttach(reinterpret_cast<PVOID*>(&realSetPriority), reinterpret_cast<PVOID>(SetPriority));
 		const LONG result = DetourTransactionCommit();
 		if (result != NO_ERROR) {
 			logger::warn("[VkTrace] hooking the driver failed ({})", result);
