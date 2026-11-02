@@ -63,9 +63,11 @@ namespace DCLF::Features::Shadows::Sun
 		// The engine's AppendNonAccum (Hooks::AppendNonAccum's original), for an entry the veto gives back.
 		void (*appendNonAccum)(void*, RE::NiAVObject*, std::uint64_t, std::uint64_t) = nullptr;
 		constexpr std::size_t kDescriptorAccumulator = 0x48;  // ShadowmapDescriptor::shaderAccumulator
-		// The full-frustum cull's lists (its second argument points at their base: one BSTArray<NiPointer<NiAVObject>> of 0x18 bytes per
-		// scene list, kSceneListCount of them); the whole skip passes as many empty ones.
-		constexpr std::size_t kSceneListBytes = 0x18;
+		// The engine indexes the inner lists by its global count. Detours of the same
+		// function also read the outer BSTArray's size, so pass the complete container.
+		using SceneList = RE::BSTArray<RE::NiPointer<RE::NiAVObject>>;
+		RE::BSTArray<SceneList> emptySceneLists;
+		SceneList emptyExtraNodes;
 		constexpr std::uint32_t kMaxSceneLists = 32;
 		// FUN_1414f0920's fourth argument: the light's full-frustum processes, as the BSTArray<NiPointer<BSCullingProcess>> it reads (data,
 		// then the size at +0x10). The whole skip passes one of its own, of the processes holding entries.
@@ -178,6 +180,11 @@ namespace DCLF::Features::Shadows::Sun
 			auto& mask = At<std::uint32_t>(lightData, kLightDataActiveMask);
 			mask = index == 0xFFFF ? 0u : (mask | At<std::uint32_t>(a_accumulator, kAccumulatorLightBit));
 		}
+	}
+
+	bool SunAccumulation::IsWholeCullInput(const void* a_lists)
+	{
+		return a_lists == &emptySceneLists;
 	}
 
 	SunAccumulation& SunAccumulation::Get()
@@ -556,31 +563,29 @@ namespace DCLF::Features::Shadows::Sun
 		/** @brief CalculateAndDrawShadowCasterLights' call of the full-frustum cull (FUN_141511f30). */
 		struct FullFrustum
 		{
-			static void thunk(void* a_light, void* a_lists, void* a_arg)
+			static void thunk(RE::BSShadowDirectionalLight* a_light, RE::BSTArray<SceneList>& a_lists, SceneList& a_nodes)
 			{
 				auto& self = SunAccumulation::Get();
 				self.ResetFrameSun();
 				self.fullFrustumRan = true;
 				// DCLF switched off: the engine's whole cull (no exclusion, no whole skip: the views' coverage is not decided while off).
 				if (!ShellState::Running()) {
-					func(a_light, a_lists, a_arg);
+					func(a_light, a_lists, a_nodes);
 					return;
 				}
-				auto* light = static_cast<RE::BSShadowDirectionalLight*>(a_light);
-				if (self.ArmWhole(light)) {
+				if (self.ArmWhole(a_light)) {
 					// The engine's cull with no scene list in it (each empty) and an empty extra list (in place of the main camera's portal
 					// graph's alwaysRenderChildren: every loaded cell's actor and dynamic nodes, and the particle manager): its processes' setup
 					// as the engine does it, nothing appended, so the cascade culls cull nothing. With the list culls' job list null for the
 					// call, their empty culls run inline (the engine's own path without one): no jobs queued, and no wait behind the job
 					// threads' other work. Only the render thread reads the job list while the game runs (Main::Draw,
 					// CalculateAndDrawShadowCasterLights, this cull; then shutdown).
-					static const std::array<std::uint8_t, kSceneListBytes * kMaxSceneLists> emptyLists{};
-					auto lists = reinterpret_cast<std::uintptr_t>(emptyLists.data());
+					emptySceneLists.resize(Global<std::uint32_t>(Address::kSceneListCount));
 					auto& jobs = Global<void*>(Address::kListCullJobs);
 					void* const held = jobs;
 					const std::int64_t start = Now();
 					jobs = nullptr;
-					func(a_light, &lists, const_cast<std::uint8_t*>(emptyLists.data()));
+					func(a_light, emptySceneLists, emptyExtraNodes);
 					jobs = held;
 					self.WholeApplied();
 					const std::int64_t ticks = Now() - start;
@@ -588,9 +593,9 @@ namespace DCLF::Features::Shadows::Sun
 					self.stats.fullFrustumMax = std::max(self.stats.fullFrustumMax, ticks);
 					return;
 				}
-				self.ArmExclusion(light);
+				self.ArmExclusion(a_light);
 				const std::int64_t start = Now();
-				func(a_light, a_lists, a_arg);
+				func(a_light, a_lists, a_nodes);
 				const std::int64_t ticks = Now() - start;
 				auto& stats = self.stats;
 				stats.fullFrustumTicks += ticks;
