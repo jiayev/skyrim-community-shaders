@@ -776,6 +776,9 @@ struct BSShaderRenderTargets_Create
 
 	static void thunk()
 	{
+		static int calls = 0;
+		if (++calls > 1)
+			logger::warn("[Hooks] the engine is creating its render targets again (call {}); CS's resources are not made for that", calls);
 		Util::SetGameSettingValue<std::int32_t>("iNumFocusShadow:Display", iNumFocusShadow, 0);
 		{
 			// Everything the game creates here is its render targets (VRAM attribution); each is then labeled by name.
@@ -912,6 +915,36 @@ namespace Hooks
 		static LRESULT thunk(HWND a_hwnd, UINT a_msg, WPARAM a_wParam, LPARAM a_lParam)
 		{
 			auto menu = globals::menu;
+			// A monitor that turns off or is removed makes Windows shrink the window to what is left of the desktop, and the engine
+			// answers by creating its render targets again. CS's resources are not made for that: State::Setup runs a second time
+			// (about 1 GB more each time), and with Drawcall Limit Fix the game crashes recording its shadow views. Nothing the
+			// player asked for changed, so the window keeps its size. Moving and minimizing still work.
+			if (a_msg == WM_WINDOWPOSCHANGING && menu->initialized && !Upscaling::s_windowModifying.load(std::memory_order_relaxed) && !IsIconic(a_hwnd)) {
+				auto* position = reinterpret_cast<WINDOWPOS*>(a_lParam);
+				RECT rect{};
+				if (!(position->flags & SWP_NOSIZE) && position->x > -32000 && GetWindowRect(a_hwnd, &rect) &&
+					(position->cx != rect.right - rect.left || position->cy != rect.bottom - rect.top)) {
+					logger::info("[Hooks] window kept at {}x{}, not resized to {}x{}", rect.right - rect.left, rect.bottom - rect.top, position->cx, position->cy);
+					position->flags |= SWP_NOSIZE | SWP_NOMOVE;
+				}
+			}
+			// The display timeout does not count a controller as input: the screen stays on while the game has focus.
+			if (a_msg == WM_ACTIVATEAPP) {
+				(void)SetThreadExecutionState(a_wParam ? ES_CONTINUOUS | ES_DISPLAY_REQUIRED : ES_CONTINUOUS);
+				static const auto displayNotification = [&] {
+					static constexpr GUID kConsoleDisplayState{ 0x6fe69556, 0x704a, 0x47a0, { 0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47 } };
+					return RegisterPowerSettingNotification(a_hwnd, &kConsoleDisplayState, DEVICE_NOTIFY_WINDOW_HANDLE);
+				}();
+				(void)displayNotification;
+			}
+			if (a_msg == WM_POWERBROADCAST && a_wParam == PBT_POWERSETTINGCHANGE) {
+				const auto* setting = reinterpret_cast<const POWERBROADCAST_SETTING*>(a_lParam);
+				// 0: off, 1: on, 2: dimmed.
+				if (setting->DataLength >= sizeof(DWORD))
+					Upscaling::NotifyDisplayState(*reinterpret_cast<const DWORD*>(setting->Data) != 0);
+			}
+			if (a_msg == WM_DISPLAYCHANGE)
+				Upscaling::NotifyDesktopChanged();
 			if ((a_msg == WM_KILLFOCUS || a_msg == WM_SETFOCUS) && menu->initialized) {
 				menu->focusChanged = true;
 			}

@@ -421,14 +421,16 @@ The cache's per-light `LocalShadow` flag, its `FirstPerson` / `WorldEyePosition`
     opcode contexts do not match the verified 1.5.97/1.6.1170 sequences" and installs no blur adapters, with or without DCLF.
     **Next:** compare the opcode contexts against the SE executable.
 
--   **A second run of the renderer's setup crashes or collapses with DCLF on.** With a synthetic Alt key sent to the focused game,
-    the window re-initialised at the second monitor's 2560x1440 (Effects11, render targets, every graph epoch rebuilt) about 70 s
-    later. With frame generation on, each of 3 runs then crashed in the driver (`nvoglv64.dll+0E5A9FD`, null read) under
-    `DCLF::Draws::ShadowViewPass` recording, and the scene pump stopped. With it off, the run lived, but fell to 4-13 fps as DXVK's
-    device memory grew from 5.9 to 11.3 GB. A run focused without the key had none of this. **Next:** find what calls
-    `BSGraphics::Renderer::InitD3D` again, and check a real Alt+Tab.
+-   **The engine creating its render targets a second time is not survivable with DCLF on.** When a monitor turns off and leaves the
+    desktop, Windows shrinks the borderless window, and the engine calls `BSShaderRenderTargets::Create` again (not `InitD3D`). With
+    frame generation on, the game then crashed in the driver (`nvoglv64.dll+0E5A9FD`, null read) in `ShadowViewPass`'s `BeginPass`.
+    With it off, it fell to 4-13 fps as `State::Setup` ran again and DXVK's device memory grew from 5.9 to 11.3 GB. The likely cause
+    of the crash is `ImportDepthTexture` keeping a raw image of a shadow map the engine destroyed; that is unproven. The window
+    procedure now refuses the resize (`WM_WINDOWPOSCHANGING`), so this path is no longer reached that way, and `[Hooks] the engine is
+    creating its render targets again` in the log means something else reached it. **Next:** make the path safe if that line appears.
 -   **FSR-FG hung once at startup.** One of 7 runs presented nothing from the wrap on, with a forced focus change in the same second
-    as the swapchain recreate. Not reproduced, and no stacks were taken. **Next:** dump stacks if it recurs.
+    as the swapchain recreate. No stacks were taken. It may have been the deadlock fixed in DXVK's `D3D11Initializer` on 2026-11-02
+    (the main thread waiting on its lock, held by a texture thread waiting on the GPU). **Next:** dump stacks if it recurs.
 -   **Frame generation is not separated from graph epochs.** `Streamline::EvaluateFSRFrameGen` and the DLSS-G path do not call
     `Upscaling::SeparateFromGraphEpochs()` (`render-graph.md`, "Hazard: external Vulkan work directly after a graph epoch"). The inn
     (`coc RiverwoodSleepingGiantInn`, DCLF on) showed no corruption in screen grabs with either method, on 2026-11-01. That is a few

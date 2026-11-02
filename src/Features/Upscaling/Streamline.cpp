@@ -1,5 +1,6 @@
 #include "Streamline.h"
 #include "Features/DrawcallLimitFix.h"
+#include "Features/Upscaling.h"
 
 #include "DXVKInterop.h"
 
@@ -78,6 +79,9 @@ namespace
 		// the D3D11 branch does not have at all. Streamline is now always initialised for in-game
 		// switching, so this has to be gated on use rather than on initialisation.
 		std::atomic<bool> latencyMarkersNeeded = { false };
+		// Frame generation also needs them for sl.common to recycle its input copies, and sl.common goes on making those once a
+		// plugin has asked for the tags, after the plugin is unloaded too. So they stay on from the first load (2.4 GB of copies otherwise).
+		std::atomic<bool> frameGenerationHasLoaded = { false };
 
 		// Disable dispatch after an SEH fault to prevent repeated crashes.
 
@@ -784,9 +788,10 @@ void Streamline::CaptureDLSSGPresentState()
 
 void Streamline::UpdateReflex(bool a_enable, bool a_boost, uint32_t a_frameLimitUs)
 {
-	g_sl.latencyMarkersNeeded.store(a_enable || g_dlssgCurrentlyLoaded.load(std::memory_order_acquire) ||
-			g_fsrfgCurrentlyLoaded.load(std::memory_order_acquire),
-		std::memory_order_release);
+	if (globals::features::upscaling.settings.frameGeneration || g_dlssgCurrentlyLoaded.load(std::memory_order_acquire) ||
+		g_fsrfgCurrentlyLoaded.load(std::memory_order_acquire))
+		g_sl.frameGenerationHasLoaded.store(true, std::memory_order_relaxed);
+	g_sl.latencyMarkersNeeded.store(a_enable || g_sl.frameGenerationHasLoaded.load(std::memory_order_relaxed), std::memory_order_release);
 	if (!initialized || !featureReflex)
 		return;
 
