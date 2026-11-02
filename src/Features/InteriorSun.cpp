@@ -4,6 +4,9 @@
 #include "Utils/VersionedRelocation.h"
 
 #include "PhysicalSky.h"
+#if defined(CS_HAS_DCLF)
+#	include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunAccumulation.h"
+#endif
 
 #define I18N_KEY_PREFIX "feature.interior_sun."
 
@@ -122,11 +125,17 @@ RE::TESWorldSpace* InteriorSun::disableInteriorSun = [] {
 
 void InteriorSun::DirShadowLightCulling::thunk(RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays, RE::BSTArray<RE::NiPointer<RE::NiAVObject>>& nodes)
 {
+#if defined(CS_HAS_DCLF)
+	// DCLF draws these cascades itself. The engine still sets up its culling
+	// processes, but adding portal geometry here would repopulate its jobs.
+	if (DCLF::Features::Shadows::Sun::SunAccumulation::IsWholeCullInput(&jobArrays))
+		return func(dirLight, jobArrays, nodes);
+#endif
 	auto& singleton = globals::features::interiorSun;
 	const auto cell = RE::TES::GetSingleton()->interiorCell;
 	auto* passedJobArrays = &jobArrays;
 
-	if (cell && singleton.isInteriorWithSun) {
+	if (cell && singleton.isInteriorWithSun && !jobArrays.empty()) {
 		const auto* loadedData = cell->GetRuntimeData().loadedData;
 		const auto portalGraph = loadedData ? loadedData->portalGraph : nullptr;
 		if (portalGraph) {

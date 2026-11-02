@@ -40,6 +40,8 @@ namespace DCLF::Features::Shadows::Sun
 	{
 	public:
 		static SunAccumulation& Get();
+		/** @brief Whether this is the intentionally empty scene list array for DCLF-owned sun cascades. */
+		static bool IsWholeCullInput(const void* a_lists);
 
 		/** @brief AE: the Accumulate vtable slot and the call sites; verified before patching. */
 		void Install();
