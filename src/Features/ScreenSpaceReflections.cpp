@@ -27,7 +27,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SpecCubemapMult,
 	UseEnvironmentProbe,
 	ProbeMaxSteps,
-	ProbeHierarchicalTrace,
+	ProbePreciseTrace,
 	HitDistA,
 	HitDistB,
 	HitDistC,
@@ -100,8 +100,8 @@ void ScreenSpaceReflections::DrawSettings()
 			ImGui::Separator();
 			ImGui::SliderInt(T(TKEY("max_steps"), "Max Steps"), (int*)&settings.SpecMaxSteps, 1, 256);
 			if (settings.UseEnvironmentProbe) {
-				ImGui::SliderInt(T(TKEY("probe_max_steps"), "Probe Max Steps"), (int*)&settings.ProbeMaxSteps, 8, 128);
-				if (ImGui::Checkbox(T(TKEY("probe_hierarchical_trace"), "Hierarchical Probe Trace"), &settings.ProbeHierarchicalTrace))
+				ImGui::SliderInt(T(TKEY("probe_max_steps"), "Probe Max Steps"), (int*)&settings.ProbeMaxSteps, 8, settings.ProbePreciseTrace ? 64 : 16, "%d", ImGuiSliderFlags_AlwaysClamp);
+				if (ImGui::Checkbox(T(TKEY("probe_hierarchical_trace"), "Hierarchical Probe Trace"), &settings.ProbePreciseTrace))
 					resetReblurHistory = true;
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted(T(TKEY("probe_hierarchical_trace_tooltip"), "Skip empty regions using the probe's own depth hierarchy. Disable to compare with the original probe ray march. Screen-space Hi-Z tracing is unchanged."));
@@ -529,7 +529,7 @@ void ScreenSpaceReflections::UpdateSB()
 	if (data.SpecUseEnvironmentProbe)
 		data.SpecUseDynamicCubemap = settings.UseDynamicCubemapsAsFallback;
 	data.ProbeValidFaces = data.SpecUseEnvironmentProbe && probe.Radiance() && probe.Depth() ? probe.ValidFaces() : 0;
-	data.ProbeMaxSteps = std::clamp(settings.ProbeMaxSteps, 8u, 128u);
+	data.ProbeMaxSteps = std::clamp(settings.ProbeMaxSteps, 8u, settings.ProbePreciseTrace ? 64u : 16u);
 	data.ProbeFarDistance = probe.FarDistance;
 	data.ProbeBoundsRadius = probe.FarDistance;
 	const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();
@@ -588,7 +588,7 @@ void ScreenSpaceReflections::DrawSSR()
 		context->CSSetUnorderedAccessViews(0, 8, nullUAVs, nullptr);
 	};
 
-	bool useProbeHierarchy = usingEnvironmentProbe && settings.ProbeHierarchicalTrace && specularGICompute[2] && BuildProbeHierarchy();
+	bool useProbeHierarchy = usingEnvironmentProbe && settings.ProbePreciseTrace && specularGICompute[2] && BuildProbeHierarchy();
 	// The probe builder owns b0 and u0..4; screen tracing retains its original bindings.
 	context->CSSetConstantBuffers(1, 1, &cb);
 

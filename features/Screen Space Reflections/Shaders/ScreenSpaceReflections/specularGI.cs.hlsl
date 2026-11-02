@@ -446,17 +446,18 @@ float SSRT_ValidateHit(float3 hit,
 		screenConfidence = 0;  // the rejected depth sample supplies no finite hit distance
 	if (resolvedProbePath && confidence < 0.999f) {
 		float3 worldDirection = normalize(mul(FrameBuffer::CameraViewInverse, float4(view_space_reflected_direction, 0)).xyz);
-		float3 worldOrigin = mul(FrameBuffer::CameraViewInverse, float4(view_space_ray, 1)).xyz;
 		float3 probeColor = 0;
 		float probeDistance = 0;
+		float3 worldOrigin = 0;
 		bool probeHit = false;
-		bool probeUnobstructed = false;
-		if (left_screen || thicknessRejected) {
+		bool probeTraced = left_screen || thicknessRejected;
+		if (probeTraced) {
+			worldOrigin = mul(FrameBuffer::CameraViewInverse, float4(view_space_ray, 1)).xyz;
 			float startDistance = ray_length + 0.5;
 			if (left_screen)
 				startDistance = ProbeScreenExitDistance(mul(FrameBuffer::CameraProj, float4(view_space_ray, 1)),
 					mul(FrameBuffer::CameraProj, float4(view_space_reflected_direction, 0)));
-			probeHit = TraceEnvironmentProbe(worldOrigin, worldDirection, startDistance, thickness, probeColor, probeDistance, probeUnobstructed);
+			probeHit = TraceEnvironmentProbe(worldOrigin, worldDirection, startDistance, thickness, probeColor, probeDistance);
 		}
 		float3 fallbackColor = 0;
 		if (probeHit) {
@@ -465,8 +466,6 @@ float SSRT_ValidateHit(float3 hit,
 			screenConfidence = 1;
 		} else if (SpecUseDynamicCubemap != 0 && ReflectionCubemapValid != 0) {
 			fallbackColor = ColorManagement::SceneToLinear(ReflectionCubemap.SampleLevel(LinearSampler, worldDirection, 0)) * SpecCubemapMult;
-			if (!probeUnobstructed)
-				fallbackColor *= ProbeUnknownVisibility(worldOrigin, worldDirection);
 			float ao = lerp(1.0, occlusion, OcclusionStrength);
 			fallbackColor *= GetSpecularOcclusionFromAmbientOcclusion(saturate(dot(normalize(view_space_ray), view_space_surface_normal)), ao, roughness);
 		}

@@ -1,5 +1,6 @@
 #include "ScreenSpaceReflections/common.hlsli"
 SamplerState LinearSampler : register(s1);
+#define PROBE_TRACE_VISIBILITY
 #include "ScreenSpaceReflections/probeTrace.hlsli"
 struct Ray
 {

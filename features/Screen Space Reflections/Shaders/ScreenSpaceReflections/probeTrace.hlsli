@@ -23,15 +23,17 @@ float ProbeScreenExitDistance(float4 originClip, float4 directionClip)
 }
 
 #define PROBE_TRACE_SAMPLER LinearSampler
-#define PROBE_TRACE_VISIBILITY
 #if defined(PROBE_HIERARCHY)
+#	ifndef PROBE_TRACE_VISIBILITY
+#		define PROBE_TRACE_VISIBILITY
+#	endif
 #	include "Common/EnvironmentProbeHierarchy.hlsli"
 #else
 #	include "Common/EnvironmentProbeTrace.hlsli"
 #endif
 #undef PROBE_TRACE_SAMPLER
-#include "Common/EnvironmentProbeVisibility.hlsli"
 
+#ifdef PROBE_TRACE_VISIBILITY
 // Keep the public intersection-only entry point for callers that do not resolve
 // lighting fallbacks (including raster/hierarchy regression fixtures).
 bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance, float thickness,
@@ -40,5 +42,6 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 	bool unobstructed;
 	return TraceEnvironmentProbe(origin, direction, startDistance, thickness, radiance, hitDistance, unobstructed);
 }
+#endif
 
 #endif

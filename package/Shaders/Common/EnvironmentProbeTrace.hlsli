@@ -16,14 +16,21 @@ bool ProbeSampleDepth(float3 position, uint2 dimensions, out float gap, out floa
 	// Rotating captures have independent origins. Resolve the octant in that
 	// capture's frame, and reject ambiguous seams instead of mixing depth frames.
 	[loop] for (uint i = 0; i < 3; ++i)
-		face = EnvironmentProbe::GetFace(position - ProbeOriginOffsets[face].xyz);
+	{
+		uint nextFace = EnvironmentProbe::GetFace(position - ProbeOriginOffsets[face].xyz);
+		if (nextFace == face)
+			break;
+		face = nextFace;
+	}
 	float3 delta = position - ProbeOriginOffsets[face].xyz;
 	float radius = length(delta);
 	if ((ProbeValidFaces & (1u << face)) == 0 || radius <= 1e-4 || EnvironmentProbe::GetFace(delta) != face)
 		return false;
 	uv = EnvironmentProbe::Encode(delta);
 	uint2 pixel = min(uint2(saturate(uv) * dimensions), dimensions - 1);
-	uint pixelFace = EnvironmentProbe::GetFace(EnvironmentProbe::Decode((pixel + 0.5) / dimensions));
+	int2 centered = int2(pixel) * 2 + 1 - int(dimensions.x);
+	uint pixelFace = (centered.x < 0 ? 1u : 0u) | (centered.y < 0 ? 2u : 0u) |
+	                 (abs(centered.x) + abs(centered.y) > int(dimensions.x) ? 4u : 0u);
 	if ((ProbeValidFaces & (1u << pixelFace)) == 0 ||
 		(pixelFace != face && any(abs(ProbeOriginOffsets[pixelFace].xyz - ProbeOriginOffsets[face].xyz) > 1e-3)))
 		return false;
@@ -77,6 +84,8 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 	}
 #endif
 	uint steps = clamp(ProbeMaxSteps, 8u, 128u);
+	float stepScale = pow(end / begin, rcp(float(steps)));
+	float distance = begin;
 	float previousDistance = begin;
 	float previousGap, footprint;
 	float2 uv;
@@ -85,12 +94,11 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 	bool clear = previousValid && previousGap < 0;
 	uint2 previousPixel = min(uint2(saturate(uv) * dimensions), dimensions - 1);
 #endif
-	// Quadratic spacing spends the finite budget close to the screen exit. A
-	// front-surface crossing is refined in world ray distance, never in octahedral UV.
+	// A fixed angular resolution needs a world step that grows with radial
+	// distance. Geometric spacing covers the whole interval at every range.
 	[loop] for (uint i = 1; i <= steps; ++i)
 	{
-		float fraction = float(i) / steps;
-		float distance = lerp(begin, end, fraction * fraction);
+		distance = i == steps ? end : min(end, distance * stepScale);
 		float gap;
 		bool valid = ProbeSampleDepth(origin + direction * distance, dimensions, gap, footprint, uv);
 #ifdef PROBE_TRACE_VISIBILITY
@@ -102,31 +110,27 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 		previousPixel = pixel;
 #endif
 		if (valid && previousValid && previousGap <= 0 && gap >= 0) {
-			float lo = previousDistance;
-			float hi = distance;
-			bool bracketValid = true;
-			[loop] for (uint j = 0; j < 6; ++j)
-			{
-				float mid = (lo + hi) * 0.5;
-				float midGap, midFootprint;
-				float2 midUV;
-				if (!ProbeSampleDepth(origin + direction * mid, dimensions, midGap, midFootprint, midUV)) {
-					bracketValid = false;
-					break;
+			float hitT = distance;
+			float hitGap = gap;
+			float hitFootprint = footprint;
+			float2 hitUV = uv;
+			if (hitGap > max(thickness, 0.5) + hitFootprint) {
+				float fraction = saturate(previousGap / min(previousGap - gap, -1e-6));
+				float refinedDistance = lerp(previousDistance, distance, fraction);
+				float refinedGap, refinedFootprint;
+				float2 refinedUV;
+				if (ProbeSampleDepth(origin + direction * refinedDistance, dimensions, refinedGap, refinedFootprint, refinedUV)) {
+					hitT = refinedDistance;
+					hitGap = refinedGap;
+					hitFootprint = refinedFootprint;
+					hitUV = refinedUV;
 				}
-				if (midGap < 0)
-					lo = mid;
-				else
-					hi = mid;
 			}
-			float hitGap, hitFootprint;
-			float2 hitUV;
-			if (bracketValid && ProbeSampleDepth(origin + direction * hi, dimensions, hitGap, hitFootprint, hitUV) &&
-				hitGap >= 0 && hitGap <= max(thickness, 0.5) + hitFootprint) {
+			if (hitGap >= 0 && hitGap <= max(thickness, 0.5) + hitFootprint) {
 				float3 color = EnvironmentProbe::SampleRadiance(ProbeRadianceTexture, PROBE_TRACE_SAMPLER, hitUV, dimensions);
 				if (all(isfinite(color))) {
 					radiance = max(color, 0);  // already scene-linear, without pre-exposure
-					hitDistance = hi;
+					hitDistance = hitT;
 #ifdef PROBE_TRACE_NORMALS
 					uint2 hitPixel = min(uint2(saturate(hitUV) * dimensions), dimensions - 1);
 					sourceNormal = GBuffer::DecodeNormal(ProbeNormalTexture.Load(int3(hitPixel, 0)));
