@@ -403,10 +403,28 @@ namespace DCLF::Scene
 		const bool everything = drawn != setPhaseMask || !setCursor.Continues(tables.changeLog, tablesGeneration) || setPhases.size() > objects;
 		if (everything) {
 			++setStats.resyncs;
-			logger::info("[DCLF] set resync at frame {} ({} objects, scene {}): {}", sceneFrame, objects, live ? "built" : "not built",
-				drawn != setPhaseMask                                 ? fmt::format("phases {:#x} -> {:#x}", setPhaseMask, drawn) :
-				!setCursor.Continues(tables.changeLog, tablesGeneration) ? std::string("new tables or a change log the cursor cannot read on") :
-				                                                          std::string("fewer objects"));
+			// A load that never finishes can resync hundreds of times a scene frame, so the lines are capped per window of scene frames.
+			// The next line logged counts the ones skipped. Only the commit's thread touches these, as with setStats.
+			constexpr std::uint32_t kLinesPerWindow = 8;
+			constexpr std::uint32_t kWindowFrames = 600;
+			static std::uint32_t logWindow = ~0u;
+			static std::uint32_t linesInWindow = 0;
+			static std::uint64_t skippedLines = 0;
+			if (const std::uint32_t window = sceneFrame / kWindowFrames; window != logWindow) {
+				logWindow = window;
+				linesInWindow = 0;
+			}
+			if (linesInWindow < kLinesPerWindow) {
+				++linesInWindow;
+				logger::info("[DCLF] set resync at frame {} ({} objects, scene {}): {}{}", sceneFrame, objects, live ? "built" : "not built",
+					drawn != setPhaseMask                                 ? fmt::format("phases {:#x} -> {:#x}", setPhaseMask, drawn) :
+					!setCursor.Continues(tables.changeLog, tablesGeneration) ? std::string("new tables or a change log the cursor cannot read on") :
+					                                                          std::string("fewer objects"),
+					skippedLines ? fmt::format(" ({} lines skipped before this one)", skippedLines) : std::string());
+				skippedLines = 0;
+			} else {
+				++skippedLines;
+			}
 		}
 		setPhaseMask = drawn;
 		if (everything) {
