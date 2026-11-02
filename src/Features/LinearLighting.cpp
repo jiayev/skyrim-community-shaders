@@ -439,7 +439,7 @@ namespace
 	{
 		if (!pass || !pass->sceneLights || !pass->numLights || !pass->sceneLights[0])
 			return;
-		const auto* light = skyrim_cast<RE::NiDirectionalLight*>(pass->sceneLights[0]->light.get());
+		const auto* light = netimmerse_cast<RE::NiDirectionalLight*>(pass->sceneLights[0]->light.get());
 		auto& ll = globals::features::linearLighting;
 		if (light && (ll.IsLinearLightingActive() || ll.IsSunlightOverridden(light)))
 			WriteRGB(Group::PerGeometry, index, ll.DirectionalColorToWorking(light, effect));

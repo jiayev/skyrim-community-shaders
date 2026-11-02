@@ -5,6 +5,8 @@
         "auto_generated": true,
         "note": "NIE EDYTUJ RĘCZNIE. Uruchom: python tools/extract-i18n.py --write"
     },
+    "common.active": "Aktywny",
+    "common.inactive": "Nieaktywny",
     "cs_editor.actions": "Akcje",
     "cs_editor.active": "Aktywny:",
     "cs_editor.add_new_marker": "Dodaj nowy znacznik",
@@ -84,7 +86,5 @@
     "cs_editor.direction_z_minus": "Z- (Dół)",
     "cs_editor.direction_z_plus": "Z+ (Góra)",
     "cs_editor.drag_colours_here": "Przeciągnij kolory żeby zapisać jako ulubione.",
-    "cs_editor.drag_to_favourites": "Przeciągnij kolor tutaj aby dodać go do ulubionych",
-    "common.active": "Aktywny",
-    "common.inactive": "Nieaktywny"
+    "cs_editor.drag_to_favourites": "Przeciągnij kolor tutaj aby dodać go do ulubionych"
 }

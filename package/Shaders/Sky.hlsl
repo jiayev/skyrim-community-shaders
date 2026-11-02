@@ -239,9 +239,6 @@ cbuffer AlphaTestRefCB : register(b11)
 // Effects 11 procedural sun: the disc replaces the sun texture, and clouds in front of it hide it or, when thin, pass it on
 #	if defined(EFFECTS11) && defined(TEX) && !defined(MOONMASK) && !defined(DITHER)
 #		include "Effects11/ProceduralSun.hlsli"
-#		if defined(CLOUD_SHADOWS)
-#			include "CloudShadows/CloudShadows.hlsli"
-#		endif
 #		if defined(CLOUDS)
 #			define EFFECTS11_CLOUD_SUN
 #		else

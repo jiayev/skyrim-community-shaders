@@ -286,7 +286,7 @@ float3 GetThinSurfaceTransmissionLighting(float3 ambientColor, float3 transmissi
 #	if defined(DEFERRED)
 	if (SharedData::ssgiSettings.EnableIL != 0
 #		if defined(LIGHTING)
-		&& !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection)
+	    && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection)
 #		endif
 	)
 		ambientColor = 0;

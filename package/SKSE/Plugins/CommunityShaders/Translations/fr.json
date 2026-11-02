@@ -4,6 +4,8 @@
         "locale": "fr",
         "auto_generated": true
     },
+    "common.active": "Active",
+    "common.inactive": "Inactive",
     "cs_editor.add_new_marker": "Ajouter un nouveau marqueur",
     "cs_editor.ambient_color": "Couleur ambiante",
     "cs_editor.apply": "Appliquer",
@@ -113,7 +115,5 @@
     "cs_editor.fog_power": "Puissance du brouillard",
     "cs_editor.fog_power_short": "Puissance",
     "cs_editor.force_this_weather": "Forcez cette météo",
-    "cs_editor.form_id": "ID du formulaire",
-    "common.active": "Active",
-    "common.inactive": "Inactive"
+    "cs_editor.form_id": "ID du formulaire"
 }

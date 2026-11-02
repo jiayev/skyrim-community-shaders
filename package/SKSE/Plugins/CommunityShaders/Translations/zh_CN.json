@@ -4,6 +4,8 @@
         "language": "简体中文",
         "locale": "zh_CN"
     },
+    "common.active": "激活",
+    "common.inactive": "未激活",
     "common.settings_managed_by_enb": "设置当前由 ENB 管理。",
     "common.texture_preview.debug_texture_channel": "通道",
     "common.texture_preview.debug_texture_dimensions": "%u × %u × %u",
@@ -4500,8 +4502,6 @@
     "menu.settings.animation_speed_tooltip": "菜单动画的运行速度：0.5x 较慢，2x 较快。默认为 1x。",
     "menu.settings.auto_hide_feature_list": "自动隐藏功能列表",
     "menu.settings.auto_hide_feature_list_tooltip": "自动隐藏左侧功能列表面板。将光标移到左边缘即可显示。",
-    "menu.settings.background_blur": "背景模糊",
-    "menu.settings.background_blur_tooltip": "对菜单窗口后面的背景应用模糊效果。",
     "menu.settings.base_font_size": "基础字体大小",
     "menu.settings.button_text_align": "按钮文本对齐",
     "menu.settings.button_text_align_tooltip": "当按钮大于其文本内容时应用对齐。",
@@ -4879,15 +4879,5 @@
     "ui.restore_saved_settings_title": "恢复已保存的设置？",
     "ui.search": "搜索...",
     "ui.search_clear": "清空搜索",
-    "ui.search_features": "搜索功能...",
-    "common.active": "激活",
-    "common.inactive": "未激活",
-    "feature.perf_overlay.post_fg_fps": "帧生成后FPS：",
-    "feature.perf_overlay.post_fg_graph_tooltip": "帧生成后计时根据帧生成前的帧时间和当前帧生成后端报告的呈现倍数进行估算。",
-    "feature.perf_overlay.raw_fps": "原始FPS：",
-    "feature.perf_overlay.show_post_fg_graph": "显示帧生成后帧时间图表",
-    "feature.perf_overlay.show_pre_fg_graph": "显示帧生成前帧时间图表",
-    "feature.upscaling.backend_diagnostics": "后端诊断",
-    "feature.upscaling.fg_enable_restart": "帧生成（重启后）",
-    "feature.upscaling.sl_restart_note": "超分辨率和帧生成将在重启后启用"
+    "ui.search_features": "搜索功能..."
 }

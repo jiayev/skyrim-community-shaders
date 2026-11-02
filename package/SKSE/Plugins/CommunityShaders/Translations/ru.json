@@ -6,6 +6,8 @@
         "locale": "ru",
         "note": "НЕ РЕДАКТИРУЙТЕ ВРУЧНУЮ. Запустите: python tools/extract-i18n.py --write"
     },
+    "common.active": "Активно",
+    "common.inactive": "Неактивно",
     "cs_editor.actions": "Действия",
     "cs_editor.active": "Активно:",
     "cs_editor.add_new_marker": "Добавить новый маркер",
@@ -1484,8 +1486,6 @@
     "menu.restore_settings": "Восстановить сохранённые настройки",
     "menu.settings.auto_hide_feature_list": "Автоскрытие списка функций",
     "menu.settings.auto_hide_feature_list_tooltip": "Автоматически скрывает левую панель списка функций. Наведите к левому краю.",
-    "menu.settings.background_blur": "Размытие фона",
-    "menu.settings.background_blur_tooltip": "Размытие фона за окном меню.",
     "menu.settings.base_font_size": "Базовый размер шрифта",
     "menu.settings.button_text_align": "Выравнивание текста кнопки",
     "menu.settings.button_text_align_tooltip": "Выравнивание при кнопке большей, чем текст.",
@@ -1718,15 +1718,5 @@
     "ui.copy": "Копировать",
     "ui.dont_ask_again": "Больше не спрашивать",
     "ui.search": "Поиск...",
-    "ui.search_features": "Поиск функций...",
-    "common.active": "Активно",
-    "common.inactive": "Неактивно",
-    "feature.perf_overlay.post_fg_fps": "Post-FG FPS:",
-    "feature.perf_overlay.post_fg_graph_tooltip": "Время Post-FG оценивается по времени кадра Pre-FG и множителю презентации, сообщаемому активным бэкендом генерации кадров.",
-    "feature.perf_overlay.raw_fps": "Исходный FPS:",
-    "feature.perf_overlay.show_post_fg_graph": "Показать график времени Post-FG кадра",
-    "feature.perf_overlay.show_pre_fg_graph": "Показать график времени Pre-FG кадра",
-    "feature.upscaling.backend_diagnostics": "Диагностика бэкенда",
-    "feature.upscaling.fg_enable_restart": "Генерация кадров (после перезапуска)",
-    "feature.upscaling.sl_restart_note": "Апскейлеры и генерация кадров активируются после перезапуска"
+    "ui.search_features": "Поиск функций..."
 }

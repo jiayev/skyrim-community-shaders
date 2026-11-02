@@ -180,7 +180,7 @@ void CalculateGI(
 	float2 normalizedScreenPos = uv;
 	const float rcpNumSteps = rcp((float)NumSteps);
 	uint2 noiseCoord = uint2(normalizedScreenPos * OUT_FRAME_DIM);
-	const float2 localNoise = SpatioTemporalNoise(noiseCoord, FrameIndex);
+	const float2 localNoise = SpatioTemporalNoise(noiseCoord, SharedData::FrameCount);
 	const float noiseStep = localNoise.y;
 	const float noiseDirection = localNoise.x;
 
@@ -394,13 +394,13 @@ void CalculateGI(
 #if defined(SSGI_QUARTER)
 	// Trace one pixel per 2x2 block. Cycle through all four phases so REBLUR's
 	// hit-distance reconstruction and temporal accumulation receive fresh data.
-	uint2 phaseOffset = uint2(FrameIndex & 1u, (FrameIndex >> 1u) & 1u);
+	uint2 phaseOffset = uint2(SharedData::FrameCount & 1u, (SharedData::FrameCount >> 1u) & 1u);
 	uint2 pxCoord = dtid * 2u + phaseOffset;
 	if (any(pxCoord >= uint2(FrameDim)))
 		return;
 	uint2 outCoord = pxCoord;
 #elif defined(SSGI_HALF)
-	uint colOffset = (dtid.y + FrameIndex) & 1;
+	uint colOffset = (dtid.y + SharedData::FrameCount) & 1;
 	uint2 pxCoord = uint2(dtid.x * 2 + colOffset, dtid.y);
 	uint2 outCoord = dtid.xy;
 #else

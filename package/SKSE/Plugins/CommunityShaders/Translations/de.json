@@ -6,9 +6,9 @@
         "generator": "tools/extract-i18n.py",
         "note": "NICHT MANUELL BEARBEITEN. Benutze: python tools/extract-i18n.py --write"
     },
+    "common.active": "Aktiv",
+    "common.inactive": "Inaktiv",
     "cs_editor.actions": "Aktionen",
     "cs_editor.active": "Aktiv:",
-    "cs_editor.add_new_marker": "Neues Kennzeichen hinzufügen",
-    "common.active": "Aktiv",
-    "common.inactive": "Inaktiv"
+    "cs_editor.add_new_marker": "Neues Kennzeichen hinzufügen"
 }
