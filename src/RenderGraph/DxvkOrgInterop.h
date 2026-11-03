@@ -345,6 +345,8 @@ typedef HRESULT(__stdcall* PFN_dxvkReadSubmissionTrace)(ID3D11Device* pDevice, D
 	typedef HRESULT(__stdcall* PFN_dxvkRequestMemorySnapshot)(ID3D11Device* pDevice);
 	// Copies the last completed snapshot, up to capacity rows; *pCount is its row count, *pSerial (optional) its serial (0 before
 	// the first). S_FALSE if capacity was too small.
+	typedef HRESULT(__stdcall* PFN_dxvkSetResourcesSpillable)(ID3D11Device* pDevice, uint32_t count, const uint64_t* pCookies, BOOL spillable, uint32_t* pQueued);
+	typedef HRESULT(__stdcall* PFN_dxvkForceResourcePlacement)(ID3D11Device* pDevice, uint32_t count, const uint64_t* pCookies, BOOL toSystem, uint32_t* pQueued);
 	typedef HRESULT(__stdcall* PFN_dxvkReadMemorySnapshot)(ID3D11Device* pDevice, DxvkMemoryResourceRow* pRows, uint32_t capacity, uint32_t* pCount, uint64_t* pSerial);
 	// One report per memory heap, up to capacity; *pCount is the heap count. Set each report's version.
 	typedef HRESULT(__stdcall* PFN_dxvkGetMemoryHeapReports)(ID3D11Device* pDevice, DxvkMemoryHeapReport* pReports, uint32_t capacity, uint32_t* pCount);

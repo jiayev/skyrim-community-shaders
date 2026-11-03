@@ -3,6 +3,8 @@
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "TestHarness.h"
 
+#include "Vram/MemProbe.h"
+#include "Vram/SpillLab.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
@@ -192,6 +194,8 @@ namespace DCLF
 			{
 				{
 					logger::info("[DCLF] test command at frame {}: {}", a_frame, command);
+					if (Vram::SpillLab::Command(command))
+						return;
 					// The command in a capture too: a timing run's phases are found in its Tracy capture by these zones.
 					ZoneScopedN("CS.DCLF.TestCommand");
 					ZoneText(command.data(), command.size());
@@ -301,8 +305,10 @@ namespace DCLF
 						return;
 					}
 					// "dclf:mark[=<label>]": nothing but this line in the log, a phase's boundary for the run's analysis.
-					if (command == "dclf:mark" || command.rfind("dclf:mark=", 0) == 0)
+					if (command == "dclf:mark" || command.rfind("dclf:mark=", 0) == 0) {
+						MemProbe::Mark(command.size() > 10 ? std::string_view(command).substr(10) : std::string_view{}, a_frame);
 						return;
+					}
 					// "dclf:telemetry=<label>": a BasicTelemetry session for this phase, in place of the running one, whose files it writes. "=off": none.
 					if (command.rfind("dclf:telemetry=", 0) == 0) {
 						Diagnostics::TelemetryPhase(std::string_view(command).substr(15));
@@ -775,6 +781,8 @@ namespace DCLF
 	void RunTestHarness(std::string_view a_feature)
 	{
 		Diagnostics::TelemetryFrame();
+		MemProbe::Start(logger::log_directory().value_or(std::filesystem::path{}));
+		Vram::SpillLab::OnPresent();
 		if (Harness().feature.empty())
 			Harness().feature = a_feature;
 		{
