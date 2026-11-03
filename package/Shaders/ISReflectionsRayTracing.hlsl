@@ -34,13 +34,15 @@ cbuffer WaterProbe : register(b9)
 	float ProbeFarDistance;
 	float ProbeBoundsRadius;
 };
-// Water has no temporal probe denoiser. Use a small, deterministic march.
-static const uint ProbeMaxSteps = 8;
-#		define PROBE_TRACE_BRACKET_TOLERANCE
+// Water has no temporal denoiser. Keep the sample positions stable as the camera moves.
+static const uint ProbeMaxSteps = 24;
+#		define PROBE_TRACE_COARSE_HITS
+#		define PROBE_TRACE_WATER
 #		define PROBE_TRACE_SAMPLER ColorSampler
 #		include "Common/EnvironmentProbeTrace.hlsli"
 #		undef PROBE_TRACE_SAMPLER
-#		undef PROBE_TRACE_BRACKET_TOLERANCE
+#		undef PROBE_TRACE_WATER
+#		undef PROBE_TRACE_COARSE_HITS
 #	endif
 
 cbuffer PerGeometry : register(b2)
@@ -70,6 +72,30 @@ float2 ConvertRaySamplePrevious(float2 raySample)
 	return FrameBuffer::GetPreviousDynamicResolutionAdjustedScreenPosition(raySample);
 }
 
+float3 SampleScreenReflection(float2 finalSampleUV, float iterationDepth)
+{
+	float3 color = ColorTex.SampleLevel(ColorSampler, ConvertRaySample(finalSampleUV), 0).xyz;
+
+	// Final sample to world-space
+	float4 positionWS = float4(float2(finalSampleUV.x, 1.0 - finalSampleUV.y) * 2.0 - 1.0, iterationDepth, 1.0);
+	positionWS = mul(FrameBuffer::CameraViewProjInverse, positionWS);
+	positionWS.xyz = positionWS.xyz / positionWS.w;
+	positionWS.w = 1.0;
+
+	// Compute camera motion vector
+	float2 cameraMotionVector = MotionBlur::GetSSMotionVector(positionWS, positionWS);
+
+	// Reproject alpha from previous frame
+	float2 reprojectedRaySample = finalSampleUV + cameraMotionVector;
+	float4 alpha = 0.0;
+
+	// Check that the reprojected data is within the frame
+	if (!FrameBuffer::IsOutsideFrame(reprojectedRaySample.xy))
+		alpha = float4(AlphaTex.SampleLevel(AlphaSampler, ConvertRaySamplePrevious(reprojectedRaySample.xy), 0).xyz, 1.0);
+
+	return color + SSRParams.z * PreExposure::History(alpha.xyz) * alpha.w;
+}
+
 float4 GetReflectionColor(
 	float3 projReflectionDirection,
 	float3 projPosition,
@@ -78,6 +104,13 @@ float4 GetReflectionColor(
 {
 	float3 prevRaySample;
 	float3 raySample = projPosition;
+	float4 screen = 0;
+	// The fixed screen march only proves free space across adjacent depth texels.
+	float2 depthSize = SharedData::BufferDim.xy * FrameBuffer::DynamicResolutionParams1.xy;
+	float3 clearEnd = projPosition;
+	float previousDepth = projPosition.z;
+	bool contiguous = max(abs(projReflectionDirection.x) * depthSize.x, abs(projReflectionDirection.y) * depthSize.y) < iterations * 2;
+	float screenConfidence = 0;
 
 	for (int i = 0; i < iterations; i++) {
 		prevRaySample = raySample;
@@ -85,12 +118,17 @@ float4 GetReflectionColor(
 
 		float2 sampleUV = raySample.xy;
 
-		if (FrameBuffer::IsOutsideFrame(sampleUV)) {
-			raySample = prevRaySample;
+		if (FrameBuffer::IsOutsideFrame(sampleUV))
 			break;
-		}
 
 		float iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV), 0).x;
+		if (contiguous) {
+			float2 crossed = abs(floor(raySample.xy * depthSize) - floor(clearEnd.xy * depthSize));
+			contiguous = dot(crossed, 1.0.xx) <= 1 && max(clearEnd.z, raySample.z) <= min(previousDepth, iterationDepth);
+			if (contiguous)
+				clearEnd = raySample;
+			previousDepth = iterationDepth;
+		}
 		if (iterationDepth > maxValidDepth && iterationDepth <= skyDepth)
 			continue;
 
@@ -137,39 +175,18 @@ float4 GetReflectionColor(
 			float fadeFactor = depthThicknessFactor * ssrMarchingRadiusFadeFactor * centerDistanceFadeFactorX * centerDistanceFadeFactorY;
 
 			if (fadeFactor > 0.0) {
-				if (iterationDepth > skyDepth) {
-					if (SharedData::InInterior || SharedData::HideSky)
-						return 0.0;
-					float3 reflectionDirectionWS = FrameBuffer::ViewToWorld(reflectionDirection, false);
-					return float4(PreExposure::Encode(SkyReflectionTex.SampleLevel(ColorSampler, reflectionDirectionWS, 0).xyz), fadeFactor);
+				if (iterationDepth <= skyDepth) {
+					screenConfidence = depthThicknessFactor * centerDistanceFadeFactorX * centerDistanceFadeFactorY;
+					screen = float4(SampleScreenReflection(binaryRaySample.xy, iterationDepth), fadeFactor);
+					if (screenConfidence >= 0.999)
+						return screen;
+				} else if (!SharedData::InInterior && !SharedData::HideSky) {
+					// Sky has no finite intersection. The probe may still see a surface between samples.
+					float3 sky = SkyReflectionTex.SampleLevel(ColorSampler, FrameBuffer::ViewToWorld(reflectionDirection, false), 0).xyz;
+					screen = float4(PreExposure::Encode(sky), fadeFactor);
 				}
-
-				float2 finalSampleUV = binaryRaySample.xy;
-
-				float3 color = ColorTex.SampleLevel(ColorSampler, ConvertRaySample(finalSampleUV), 0).xyz;
-
-				// Final sample to world-space
-				float4 positionWS = float4(float2(finalSampleUV.x, 1.0 - finalSampleUV.y) * 2.0 - 1.0, iterationDepth, 1.0);
-				positionWS = mul(FrameBuffer::CameraViewProjInverse, positionWS);
-				positionWS.xyz = positionWS.xyz / positionWS.w;
-				positionWS.w = 1.0;
-
-				// Compute camera motion vector
-				float2 cameraMotionVector = MotionBlur::GetSSMotionVector(positionWS, positionWS);
-
-				// Reproject alpha from previous frame
-				float2 reprojectedRaySample = finalSampleUV + cameraMotionVector;
-				float4 alpha = 0.0;
-
-				// Check that the reprojected data is within the frame
-				if (!FrameBuffer::IsOutsideFrame(reprojectedRaySample.xy))
-					alpha = float4(AlphaTex.SampleLevel(AlphaSampler, ConvertRaySamplePrevious(reprojectedRaySample.xy), 0).xyz, 1.0);
-
-				float3 reflectionColor = color + SSRParams.z * PreExposure::History(alpha.xyz) * alpha.w;
-				return float4(reflectionColor, fadeFactor);
 			}
 
-			raySample = prevRaySample;
 			break;
 		}
 	}
@@ -177,21 +194,48 @@ float4 GetReflectionColor(
 #	ifdef ENABLESSR
 	[branch] if (ProbeValidFaces != 0)
 	{
-		// Resume from the last tested interval. The screen march advances in projected
-		// coordinates, so its step count is not a distance along the world-space ray.
-		float4 resume = mul(FrameBuffer::CameraProjInverse, float4(raySample.xy * float2(2, -2) + float2(-1, 1), raySample.z, 1));
-		if (resume.w > 0) {
-			float3 direction = normalize(reflectionDirection);
-			float startDistance = max(0.5, dot(resume.xyz / resume.w - viewPosition, direction));
-			float3 radiance;
-			float hitDistance;
-			if (TraceEnvironmentProbe(FrameBuffer::ViewToWorld(viewPosition), normalize(FrameBuffer::ViewToWorld(direction, false)),
-					startDistance, 5.0, radiance, hitDistance))
-				return float4(PreExposure::Encode(ColorManagement::LinearToScene(radiance)), 1.0);
+		float3 direction = normalize(reflectionDirection);
+		float3 worldDirection = normalize(FrameBuffer::ViewToWorld(direction, false));
+		float4 resume = mul(FrameBuffer::CameraProjInverse, float4(clearEnd.xy * float2(2, -2) + float2(-1, 1), clearEnd.z, 1));
+		float startDistance = resume.w > 0 ? max(0.5, dot(resume.xyz / resume.w - viewPosition, direction)) : 1e30;
+		float3 radiance;
+		float hitDistance, probeCoverage;
+		if (TraceEnvironmentProbe(FrameBuffer::ViewToWorld(viewPosition), worldDirection, startDistance, 5.0, radiance, hitDistance, probeCoverage)) {
+			if (probeCoverage <= 0)
+				return screen;
+			// Empty probe texels store black. Return straight color and let the water
+			// material supply its own cubemap for the uncovered part of the footprint.
+			radiance /= probeCoverage;
+			// If this same surface is visible, use the game's lit scene and alpha history
+			// on both sides of the handoff. Reject occluders using linear view depth.
+			float3 hitVS = viewPosition + hitDistance * direction;
+			float4 clip = mul(FrameBuffer::CameraProj, float4(hitVS, 1));
+			if (clip.w > 0) {
+				float2 uv = clip.xy / clip.w * float2(0.5, -0.5) + 0.5;
+				if (!FrameBuffer::IsOutsideFrame(uv)) {
+					float sceneDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(uv), 0).x;
+					float error = abs(SharedData::GetScreenDepth(sceneDepth) - hitVS.z);
+					uint width, height;
+					ProbeDepthTexture.GetDimensions(width, height);
+					float tolerance = max(5.0, length(hitVS) * 2 / width);
+					if (sceneDepth <= maxValidDepth && error < tolerance) {
+						float2 edge = min(uv, 1 - uv) * depthSize;
+						float confidence = saturate(min(edge.x, edge.y) * 0.25) * (1 - smoothstep(0, tolerance, error));
+						float3 screenRadiance = ColorManagement::SceneToLinear(PreExposure::Decode(SampleScreenReflection(uv, sceneDepth)));
+						radiance = lerp(radiance, screenRadiance, confidence);
+					}
+				}
+			}
+			// A finite screen hit is in front. A sky sample fills only the open part behind the probe hit.
+			float screenWeight = screen.a * (screenConfidence > 0 ? 1 : 1 - probeCoverage);
+			float probeWeight = probeCoverage * (1 - screenConfidence);
+			float coverage = screenWeight + probeWeight;
+			float3 fallback = PreExposure::Encode(ColorManagement::LinearToScene(radiance));
+			return float4(ColorManagement::SceneColor::LerpInLinear(fallback, screen.rgb, screenWeight / coverage), coverage);
 		}
 	}
 #	endif
-	return 0.0;
+	return screen;
 }
 
 PS_OUTPUT main(PS_INPUT input)
