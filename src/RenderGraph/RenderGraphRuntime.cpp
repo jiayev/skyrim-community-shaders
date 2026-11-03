@@ -16,7 +16,7 @@
 #include "Features/DrawcallLimitFix.h"
 #include "GpuIdleTrace.h"
 #include "State.h"
-#include "Utils/FileRename.h"
+#include "Utils/SharedShaderStore.h"
 #	include "Vram/Debug.h"
 
 #include <OpenRenderGraph/GraphHost.h>
@@ -1763,8 +1763,15 @@ bool RenderGraphRuntime::Initialize()
 		std::filesystem::path compilerDirectory;
 		if (::GetModuleFileNameW(d3d11, dxvkPath, MAX_PATH))
 			compilerDirectory = std::filesystem::path(dxvkPath).parent_path();
-		impl->shaderCompiler = std::make_unique<org::services::ShaderCompiler>(std::filesystem::path(L"Data/ShaderCache/ORG"), compilerDirectory,
-			Util::RenameSerialized);  // serialized with the plugin's other renames (Utils/FileRename.h)
+		impl->shaderCompiler = std::make_unique<org::services::ShaderCompiler>(std::filesystem::path{}, compilerDirectory, Util::SharedShaderStore());
+		// A reload means files may have changed, so the store must read them again. This listener also runs after a publish, which changes no files.
+		PipelineRegistry()->AddListener([sourcesGeneration = PipelineRegistry()->SourcesGeneration()]() mutable {
+			const auto current = PipelineRegistry()->SourcesGeneration();
+			if (current == sourcesGeneration)
+				return;
+			sourcesGeneration = current;
+			Util::BeginShaderStoreGeneration();
+		});
 		logger::info("[ORG] Runtime SPIR-V compilation {}", impl->shaderCompiler->Available() ? "available" : "unavailable (no dxcompiler.dll beside the DXVK DLLs)");
 		if (!impl->shaderCompiler->Available())
 			impl->shaderCompiler.reset();

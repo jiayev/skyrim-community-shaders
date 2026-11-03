@@ -681,14 +681,12 @@ void State::SaveCoreToJson(json& settings)
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
 	advanced["Frame Annotations"] = frameAnnotationsSetting.value_or(frameAnnotations);
 	advanced["Partial Precision"] = enablePartialPrecision.load(std::memory_order_relaxed);
-	advanced["Content Store"] = enableContentStore.load(std::memory_order_relaxed);
-	advanced["Content Store Max MB"] = contentStoreMaxMB.load(std::memory_order_relaxed);
+	advanced["Shader Store Max MB"] = shaderStoreMaxMB.load(std::memory_order_relaxed);
 	settings["Advanced"] = advanced;
 
 	json general;
 	general["Enable Shaders"] = shaderCache->IsEnabled();
 	general["Enable Disk Cache"] = shaderCache->IsDiskCache();
-	general["Skip Unchanged Shaders"] = shaderCache->IsSkipUnchangedShaders();
 	general["Enable Async"] = shaderCache->IsAsync();
 	general["Language"] = I18n::GetSingleton()->GetCurrentLocale();
 	PostProcessingMode::Save(general);
@@ -836,10 +834,8 @@ void State::LoadFromJson(nlohmann::json& settings)
 		}
 		if (advanced.contains("Partial Precision") && advanced["Partial Precision"].is_boolean())
 			enablePartialPrecision.store(advanced["Partial Precision"].get<bool>(), std::memory_order_relaxed);
-		if (advanced.contains("Content Store") && advanced["Content Store"].is_boolean())
-			enableContentStore.store(advanced["Content Store"].get<bool>(), std::memory_order_relaxed);
-		if (advanced.contains("Content Store Max MB") && advanced["Content Store Max MB"].is_number_unsigned())
-			contentStoreMaxMB.store(static_cast<uint32_t>(std::clamp<uint64_t>(advanced["Content Store Max MB"].get<uint64_t>(), kContentStoreMinMB, kContentStoreMaxMB)), std::memory_order_relaxed);
+		if (advanced.contains("Shader Store Max MB") && advanced["Shader Store Max MB"].is_number_unsigned())
+			shaderStoreMaxMB.store(static_cast<uint32_t>(std::clamp<uint64_t>(advanced["Shader Store Max MB"].get<uint64_t>(), kShaderStoreMinMB, kShaderStoreMaxMB)), std::memory_order_relaxed);
 	}
 
 	if (settings.contains("General") && settings["General"].is_object()) {
@@ -848,8 +844,6 @@ void State::LoadFromJson(nlohmann::json& settings)
 			shaderCache->SetEnabled(general["Enable Shaders"]);
 		if (general.contains("Enable Disk Cache") && general["Enable Disk Cache"].is_boolean())
 			shaderCache->SetDiskCache(general["Enable Disk Cache"]);
-		if (general.contains("Skip Unchanged Shaders") && general["Skip Unchanged Shaders"].is_boolean())
-			shaderCache->SetSkipUnchangedShaders(general["Skip Unchanged Shaders"]);
 		if (general.contains("Enable Async") && general["Enable Async"].is_boolean())
 			shaderCache->SetAsync(general["Enable Async"]);
 		PostProcessingMode::Load(general);
@@ -1140,20 +1134,6 @@ void State::RestoreFeatureLayers(Feature* feature)
 		logger::warn("Could not restore {} to its Baseline values, using defaults: {}", feature->GetName(), e.what());
 		feature->RestoreDefaultSettings();
 	}
-}
-
-bool State::ValidateCache(CSimpleIniA& a_ini)
-{
-	bool valid = true;
-	for (auto* feature : Feature::GetFeatureList())
-		valid = valid && feature->ValidateCache(a_ini);
-	return valid;
-}
-
-void State::WriteDiskCacheInfo(CSimpleIniA& a_ini)
-{
-	for (auto* feature : Feature::GetFeatureList())
-		feature->WriteDiskCacheInfo(a_ini);
 }
 
 void State::SetLogLevel(spdlog::level::level_enum a_level)

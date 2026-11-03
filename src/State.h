@@ -269,18 +269,6 @@ public:
 	void SaveTheme();
 
 	/**
-	 * @brief Validates the disk shader cache against all loaded features.
-	 * @param a_ini The cache INI to validate against.
-	 * @return True if all feature cache entries are still valid.
-	 */
-	bool ValidateCache(CSimpleIniA& a_ini);
-	/**
-	 * @brief Writes each feature's cache metadata into the disk cache INI.
-	 * @param a_ini The cache INI to write into.
-	 */
-	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
-
-	/**
 	 * @brief Sets the global log level and flushes on that level.
 	 * @param a_level The spdlog severity level to apply.
 	 */
@@ -389,14 +377,11 @@ public:
 	// Atomic: written from the UI thread, read from compilation pool workers.
 	std::atomic_bool enableAvoidFlowControl{ false };
 
-	// Keep compiled shaders in Data/ShaderCache/ContentStore, keyed by their preprocessed source and
-	// compile inputs, so a cache wipe or plugin update restores unchanged shaders instead of recompiling.
-	// Atomic: written from the UI thread, read from compilation pool workers.
-	std::atomic_bool enableContentStore{ true };
-	/// Size limit of the persistent shader store in MB; least recently used shaders beyond it are evicted.
-	std::atomic<uint32_t> contentStoreMaxMB{ 1024 };
-	static constexpr uint32_t kContentStoreMinMB = 512;
-	static constexpr uint32_t kContentStoreMaxMB = 32768;
+	/// Size limit of the shader store in MB. It applies at startup, and never evicts what recent starts used.
+	/// Atomic: written from the UI thread.
+	std::atomic<uint32_t> shaderStoreMaxMB{ 4096 };
+	static constexpr uint32_t kShaderStoreMinMB = 512;
+	static constexpr uint32_t kShaderStoreMaxMB = 32768;
 
 	uint lastVertexDescriptor = 0;
 	uint lastPixelDescriptor = 0;

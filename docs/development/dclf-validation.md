@@ -899,7 +899,7 @@ and state); with the shadow site on it loses the device (dclf-architecture.md, "
 -   **Decoding.** `tools/aftermath-decode` builds `aftermath-decode <dump.nv-gpudmp> [--debug-info <dir>] [--spirv <dir>]
     [--json <out.json>]`. It prints the device status, the page fault (address, access, client, resources), the active shaders and
     the last markers per context, and writes the SDK's full JSON (by default `<dump>.json`). `--spirv` names ORGModuleServices'
-    shader cache (`Data/ShaderCache/ORG`, in MO2's overwrite folder), so the faulting warps map to SPIR-V, and to HLSL lines with
+    shader cache (`Data/ShaderCache/v2/cas`, in MO2's overwrite folder), so the faulting warps map to SPIR-V, and to HLSL lines with
     `CS_DCLF_SHADER_DEBUG` on (the default). Without shader debug info it cannot name the shader.
 -   **DXVK's own output.** Community Shaders points `DXVK_LOG_PATH` at the SKSE log directory, so `SkyrimSE_d3d11.log`,
     `SkyrimSE_dxgi.log` and, on a device loss with `VK_EXT_device_fault`, `SkyrimSE_device_fault.bin` land beside

@@ -10,7 +10,7 @@
 // (gpu-crash-<stamp>-shader-<identifier>.nvdbg) is looked up by its identifier in the dump's folder, or
 // in --debug-info. The JSON (by default <dump>.json) holds everything the SDK can decode.
 //
-// --spirv names ORGModuleServices' shader cache (Data/ShaderCache/ORG, in MO2's overwrite folder): the
+// --spirv names ORGModuleServices' shader cache (Data/ShaderCache/v2/cas, in MO2's overwrite folder): the
 // SPIR-V of every shader DCLF compiled, each file a CacheHeader and the binary. The decoder hands the
 // SDK the binary whose Aftermath hash an active shader carries, so the JSON maps the faulting warps to
 // SPIR-V, and to HLSL lines when the shader was built with CS_DCLF_SHADER_DEBUG=1. Hashing the cache
@@ -60,17 +60,20 @@ namespace
 		unsigned spirvFound = 0, spirvMissing = 0;
 	};
 
-	// ORGModuleServices' cache file: this header, then the binary (extern/ORGModuleServices/src/ShaderCompiler.cpp).
+	// ORGModuleServices' artifact file: this header, then the binary (extern/ORGModuleServices/src/ShaderStore.cpp).
+#pragma pack(push, 1)
 	struct CacheHeader
 	{
 		std::uint32_t magic;
-		std::uint16_t version;
+		std::uint16_t schema;
 		std::uint8_t format;
 		std::uint8_t reserved;
-		std::uint64_t key;
+		std::uint64_t key[2];
 		std::uint64_t size;
+		std::uint64_t payloadHash[2];
 	};
-	constexpr std::uint32_t kCacheMagic = 0x5347524f;
+#pragma pack(pop)
+	constexpr std::uint32_t kCacheMagic = 0x41435353;
 	constexpr std::uint8_t kFormatSpirv = 1;
 
 	// The SPIR-V a cache file holds, or nothing if it holds DXIL or is not one.
@@ -105,8 +108,8 @@ namespace
 		std::ostringstream index;
 		unsigned hashed = 0, reused = 0;
 		std::error_code ec;
-		for (const auto& file : fs::directory_iterator(a_directory, ec)) {
-			if (file.path().extension() != ".orgshader")
+		for (const auto& file : fs::recursive_directory_iterator(a_directory, ec)) {
+			if (file.path().extension() != ".bin")
 				continue;
 			const auto name = file.path().filename().string();
 			const std::uint64_t size = file.file_size(ec);

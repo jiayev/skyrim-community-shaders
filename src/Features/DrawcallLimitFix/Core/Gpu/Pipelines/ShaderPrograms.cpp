@@ -23,6 +23,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
 #include <ORGModuleServices/PipelineRegistry.h>
+#include "Utils/SharedShaderStore.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "RenderGraph/RenderGraphRuntime.h"
@@ -331,9 +332,8 @@ namespace DCLF
 
 	/**
 	 * @brief The shader files of one sources generation, as every stage compiled for it reads them: Lighting.hlsl and its pulled form,
-	 * Utility.hlsl, the draw families' and program families' sources (and the latter's pulled forms), every shader file as a dependency,
-	 * and each source's ShaderCompiler::FingerprintInputs with them, taken once here: every request's key starts from it instead of
-	 * hashing the source and checking the dependency files again (thousands of keys a launch). Immutable once made.
+	 * Utility.hlsl, and the draw families' and program families' sources (and the latter's pulled forms). Includes are not listed here:
+	 * the compiler records what each stage actually opens. Immutable once made.
 	 */
 	struct ShaderPrograms::Sources
 	{
@@ -348,16 +348,11 @@ namespace DCLF
 		std::array<std::vector<std::byte>, kDrawFamilyLanes> drawFamilySources;
 		// By program family: its source (Extensions::ProgramFamilies' sourcePath: Data/Shaders/Effect.hlsl) and its pulled form.
 		std::array<std::vector<std::byte>, Extensions::kProgramFamilies> familySources, familyPulledSources;
-		std::vector<std::filesystem::path> dependencies;
-		std::uint64_t sourceFingerprint = 0, pulledFingerprint = 0, utilityFingerprint = 0;
-		std::array<std::uint64_t, Extensions::kProgramFamilies> familyFingerprints{}, familyPulledFingerprints{};
-		std::array<std::uint64_t, kDrawFamilyLanes> drawFamilyFingerprints{};
 
-		/** @brief Where a stage compiles from: its source, the source's fingerprint and the logs' name of it. */
+		/** @brief Where a stage compiles from: its source and the logs' name of it. */
 		struct Resolved
 		{
 			std::span<const std::byte> source;
-			std::uint64_t fingerprint = 0;
 			const char* name = nullptr;
 			bool pulled = false;  // its pulled build (StageKeyOf's)
 			bool family = false;  // a program family's
@@ -375,8 +370,7 @@ namespace DCLF
 			missing = true;
 			return;
 		}
-		// Every shader file is a potential include; the compiler re-hashes one only when it changes.
-		dependencies = RenderGraphRuntime::ShaderSourceFiles();
+		const auto& dependencies = RenderGraphRuntime::ShaderSourceFiles();
 		static const bool lazyRows = SwitchOnUnlessZero(Switch::LazyRows);
 		const auto eager = lazyRows ? PulledSource::EagerRowNames(dependencies) : std::unordered_set<std::string>{};
 		const auto pulledOptions = PulledOptions(lazyRows ? &eager : nullptr);
@@ -413,18 +407,7 @@ namespace DCLF
 			else
 				logger::warn("[DCLF] {} is missing; {}", family.sourcePath, family.nativeNote);
 		}
-		if (auto* compiler = RenderGraphRuntime::Get().ShaderCompiler()) {
-			sourceFingerprint = compiler->FingerprintInputs(source, dependencies);
-			for (std::size_t f = 0; f < Extensions::kProgramFamilies; ++f) {
-				familyFingerprints[f] = familySources[f].empty() ? 0 : compiler->FingerprintInputs(familySources[f], dependencies);
-				familyPulledFingerprints[f] = familyPulledSources[f].empty() ? 0 : compiler->FingerprintInputs(familyPulledSources[f], dependencies);
-			}
-			pulledFingerprint = pulledSource.empty() ? 0 : compiler->FingerprintInputs(pulledSource, dependencies);
-			utilityFingerprint = utilitySource.empty() ? 0 : compiler->FingerprintInputs(utilitySource, dependencies);
-			for (std::size_t f = 0; f < kDrawFamilyLanes; ++f)
-				drawFamilyFingerprints[f] = drawFamilySources[f].empty() ? 0 : compiler->FingerprintInputs(drawFamilySources[f], dependencies);
-		}
-		logger::info("[DCLF] SPIR-V builds of {}: {} shader files tracked as dependencies (sources generation {})", kSourcePath, dependencies.size(), generation);
+		logger::info("[DCLF] SPIR-V builds of {}: {} shader files seen (sources generation {})", kSourcePath, dependencies.size(), generation);
 		if (ShaderDebug())
 			SnapshotSources(dependencies);
 	}
@@ -504,13 +487,11 @@ namespace DCLF
 		 * @brief A stage's compile request (the lane's stage cache and the registry's rebuilds both: one request, one compiler key), and
 		 * into a_vertexAttributes a DCLF_PULLED_VERTICES vertex stage's attributes (VertexAttributesOf; 0 for any other).
 		 */
-		org::services::ShaderCompileRequest MakeStageRequest(std::span<const std::byte> a_source, const std::vector<std::filesystem::path>& a_dependencies,
-			std::uint64_t a_fingerprint, const RE::BSShader& a_lighting, bool a_pixel, std::uint32_t a_descriptor, bool a_depthOnly, bool a_pulled, bool a_family,
+		org::services::ShaderCompileRequest MakeStageRequest(std::span<const std::byte> a_source, const RE::BSShader& a_lighting, bool a_pixel, std::uint32_t a_descriptor, bool a_depthOnly, bool a_pulled, bool a_family,
 			const char* a_sourceName, std::uint32_t& a_vertexAttributes)
 		{
 			a_vertexAttributes = 0;
 			org::services::ShaderCompileRequest request{};
-			request.inputsFingerprint = a_fingerprint;
 			ZoneScopedN("CS.DCLF.Shaders.RequestStage");
 			request.sourceName = a_sourceName;
 			request.source = a_source;
@@ -521,7 +502,6 @@ namespace DCLF
 			request.debugInfo = ShaderDebug();
 			request.languageVersion = L"2018";  // CS's shaders are written for FXC's semantics
 			request.includeDirectories = { kShaderDirectory };
-			request.dependencyFiles = a_dependencies;
 			for (const auto& [name, value] : SIE::ShaderCache::GetCompileDefines(a_lighting, a_pixel ? SIE::ShaderClass::Pixel : SIE::ShaderClass::Vertex, a_descriptor))
 				request.defines.push_back({ Widen(name), Widen(value) });
 			const std::size_t communityShadersDefines = request.defines.size();
@@ -712,10 +692,6 @@ namespace DCLF
 		a_out.source = utility ? utilitySource : drawBuild ? drawFamilySources[d] : familyBuild ? (pulled ? familyPulledSources[f] : familySources[f]) :
 		               pulled  ? pulledSource :
 		                         source;
-		a_out.fingerprint = utility ? utilityFingerprint : drawBuild ? drawFamilyFingerprints[d] :
-		                    familyBuild                      ? (pulled ? familyPulledFingerprints[f] : familyFingerprints[f]) :
-		                    pulled                           ? pulledFingerprint :
-		                                                       sourceFingerprint;
 		a_out.name = utility ? kUtilitySourcePath : drawBuild ? Extensions::DrawFamilyOf(drawFamily).sourcePath.c_str() :
 		             familyBuild                  ? Extensions::ProgramFamilyOf(family).sourcePath.c_str() :
 		                                            kSourcePath;
@@ -777,7 +753,7 @@ namespace DCLF
 			stage->key = key;
 			stage->sourcesGeneration = current->generation;
 			RequestStage(*compiler, stage,
-				MakeStageRequest(resolved.source, current->dependencies, resolved.fingerprint, shader, pixel, descriptor, depth, resolved.pulled, resolved.family, resolved.name,
+				MakeStageRequest(resolved.source, shader, pixel, descriptor, depth, resolved.pulled, resolved.family, resolved.name,
 					stage->vertexAttributes));
 			{
 				std::lock_guard lock(mutex);
@@ -896,11 +872,15 @@ namespace DCLF
 			stages->started = true;
 			pending.swap(stages->pending);
 		}
+		auto remaining = std::make_shared<std::atomic<std::size_t>>(pending.size());
 		for (const auto request : pending)
-			SIE::ShaderCache::Instance().compilationPool.detach_task([this, request] {
+			SIE::ShaderCache::Instance().compilationPool.detach_task([this, request, remaining] {
 				try { Precompile(*request.shader, request.pixel, request.descriptor); }
 				catch (const std::exception& e) { logger::warn("[DCLF] ORG shader precompile failed: {}", e.what()); }
 
+				// The last task finishes the batch: save the index now, and say what the batch cost.
+				if (remaining->fetch_sub(1) == 1)
+					Util::FinishShaderStoreBatch("DCLF precompile");
 				SIE::ShaderCache::Instance().NotifyPoolProgress();
 			});
 	}
@@ -1281,7 +1261,7 @@ namespace DCLF
 		std::array<org::services::ShaderCompileRequest, N> requests;
 		for (std::size_t i = 0; i < N; ++i) {
 			const auto& stage = a_stages[i];
-			requests[i] = MakeStageRequest(resolved[i].source, current->dependencies, resolved[i].fingerprint, a_shader, stage.pixel, stage.descriptor, stage.depth,
+			requests[i] = MakeStageRequest(resolved[i].source, a_shader, stage.pixel, stage.descriptor, stage.depth,
 				resolved[i].pulled, resolved[i].family, resolved[i].name, compiles->attributes[i]);
 		}
 		for (std::size_t i = 0; i < N; ++i) {

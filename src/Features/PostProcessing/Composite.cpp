@@ -76,7 +76,7 @@ void Composite::ClearShaderCache()
 		}
 	}
 
-	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/Composite");
+	globals::shaderCache->ReloadShaderSources();
 	CompileRasterShaders();
 }
 

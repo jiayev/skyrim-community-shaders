@@ -278,8 +278,8 @@ public:
 	std::vector<std::uint32_t> InStreamEpochs() const;
 
 	/**
-	 * @brief Runtime DXC compilation to SPIR-V with BasicRHI's ABI (ORGModuleServices), content-addressed
-	 * with a disk cache under Data/ShaderCache/ORG. Null when inactive, or when the build or the
+	 * @brief Runtime DXC compilation to SPIR-V with BasicRHI's ABI (ORGModuleServices), saved in the shared
+	 * shader store (Utils/SharedShaderStore.h). Null when inactive, or when the build or the
 	 * installation has no DXC (dxcompiler.dll beside the DXVK DLLs).
 	 */
 	org::services::ShaderCompiler* ShaderCompiler();

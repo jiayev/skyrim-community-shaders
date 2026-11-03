@@ -113,7 +113,5 @@
     "cs_editor.fog_power": "Puissance du brouillard",
     "cs_editor.fog_power_short": "Puissance",
     "cs_editor.force_this_weather": "Forcez cette météo",
-    "cs_editor.form_id": "ID du formulaire",
-    "common.active": "Active",
-    "common.inactive": "Inactive"
+    "cs_editor.form_id": "ID du formulaire"
 }

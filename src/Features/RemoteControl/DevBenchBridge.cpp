@@ -491,7 +491,7 @@ namespace
 		// Mutating cache ops touch the live ShaderCache (and, for deleteDisk, the filesystem)
 		// — marshal to the main thread. Recompiles are observable via inspect(kind=shadercache)
 		// + the communityshaders.shaderRecompiled event. NOTE clear vs deleteDisk: clear only drops
-		// the in-memory maps, so with the disk cache enabled shaders reload from Data/ShaderCache
+		// the in-memory maps, so with the disk cache enabled shaders reload from the shader store
 		// rather than recompiling — only deleteDisk guarantees a cold recompile.
 		if (action == "clear") {
 			task->AddTask([cache]() { cache->Clear(); });

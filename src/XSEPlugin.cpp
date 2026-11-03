@@ -283,9 +283,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// Run feature PostPostLoad() first so features can disable themselves if needed
 				Feature::ForEachLoadedFeature("PostPostLoad", [](Feature* feature) { feature->PostPostLoad(); });
 
-				// Now validate disk cache after features have had a chance to modify their state
-				shaderCache->ValidateDiskCache();
-
 				if (shaderCache->UseFileWatcher())
 					shaderCache->StartFileWatcher();
 			}
@@ -316,10 +313,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				if (globals::game::quitGame) {
 					logger::info("Game was closed, skipping feature DataLoaded methods");
 					break;
-				}
-
-				if (shaderCache->IsDiskCache()) {
-					shaderCache->WriteDiskCacheInfo();
 				}
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });

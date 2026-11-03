@@ -164,7 +164,7 @@ void CODBloom::ClearShaderCache()
 			}
 	}
 
-	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/CODBloom");
+	globals::shaderCache->ReloadShaderSources();
 	CompileRasterShaders();
 }
 
