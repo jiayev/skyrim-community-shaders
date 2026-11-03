@@ -271,8 +271,8 @@ namespace DCLF
 		const bool newSlots = slots > layout.viewSlots;
 		if (newSlots) {
 			// The slots' buffers are the render thread's to make (ShadowSlotsRequest below: a graph build declares them).
-			// A quarter past the views, not doubled: every slot's sequences hold the scene's casting bound.
-			layout.viewSlots = org::services::GrowthPolicy::Headroom(25).NextAs(layout.viewSlots, slots);
+			// Exactly the views: the placements are set up once, and every slot's sequences hold the scene's casting bound.
+			layout.viewSlots = slots;
 			logger::info("[DCLF] shadow view slots: {} grown to {}", latches.shadow.viewSlots, layout.viewSlots);
 		}
 		if (a_keys > layout.keySlots) {

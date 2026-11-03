@@ -56,6 +56,7 @@ namespace DCLF::Draws
 	// kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM: the engine's second draw of each cascade's accumulator (flag 0x100) draws batch group 15
 	// alone (FUN_1414b44f0), i.e. the accumulation-hint-8 volumetric-only casters (kCullVolumetricOnly). [3] depth target 10 as
 	// Skylighting swaps it in; [4] depth target 10 itself, the precipitation mask.
+	constexpr std::uint32_t kShadowLightTarget = 1;
 	constexpr std::uint32_t kFirstOcclusionTarget = 3;
 	constexpr std::uint32_t kShadowDepthTargets = kFirstOcclusionTarget + kOcclusionViews;
 	inline constexpr std::uint32_t OcclusionDepthTarget(std::uint32_t a_view) { return kFirstOcclusionTarget + a_view; }

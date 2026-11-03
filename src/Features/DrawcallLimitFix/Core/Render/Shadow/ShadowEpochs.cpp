@@ -715,6 +715,20 @@ namespace DCLF
 			const auto record = Draws::UploadShadowArena(commit);
 			impl->revisions.latchedMisses += Draws::LatchShadowCsBlocks(commit, latchSlot, record);
 			engine.lastActiveViews = active;
+			// Views that share sequences (ShareSequences) must not draw in one frame: their draws would overwrite each other's.
+			if (revisionShape) {
+				std::uint64_t ownersSeen = 0;
+				const auto& views = revisionShape->views;
+				for (std::size_t v = 0; v < views.size() && v < 64; ++v) {
+					if (!((active >> v) & 1) || views[v].slot >= resources->sequenceOwner.size())
+						continue;
+					const std::uint64_t bit = 1ull << (resources->sequenceOwner[views[v].slot] % 64);
+					static std::uint32_t reported = 0;
+					if ((ownersSeen & bit) && reported++ < 8)
+						logger::error("[DCLF] shadow views that share sequences drew in one frame (slot {})", views[v].slot);
+					ownersSeen |= bit;
+				}
+			}
 			// The CPU pipeline's graph: no recording; the shadow site culls and draws the latched views from this commit (its pre-work the
 			// shape's latched copies and index pool copies).
 			if (revision.direct) {

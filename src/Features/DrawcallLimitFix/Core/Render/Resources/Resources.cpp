@@ -177,9 +177,12 @@ namespace DCLF::Draws
 				// A unit: a draw (ShadowSlotSequences' sequences). Every slot holds the scene's casting bound, so they grow a quarter past it,
 				// not to a power of two (32 slots in a large list's interiors).
 				static_assert(sizeof(DrawSequence) * 3 / 2 % 4 == 0);
-				a_state.sequences.push_back(MakeVersioned(CreateWords(std::uint64_t(draws) * (sizeof(DrawSequence) * 3 / 2) / 4, true,
-															  fmt::format("cs.dclf.shadow.sequences{}", s).c_str()),
-					{ .extent = { 0, sizeof(DrawSequence) * 3 / 2, 4 }, .policy = org::services::GrowthPolicy::Headroom(25, 64) }));
+				if (s < a_state.sequenceOwner.size() && a_state.sequenceOwner[s] < s)
+					a_state.sequences.push_back(a_state.sequences[a_state.sequenceOwner[s]]);
+				else
+					a_state.sequences.push_back(MakeVersioned(CreateWords(std::uint64_t(draws) * (sizeof(DrawSequence) * 3 / 2) / 4, true,
+																  fmt::format("cs.dclf.shadow.sequences{}", s).c_str()),
+						{ .extent = { 0, sizeof(DrawSequence) * 3 / 2, 4 }, .policy = org::services::GrowthPolicy::Headroom(25, 64) }));
 				a_state.count.push_back(CreateWords(kCountWords, true, fmt::format("cs.dclf.shadow.draw-count{}", s).c_str()));
 				// A word per key slot: the latch layout's key slots exactly (doubled there).
 				a_state.bucketCounts.push_back(MakeVersioned(CreateWords(std::max(a_words, 64u), true, fmt::format("cs.dclf.shadow.bucket-counts{}", s).c_str()),
@@ -682,6 +685,27 @@ namespace DCLF
 		}
 		// A new layout: the next seal makes a new block (RequireLatches). Every execution writes its frame slot's region whole; frames in
 		// flight keep the block their set names.
+	}
+
+	void ShareSequences(ShadowResources& a_state, std::span<const ShadowViewLayout> a_placements)
+	{
+		// A light's map slice holds one light a frame: its full-slice views and a paraboloid's first half never draw together, and only
+		// a pair of halves does. Cascades and their volumetric copies do draw together, as do the occlusion maps: they keep their own.
+		std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>, std::uint32_t> owners;
+		for (const auto& placement : a_placements) {
+			if (a_state.sequenceOwner.size() <= placement.slot) {
+				const auto first = static_cast<std::uint32_t>(a_state.sequenceOwner.size());
+				a_state.sequenceOwner.resize(placement.slot + 1);
+				std::iota(a_state.sequenceOwner.begin() + first, a_state.sequenceOwner.end(), first);
+			}
+			if (placement.target != kShadowLightTarget)
+				continue;
+			const auto owner = owners.try_emplace({ placement.target, placement.slice, placement.y }, placement.slot).first->second;
+			a_state.sequenceOwner[placement.slot] = owner;
+			// Slots made before the placements were known.
+			if (placement.slot < a_state.sequences.size() && owner != placement.slot)
+				a_state.sequences[placement.slot] = a_state.sequences[owner];
+		}
 	}
 
 	bool ShadowEngine::SetupShadow()

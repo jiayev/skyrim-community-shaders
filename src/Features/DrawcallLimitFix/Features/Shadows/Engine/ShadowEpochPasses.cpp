@@ -80,7 +80,7 @@ namespace DCLF::Draws
 			// The scene list, the geometry table and the shadow rows are the installed payload's (the latch names them). Every slot's
 			// outputs, written by the one dispatch.
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
-				bindings.sequences.push_back(a_builder.UnorderedAccess(*resources->sequences[s]).View());
+				bindings.sequences.push_back(resources->OwnsSequences(s) ? a_builder.UnorderedAccess(*resources->sequences[s]).View() : bindings.sequences[resources->sequenceOwner[s]]);
 				bindings.count.push_back(a_builder.UnorderedAccess(resources->count[s]).View());
 				bindings.bucketCounts.push_back(a_builder.UnorderedAccess(*resources->bucketCounts[s]).View());
 			}
@@ -215,8 +215,11 @@ namespace DCLF::Draws
 			}
 			// A slot's sequences are both arguments and read by address (DCLF_PULLED).
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
-				bindings.sequences.push_back(a_builder.IndirectArguments(*resources->sequences[s]).Resource());
-				a_builder.ShaderResource(*resources->sequences[s], noViews);
+				if (resources->OwnsSequences(s)) {
+					bindings.sequences.push_back(a_builder.IndirectArguments(*resources->sequences[s]).Resource());
+					a_builder.ShaderResource(*resources->sequences[s], noViews);
+				} else
+					bindings.sequences.push_back(bindings.sequences[resources->sequenceOwner[s]]);
 				bindings.bucketCounts.push_back(a_builder.IndirectArguments(*resources->bucketCounts[s]).Resource());
 			}
 			bindings.constants = a_builder.ShaderResource(resources->constants, noViews).Resource();

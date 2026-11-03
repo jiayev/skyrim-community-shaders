@@ -158,8 +158,13 @@ namespace DCLF::Draws
 		Versioned visibility;
 		// The views' inputs, geometries and material rows (ShadowMaterialRow) are the installed payload's (PayloadVersions).
 		std::shared_ptr<SceneBuffers> scene;
-		// Per view slot (occlusion views, then shadow views): sequence and count buffers.
+		// Per view slot (occlusion views, then shadow views): sequence and count buffers. Slots that can never draw in one frame hold the
+		// same sequences (ShareSequences), since each must fit the scene's whole casting bound and there are many more slots than views.
 		std::vector<Versioned> sequences;
+		// The slot whose sequences a slot uses (itself where it owns them). Slots past its end own theirs.
+		std::vector<std::uint32_t> sequenceOwner;
+		/** @brief Whether this slot's sequences are declared under it (a pass declares each buffer once). */
+		bool OwnsSequences(std::size_t a_slot) const { return a_slot >= sequenceOwner.size() || sequenceOwner[a_slot] == a_slot; }
 		std::vector<std::shared_ptr<org::Buffer>> count;
 		// Per view slot, one count word per bucket.
 		std::vector<Versioned> bucketCounts;
