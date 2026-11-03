@@ -12,7 +12,9 @@
       cs-ab.ps1 restore                       Puts back the mod and state from before the first "use".
       cs-ab.ps1 status                        What is live, and what is stashed.
       cs-ab.ps1 run <name> <scenario> [-Label x] [-Env A=1,B=2] [-TimeoutSeconds n] [-Until regex]
-                                              "use", one game run of the scenario, then collects its files.
+                    [-DumpAtFrame n -DumpPath file [-Procdump exe]]
+                                              "use", one game run of the scenario, then collects its files. -DumpAtFrame takes a
+                                              full process dump once the scenario's command at that frame has run (dump\*.py read it).
 
     Scenarios are scenarios\*.env beside this script: the CommunityShaders.env for the run. Results land in
     <Root>\runs\<time>-<name>-<scenario>[-<label>]. compare.py reads those folders.
@@ -26,6 +28,9 @@ param(
     [int]$TimeoutSeconds = 600,
     [string]$Until = '',
     [int]$Pad = 0,
+    [int]$DumpAtFrame = 0,
+    [string]$DumpPath = '',
+    [string]$Procdump = 'procdump64.exe',
     [string]$Mo2 = 'C:\Modding\MO2',
     [string]$Root = 'C:\Modding\CS-AB',
     [string]$Profile2 = 'Default'
@@ -157,13 +162,15 @@ switch ($Action) {
         Use-Variant $Name
         $scenario = Join-Path $PSScriptRoot "scenarios\$Argument.env"
         if (-not (Test-Path $scenario)) { throw "No scenario $scenario" }
+        if ($DumpAtFrame -and (-not $DumpPath -or (Test-Path $DumpPath))) { throw "-DumpAtFrame needs a -DumpPath that does not exist yet" }
+        if ($DumpAtFrame -and -not (Get-Command $Procdump -ErrorAction SilentlyContinue)) { throw "No $Procdump`: pass its path with -Procdump" }
         $envFile = Join-Path $skse 'CommunityShaders.env'
         $lines = @('CS_AB_PROBE=1') + (Get-Content $scenario) + ($Env | ForEach-Object { $_ -split ',(?=[A-Z_0-9]+=)' })
         Set-Content $envFile $lines -Encoding ascii
         $start = Get-Date
         $startUtc = $start.ToUniversalTime()
         Start-Process -FilePath (Join-Path $Mo2 'ModOrganizer.exe') -ArgumentList '-p', $Profile2, '"moshortcut://:SKSE"' -WorkingDirectory $Mo2 | Out-Null
-        $seen = $false; $stop = 'timeout'; $focused = $false
+        $seen = $false; $stop = 'timeout'; $focused = $false; $dumped = $false
         # The displays must stay on: with them off, Present throttles to a few frames a second.
         Add-Type -Namespace CsAb -Name Native -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint f); [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, uint d, UIntPtr e); [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr w, bool a);'
         [void][CsAb.Native]::SetThreadExecutionState([uint32]2147483651)
@@ -174,6 +181,10 @@ switch ($Action) {
             if ($game) { $seen = $true }
             if ($game -and -not $focused -and $game.MainWindowHandle -ne [IntPtr]::Zero) { [CsAb.Native]::SwitchToThisWindow($game.MainWindowHandle, $true); $focused = $true }
             if ($seen -and -not $game) { $stop = 'exited'; break }
+            if ($DumpAtFrame -and -not $dumped -and $game -and (Get-Content (Join-Path $skse 'CommunityShaders.log') -ErrorAction SilentlyContinue | Select-String -Pattern "test command at frame $DumpAtFrame\b" -Quiet)) {
+                & $Procdump -accepteula -ma $game.Id $DumpPath | Select-Object -Last 2
+                $dumped = $true
+            }
             if ($Until -and $seen -and (Get-Content (Join-Path $skse 'CommunityShaders.log') -ErrorAction SilentlyContinue | Select-String -Pattern $Until -Quiet)) { $stop = 'until'; Start-Sleep -Seconds 3; break }
         }
         [void][CsAb.Native]::SetThreadExecutionState([uint32]2147483648)
