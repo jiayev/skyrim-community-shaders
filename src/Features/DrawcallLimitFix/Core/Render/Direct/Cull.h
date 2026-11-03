@@ -191,6 +191,11 @@ namespace DCLF::Direct
 	/** @brief The CPU fade stage (producer thread): the frame's CullFrame, published; continuations waiting for its frame run here. */
 	void PublishCullFrame(std::shared_ptr<CullFrame> a_frame);
 	/**
+	 * @brief The publisher's, with no CPU frame running: lets go of the newest frame. Its tables and retirement node would otherwise stay
+	 * held until the next CPU frame, and everything the scene retires after them with them.
+	 */
+	void DropCullFrame();
+	/**
 	 * @brief Any thread: a_then(frame) once the CullFrame of a_sceneFrame (or a later one) is published: at once if it is, else on the
 	 * publishing thread. Lock-free (a stack the publication drains; each continuation runs once).
 	 */

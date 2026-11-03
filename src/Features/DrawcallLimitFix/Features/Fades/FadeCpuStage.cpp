@@ -23,6 +23,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/SceneBuffers.h"
@@ -419,8 +420,12 @@ namespace DCLF::Features::Fades
 		void CpuStatesSample(Api::FrameValuePoolProducer& a_producer)
 		{
 			const auto* input = a_producer.Input<CpuStageInput>();
-			if (!input || !input->set || !input->tables)
+			if (!input || !input->set || !input->tables) {
+				// No CPU frame: nothing is drawing from the last one, so what it holds of the scene goes.
+				if (!Direct::CpuFrame())
+					Direct::DropCullFrame();
 				return;
+			}
 			ZoneScopedN("CS.DCLF.FadeCpuStage");
 			a_producer.BeginBuild(cpuStates);
 			const auto list = Extensions::RootListOf(*input->tables);

@@ -773,6 +773,18 @@ namespace DCLF::Direct
 			DiffVisibility(*a_frame);
 	}
 
+	void DropCullFrame()
+	{
+		const Held* replaced = latest.exchange(nullptr, std::memory_order_seq_cst);
+		if (replaced)
+			retired.push_back(replaced);
+		if (!retired.empty() && latestReaders.load(std::memory_order_seq_cst) == 0) {
+			for (const Held* old : retired)
+				delete old;
+			retired.clear();
+		}
+	}
+
 	void AfterCullFrame(std::uint32_t a_sceneFrame, std::function<void(const std::shared_ptr<const CullFrame>&)> a_then)
 	{
 		PushWaiter(new Waiter{ a_sceneFrame, std::move(a_then) });
