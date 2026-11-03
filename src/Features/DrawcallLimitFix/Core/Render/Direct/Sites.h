@@ -117,14 +117,14 @@ namespace DCLF::Direct
 
 	/**
 	 * @brief Render thread, inside the colour epoch's commit: the colour site (main colour, decals, the families' colour), and the forward
-	 * site's culls (forward, refraction: their view is this commit's), drawn at ForwardReached.
+	 * site's culls (forward, refraction: their view is this commit's), drawn at ForwardReached. In a GPU-driven frame, the latter alone.
 	 */
 	void ColourCommitted(const MainCommitInputs& a_inputs);
 
 	/**
 	 * @brief Render thread, at the forward epoch's trigger (IndirectDraws::SubmitSharedEpoch's body, in ExecuteEpoch): the forward site, from
 	 * this frame's colour commit (ColourCommitted); a_refraction: its refraction pass (the epoch's optional part, prepared). False: no
-	 * colour commit this frame (nothing to draw, as the GPU path's noSharedPayload).
+	 * colour commit this frame (nothing to draw, as the GPU path's noSharedPayload). In a GPU-driven frame, before the epoch's submission.
 	 */
 	bool ForwardReached(bool a_refraction);
 
@@ -136,6 +136,19 @@ namespace DCLF::Direct
 	bool ShadowSiteLive();
 	bool ViewSiteLive(std::uint32_t a_view);
 
+	/*
+	 * The GPU-driven graph's forward family on the CPU (GraphConditions::forwardDirect; dclf-architecture.md, "The forward epoch"): the one
+	 * thing a frame there sends through these sites, because ForwardSortCS can order draws only within a pipeline. FrameStart opens a slot
+	 * for it (FrameSlot::ownsEpochs false), ColourCommitted its views and culls, ForwardReached hands its run to the forward epoch's late pass
+	 * in DXVK's stream. The epoch is the graph's own, in DXVK's stream as every async epoch is (RenderGraphRuntime::InStreamEpochs). Root states
+	 * come from the CPU fade stage's read-only observer (KickCpuFrameState). The GPU's events keep reporting visibility.
+	 */
+
+	/** @brief Render thread: the frame's batches in either mode, null without any: a GPU-driven forward epoch is then not covered. */
+	const ViewBatchSet* ForwardBatches();
+	/** @brief Render thread: the forward epoch failed after ForwardReached's hand-off: its run withdrawn, in stream order. */
+	void ForwardHandOffCancel();
+
 	/** @brief One report window's totals (Reports::CpuPipelineLine): FrameCounters summed, the frames, and the sites' drawn > 0 checks. */
 	struct WindowCounters
 	{
@@ -143,6 +156,7 @@ namespace DCLF::Direct
 		std::uint32_t frames = 0;
 		std::array<std::uint32_t, static_cast<std::size_t>(Site::kCount)> siteRuns{}, siteEmpty{};  // callbacks, and those that drew nothing
 		std::uint32_t notQueued = 0, slotWaits = 0, rowWaits = 0;
+		std::uint32_t forwardSkipped = 0;  // GPU-driven frames whose forward draws had no cull frame
 		double slotWaitMs = 0.0;
 		// The CPU frames' render thread and DXVK CS thread CPU time (FrameStart to FrameStart), and their wall time.
 		double renderBusyUs = 0.0, csBusyUs = 0.0, wallUs = 0.0;

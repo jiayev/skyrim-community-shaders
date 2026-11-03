@@ -31,6 +31,7 @@ namespace DCLF::Draws
 			decltype(Api::PassDef::frameRows) frameRows = nullptr;
 			bool cpuPipeline = false;
 			bool recordAtExecution = false;
+			bool gpuLate = false;
 			bool viewName = false;  // passName names "{view}"
 		};
 
@@ -293,13 +294,13 @@ namespace DCLF::Draws
 	{
 		auto& state = State();
 		if (a_pass.key.empty() || !a_pass.make == !a_pass.emit || (a_pass.make && a_pass.passName.empty()) || (a_pass.emit && (a_pass.setup || a_pass.latchWord || a_pass.animatedRows || a_pass.frameRows)) ||
-			(a_pass.recordAtExecution && !a_pass.cpuPipeline))
+			(a_pass.recordAtExecution && !a_pass.cpuPipeline && !a_pass.gpuLate))
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete pass {}", a_who, a_pass.key));
 		for (const auto& entry : state.passes)
 			if (entry.key == a_pass.key)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered pass {}, which {} has", a_who, a_pass.key, entry.who));
 		state.passes.push_back({ std::string(a_pass.key), std::string(a_pass.passName), std::string(a_who), a_pass.kind, a_pass.queue, a_pass.make, a_pass.emit,
-			a_pass.setup, a_pass.latchWord, a_pass.animatedRows, a_pass.frameRows, a_pass.cpuPipeline, a_pass.recordAtExecution,
+			a_pass.setup, a_pass.latchWord, a_pass.animatedRows, a_pass.frameRows, a_pass.cpuPipeline, a_pass.recordAtExecution, a_pass.gpuLate,
 			a_pass.passName.find(kViewToken) != std::string_view::npos });
 	}
 
@@ -578,7 +579,7 @@ namespace DCLF::Draws
 						continue;
 					context.view = &view;
 				}
-				if (cpu ? !cpuPass(entry) : entry.recordAtExecution)
+				if (cpu ? !cpuPass(entry) : entry.recordAtExecution && !entry.gpuLate)
 					continue;
 				if (entry.emit) {
 					if (!cpu)

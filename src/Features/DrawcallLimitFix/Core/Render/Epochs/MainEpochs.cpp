@@ -3,6 +3,7 @@
 // the frame blocks taken from the capture.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ExecutionOwners.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -137,6 +138,12 @@ namespace DCLF
 		// The CPU pipeline's graph: the forward site, from this frame's colour commit (Direct/Sites.h), and the recording of the epoch's
 		// CPU pipeline passes, its late draw pass among them (Direct/SitePasses.cpp), which the site's execution runs.
 		bool drawn = true;
+		// The GPU-driven graph's forward family, the CPU's: its run handed to the epoch's late pass in DXVK's stream ahead of its execution.
+		const bool forwardDirect = !revision.direct && Draws::CurrentGraphConditions().forwardDirect;
+		if (forwardDirect && !Direct::ForwardReached(result.optional)) {
+			++f.noSharedPayload;
+			return {};
+		}
 		const bool ok = Direct::ExecuteEpoch(traits.segment, [&] {
 			if (revision.direct)
 				drawn = Direct::ForwardReached(result.optional);
@@ -149,6 +156,8 @@ namespace DCLF
 			return {};
 		}
 		if (!ok) {
+			if (forwardDirect)
+				Direct::ForwardHandOffCancel();
 			++f.failed;
 			return {};
 		}
@@ -354,6 +363,9 @@ namespace DCLF
 
 	namespace
 	{
+		// Where FrameParams.z sits in the game's PerFrame (FrameBuffer.hlsli: FrameParams at c42).
+		inline constexpr std::size_t kFrameParamsZOffset = 42 * 16 + 2 * sizeof(float);
+
 		/**
 		 * @brief The blocks the epoch supplies whatever the pass binds: the game's PerFrame (b12), Community Shaders' SharedData (b5)
 		 * and feature data, and DCLF's own frame fog slot (VS b13), named in the mask.
@@ -396,6 +408,11 @@ namespace DCLF
 		}
 	}
 
+	void IndirectDraws::NoteBlendedFrameParams(float a_z)
+	{
+		impl->blendedFrameParamsZ = a_z;
+	}
+
 	void IndirectDraws::Impl::PackFrameBlocks(const Capture& a_capture, bool a_depthOnly, FrameBlocks& a_out)
 	{
 		RenderThreadBudget::Part budget(RenderThreadBudget::Bucket::Capture);
@@ -405,6 +422,11 @@ namespace DCLF
 		MirrorFrameBlocks(a_capture, a_depthOnly, replayVertexInputs, a_out);
 		SupplyFixedBlocks(a_out);
 		CarryMissingBlocks(a_depthOnly, replayVertexInputs, a_out);
+		// The forward epoch draws with the colour epoch's blocks, but after the composite, where the engine's PerFrame has FrameParams.z
+		// raised. Lighting's forward stage needs it to apply its fog and fade. Only that stage reads it, and the colour epoch's Lighting
+		// is all Deferred, so the colour draws do not notice. The vertex block stays as it is: it replays the Z-prepass's bytes.
+		if (auto& perFrame = a_out.ps[kPerFrameVertexRegister]; !a_depthOnly && perFrame.size() >= kFrameParamsZOffset + sizeof(float))
+			std::memcpy(perFrame.data() + kFrameParamsZOffset, &blendedFrameParamsZ, sizeof(float));
 		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
 			if (!a_out.vs[slot].empty())
 				a_out.vsMask |= 1u << slot;

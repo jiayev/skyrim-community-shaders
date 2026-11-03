@@ -21,6 +21,7 @@ namespace DCLF
 		AsyncPriority,
 		AsyncCompute,
 		ForwardPlain,
+		ForwardDirect,
 		MainPlain,
 		TerrainPlain,
 		DecalPlain,

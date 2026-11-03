@@ -8,7 +8,9 @@
 #include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Engine/ShellState.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Globals.h"
 
 #include <cstdint>
 
@@ -67,6 +69,7 @@ namespace DCLF::Features::Forward
 					Diagnostics::Notify(Diagnostics::TargetPoint{ "before forward" });
 				if (main && ShellState::Running()) {
 					Extensions::TriggerScope trigger(blendedDraw);
+					IndirectDraws::Get().NoteBlendedFrameParams(globals::game::frameBufferCached.GetFrameParams().z);
 					if (SubmitForwardEpoch())
 						MarkRefractionNormals();
 				}

@@ -57,6 +57,12 @@ namespace DCLF::Features::Fades
 	 */
 	void TakeAnimatedBatch(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs);
 	/**
+	 * @brief Render thread: a copy of the batch FadeStateCS's frame took, for the CPU fade stage's next observer frame (it steps the same
+	 * updates a frame later), and that copy taken, emptied.
+	 */
+	void KeepAnimatedBatchForObserver(const std::vector<AnimatedFadeRoot>& a_roots, const AnimatedFadeInputs& a_inputs);
+	void TakeObserverAnimatedBatch(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs);
+	/**
 	 * @brief Render thread, at the list jobs' Finish (the stand-in observer's listJobsDone): the animation job's queued updates and
 	 * inputs become the batch TakeAnimatedBatch hands out.
 	 */

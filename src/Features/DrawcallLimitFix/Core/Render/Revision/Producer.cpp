@@ -1057,7 +1057,7 @@ namespace DCLF
 			viewOn[v] = view.targets.colour != DXGI_FORMAT_UNKNOWN && Extensions::ViewOn(producer.toggles, kind) && inputs.claims;
 			ViewPipelinesOf(kind, a_make.catalog, tables, view.targets, viewOn[v], viewRevisionPipelines[v]);
 			if (traits.forwardPart)
-				ViewForwardSlotsOf(tables, viewOn[v], viewForwardSlots);
+				ViewForwardSlotsOf(tables, viewOn[v] && !producer.inputs.firstPersonForwardDirect, viewForwardSlots);
 			for (std::size_t d = 0; traits.trees && d < Extensions::kDrawFamilies; ++d) {
 				const auto family = static_cast<Api::DrawFamily>(d);
 				viewRevisionFaces[d] = viewOn[v] && Extensions::DrawFamilyHasFaces(family) && Extensions::DrawFamilyOn(producer.toggles, family) ?

@@ -56,6 +56,7 @@ namespace DCLF::Draws
 			return nullptr;
 		auto set = std::make_shared<Direct::ViewBatchSet>();
 		set->lanes = BatchLanes();
+		set->forwardOnly = a_in.forwardOnly;
 		set->keep = a_in.keep;
 		const auto& geometries = a_in.main ? a_in.main->body->geometryDraws : a_in.shadow->geometries;
 		set->geometryIndexAddress.assign(geometries.SlotCount(), 0);
@@ -235,19 +236,23 @@ namespace DCLF::Draws
 	bool ViewBatchBuilder::Ready(const ViewBatchInputs& a_in)
 	{
 		// A new payload, or the lanes changed (SetBatchLanes): the set made again, from this snapshot.
-		if (const std::uint32_t want = BatchLanes(); payload != a_in.payload || lanes != want) {
+		if (const std::uint32_t want = BatchLanes(); payload != a_in.payload || lanes != want || forwardOnly != a_in.forwardOnly) {
 			Reset();
 			payload = a_in.payload;
 			lanes = want;
+			forwardOnly = a_in.forwardOnly;
 		}
 		if (!a_in.payload || set || failed)
 			return true;
 		if (!pending) {
 			// The newest spheres a producer posted, and the next producer's asked for (the next set's).
+			// A forward-only set asks for none: its few lanes are all movers, their spheres the frame's.
 			auto& values = FrameValues::Get();
-			if (auto taken = values.TakeSnapshotSpheres())
-				spheres = std::move(taken);
-			values.RequestSnapshotSpheres();
+			if (!a_in.forwardOnly) {
+				if (auto taken = values.TakeSnapshotSpheres())
+					spheres = std::move(taken);
+				values.RequestSnapshotSpheres();
+			}
 			// The incremental lists (kExpIncremental), else a full build; off, the lists are forgotten (back on, they compact).
 			SequencesUpload upload;
 			const bool incremental = Direct::ExperimentOn(Direct::kExpIncremental);
@@ -255,7 +260,7 @@ namespace DCLF::Draws
 				lists.reset();
 			else if (!lists)
 				lists = std::make_unique<SceneLists>();
-			if (lists)
+			if (lists && !a_in.forwardOnly)
 				building = lists->Make(a_in, spheres, versions + 1, upload);
 			const bool fromLists = building != nullptr;
 			if (fromLists && Direct::ExperimentOn(Direct::kExpIncrementalCheck) && ++checks % 2 == 0) {
@@ -275,7 +280,7 @@ namespace DCLF::Draws
 			}
 			if (!building) {
 				auto sequences = std::make_shared<std::vector<DrawSequence>>();
-				building = MakeViewBatches(a_in, spheres.get(), *sequences);
+				building = MakeViewBatches(a_in, a_in.forwardOnly ? nullptr : spheres.get(), *sequences);
 				if (building)
 					building->ownSequences = sequences;
 				const auto* view = sequences.get();

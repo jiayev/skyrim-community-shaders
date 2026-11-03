@@ -293,6 +293,25 @@ namespace DCLF::Features::Fades
 		a_inputs = std::exchange(batchInputs, {});
 	}
 
+	namespace
+	{
+		std::vector<AnimatedFadeRoot> observerBatch;  // render thread
+		AnimatedFadeInputs observerInputs{};
+	}
+
+	void KeepAnimatedBatchForObserver(const std::vector<AnimatedFadeRoot>& a_roots, const AnimatedFadeInputs& a_inputs)
+	{
+		observerBatch.assign(a_roots.begin(), a_roots.end());
+		observerInputs = a_inputs;
+	}
+
+	void TakeObserverAnimatedBatch(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs)
+	{
+		a_roots.swap(observerBatch);
+		observerBatch.clear();
+		a_inputs = std::exchange(observerInputs, {});
+	}
+
 	void DrainAnimatedFades()
 	{
 		// The animation job runs between two culls, so its updates are complete now: its queued nodes and published inputs become

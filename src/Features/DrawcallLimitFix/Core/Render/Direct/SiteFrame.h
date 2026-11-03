@@ -169,6 +169,12 @@ namespace DCLF::Direct::detail
 		std::uint32_t colourSlot = 0;
 		std::uint64_t signal = 0;  // the CPU-frame timeline's value of the frame that used it last (0: none)
 		bool used = false;         // a frame used it since its last Release
+		// Whether its frame is the CPU pipeline's, and owns the frame's epochs: the host's latch regions, every site, the frame's signal.
+		// False: a GPU-driven frame's forward family alone (GraphConditions::forwardDirect), in a slot of State::forwardSlots. No signal: it
+		// retires by its point on the retirement clock, noted at the frame's end.
+		bool ownsEpochs = true;
+		std::uint64_t retirePoint = 0;
+		bool retireNoted = false;
 		std::unique_ptr<Worker[]> workers;
 		std::uint32_t workerCount = 0;
 		Worker cs;  // DXVK's CS thread's
@@ -214,9 +220,12 @@ namespace DCLF::Direct::detail
 		std::uint64_t submitted = 0;  // the last value known submitted (SubmitQueued's flush, or a frame's own work after it)
 		std::uint64_t hostSubmitted = 0;  // the host's submissions made at SubmitQueued's last flush
 		std::vector<std::unique_ptr<FrameSlot>> slots;
+		std::vector<std::unique_ptr<FrameSlot>> forwardSlots;  // FrameSlot::ownsEpochs false
 		std::uint64_t frames = 0;
 		FrameSlot* current = nullptr;  // the frame's (FrameStart to EndFrame)
 		SiteRun* pending = nullptr;    // the site the epoch body being run opened (ExecuteEpoch)
+		// A GPU-driven frame's forward run, on its way to its epoch's late pass (ForwardReached, in DXVK's stream; RecordExecutingSite).
+		std::atomic<SiteRun*> handedOff{ nullptr };
 		// The per-snapshot views' recordings of the newest set (PrepareSnapshotView; a released one's pool goes to ResetLater).
 		std::vector<std::shared_ptr<SnapshotRecording>> snapshots;
 		bool wasCpu = false;
@@ -258,6 +267,12 @@ namespace DCLF::Direct::detail
 	void SetPending(SiteRun& a_run);
 	/** @brief Render thread: a_run's callback queued (with the uploads its commits staged and the frame values' wait). False: not queued. */
 	bool Emit(SiteRun& a_run);
+	/**
+	 * @brief Render thread, a GPU-driven frame, before an epoch whose late pass draws a_run: the run handed to that pass in DXVK's stream.
+	 * a_run's culls ran when the frame's cull frame was published, which a_rowsDone (the producer done) means. Without one its recording
+	 * would wait for a later frame's, which a frame's start may wait on this frame's GPU work for: false, no draws this frame (counted).
+	 */
+	bool HandOffRun(SiteRun& a_run, bool a_rowsDone);
 
 	// ---- The culls (DCLF's pool) ----
 

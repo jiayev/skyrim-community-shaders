@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Features/Forward/Forward.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/DrawHelpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/IndexPool.h"
@@ -285,14 +286,14 @@ namespace DCLF::Features::Forward
 		std::shared_ptr<org::RenderPass> ForwardDraw(const Api::PassContext& a_context)
 		{
 			const auto& resources = a_context.Main();
-			return resources->forwardSort ? std::make_shared<Draws::ForwardDrawPass>(resources, a_context.ShapeSegment()) : nullptr;
+			return resources->forwardSort && !Draws::CurrentGraphConditions().forwardDirect ? std::make_shared<Draws::ForwardDrawPass>(resources, a_context.ShapeSegment()) : nullptr;
 		}
 
 		// Refraction normals, in the forward epoch after the blended draws.
 		std::shared_ptr<org::RenderPass> RefractionDraw(const Api::PassContext& a_context)
 		{
 			const auto& resources = a_context.Main();
-			return resources->refractionNormals && resources->nativeDepth && resources->pool ?
+			return !Draws::CurrentGraphConditions().forwardDirect && resources->refractionNormals && resources->nativeDepth && resources->pool ?
 			           std::make_shared<Draws::RefractionDrawPass>(resources, a_context.ShapeSegment()) :
 			           nullptr;
 		}

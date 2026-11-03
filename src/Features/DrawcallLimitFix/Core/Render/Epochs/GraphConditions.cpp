@@ -3,8 +3,10 @@
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 
@@ -71,14 +73,19 @@ namespace DCLF::Draws
 		// Which one draws this kind of cell (Auto: interiors CPU-driven): entering or leaving an interior rebuilds the graph anyway. Every
 		// cell without device-generated commands.
 		next.cpuPipeline = CpuPipelineForCell(Toggles::Get().Active(), next.interior);
+		next.forwardDirect = !next.cpuPipeline && SwitchOnUnlessZero(Switch::ForwardDirect) &&
+		                     std::ranges::contains(RenderGraphRuntime::Get().InStreamEpochs(), RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::Forward));
+		next.firstPersonForwardDirect = next.forwardDirect &&
+		                                std::ranges::contains(RenderGraphRuntime::Get().InStreamEpochs(), RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::FirstPerson));
 		{
 			std::lock_guard lock(cutsMutex);
 			next.cuts = requestedCuts;
 		}
 		if (next == current)
 			return;
-		logger::info("[DCLF] graph conditions: {} cell, {}, {} pipeline{}{}; the graph is rebuilt", next.interior ? "interior" : "exterior",
+		logger::info("[DCLF] graph conditions: {} cell, {}, {} pipeline{}{}{}; the graph is rebuilt", next.interior ? "interior" : "exterior",
 				next.twoPassOcclusion ? "two-pass occlusion" : "no occlusion pass (portal and frustum culling)", next.cpuPipeline ? "CPU" : "GPU",
+				next.forwardDirect ? ", forward draws on the CPU" : "",
 				next.cuts.empty() ? "" : ", passes cut: ", next.cuts);
 		// The epochs the CPU pipeline's sites execute themselves (their passes before the draws), before the build the change requests,
 		// with the ones executed in DXVK's stream (RenderGraphRuntime::InStreamEpochs).

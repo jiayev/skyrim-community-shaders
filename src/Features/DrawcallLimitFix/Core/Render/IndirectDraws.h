@@ -187,6 +187,11 @@ namespace DCLF
 		 * shared payload's owners held, a_submit's prepare, then the execution in the epoch's segment. Each early return counted.
 		 */
 		SharedEpochResult SubmitSharedEpoch(std::uint32_t a_epoch, const SharedEpochSubmit& a_submit);
+		/**
+		 * @brief The engine's FrameParams.z at the main pass's blended draw (render thread). The engine raises it after the colour epoch's
+		 * commit, so the next commits take it for the pixel stage's b12, which the forward epoch shares (PackFrameBlocks).
+		 */
+		void NoteBlendedFrameParams(float a_z);
 		/** @brief Render thread, at the report: a_epoch's shared epoch counters since the last report, reset (its submitted frame kept). */
 		SharedEpochStats TakeSharedEpochStats(std::uint32_t a_epoch);
 		/**

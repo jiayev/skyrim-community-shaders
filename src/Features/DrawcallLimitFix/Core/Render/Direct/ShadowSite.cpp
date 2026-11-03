@@ -181,7 +181,7 @@ namespace DCLF::Direct
 		ZoneScopedN("CS.DCLF.Cpu.ShadowCommitted");
 		auto& s = S();
 		auto* slot = s.current;
-		if (!slot || !slot->set || !a_inputs.shape || !a_inputs.resources || !a_inputs.adopted)
+		if (!slot || !slot->ownsEpochs || !slot->set || !a_inputs.shape || !a_inputs.resources || !a_inputs.adopted)
 			return;
 		const auto& shape = *a_inputs.shape;
 		const auto& resources = *a_inputs.resources;

@@ -46,7 +46,7 @@ namespace DCLF::Reports
 			w.frames, mode.record == Direct::RecordMode::Parallel ? "parallel" : "serial", Draws::BatchLanes(), cadences.empty() ? "none" : cadences, views.empty() ? "none" : views,
 			sites.empty() ? "none" : sites, calls, w.sum.secondaries / n, w.sum.waits, w.slotWaits, w.slotWaitMs, w.rowWaits,
 			w.sum.staleGeometry / n, w.notQueued ? fmt::format(", {} callbacks not queued <- NOT QUEUED", w.notQueued) : std::string(),
-			empty) +
+			(w.forwardSkipped ? fmt::format(", {} forward epochs without a cull frame <- FORWARD SKIPPED", w.forwardSkipped) : std::string()) + empty) +
 			[] { const auto profile = Direct::TakeCullProfileLine(); return profile.empty() ? std::string() : "; cull profile (window): " + profile; }();
 	}
 }

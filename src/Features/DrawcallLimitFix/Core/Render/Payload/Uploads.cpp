@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Direct.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
@@ -673,6 +674,11 @@ namespace DCLF
 			lap(6);
 			return true;
 		}
+		// The GPU-driven graph's forward family, the CPU's: its views and culls, from these commits (GraphConditions::forwardDirect).
+		if (!depthOnly && CurrentGraphConditions().forwardDirect)
+			Direct::ColourCommitted({ revisionShape, a_resources, &adopted, &latch, sunCascades, std::span(shadowVolumes.data(), shadowVolumesLatched), latchSlot, poolCopies });
+		if (depthOnly && CurrentGraphConditions().firstPersonForwardDirect)
+			Direct::DepthCommitted({ revisionShape, a_resources, &adopted, &latch, sunCascades, std::span(shadowVolumes.data(), shadowVolumesLatched), latchSlot, poolCopies });
 		const auto& recordings = *a_revision.recordings;
 		const std::size_t variant = depthOnly && !poolCopies && recordings.Variants() > 1 ? 1 : 0;
 		SubmitRevisionRecording(revisionEpoch, recordings, recordings.IndexOf(variant, hostedDrawn));

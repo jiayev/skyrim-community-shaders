@@ -471,7 +471,7 @@ namespace DCLF
 	bool IndirectDraws::Impl::ViewBatchesReady()
 	{
 		auto& b = snapshotBuilder;
-		if (!producer.inputs.cpuPipeline || !b.payload || !b.draws) {
+		if ((!producer.inputs.cpuPipeline && !producer.inputs.forwardDirect) || !b.payload || !b.draws) {
 			if (b.viewBatches)
 				b.viewBatches->Reset();
 			return true;
@@ -489,6 +489,7 @@ namespace DCLF
 		in.main = NewestMainPayload(*b.draws);
 		in.shadow = b.draws->shadow.get();
 		in.uploads = producer.inputs.uploads.lock();
+		in.forwardOnly = !producer.inputs.cpuPipeline;
 		return b.viewBatches->Ready(in);
 	}
 
@@ -733,12 +734,13 @@ namespace DCLF
 		snapshot->shadowFormat = inputs.shadowFormat;
 		// The CPU pipeline's view batches: the set made for its payload, else (passed through) the one posted with that payload; a new set's
 		// serial is the first snapshot's it is.
-		if (inputs.cpuPipeline && b.payload) {
+		// (A forward-only set is the GPU-driven graph's alone: the CPU pipeline's sites draw every list.)
+		if ((inputs.cpuPipeline || inputs.forwardDirect) && b.payload) {
 			if (const auto& set = b.viewBatches ? b.viewBatches->Set() : nullptr; set && b.viewBatches->For() == b.payload.get()) {
 				if (!set->serial)
 					set->serial = snapshot->serial;
 				snapshot->viewBatches = set;
-			} else if (b.posted.payload == b.payload) {
+			} else if (b.posted.payload == b.payload && b.posted.viewBatches && b.posted.viewBatches->forwardOnly == !inputs.cpuPipeline) {
 				snapshot->viewBatches = b.posted.viewBatches;
 			}
 		}

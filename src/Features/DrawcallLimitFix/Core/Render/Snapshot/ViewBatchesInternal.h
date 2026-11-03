@@ -308,7 +308,7 @@ namespace DCLF::Draws::detail
 	{
 	public:
 		ListBuilder(const ViewBatchInputs& a_in, const RowBases& a_rows, SequenceSink& a_sink, Scratch& a_scratch) :
-			rows(a_rows), sinkTarget(&a_sink), lanes(&a_scratch.lanes)
+			rows(a_rows), sinkTarget(&a_sink), lanes(&a_scratch.lanes), forwardOnly(a_in.forwardOnly)
 		{
 			if (a_in.catalog)
 				zGroups = GetIndirectState(*a_in.catalog, a_in.targetsGeneration).zGroups;
@@ -351,6 +351,15 @@ namespace DCLF::Draws::detail
 					mainRun = decalGroup ? sink.EmitDecal(rows.Main(a_input), a_input) : sink.EmitPartitions(rows.Main(a_input), a_input);
 				return mainRun;
 			};
+			if (forwardOnly) {
+				if (drawable && forward && (mask & kViewForward) && !(mask & kViewRefraction))
+					AddMain(ViewType::Forward, a_input, mainRuns(), 0, a_input.pipelineIndex);
+				if (drawable && (mask & kViewRefraction))
+					AddMain(ViewType::Refraction, a_input, mainRuns(), 0, 0).bucketKey = 0;
+				if (drawable && forward && firstPersonBit && (mask & firstPersonBit) && !(mask & kViewRefraction))
+					AddMain(ViewType::FirstPerson, a_input, mainRuns(), 0, a_input.pipelineIndex);
+				return out;
+			}
 			// The main family's views (keyWord 0: the drawable bit is theirs).
 			if (!decalGroup && !forward && (mask & (kViewMain | kViewMainCull))) {
 				if (drawable && (mask & kViewMain))
@@ -439,6 +448,7 @@ namespace DCLF::Draws::detail
 		const RowBases& rows;
 		SequenceSink* sinkTarget;
 		std::array<std::vector<Lane>, Direct::kViewTypes>* lanes;
+		bool forwardOnly = false;  // ViewBatchInputs::forwardOnly: Add takes the forward family's lanes alone
 		std::vector<std::uint32_t> zGroups;
 		std::uint32_t reflectionBit = 0, firstPersonBit = 0;
 		std::array<std::uint32_t, kOcclusionViews> occlusionBits{};

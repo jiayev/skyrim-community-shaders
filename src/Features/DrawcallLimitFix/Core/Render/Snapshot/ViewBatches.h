@@ -50,6 +50,8 @@ namespace DCLF::Draws
 		const MainPayload* main = nullptr;      // NewestMainPayload (null: none)
 		const ShadowPayload* shadow = nullptr;  // null: none
 		std::shared_ptr<org::runtime::IUploadService> uploads;  // the frame's dedicated uploader (the sequences' version)
+		// The forward family's lanes alone (forward, refraction, first person's forward part), a full build each set (GraphConditions::forwardDirect: the GPU-driven graph's forward draws).
+		bool forwardOnly = false;
 	};
 
 	/**
@@ -82,6 +84,7 @@ namespace DCLF::Draws
 	private:
 		const void* payload = nullptr;  // the payload the set or the pending one is for
 		std::uint32_t lanes = 0;        // ... and the batch lanes it is made with (BatchLanes when made)
+		bool forwardOnly = false;       // ... and whether it is the forward family alone (ViewBatchInputs::forwardOnly)
 		std::shared_ptr<Direct::ViewBatchSet> set, building;
 		std::shared_ptr<Pending> pending;
 		std::shared_ptr<const Direct::SnapshotSpheres> spheres;  // the newest taken

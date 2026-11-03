@@ -69,6 +69,10 @@ namespace DCLF::Features::Fades
 			std::vector<std::pair<std::uint32_t, std::uint32_t>> animated;  // (root slot, updates) of the animation job's batch
 			std::shared_ptr<const std::vector<std::uint32_t>> rootPrograms;  // by root slot
 			std::vector<std::uint32_t> programs;  // the main cull input's words, this frame's walk
+			// A GPU-driven frame's (Direct::KickCpuFrameState's a_observer): the stage only reads. It steps routedRoots (the slots the set's
+			// lanes name, sorted) in observerStates, and neither reports nor sends anything; FadeStateCS stays the fades' authority.
+			bool observer = false;
+			std::shared_ptr<const std::vector<std::uint32_t>> routedRoots;
 		};
 
 		// Render thread: the roots' programs as last judged (FadeCommit.cpp's UploadFadeRootPrograms, with a mirror of its own), shared with
@@ -87,6 +91,7 @@ namespace DCLF::Features::Fades
 		// The producers' (one at a time): the states by root slot (the pool's rows), each root's last reported generation and milestone
 		// (FadeStateCS's fade-reported), and the published frames' storage, recycled once no cull holds it.
 		KeptWholeArray<FadeNodeState> cpuStates;
+		std::vector<FadeNodeState> observerStates;
 		std::vector<std::pair<std::uint32_t, std::uint32_t>> reported;
 
 		/** @brief The spans a CullFrame names (Direct::CullFrame::storage), reused frame after frame. */
@@ -175,8 +180,12 @@ namespace DCLF::Features::Fades
 		{
 			std::vector<AnimatedFadeRoot> roots;
 			AnimatedFadeInputs anim{};
-			DrainAnimatedFades();
-			TakeAnimatedBatch(roots, anim);
+			// An observer leaves the frame's batch to FadeStateCS, and steps the copy of the last one it took.
+			TakeObserverAnimatedBatch(roots, anim);
+			if (!a_input.observer) {
+				DrainAnimatedFades();
+				TakeAnimatedBatch(roots, anim);
+			}
 			std::copy_n(anim.eye, 3, a_input.frame.animEye);
 			a_input.frame.animLodAdjust = anim.lodAdjust;
 			a_input.frame.animCounter = anim.counter;
@@ -195,6 +204,26 @@ namespace DCLF::Features::Fades
 			}
 		}
 
+		/** @brief The root slots a_set's lanes name, sorted, made once a set. */
+		std::shared_ptr<const std::vector<std::uint32_t>> RoutedRoots(const std::shared_ptr<const Direct::ViewBatchSet>& a_set)
+		{
+			static std::weak_ptr<const Direct::ViewBatchSet> madeFor;
+			static std::shared_ptr<const std::vector<std::uint32_t>> made;
+			if (made && madeFor.lock() == a_set)
+				return made;
+			auto roots = std::make_shared<std::vector<std::uint32_t>>();
+			for (const auto& list : a_set->lists)
+				for (const auto& batch : list)
+					for (std::uint32_t lane = 0; batch.fadeRoot && lane < batch.count; ++lane)
+						if (batch.fadeRoot[lane])
+							roots->push_back(batch.fadeRoot[lane] - 1);
+			std::sort(roots->begin(), roots->end());
+			roots->erase(std::unique(roots->begin(), roots->end()), roots->end());
+			madeFor = a_set;
+			made = std::move(roots);
+			return made;
+		}
+
 		Api::FrameValueInput CpuStatesKick(const Api::FrameValuePoolKick&)
 		{
 			auto arm = Direct::TakeCpuFrameArm();
@@ -204,6 +233,9 @@ namespace DCLF::Features::Fades
 			if (!arm.set || !tables || !scene)
 				return { idleInput, stateRows };
 			auto input = std::make_shared<CpuStageInput>();
+			input->observer = arm.observer;
+			if (arm.observer)
+				input->routedRoots = RoutedRoots(arm.set);
 			input->set = std::move(arm.set);
 			input->sceneFrame = arm.sceneFrame;
 			input->visibilityReset = arm.visibilityReset;
@@ -230,7 +262,9 @@ namespace DCLF::Features::Fades
 				input->programs.assign(words.begin(), words.end());
 			}
 			input->tables = std::move(tables);
-			stateRows = std::max<std::uint64_t>(stateRows, list.rows.size());
+			// An observer sends nothing: no backing for it.
+			if (!input->observer)
+				stateRows = std::max<std::uint64_t>(stateRows, list.rows.size());
 			return { std::move(input), stateRows };
 		}
 
@@ -301,6 +335,7 @@ namespace DCLF::Features::Fades
 		{
 			const CpuStageInput& input;
 			const Api::RootListView& list;
+			std::span<const BindlessPlacement> rows;  // the placements as the producer sampled them
 			const std::vector<FadeRootStatic>& seeds;
 			FrameStorage& storage;
 			std::vector<FadeNodeState>& states;
@@ -336,7 +371,8 @@ namespace DCLF::Features::Fades
 			const FadeRootStatic& row = a_context.list.rows[a_slot];
 			FadeNodeState& state = a_context.states[a_slot];
 			auto& storage = a_context.storage;
-			storage.rootGenerations[a_slot] = row.generation;
+			if (!input.observer)
+				storage.rootGenerations[a_slot] = row.generation;
 			const bool listed = row.object != kNoObject && row.generation != 0;
 			FadeRootStatic root = row;
 			const bool merged = listed && MergeFadeSeed(row, a_context.seeds.data(), a_context.seeds.size(), a_slot, root);
@@ -347,10 +383,10 @@ namespace DCLF::Features::Fades
 					state.verdict = 0;
 					state.frame = 0;
 				}
-				if (state.frame != input.sceneFrame && input.frame.lodAdjust != 0.0f && root.object < storage.fadeNode.size()) {
-					const float* centre = storage.fadeNode[root.object].data();
+				if (state.frame != input.sceneFrame && input.frame.lodAdjust != 0.0f && root.object < a_context.rows.size()) {
+					const float* centre = a_context.rows[root.object].lodFadeNode;
 					// The bound's radius as the engine reads it now: the sun entry row's, else the listed radius.
-					const float entryRadius = storage.sunEntry[root.object][3];
+					const float entryRadius = a_context.rows[root.object].sunEntry[3];
 					const float radius = entryRadius >= 0.0f && entryRadius < 1e30f ? entryRadius : root.radius;
 					state.verdict = 0;
 					std::uint32_t updates = 0;
@@ -367,13 +403,16 @@ namespace DCLF::Features::Fades
 					if (updates)
 						state.verdict |= kFadeVerdictAnimated | (updates << 5);
 					state.frame = input.sceneFrame;
-					a_context.marked.push_back(a_slot);
-					Report(a_context, a_slot, root, state);
+					if (!input.observer) {
+						a_context.marked.push_back(a_slot);
+						Report(a_context, a_slot, root, state);
+					}
 				}
 			}
 			// The state the members' readers take (BuildDrawsCS's SeedState rule): the root's own, else its seed's, else its row's.
 			const FadeNodeState& effective = state.generation == row.generation ? state : (merged ? root.initial : row.initial);
-			storage.rootStates[a_slot] = effective;
+			if (!input.observer)
+				storage.rootStates[a_slot] = effective;
 			storage.rootWords[a_slot] = listed ? RootWordOf(effective, state, row, input.sceneFrame) : 0u;
 		}
 
@@ -404,8 +443,12 @@ namespace DCLF::Features::Fades
 			frame->rootGenerations = s.rootGenerations;
 			frame->rootPrograms = s.rootPrograms;
 			frame->programs = s.programs;
-			frame->portalTest = &::DCLF::Portals::PortalTestCpu;
-			frame->portalTestBatch = &::DCLF::Portals::PortalTestCpuBatch;
+			// An observer's culls stamp nothing, and portals decide only the stamps of the lists it culls: no portal tests.
+			frame->reportsVisibility = !a_input.observer;
+			if (!a_input.observer) {
+				frame->portalTest = &::DCLF::Portals::PortalTestCpu;
+				frame->portalTestBatch = &::DCLF::Portals::PortalTestCpuBatch;
+			}
 			frame->fadeEye = a_input.fadeEye;
 			frame->treeHeight = a_input.treeHeight;
 			frame->tables = a_input.tables;
@@ -427,53 +470,74 @@ namespace DCLF::Features::Fades
 				return;
 			}
 			ZoneScopedN("CS.DCLF.FadeCpuStage");
-			a_producer.BeginBuild(cpuStates);
+			const bool observer = input->observer;
+			if (!observer)
+				a_producer.BeginBuild(cpuStates);
 			const auto list = Extensions::RootListOf(*input->tables);
 			const std::size_t roots = list.rows.size();
-			auto& states = cpuStates.Mutable();
+			auto& states = observer ? observerStates : cpuStates.Mutable();
 			if (states.size() < roots) {
 				const std::size_t first = states.size();
 				states.resize(roots, FadeNodeState{});
-				cpuStates.MarkRange(first, roots - first);
+				if (!observer)
+					cpuStates.MarkRange(first, roots - first);
 			}
 			if (reported.size() < roots)
 				reported.resize(roots, { 0u, 0u });
 			auto* storage = TakeStorage();
-			CopyRows(Direct::SampledRows(a_producer.seq), *storage);
+			const auto rows = Direct::SampledRows(a_producer.seq);
 			storage->rootWords.assign(roots, 0u);
-			storage->rootGenerations.assign(roots, 0u);
-			storage->rootStates.assign(roots, FadeNodeState{});
-			// The members' programs: a root's past this frame's programs takes the frustum alone.
-			const std::uint32_t count = input->programs.size() > kPortalSetBytes / 4 ? input->programs[kPortalSetBytes / 4] : 0u;
-			storage->rootPrograms.assign(roots, kPortalNoProgram);
-			for (std::size_t r = 0; r < roots && r < input->rootPrograms->size(); ++r)
-				if ((*input->rootPrograms)[r] < count)
-					storage->rootPrograms[r] = (*input->rootPrograms)[r];
-			storage->programs = input->programs;
+			// An observer's frame is read for its root words alone (its culls stamp nothing).
+			if (observer) {
+				storage->sunEntry.clear();
+				storage->fadeNode.clear();
+				storage->rootGenerations.clear();
+				storage->rootStates.clear();
+				storage->rootPrograms.clear();
+				storage->programs.clear();
+			} else {
+				CopyRows(rows, *storage);
+				storage->rootGenerations.assign(roots, 0u);
+				storage->rootStates.assign(roots, FadeNodeState{});
+				// The members' programs: a root's past this frame's programs takes the frustum alone.
+				const std::uint32_t count = input->programs.size() > kPortalSetBytes / 4 ? input->programs[kPortalSetBytes / 4] : 0u;
+				storage->rootPrograms.assign(roots, kPortalNoProgram);
+				for (std::size_t r = 0; r < roots && r < input->rootPrograms->size(); ++r)
+					if ((*input->rootPrograms)[r] < count)
+						storage->rootPrograms[r] = (*input->rootPrograms)[r];
+				storage->programs = input->programs;
+			}
+			// The slots stepped: every root, or an observer's routed ones still listed.
+			const std::uint32_t* routed = observer ? input->routedRoots->data() : nullptr;
+			const std::size_t steps = observer ? static_cast<std::size_t>(std::lower_bound(input->routedRoots->begin(), input->routedRoots->end(), roots) - input->routedRoots->begin()) : roots;
+			const auto slotAt = [&](std::size_t a_step) { return routed ? routed[a_step] : static_cast<std::uint32_t>(a_step); };
 			// The roots in chunks on the pool (a root's step touches its own slot alone; the culls wait for this stage): each chunk's
 			// events and marks kept apart, then taken in root order, as one pass would make them.
 			constexpr std::size_t kRootGrain = 1024;
-			const std::size_t chunks = (roots + kRootGrain - 1) / kRootGrain;
+			const std::size_t chunks = (steps + kRootGrain - 1) / kRootGrain;
 			std::vector<std::vector<FadeEvent>> chunkEvents(chunks);
 			std::vector<std::vector<std::uint32_t>> chunkMarked(chunks);
 			const auto& seeds = ProducerSeeds();
-			SceneScheduler::Executor().ParallelFor("CS.DCLF.FadeCpuStage.Roots", roots, kRootGrain, [&](std::size_t a_begin, std::size_t a_end) {
+			SceneScheduler::Executor().ParallelFor("CS.DCLF.FadeCpuStage.Roots", steps, kRootGrain, [&](std::size_t a_begin, std::size_t a_end) {
 				const std::size_t chunk = a_begin / kRootGrain;
-				StepContext context{ *input, list, seeds, *storage, states, chunkEvents[chunk], chunkMarked[chunk] };
-				context.animatedAt = static_cast<std::size_t>(std::lower_bound(input->animated.begin(), input->animated.end(), a_begin,
+				StepContext context{ *input, list, rows, seeds, *storage, states, chunkEvents[chunk], chunkMarked[chunk] };
+				const std::size_t firstSlot = a_begin < steps ? slotAt(a_begin) : 0u;
+				context.animatedAt = static_cast<std::size_t>(std::lower_bound(input->animated.begin(), input->animated.end(), firstSlot,
 																	[](const auto& a_entry, std::size_t a_slot) { return a_entry.first < a_slot; }) -
 															  input->animated.begin());
 				for (std::size_t r = a_begin; r < a_end; ++r)
-					StepRoot(context, static_cast<std::uint32_t>(r));
+					StepRoot(context, slotAt(r));
 			});
-			std::vector<FadeEvent> events;
-			for (std::size_t c = 0; c < chunks; ++c) {
-				events.insert(events.end(), chunkEvents[c].begin(), chunkEvents[c].end());
-				for (const std::uint32_t slot : chunkMarked[c])
-					cpuStates.Mark(slot);
+			if (!observer) {
+				std::vector<FadeEvent> events;
+				for (std::size_t c = 0; c < chunks; ++c) {
+					events.insert(events.end(), chunkEvents[c].begin(), chunkEvents[c].end());
+					for (const std::uint32_t slot : chunkMarked[c])
+						cpuStates.Mark(slot);
+				}
+				if (input->scene && input->scene->fadeWriteBack)
+					PostCpuFadeEvents(*input->scene->fadeWriteBack, input->sceneFrame, std::move(events));
 			}
-			if (input->scene && input->scene->fadeWriteBack)
-				PostCpuFadeEvents(*input->scene->fadeWriteBack, input->sceneFrame, std::move(events));
 			Direct::PublishCullFrame(MakeCullFrame(*input, a_producer.seq, storage));
 		}
 

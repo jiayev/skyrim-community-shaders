@@ -299,6 +299,9 @@ namespace DCLF
 		Reports::Window sunTestWindow;
 		std::uint32_t sunTestEmpty = 0;
 		bool loggedFrameConstants = false;
+		// FrameParams.z as the engine last had it at the blended draw (NoteBlendedFrameParams). It gates Lighting's forward fog. 1 is what
+		// the engine holds there, for the frames before the first blended draw.
+		float blendedFrameParamsZ = 1.0f;
 
 		// The sun cascades the colour commit's BuildDraws tests against (its latch's).
 		std::vector<GpuCascade> sunCascades;

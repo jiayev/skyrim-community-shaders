@@ -120,7 +120,8 @@ namespace DCLF::Schedule
 			"diag.after-colour",
 			"core.direct",
 		};
-		// The forward epoch: the forward range's blended draws, then the refraction normals.
+		// The forward epoch: the forward range's blended draws on the GPU, each pipeline's (forward.draw), then the refraction normals; or both
+		// on the CPU, all pipelines sorted together (core.forward-direct: the CPU pipeline's graph, or GraphConditions::forwardDirect's).
 		constexpr std::string_view kForward[] = {
 			"forward.draw",
 			"forward.refraction",

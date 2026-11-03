@@ -4,6 +4,7 @@
 
 #include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Events.h"
 #include "Observers.h"
@@ -120,8 +121,10 @@ namespace DCLF::Diagnostics
 				counts.colourDrawnTotal += colourDrawn;
 				const char* kind = nullptr;
 				// A forward object is colour-only like a decal (no depth segment input, no frustum stamp).
-				const bool decal = (o < snapshot.colourState.size() && snapshot.colourState[o] == kObjectStateDecal) ||
-				                   (snapshot.tables && o < snapshot.tables->objects.size() && (snapshot.tables->objects[o].flags & kObjectForward));
+				const bool forward = snapshot.tables && o < snapshot.tables->objects.size() && (snapshot.tables->objects[o].flags & kObjectForward);
+				const bool decal = (o < snapshot.colourState.size() && snapshot.colourState[o] == kObjectStateDecal) || forward;
+				// The GPU builds none of them with the forward family on the CPU (GraphConditions::forwardDirect): its words say nothing of them.
+				const bool forwardOnCpu = forward && Draws::CurrentGraphConditions().forwardDirect;
 				counts.recordDisagrees += (flags & 8) ? 1 : 0;
 				if (!withheld && (depthDrawn || colourDrawn)) {
 					++counts.outsideDrawn;
@@ -143,7 +146,7 @@ namespace DCLF::Diagnostics
 					++counts.colourOnly;
 					counts.colourUnpublished += verdict == 3;
 					counts.alphaColourOnly += alpha;
-				} else if (withheld && !colourDrawn) {
+				} else if (withheld && !colourDrawn && !forwardOnCpu) {
 					// The frustum stamp is this frame's for an object phase 1 found inside the frustum, with the fade test's drop in its
 					// top bit: one without it was rejected by the frustum, one with it and no drop by the HZB (phase 2's final verdict).
 					const std::uint32_t frustumWord = frustum && o < frustumWords ? frustum[o] : 0u;

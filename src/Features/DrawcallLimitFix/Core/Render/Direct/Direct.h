@@ -6,7 +6,8 @@
 // (Snapshot/ViewBatches.cpp), the cull (Cull.cpp), the recorder (Recorder.cpp) and the sites (Sites.cpp).
 //
 // It suspends two standing policies while dclf:pipeline=cpu, and only then: "DCLF owns all culling, on the GPU" and "No per-view
-// lists". The GPU path, the set, the claims and withholding are unchanged.
+// lists". The GPU path, the set, the claims and withholding are unchanged, but for the forward family, which the GPU-driven graph
+// sends through this pipeline too (GraphConditions::forwardDirect).
 
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 
@@ -249,6 +250,7 @@ namespace DCLF::Direct
 	{
 		std::uint64_t serial = 0;  // the snapshot's
 		std::uint32_t lanes = kDefaultBatchLanes;
+		bool forwardOnly = false;  // ViewBatchInputs::forwardOnly: only the forward family's lanes are filled
 		std::array<std::vector<ViewBatch>, kViewTypes> lists;
 		std::array<ViewBuckets, kViewTypes> buckets;
 		// The resident sequences: one fully resolved 136 B DrawSequence per drawn (object, partition, view class), in a pooled

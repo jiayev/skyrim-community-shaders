@@ -1530,9 +1530,10 @@ Where each material input comes from (`Core/Shading/MaterialSources.h`):
 -   the shader object and globals (PS 6, `SnowRimLightParameters`, `CharacterLightParams`, `LODTexParams.z`,
     `LandscapeTexture5to6IsSnow.zw`): one evaluation per signature (`MaterialSources::Signature`, `ApplyFrameComponents`),
     written only when `FrameComponentsWitness` moves (`RefreshMaterialSignatures`);
--   `IBLParams` (PS 29) and `FogColor`: read by no Lighting stage and drifting with the time of day, so a record keeps its first
-    value (`KeepUnreadFloats`, `KeepTechniqueFog`); re-versioning them re-resolved every pair every frame. `IBLParams` comes from
-    the `BSLightingShader` object, not the material;
+-   `IBLParams` (PS 29) and `FogColor`'s colour: read by no Lighting stage and drifting with the time of day, so a record keeps its
+    first value (`KeepUnreadFloats`, `KeepTechniqueFog`); re-versioning them re-resolved every pair every frame. `IBLParams` comes from
+    the `BSLightingShader` object, not the material. The forward stage does read `FogColor.w`, the fade (`invFrameBufferRange`), which
+    the record keeps too: it read 0.8333 throughout one exterior session, and nothing checks that it never moves;
 -   the character light's t11: a frame register (below); the record keeps only its sampler modes. `CopyFrameComponents` copies t11
     whole, because its index is -1 while a cell loads.
 
@@ -1882,6 +1883,10 @@ Core keeps the ranges, the `kRasterForward` bits, `ForwardSortCS`, the shared ep
     computes its rank - farther first; at one depth a plain draw before an ordered group's; then group, ordinal under the node,
     object index, first index (stable whatever the atomic append gave) - and writes the sorted half with `instanceCount` 1 restored.
     O(n^2) in the visible forward draws, keys read through groupshared memory a tile of 64 at a time.
+-   **FrameParams.z.** The forward draws read the colour epoch's blocks, but the engine raises `FrameParams.z` (PerFrame c42) between
+    that commit and the blended draw, and Lighting's forward stage needs it to apply its fog and fade. So the colour commit's pixel b12
+    carries the value from the last blended draw (`NoteBlendedFrameParams`). Measured at the blended draw: `.z` was the only one of
+    the block's 180 floats that differed. The colour epoch's own Lighting is all Deferred and does not read it.
 -   **The draw**: `forward.draw` draws the sorted half through the colour signature, with explicit preprocessing on its own state
     list (`Resources::preprocessForward`), on the colour pass's attachments all loaded (the first is kMAIN; the G-buffer attachments
     masked off as the engine has them unbound).
@@ -1889,7 +1894,41 @@ Core keeps the ranges, the `kRasterForward` bits, `ForwardSortCS`, the shared ep
     back to front among themselves, and before every blended pass the engine still draws. Exact against additive engine passes in
     front; wrong by an engine pass's contribution where it lies behind a DCLF surface. Not after the engine's, because an alpha-over
     DCLF surface would then cover an effect in front of it. DCLF owns blended Lighting, the Effect port's meshes, particles and
-    billboards in one sort.
+    billboards.
+-   **The forward family on the CPU (`CS_DCLF_FORWARD_DIRECT`, `GraphConditions::forwardDirect`, default on).** There is one forward
+    pipeline: the CPU pipeline's. CPU mode routes every view through it, and the GPU-driven graph routes only the forward family: blended
+    draws, refraction and first person's forward part. Why: `core.forward-sort` can only sort within a pipeline (with
+    `CS_DCLF_FORWARD_PLAIN=0`, a state class), because a draw's pipeline is fixed by the range it is in, and those lists then draw in
+    creation order whatever their depth. Smoke drew over the log in front of it, and no fixed order of the lists is right: flames
+    in front of logs and smoke behind them interleave. Off, or with the epoch not in DXVK's stream (`CS_ORG_IN_STREAM=0`), the GPU path runs.
+    -   **What is shared.** `Direct::ColourCommitted` makes the views, pool jobs run `CullBatch`, `ForwardReached` is the trigger,
+        `RecordForwardSite` sorts and records on DXVK's CS thread, and `core.forward-direct` is the late pass, in both modes.
+    -   **What differs, by `FrameSlot::ownsEpochs`.** False in a GPU-driven frame: the slot is one of `State::forwardSlots`, never waited for, and
+        retires by a `SubmittedRetirementPoint` taken at `EndFrame`, not by a frame signal. It takes no host frame slot, and no site opens
+        but the forward family's. The graph runs the epoch itself, so `ForwardReached` hands the run to the late pass in DXVK's stream, ahead of
+        the execution (`HandOffRun`). ORG records a pass per frame only in an external epoch, so this needs the epoch in the stream. Without
+        this frame's cull frame nothing is handed off and the frame draws no forward objects (`FORWARD SKIPPED` on the `[CPU]` line),
+        because the recording would otherwise wait on a later frame, which a frame's start may wait on this frame's GPU work for.
+    -   **Root state: a read-only observer (`KickCpuFrameState`'s `a_observer`, `Features/Fades/FadeCpuStage.cpp`).** `FadeStateCS` stays the fades'
+        authority. The stage steps only the roots the set's lanes name, in states of its own (`observerStates`), and sends and reports nothing:
+        no pool upload, no write-back events, no binding switch (`CpuRootStatesFor` stays false), no visibility diff
+        (`CullFrame::reportsVisibility`, no portal tests). It takes the animated batch `SampleFadeInputs` took the frame before
+        (`KeepAnimatedBatchForObserver`), since only one can take it. It feeds `LodMask` and refraction's verdict.
+    -   **The set.** Each snapshot has a forward-only `ViewBatchSet` (`ViewBatchInputs::forwardOnly`: a full build of the family's lanes, all
+        movers). It makes the same `ListBuilder` decisions as the incremental lists, with fresher spheres.
+    -   **What the GPU still does.** `core.forward-sort` stays for **the decal buckets** (`CS_DCLF_DECAL_PLAIN`): it sorts their pairs into the half the
+        plain draws read, so without it plain decals draw nothing. The colour dispatch gets `forwardCapacity` and `refractionCapacity` 0, so the
+        build stages no forward draw. The shape keeps both, for the epoch's `empty`, `PrepareRefraction` and the layout. First person's forward
+        slots map to no bucket (`GraphConditions::firstPersonForwardDirect`, its colour epoch in the stream).
+    -   **First person** (`CS_DCLF_FIRST_PERSON`, off by default: the engine draws it). `DepthCommitted` in a GPU-driven frame opens no site. It
+        only culls the hosted view with that commit. `FirstPersonColourReached` hands off to `view.direct`, which records the forward part alone.
+    -   **Accepted differences against the GPU path.** No HZB test: the depth test still hides the pixels, at the cost of their overdraw. Frustum
+        by sphere (the CPU cull's). LOD selection reads the observer's this-frame state while the shaders read `t120`, the GPU's state a frame
+        behind, so the two can briefly disagree around a level change, and animated updates reach the observer a frame late.
+    -   **Measured** (2026-11-03, Dev-Fast, /Od): campfire and decal spot match DCLF off; no LOD skin among the forward lanes at the campfire
+        or on the tour, so the LOD path is not yet seen drawing; Whiterun 250-560 draws a frame, about 30 us culling on the pool and
+        250-530 us recording. Refraction drew one lane on the first-person run; its image has not been compared against DCLF off.
+        Optimized build, Whiterun, one run each: 95.9 fps with this path, 95.5 with `CS_DCLF_FORWARD_DIRECT=0`, worst frame 32 and 31 ms, no skipped frame.
 -   **Views.** Main camera and first person's forward part. Shadow views draw no blended Lighting: the caster rule rejects
     alpha-blended properties.
 
@@ -2691,8 +2730,8 @@ A second pipeline, switched live against the GPU one (`dclf:pipeline=auto|manual
 CPU-driven, Manual takes a choice per kind of cell, `ToggleSet::interiorCpu` and `exteriorCpu`, resolved at the build point by
 `RefreshGraphConditions`), to measure how much of DCLF's GPU overhead goes
 when the CPU culls and records instead: the GPU cull (BuildDrawsCS, the HZB, the sorts), the epochs' entry and exit barriers and
-DXVK's list splits at each epoch. The GPU path is unchanged; with `pipeline=gpu` the schedule dump is the same. The contract is
-`Core/Render/Direct/Direct.h`.
+DXVK's list splits at each epoch. The GPU path does not depend on it, but for its forward family, which goes through this pipeline
+([The forward epoch](#the-forward-epoch), "The forward family on the CPU"). The contract is `Core/Render/Direct/Direct.h`.
 
 **Suspended policies, in this mode only.** "DCLF owns all culling, on the GPU" (the CPU culls) and "No per-view lists" (the
 snapshot builder makes a list per view type). Why: they are what the experiment measures. The claims, the set, withholding, the
@@ -2835,7 +2874,7 @@ texture transforms, not the frame's.
 
 **Accepted differences.** The frustum test is a sphere against the view's planes (the GPU projects the sphere's AABB): the CPU
 keeps a subset of the GPU's draws. No HZB: more overdraw in colour, which draws exactly the depth pass's set (EQUAL holds).
-Per-snapshot views pop at their edges. Forward's cross-class order is as in the GPU path.
+Per-snapshot views pop at their edges.
 
 ## What the engine still draws
 

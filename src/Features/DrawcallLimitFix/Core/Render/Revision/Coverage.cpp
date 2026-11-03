@@ -80,7 +80,7 @@ namespace DCLF
 			       a_next.shadowPlacements == a_previous.shadowPlacements && a_next.shadowActiveViews == a_previous.shadowActiveViews && a_next.mainKnown == a_previous.mainKnown && a_next.viewport == a_previous.viewport &&
 			       a_next.blockSizes == a_previous.blockSizes &&
 			       a_next.resourceInputs == a_previous.resourceInputs &&
-			       a_next.shadowSlots == a_previous.shadowSlots && a_next.asyncEpochs == a_previous.asyncEpochs && a_next.cpuPipeline == a_previous.cpuPipeline &&
+			       a_next.shadowSlots == a_previous.shadowSlots && a_next.asyncEpochs == a_previous.asyncEpochs && a_next.cpuPipeline == a_previous.cpuPipeline && a_next.forwardDirect == a_previous.forwardDirect && a_next.firstPersonForwardDirect == a_previous.firstPersonForwardDirect &&
 			       !a_next.uploads.owner_before(a_previous.uploads) && !a_previous.uploads.owner_before(a_next.uploads);
 		}
 	}
@@ -107,6 +107,8 @@ namespace DCLF
 			next.uploads = host->RetainUploads();
 		}
 		next.cpuPipeline = Draws::CurrentGraphConditions().cpuPipeline;
+		next.forwardDirect = Draws::CurrentGraphConditions().forwardDirect;
+		next.firstPersonForwardDirect = Draws::CurrentGraphConditions().firstPersonForwardDirect;
 		auto& drawPipelines = DrawPipelines::Get();
 		next.targetsGeneration = drawPipelines.Generation();
 		next.claims = !IndirectDraws::Get().Failed();
@@ -252,6 +254,13 @@ namespace DCLF
 				const auto recordings = active->Get<RevisionRecordings>(R::kRecordingSlot + (hostedBy != kNoEpoch ? hostedBy : e));
 				rv.covered[e] = recordings && !recordings->recordings.empty() && recordings->recordings.front() &&
 				                (hostedBy == kNoEpoch ? host->EpochRecordingCurrent(*recordings->recordings.front()) : rv.covered[hostedBy] && recordings->Carries(e));
+				// Without the forward family's batches nothing draws the forward epoch's objects: the engine draws them this frame.
+				if (EpochTraitsOf(e).segment == RenderGraphRuntime::Segment::Forward && Draws::CurrentGraphConditions().forwardDirect && !Direct::ForwardBatches())
+					rv.covered[e] = false;
+				// Likewise first person's forward part, whose view then falls to the engine whole.
+				if (const auto& traits = EpochTraitsOf(e); traits.shape == ShapeKind::View && traits.index == Draws::ViewIndex(Api::EngineView::FirstPerson) &&
+					Draws::CurrentGraphConditions().firstPersonForwardDirect && !Direct::ForwardBatches())
+					rv.covered[e] = false;
 			}
 		for (std::uint32_t e = 0, epochs = EpochCount(); e < epochs; ++e)
 			rv.uncovered[e] += rv.covered[e] ? 0 : 1;

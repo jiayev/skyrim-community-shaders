@@ -5,6 +5,7 @@
 // roots its faces draw: ViewRoots.cpp.)
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
@@ -305,7 +306,9 @@ namespace DCLF
 		// values, its owners with the host's), and the view is posted for the depth site (Direct/ViewSites.h), which draws it.
 		if (EpochTraitsOf(epoch).hostedBy != kNoEpoch) {
 			const auto submitted = impl->CommitHostedView(a_view, epoch, a_listed, a_faces, a_drawn, a_nullTextures);
-			if (!Direct::CpuFrame() || submitted != ViewSubmit::Submitted || a_faces.empty())
+			// A GPU-driven frame posts first person alone: its forward part is the CPU's (GraphConditions::firstPersonForwardDirect).
+			const bool posted = Direct::CpuFrame() || (a_view == Api::EngineView::FirstPerson && CurrentGraphConditions().firstPersonForwardDirect);
+			if (!posted || submitted != ViewSubmit::Submitted || a_faces.empty())
 				return submitted;
 			impl->PostHostedView(a_view, epoch, a_faces);
 			return submitted;
@@ -345,12 +348,16 @@ namespace DCLF
 		if (trees)
 			rows = impl->ViewFaceRows(a_view, *shape, owners.List());
 		std::uint32_t drawn = 0;
+		// First person's forward part, the CPU's: its run handed to the epoch's late pass in DXVK's stream ahead of its execution.
+		const bool handedOff = a_faces.empty() && a_view == Api::EngineView::FirstPerson && CurrentGraphConditions().firstPersonForwardDirect && Direct::FirstPersonColourReached();
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(epochs.segments[a_epoch], [&](org::RenderGraph&) {
 			if (!a_faces.empty())
 				drawn = impl->CommitView(*shape, a_faces, a_listed.inputs, trees ? &rows : nullptr);
 			impl->SubmitRevisionRecording(epoch, *revision.recordings, 0);
 			owners.Seal(impl->scene.get());
 		}, owners.Handle());
+		if (!ok && handedOff)
+			Direct::ForwardHandOffCancel();
 		if (!ok)
 			return ViewSubmit::Failed;
 		if (a_drawn)
