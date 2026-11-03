@@ -21,7 +21,9 @@ namespace DCLF::HookSites
 	 * layering over those is reviewed in-tree (a hook that must yield to one, as the point lights' category filter to Grass
 	 * Optimizations' NiNode::OnVisible, checks it at its own install).
 	 *
-	 * The Require calls record conflicts; Conflicts() reads them. Main thread, at PostPostLoad.
+	 * The Require calls record conflicts; Conflicts() reads them. A conflict at a code site also logs the game's version, the site's address
+	 * and bytes, the calls and jumps around it that leave the game's code, and the loaded modules that name its code, so a user's log can
+	 * name the patch. Main thread, at PostPostLoad.
 	 */
 
 	/** @brief A chained CALL rel32: any call target is taken (another plugin's hook runs, and through it the engine's). */

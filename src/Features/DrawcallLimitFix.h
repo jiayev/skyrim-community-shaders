@@ -19,6 +19,8 @@ struct DrawcallLimitFix : Feature
 	virtual inline std::string GetShortName() override { return "DrawcallLimitFix"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 	virtual bool IsInMenu() const override { return true; }
+	/** @brief On by default, unlike other pre-release core features. */
+	virtual bool IsDisabledByDefault() const override { return false; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{

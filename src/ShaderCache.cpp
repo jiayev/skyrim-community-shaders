@@ -15,6 +15,7 @@
 #include "Utils/CompileDedupe.h"
 #include "Utils/D3D.h"
 #include "Utils/FileRename.h"
+#include "Utils/Logging.h"
 #include "Utils/ShaderContentStore.h"
 
 #include "Features/DrawcallLimitFix.h"
@@ -1669,8 +1670,9 @@ namespace SIE
 			if (!globals::state->enableContentStore.load(std::memory_order_relaxed))
 				return nullptr;
 			if (GetCompilerIdentity().empty()) {
-				static std::once_flag warned;
-				std::call_once(warned, [] { logger::warn("Shader content store disabled: could not identify d3dcompiler_47.dll"); });
+				static Util::OnceFlag warned;
+				if (warned.First())
+					logger::warn("Shader content store disabled: could not identify d3dcompiler_47.dll");
 				return nullptr;
 			}
 			static Util::ShaderContentStore::Store& store = []() -> Util::ShaderContentStore::Store& {

@@ -240,9 +240,17 @@ namespace DCLF
 	void ShadowEngine::RequireShadowSequences(ImplProducer& a_producer, GrowthBuild& a_build)
 	{
 		const auto& producer = a_producer.producer;
-		const std::uint32_t draws = producer.drawBound.Draws();
+		// A view draws in one mode: the most any mode can cast, over every caster key (ShadowBoundsOf counts only those with a slot).
+		std::uint64_t casting = 0;
+		for (const auto& keys : producer.drawBound.modeKeyDraws) {
+			std::uint64_t mode = 0;
+			for (const auto& [key, keyDraws] : keys)
+				mode += keyDraws;
+			casting = std::max(casting, mode);
+		}
+		const auto draws = static_cast<std::uint32_t>(std::min<std::uint64_t>(casting, UINT32_MAX));
 		CheckSequenceLimits("a shadow view", draws, false);
-		// Every slot the frame made (as posted) holds the scene's draw bound: a view's claims always fit the slot they draw in.
+		// Every slot the frame made (as posted) holds the scene's casting bound: a view's claims always fit the slot they draw in.
 		UnitGroup slots;
 		if (const auto& slotBuffers = producer.inputs.shadowSlots)
 			for (const auto& sequences : slotBuffers->sequences)
@@ -263,7 +271,8 @@ namespace DCLF
 		const bool newSlots = slots > layout.viewSlots;
 		if (newSlots) {
 			// The slots' buffers are the render thread's to make (ShadowSlotsRequest below: a graph build declares them).
-			layout.viewSlots = org::services::GrowthPolicy::Doubling().NextAs(layout.viewSlots, slots);
+			// A quarter past the views, not doubled: every slot's sequences hold the scene's casting bound.
+			layout.viewSlots = org::services::GrowthPolicy::Headroom(25).NextAs(layout.viewSlots, slots);
 			logger::info("[DCLF] shadow view slots: {} grown to {}", latches.shadow.viewSlots, layout.viewSlots);
 		}
 		if (a_keys > layout.keySlots) {

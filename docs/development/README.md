@@ -12,6 +12,7 @@
 - **[DCLF validation](./dclf-validation.md)** - DCLF's switches, parity checks, diagnostics and probes, how to validate a change, crash triage, and the bugs parity found
 - **[DCLF open defects](./dclf-open-defects.md)** - Defects and failing parity checks under investigation, with their evidence
 - **[DCLF roadmap](./dclf-roadmap.md)** - The work left, by priority: engine work still on the render thread, the scene lane, GPU cost, coverage, integrations and tooling
+- **[Memory usage](./memory-usage.md)** - What occupies VRAM in the main menu, by owner and resource, for choosing ORG aliasing port targets
 - **[Skyrim engine notes](./skyrim-engine-notes.md)** - What the decompiled game binary does, where features depend on it
 
 ## Subsystems

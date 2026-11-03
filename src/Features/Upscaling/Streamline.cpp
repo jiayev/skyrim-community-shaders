@@ -1,5 +1,6 @@
 #include "Streamline.h"
 #include "Features/DrawcallLimitFix.h"
+#include "Features/Upscaling.h"
 
 #include "DXVKInterop.h"
 
@@ -78,6 +79,9 @@ namespace
 		// the D3D11 branch does not have at all. Streamline is now always initialised for in-game
 		// switching, so this has to be gated on use rather than on initialisation.
 		std::atomic<bool> latencyMarkersNeeded = { false };
+		// Frame generation also needs them for sl.common to recycle its input copies, and sl.common goes on making those once a
+		// plugin has asked for the tags, after the plugin is unloaded too. So they stay on from the first load (2.4 GB of copies otherwise).
+		std::atomic<bool> frameGenerationHasLoaded = { false };
 
 		// Disable dispatch after an SEH fault to prevent repeated crashes.
 
@@ -460,9 +464,11 @@ bool Streamline::Initialize()
 	// The controller keeps at most one frame-generation feature loaded at runtime.
 	dlssgHardware = ProbeDLSSGHardware();
 
-	// Reflex and PCL make the interposer enable VK_NV_low_latency on DXVK's device, which Nsight Graphics refuses to capture. For
-	// now they load only on request, CS_STREAMLINE_REFLEX=1, and DLSS-G (which needs Reflex) with them.
-	const bool reflexRequested = Util::SwitchFile::Enabled("CS_STREAMLINE_REFLEX");
+	// Frame generation needs Reflex and PCL. DLSS-G does not load without Reflex. FSR-FG needs PCL's present marker: without it
+	// sl.common never recycles the input copies it makes each frame, and holds 32 frames of them (3.3 GB at 4K, past the budget of
+	// a 16 GB card). They do make the interposer enable VK_NV_low_latency on DXVK's device, which Nsight Graphics refuses to capture,
+	// so CS_STREAMLINE_REFLEX=0 leaves them out for a capture.
+	const bool reflexRequested = Util::SwitchFile::Value("CS_STREAMLINE_REFLEX") != "0";
 	std::vector<sl::Feature> featuresToLoad = { sl::kFeatureDLSS, sl::kFeatureFSR, sl::kFeatureFSR_G, sl::kFeatureXeSS };
 	if (reflexRequested) {
 		featuresToLoad.push_back(sl::kFeatureReflex);
@@ -470,7 +476,10 @@ bool Streamline::Initialize()
 	}
 	if (dlssgHardware && reflexRequested)
 		featuresToLoad.push_back(sl::kFeatureDLSS_G);
-	logger::info("[Streamline] Reflex {} (CS_STREAMLINE_REFLEX=1 loads Reflex, PCL and DLSS-G)", reflexRequested ? "requested" : "not loaded");
+	if (reflexRequested)
+		logger::info("[Streamline] Reflex, PCL and DLSS-G loaded (CS_STREAMLINE_REFLEX=0 leaves them out)");
+	else
+		logger::warn("[Streamline] CS_STREAMLINE_REFLEX=0: no Reflex, PCL or DLSS-G; FSR-FG would hold 32 frames of input copies in VRAM");
 
 	sl::Preferences pref{};
 	pref.renderAPI = sl::RenderAPI::eVulkan;
@@ -781,9 +790,10 @@ void Streamline::CaptureDLSSGPresentState()
 
 void Streamline::UpdateReflex(bool a_enable, bool a_boost, uint32_t a_frameLimitUs)
 {
-	g_sl.latencyMarkersNeeded.store(a_enable || g_dlssgCurrentlyLoaded.load(std::memory_order_acquire) ||
-										g_fsrfgCurrentlyLoaded.load(std::memory_order_acquire),
-		std::memory_order_release);
+	if (globals::features::upscaling.settings.frameGeneration || g_dlssgCurrentlyLoaded.load(std::memory_order_acquire) ||
+		g_fsrfgCurrentlyLoaded.load(std::memory_order_acquire))
+		g_sl.frameGenerationHasLoaded.store(true, std::memory_order_relaxed);
+	g_sl.latencyMarkersNeeded.store(a_enable || g_sl.frameGenerationHasLoaded.load(std::memory_order_relaxed), std::memory_order_release);
 	if (!initialized || !featureReflex)
 		return;
 

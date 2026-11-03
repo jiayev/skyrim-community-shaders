@@ -376,7 +376,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	vsout.Position = viewPos;
 #	if defined(DCLF_BINDLESS)
-	// A decal's depth toward the eye (DCLFObjects.hlsli, DCLFDecalNudged): the engine's decal bias, which DCLF's draws cannot carry.
+	// A decal's depth toward the eye (DCLFObjects.hlsli, DCLFDecalNudged), on top of the pipeline's depth bias.
 	// The view has no translation, so this entry of the matrix is the projection's: about -near.
 	vsout.Position = DCLFDecalNudged(vsout.Position, DCLFObjectIndex, abs(FrameBuffer::CameraViewProj[2][3]));
 #	endif

@@ -667,10 +667,10 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	for (const auto& [category, features] : categorizedFeatures)
 		Menu::categoryCounts[category] = static_cast<int>(features.size());
 
-	// Categories start expanded, except Utility (debug and developer tools)
+	// Categories start expanded
 	const auto addCategory = [&](const std::string& category, const std::vector<Feature*>& features) {
 		menuList.push_back(CategoryHeader{ category });
-		if (categoryExpansionStates.try_emplace(category, category != FeatureCategories::kUtility).first->second)
+		if (categoryExpansionStates.try_emplace(category, true).first->second)
 			std::ranges::copy(features, std::back_inserter(menuList));
 	};
 	for (const auto categoryName : FeatureCategories::kMenuOrder) {

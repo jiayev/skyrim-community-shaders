@@ -294,8 +294,8 @@ float2 DCLFWindTimersOf(uint a_object)
 static const uint kDCLFRecordEffectBillboard = 1u << 4;
 
 // A decal's draw (LightingConstants.h, kRecordDecalNudge: bit 8): its clip position moved toward the eye by kDCLFDecalDepthNudge of the
-// depth range. The engine's decal depth bias is pipeline state, which a device-generated command's pipeline switch does not carry, and
-// where the engine's bias is none (interiors' modes 7 and 11) the decal sits on its host by an exact depth tie, which DCLF's two vertex
+// depth range, on top of the engine's decal depth bias, which is pipeline state and covers grazing views with its slope term. Where the
+// engine's bias is none (interiors' modes 7 and 11) the decal sits on its host by an exact depth tie, which DCLF's two vertex
 // modules (the host's pulled Z-prepass, the decal's colour draw) do not keep to the bit. 2^-20: 16 steps of a D24 depth.
 // That is too little up close and far from the origin, where a decal and its host can sit several float steps apart: the census
 // (CS_DCLF_PRECISION_CENSUS) measured 1.5 steps lost per object, so a pair can differ by 4 once each is rounded. The nudge is at least that

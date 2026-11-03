@@ -210,6 +210,34 @@ namespace DCLF::Features::Grass
 			return true;
 		}
 
+		/** @brief The buckets naming a texture that moved bind again: a superseded import holds its old storage, and that storage's chunk. */
+		void FollowRelocatedTextures(GrassTables& a_tables, Mirror& a_mirror)
+		{
+			std::vector<ID3D11ShaderResourceView*> moved;
+			const bool complete = GpuTextures::Get().RelocatedViews(a_tables.relocationCursor, moved);
+			if (complete && moved.empty())
+				return;
+			const ankerl::unordered_dense::set<ID3D11ShaderResourceView*> views(moved.begin(), moved.end());
+			for (std::uint32_t slot = 0; slot < a_mirror.BucketSlots(); ++slot) {
+				auto* bucket = a_mirror.SlotBucket(slot);
+				if (!bucket || !bucket->bound)
+					continue;
+				const auto& source = bucket->source;
+				bool names = !complete || views.contains(ViewOf(source.diffuse.get()));
+				if (bucket->key.pbr) {
+					auto uses = [&](const RE::NiPointer<RE::NiSourceTexture>& a_texture, bool a_normal) {
+						auto* view = ViewOf(a_texture.get());
+						return views.contains(view ? view : DefaultView(a_normal));
+					};
+					names = names || uses(source.normal, true) || uses(source.rmaos, false) || uses(source.features0, false) || uses(source.features1, false) || uses(source.emissive, false);
+				}
+				if (names) {
+					bucket->bound = false;
+					a_mirror.MarkBucket(slot);
+				}
+			}
+		}
+
 		// The scene's tables are made (the first frame with a device): the programs, then the tables.
 		std::shared_ptr<void> Setup(const Api::SceneResourcesSetup& a_setup)
 		{
@@ -334,6 +362,7 @@ namespace DCLF::Features::Grass
 			a_tables.bindingGeneration = generation;
 			for (const std::uint32_t slot : std::exchange(a_tables.unbound, {}))
 				a_mirror.MarkBucket(slot);
+			FollowRelocatedTextures(a_tables, a_mirror);
 			Mirror::Changes changes;
 			a_mirror.TakeChanges(changes);
 			for (const auto& [first, count] : changes.freedRanges) {

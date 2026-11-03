@@ -50,8 +50,8 @@ namespace DCLF::ImportRelocations
 		}
 		imagesTaken.fetch_add(images.size(), std::memory_order_relaxed);
 		buffersTaken.fetch_add(buffers.size(), std::memory_order_relaxed);
-		if (!images.empty())
-			GpuTextures::Get().NoteRelocations(images);
+		// With none as well: the moves no import claimed expire here, or they would hold their old storages until the next move.
+		GpuTextures::Get().NoteRelocations(images);
 		// Each instance imports on its own (a buffer both use is two imports): each takes what names its own.
 		if (!buffers.empty()) {
 			GpuResources::Scene().PostRelocations(buffers);

@@ -80,7 +80,8 @@ namespace FrameGen
 			!globals::game::graphicsState)
 			return;
 
-		if (Upscaling::IsWindowUnusable())
+		// An unsettled display takes frame generation down even for a window that is not in use (Alt+Tabbed, say).
+		if (Upscaling::IsWindowUnusable() && !Upscaling::IsDisplayUnsettled())
 			return;
 
 		auto* streamline = Streamline::GetSingleton();

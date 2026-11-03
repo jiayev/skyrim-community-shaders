@@ -24,6 +24,7 @@ namespace DCLF::Scene
 			for (const auto& answer : sb.arrived)
 				ResolveShadowTextureBinding(answer.first);
 		TakeFixedBindings();
+		FollowRelocatedSharedTextures();
 		// The projected textures: a new capture's views asked for (the capture holds them meanwhile), else the pending ones answered.
 		if (auto capture = channels.projectedPosted.load(std::memory_order_acquire); capture != sb.projectedSeen) {
 			sb.projectedSeen = std::move(capture);
@@ -42,6 +43,31 @@ namespace DCLF::Scene
 		TracyPlot("CS.DCLF.ShadowTextureChanges", static_cast<std::int64_t>(changes.size()));
 		TracyPlot("CS.DCLF.ShadowTexturePending", static_cast<std::int64_t>(sb.shadowPending));
 		TracyPlot("CS.DCLF.ShadowTextureOwners", static_cast<std::int64_t>(sb.shadowTextures.size() - sb.shadowPending));
+	}
+
+	void Coordinator::FollowRelocatedSharedTextures()
+	{
+		auto& sb = sharedBindings;
+		// A superseded import holds its old storage, and that storage's chunk, while it is held here. Each asks for the new storage's
+		// import, and draws with the one it holds until answered.
+		std::vector<ID3D11ShaderResourceView*> moved;
+		for (const auto& [view, owner] : lookups.shadowTextureOwners)
+			if (GpuTextures::Superseded(owner.get()))
+				moved.push_back(view);
+		for (auto* view : moved) {
+			const auto it = sb.shadowTextures.find(view);
+			if (it == sb.shadowTextures.end() || it->second.pending)
+				continue;
+			it->second.pending = true;
+			++sb.shadowPending;
+			ResolveShadowTextureBinding(view);
+		}
+		std::uint32_t projected = 0;
+		for (std::uint32_t i = 0; i < lookups.projectedTextures.size(); ++i)
+			if (GpuTextures::Superseded(lookups.projectedOwners[i].get()))
+				projected |= 1u << i;
+		if (projected)
+			ResolveProjectedBindings(projected);
 	}
 
 	std::uint32_t Coordinator::DrainSharedReplies()
@@ -243,7 +269,7 @@ namespace DCLF::Scene
 			const auto it = a_cache.find(a_view);
 			if (it == a_cache.end())
 				return false;
-			if (auto owner = it->second.owner.lock()) {
+			if (auto owner = it->second.owner.lock(); owner && !GpuTextures::Superseded(owner.get())) {
 				a_out = { it->second.index, std::move(owner) };
 				return true;
 			}

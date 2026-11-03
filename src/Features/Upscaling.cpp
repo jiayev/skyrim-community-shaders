@@ -579,7 +579,7 @@ void Upscaling::ApplyHardwareDefaults()
 		}
 	}
 
-	// Reflex is no longer switched on by default (see Streamline::Initialize: it loads only with CS_STREAMLINE_REFLEX=1).
+	// The hardware defaults leave Reflex's low-latency mode off. Streamline::Initialize still loads the feature, for frame generation.
 }
 
 Upscaling::FrameGenMethod Upscaling::GetFrameGenMethod() const
@@ -595,7 +595,7 @@ Upscaling::FrameGenMethod Upscaling::GetFrameGenMethod() const
 
 bool Upscaling::IsFrameGenerationActive() const
 {
-	if (!loaded || !settings.frameGeneration)
+	if (!loaded || !settings.frameGeneration || IsDisplayUnsettled())
 		return false;
 	if (DXVKInterop::GetSingleton()->HasCommandRingFault())
 		return false;
@@ -1621,6 +1621,37 @@ void Upscaling::NotifyWindowFocus(bool a_focused)
 void Upscaling::NotifyWindowModifying(bool a_modifying)
 {
 	s_windowModifying.store(a_modifying, std::memory_order_relaxed);
+}
+
+void Upscaling::NotifyDisplayState(bool a_on)
+{
+	// Windows reports the current state on registering, which is not a change.
+	if (s_displayOff.exchange(!a_on, std::memory_order_relaxed) == !a_on)
+		return;
+	logger::info("[Upscaling] the display turned {}", a_on ? "on" : "off");
+	s_displayChangedTick.store(GetTickCount64(), std::memory_order_relaxed);
+}
+
+void Upscaling::NotifyDesktopChanged()
+{
+	s_displayChangedTick.store(GetTickCount64(), std::memory_order_relaxed);
+}
+
+bool Upscaling::IsDisplayUnsettled()
+{
+	// CS_FG_DISPLAY_SUSPEND=1: frame generation unloads before a monitor leaves the desktop (the display reports off about 10 s ahead)
+	// and reloads once it settles. Off by default: it was added for a freeze that turned out to be a lock in DXVK's D3D11Initializer.
+	static const bool s_enabled = [] {
+		char v[2] = {};
+		return GetEnvironmentVariableA("CS_FG_DISPLAY_SUSPEND", v, sizeof(v)) && v[0] == '1';
+	}();
+	if (!s_enabled)
+		return false;
+	static constexpr std::uint64_t kSettleMilliseconds = 5000;
+	if (s_displayOff.load(std::memory_order_relaxed))
+		return true;
+	const auto changed = s_displayChangedTick.load(std::memory_order_relaxed);
+	return changed != 0 && GetTickCount64() - changed < kSettleMilliseconds;
 }
 
 bool Upscaling::IsWindowUnusable()

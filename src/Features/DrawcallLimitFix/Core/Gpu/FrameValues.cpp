@@ -384,10 +384,13 @@ namespace DCLF
 		// A failed upload can draw the old backing, so its descriptors must remain alive as well.
 		std::unordered_map<std::uint64_t, std::shared_ptr<const void>> fieldOwners;
 		std::vector<ShadingFieldValue> pendingFieldValues;
+		// Past this many jobs without an upload a backing has left the rotation: more than the frames in flight and their copies.
+		static constexpr std::uint64_t kIdleBackingJobs = 16;
 		struct BackingOwners
 		{
 			std::weak_ptr<org::services::Backing> backing;
 			std::shared_ptr<const ResourceOwners> resources;
+			std::uint64_t seq = 0;  // the job whose upload it was
 		};
 		std::unordered_map<std::uint64_t, BackingOwners> backingFieldOwners;
 
@@ -762,6 +765,11 @@ namespace DCLF
 			done.wait(finished, std::memory_order_acquire);
 		pendingFieldValues.insert(pendingFieldValues.end(), a_job.fieldValues.begin(), a_job.fieldValues.end());
 		std::erase_if(backingFieldOwners, [](const auto& entry) { return entry.second.backing.expired(); });
+		// A backing the pool stopped handing out is no frame's and no failed upload's fallback: its descriptors' imports, each holding a
+		// texture and any old storage a move left it, go now rather than when the pool lets the backing go.
+		for (auto& [generation, entry] : backingFieldOwners)
+			if (entry.seq + kIdleBackingJobs < a_job.seq)
+				entry.resources.reset();
 		if (const auto previous = backingFieldOwners.find(a_job.leases[kShading]->generation); previous != backingFieldOwners.end())
 			a_job.fieldResources->push_back(previous->second.resources);
 		const auto start = std::chrono::steady_clock::now();
@@ -2210,7 +2218,7 @@ namespace DCLF
 				owners->push_back(owner);
 			a_job.fieldResources->push_back(owners);
 			Send(a_job, kShading, shading);
-			backingFieldOwners[a_job.leases[kShading]->generation] = { a_job.leases[kShading].Get(), std::move(owners) };
+			backingFieldOwners[a_job.leases[kShading]->generation] = { a_job.leases[kShading].Get(), std::move(owners), a_job.seq };
 		}
 		// A registered pool's send: one zone name (Tracy's are static), the pool's name its text.
 		ForEachRegistered(a_job, [](const Extensions::FrameValuePoolEntry& a_entry, Api::FrameValuePoolProducer& a_producer) {

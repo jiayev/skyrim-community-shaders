@@ -4,6 +4,7 @@
 #include "GpuIdleTrace.h"
 #include "Profiler.h"
 #include "Utils/SwitchFile.h"
+#include "VkDriverTrace.h"
 
 #include <algorithm>
 
@@ -475,6 +476,8 @@ bool DXVKInterop::Initialize()
 	} else {
 		logger::info("[DXVKInterop] Bridged to DXVK Vulkan device (queueFamily {})", queueFamilyIndex);
 	}
+
+	VkDriverTrace::Install(instance, physicalDevice, device);
 
 	available = true;
 	return true;

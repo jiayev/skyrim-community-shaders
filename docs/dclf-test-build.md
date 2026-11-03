@@ -32,7 +32,7 @@ your choices.
   After a format change the game can also pause for a few seconds while the new pipelines compile.
 - **Light Limit Fix's local shadow cache stays off** while DCLF is loaded. The two would choose different shadow-casting lights,
   so Light Limit Fix's menu shows the cache as unavailable.
-- **Frame generation (FSR frame generation, DLSS-G) is untested** with DCLF. Please mention it in a report if you use it.
+- **Frame generation (FSR frame generation, DLSS-G) is lightly tested** with DCLF: short runs in Whiterun and an interior, with HDR off. Please mention it in a report if you use it.
 - **Occasional crashes** are under investigation, most often during long walks through busy areas with cells loading, and at
   load. A crash log helps a lot (see below).
 - **Plugins that change scene objects directly** (node flags, fades, materials or alpha set without the game's own functions)

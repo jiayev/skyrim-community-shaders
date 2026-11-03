@@ -483,6 +483,7 @@ namespace DCLF
 				std::array<rhi::IndirectPipelineSetPtr, kVariantCount> sets;
 				std::array<rhi::CommandSignaturePtr, kVariantCount> signatures;
 				std::array<std::vector<rhi::PipelineHandle>, kVariantCount> written;
+				std::array<std::uint32_t, kVariantCount> capacity{};  // what each set was made to hold
 				std::uint32_t applied = 0;
 			};
 			std::vector<ClassSets> classes;  // by state class, in creation order
@@ -1291,14 +1292,17 @@ namespace DCLF
 		static void CheckClassMembers(const SetVersion& a_version, std::uint32_t a_class, const std::vector<std::uint32_t>& a_members,
 			std::vector<std::uint8_t>& a_seen, Check&& a_check);
 
-		/** @brief Writes [a_applied, a_admitted) into a_set, creating it (initial pipeline 0) and its signatures if absent. */
+		/**
+		 * @brief Writes [a_applied, a_admitted) into a_set, creating it (initial pipeline 0, to hold a_capacity) and its signatures if
+		 * absent.
+		 */
 		template <class GetPipeline, class CreateSignatures>
-		bool ApplyToSet(rhi::IndirectPipelineSetPtr& a_set, std::uint32_t a_applied, std::uint32_t a_admitted, const char* a_name, GetPipeline&& a_pipeline,
+		bool ApplyToSet(rhi::IndirectPipelineSetPtr& a_set, std::uint32_t a_applied, std::uint32_t a_admitted, std::uint32_t a_capacity, const char* a_name, GetPipeline&& a_pipeline,
 			CreateSignatures&& a_createSignatures)
 		{
 			std::uint32_t from = a_applied;
 			if (!a_set) {
-				if (device.CreateIndirectPipelineSet(rhi::IndirectPipelineSetDesc{ a_pipeline(0), kMaxPipelines }, a_set) != rhi::Result::Ok)
+				if (device.CreateIndirectPipelineSet(rhi::IndirectPipelineSetDesc{ a_pipeline(0), a_capacity }, a_set) != rhi::Result::Ok)
 					return false;
 				a_set->SetName(a_name);
 				if (!a_createSignatures())
