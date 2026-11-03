@@ -36,6 +36,13 @@ uint WaterProbeStrongestTap(float4 weights)
 }
 #endif
 
+uint ProbeTexelFace(uint2 pixel, uint width)
+{
+	int2 centered = int2(pixel) * 2 + 1 - int(width);
+	return (centered.x < 0 ? 1u : 0u) | (centered.y < 0 ? 2u : 0u) |
+	       (abs(centered.x) + abs(centered.y) > int(width) ? 4u : 0u);
+}
+
 bool ProbeSampleDepth(float3 position, uint2 dimensions, out float gap, out float footprint, out float2 uv)
 {
 	gap = 0;
@@ -57,9 +64,7 @@ bool ProbeSampleDepth(float3 position, uint2 dimensions, out float gap, out floa
 		return false;
 	uv = EnvironmentProbe::Encode(delta);
 	uint2 pixel = min(uint2(saturate(uv) * dimensions), dimensions - 1);
-	int2 centered = int2(pixel) * 2 + 1 - int(dimensions.x);
-	uint pixelFace = (centered.x < 0 ? 1u : 0u) | (centered.y < 0 ? 2u : 0u) |
-	                 (abs(centered.x) + abs(centered.y) > int(dimensions.x) ? 4u : 0u);
+	uint pixelFace = ProbeTexelFace(pixel, dimensions.x);
 	if ((ProbeValidFaces & (1u << pixelFace)) == 0 ||
 		(pixelFace != face && any(abs(ProbeOriginOffsets[pixelFace].xyz - ProbeOriginOffsets[face].xyz) > 1e-3)))
 		return false;
@@ -219,30 +224,27 @@ bool TraceEnvironmentProbeWithOffset(float3 origin, float3 direction, float star
 #ifdef PROBE_TRACE_WATER
 				uint2 texel = min(uint2(saturate(hitUV) * dimensions), dimensions - 1);
 				float depth;
-				float2 capturedUV = (texel + 0.5) / dimensions;
 				float coverage = 1;
 				if (WaterProbeCanFilter(texel, dimensions)) {
 					float4 depths;
 					float4 support = WaterProbeFootprint(hitUV, dimensions, depths);
-					uint tap = WaterProbeStrongestTap(support);
-					depth = depths[tap];
 					coverage = saturate(dot(support, 1.0.xxxx));
 					if (coverage <= 0)
 						return false;
-					int2 base = int2(floor(hitUV * dimensions - 0.5));
-					capturedUV = (base + WaterProbeOffsets[tap] + 0.5) / dimensions;
+					// Interpolate inverse depth on the hit surface. Keep foreground and
+					// background separate at silhouettes, while allowing sloped surfaces.
+					float tapDepth = depths[WaterProbeStrongestTap(support)];
+					float texelWidth = 2.0 * tapDepth / dimensions.x;
+					float4 layer = support * (abs(depths - tapDepth) <= thickness + 4.0 * texelWidth);
+					depth = dot(layer, 1.0.xxxx) / dot(layer, (layer > 0) ? rcp(depths) : 0);
 					[branch] if (all(support > 0))
 					{
 						color = ProbeRadianceTexture.SampleLevel(PROBE_TRACE_SAMPLER, hitUV, 0).rgb;
-						// Keep reprojection continuous across a locally continuous radial surface.
-						if (all(abs(depths - depth) <= thickness + depth * 2.0 / dimensions.x)) {
-							depth = dot(support, depths);
-							capturedUV = hitUV;
-						}
 					}
 					else
 					{
 						// Normalize the finite taps themselves so mismatched hardware filter weights cannot amplify the color.
+						int2 base = int2(floor(hitUV * dimensions - 0.5));
 						float4 weights = support / coverage;
 						color = 0;
 						[unroll] for (uint j = 0; j < 4; ++j)
@@ -252,8 +254,9 @@ bool TraceEnvironmentProbeWithOffset(float3 origin, float3 direction, float star
 					depth = ProbeDepthTexture.Load(int3(texel, 0));
 					color = ProbeRadianceTexture.Load(int3(texel, 0)).rgb;
 				}
-				float3 capturedDir = EnvironmentProbe::Decode(capturedUV);
-				waterHit = float4(ProbeOriginOffsets[EnvironmentProbe::GetFace(capturedDir)].xyz + depth * capturedDir, coverage);
+				// Reproject the ray at its subtexel direction, including along octant edges.
+				float3 capturedDir = EnvironmentProbe::Decode(hitUV);
+				waterHit = float4(ProbeOriginOffsets[ProbeTexelFace(texel, dimensions.x)].xyz + depth * capturedDir, coverage);
 #else
 				color = EnvironmentProbe::SampleRadiance(ProbeRadianceTexture, PROBE_TRACE_SAMPLER, hitUV, dimensions);
 #endif
