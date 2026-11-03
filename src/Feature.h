@@ -285,19 +285,6 @@ public:
 	 */
 	virtual std::vector<FeatureConstraints::Constraint> GetActiveConstraints() const { return {}; }
 
-	/**
-	 * @brief Validates this feature's disk-cache entry against current install state.
-	 * @param a_ini The cache INI to read from.
-	 * @return True if the cache entry matches the current feature version and load state.
-	 */
-	virtual bool ValidateCache(CSimpleIniA& a_ini);
-
-	/**
-	 * @brief Writes this feature's version and enabled state into the disk-cache INI.
-	 * @param a_ini The cache INI to write to.
-	 */
-	virtual void WriteDiskCacheInfo(CSimpleIniA& a_ini);
-
 	/** @brief Invalidates any cached compiled shaders owned by this feature. */
 	virtual void ClearShaderCache() {}
 

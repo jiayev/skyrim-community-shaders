@@ -1651,8 +1651,6 @@
     "menu.settings.skip_clear_cache_dialogue": "Пропустить подтверждение очистки кэша",
     "menu.settings.skip_clear_cache_dialogue_tooltip": "При включении кэш очищается без подтверждения.",
     "menu.settings.skip_compilation_key": "Клавиша пропуска компиляции:",
-    "menu.settings.skip_unchanged_shaders": "Пропускать неизменённые шейдеры",
-    "menu.settings.skip_unchanged_shaders_tooltip": "При включении шейдер перекомпилируется только если .hlsl новее .bin на диске. Требует включённого «Кэша на диске».",
     "menu.settings.status": "Статус",
     "menu.settings.styling_tab_borders": "Рамки",
     "menu.settings.styling_tab_rounding": "Скругление",

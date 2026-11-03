@@ -200,48 +200,6 @@ void Feature::Save(json& o_json)
 		SaveSettings(o_json[GetName()]);
 }
 
-bool Feature::ValidateCache(CSimpleIniA& a_ini)
-{
-	auto name = GetName();
-	auto ini_name = GetShortName();
-
-	logger::info("Validating {}", name);
-
-	auto enabledInCache = a_ini.GetBoolValue(ini_name.c_str(), "Enabled", false);
-	if (enabledInCache && !loaded) {
-		logger::info("Feature was uninstalled");
-		return false;
-	}
-	if (!enabledInCache && loaded) {
-		logger::info("Feature was installed");
-		return false;
-	}
-
-	if (loaded) {
-		auto versionInCache = a_ini.GetValue(ini_name.c_str(), "Version");
-		if (!versionInCache) {
-			logger::info("No cached version found. Installed {}", version);
-			return false;
-		}
-		if (strcmp(versionInCache, version.c_str()) != 0) {
-			logger::info("Change in version detected. Installed {} but {} in Disk Cache", version, versionInCache);
-			return false;
-		} else {
-			logger::info("Installed version and cached version match.");
-		}
-	}
-
-	logger::info("Cached feature is valid");
-	return true;
-}
-
-void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
-{
-	auto ini_name = GetShortName();
-	a_ini.SetBoolValue(ini_name.c_str(), "Enabled", loaded);
-	a_ini.SetValue(ini_name.c_str(), "Version", version.c_str());
-}
-
 /**
  * @brief Provides access to the registry of all known features.
  * @return A constant reference to the vector of all known feature instances.

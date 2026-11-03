@@ -266,7 +266,7 @@ void LocalExposure::ClearShaderCache()
 			}
 	}
 
-	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/LocalExposure");
+	globals::shaderCache->ReloadShaderSources();
 	CompileComputeShaders();
 }
 

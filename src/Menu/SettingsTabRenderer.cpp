@@ -41,7 +41,6 @@ namespace
 		// Shaders & Cache
 		{ Ids::kShadersCache, "menu.settings.use_custom_shaders", "Use Custom Shaders" },
 		{ Ids::kShadersCache, "menu.settings.enable_disk_cache", "Enable Disk Cache" },
-		{ Ids::kShadersCache, "menu.settings.skip_unchanged_shaders", "Skip Unchanged Shaders" },
 		{ Ids::kShadersCache, "menu.settings.enable_async", "Enable Async" },
 		{ Ids::kShadersCache, "menu.settings.skip_clear_cache_dialogue", "Skip Clear Cache Dialogue" },
 		// Keybindings
@@ -724,22 +723,6 @@ void SettingsTabRenderer::RenderShadersSection()
 		if (ImGui::Checkbox(T("menu.settings.enable_disk_cache", "Enable Disk Cache"), &useDiskCache))
 			shaderCache->SetDiskCache(useDiskCache);
 		Util::SettingHint(T("menu.settings.enable_disk_cache_hint", "Saves compiled shaders to disk, so later starts load them instead of compiling."));
-
-		ImGui::Spacing();
-		bool skipUnchanged = shaderCache->IsSkipUnchangedShaders();
-		{
-			Util::DisableGuard noDiskCache(!useDiskCache);
-			if (ImGui::Checkbox(T("menu.settings.skip_unchanged_shaders", "Skip Unchanged Shaders"), &skipUnchanged))
-				shaderCache->SetSkipUnchangedShaders(skipUnchanged);
-			Util::HoverTip(T("menu.settings.skip_unchanged_shaders_tooltip",
-				"When enabled, each shader is recompiled from source only if its .hlsl file "
-				"is newer than the cached .bin on disk. "
-				"Shaders whose source has not changed are loaded directly from the disk cache, "
-				"avoiding the full startup compilation cost. "
-				"Useful for iterative testing: change a shader file and only that shader is rebuilt. "
-				"Requires 'Enable Disk Cache' to be active."));
-			Util::SettingHint(T("menu.settings.skip_unchanged_shaders_hint", "Rebuilds only shaders whose source changed since they were cached. Needs the disk cache."));
-		}
 	}
 }
 

@@ -120,7 +120,7 @@ void Vignette::ClearShaderCache()
 			}
 	}
 
-	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/Vignette");
+	globals::shaderCache->ReloadShaderSources();
 	CompileRasterShaders();
 }
 

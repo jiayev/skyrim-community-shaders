@@ -16,7 +16,7 @@
 #	include "Profiler.h"
 #	include "RenderGraph/DxvkOrgInterop.h"
 #	include "State.h"
-#	include "Utils/FileRename.h"
+#	include "Utils/SharedShaderStore.h"
 #	include "Vram/Debug.h"
 
 #	include <OpenRenderGraph/GraphHost.h>
@@ -957,10 +957,11 @@ struct RenderGraphRuntime::Impl
 		}
 		if (asyncEpochs) {
 			const auto async = host->TakeAsyncStats();
-			logger::info("[ORG] Async epochs: {} submitted, {} waited for their ticket, {} prepared again after the feature's inputs changed, {} carried uploads ({} lists recorded ahead by their producers; "
-						 "{} copies recorded on the queue that first uses them, {} other-queue batches spared the graphics uploads' wait); "
-						 "{} completions left to the host's next GPU wake-up instead of a signal; {} tickets stale only by a new version; {} epoch graphs built again; "
-						 "recordings: {} made ({} kept), {} tickets took a kept one, {} stale tickets adopted one; admissions: {} predicted, {} planned",
+			logger::info(
+				"[ORG] Async epochs: {} submitted, {} waited for their ticket, {} prepared again after the feature's inputs changed, {} carried uploads ({} lists recorded ahead by their producers; "
+				"{} copies recorded on the queue that first uses them, {} other-queue batches spared the graphics uploads' wait); "
+				"{} completions left to the host's next GPU wake-up instead of a signal; {} tickets stale only by a new version; {} epoch graphs built again; "
+				"recordings: {} made ({} kept), {} tickets took a kept one, {} stale tickets adopted one; admissions: {} predicted, {} planned",
 				async.submitted, async.waited, async.stale, async.uploads, async.recordedUploadLists, async.queueUploadCopies, async.sparedUploadWaits,
 				async.wakesSkipped, async.staleBacking, async.rebuilds, async.recorded, async.kept, async.reused, async.adopted, async.predicted, async.planned);
 		}
@@ -1618,7 +1619,8 @@ bool RenderGraphRuntime::Initialize()
 	logger::info("[ORG] Queues: graphics {}:{}, compute {}, upload {}, copy {}", info.graphicsQueueFamily, info.graphicsQueueIndex,
 		state->computeQueue ? fmt::format("{}:{}", info.computeQueueFamily, info.computeQueueIndex) : std::string("shared with graphics"),
 		state->uploadQueue ? fmt::format("{}:{}", info.uploadQueueFamily, info.uploadQueueIndex) : std::string("none"),
-		!state->copyQueue ? std::string("shared with graphics") : state->copyQueue == state->uploadQueue ? std::string("shared with upload") : fmt::format("{}:{}", info.copyQueueFamily, info.copyQueueIndex));
+		!state->copyQueue ? std::string("shared with graphics") : state->copyQueue == state->uploadQueue ? std::string("shared with upload") :
+																										   fmt::format("{}:{}", info.copyQueueFamily, info.copyQueueIndex));
 	if (rhi::vulkan::AdoptVulkanDevice(adopt, *state->device) != rhi::Result::Ok || !*state->device)
 		return disable("BasicRHI could not adopt DXVK's Vulkan device");
 
@@ -1657,16 +1659,15 @@ bool RenderGraphRuntime::Initialize()
 				EpochOf(Segment::SkyOcclusion), EpochOf(Segment::LightCulling), EpochOf(Segment::MainOpaque), EpochOf(Segment::Forward), EpochOf(Segment::FirstPerson) };
 		if (!desc.epochOrder.empty())
 			logger::info("[ORG] epoch order: {}", fmt::join(desc.epochOrder, ","));
-#if defined(CS_RELEASE_PROFILE)
+#	if defined(CS_RELEASE_PROFILE)
 		// No pass timestamps and no readback of them: the statistics take this when the runtime below creates them.
 		auto settings = org::runtime::GetOpenRenderGraphSettings();
 		settings.collectPassStatistics = false;
 		settings.collectPipelineStatistics = false;
 		org::runtime::SetOpenRenderGraphSettings(settings);
-#endif
+#	endif
 		// The runtime's slots: the host's frame slots (frames in flight times epochs), which its upload pages and statistics follow.
-		state->orgRuntime = org::Runtime::Create({ .device = state->device->Get(), .backend = rhi::Backend::Vulkan,
-			.slots = desc.framesInFlight * (std::max)(static_cast<uint32_t>(desc.epochOrder.size()), 1u) });
+		state->orgRuntime = org::Runtime::Create({ .device = state->device->Get(), .backend = rhi::Backend::Vulkan, .slots = desc.framesInFlight * (std::max)(static_cast<uint32_t>(desc.epochOrder.size()), 1u) });
 		desc.runtime = state->orgRuntime;
 		state->host = std::make_unique<org::GraphHost>(std::move(desc));
 		// The frame-wait timeline, before anything builds the graph (its packets bind it when prepared): only with a queue of the
@@ -1774,8 +1775,15 @@ bool RenderGraphRuntime::Initialize()
 		std::filesystem::path compilerDirectory;
 		if (::GetModuleFileNameW(d3d11, dxvkPath, MAX_PATH))
 			compilerDirectory = std::filesystem::path(dxvkPath).parent_path();
-		impl->shaderCompiler = std::make_unique<org::services::ShaderCompiler>(std::filesystem::path(L"Data/ShaderCache/ORG"), compilerDirectory,
-			Util::RenameSerialized);  // serialized with the plugin's other renames (Utils/FileRename.h)
+		impl->shaderCompiler = std::make_unique<org::services::ShaderCompiler>(std::filesystem::path{}, compilerDirectory, Util::SharedShaderStore());
+		// A reload means files may have changed, so the store must read them again. This listener also runs after a publish, which changes no files.
+		PipelineRegistry()->AddListener([sourcesGeneration = PipelineRegistry()->SourcesGeneration()]() mutable {
+			const auto current = PipelineRegistry()->SourcesGeneration();
+			if (current == sourcesGeneration)
+				return;
+			sourcesGeneration = current;
+			Util::BeginShaderStoreGeneration();
+		});
 		logger::info("[ORG] Runtime SPIR-V compilation {}", impl->shaderCompiler->Available() ? "available" : "unavailable (no dxcompiler.dll beside the DXVK DLLs)");
 		if (!impl->shaderCompiler->Available())
 			impl->shaderCompiler.reset();

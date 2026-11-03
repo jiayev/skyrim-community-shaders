@@ -19,7 +19,7 @@ namespace org::services
  * @brief A render-graph compute shader: the pipeline and the layout its push constants are bound through.
  *
  * Every feature's compute passes create theirs here, from the HLSL under Data/Shaders, compiled to SPIR-V at runtime by
- * RenderGraphRuntime's ORGModuleServices compiler (content-addressed, disk-cached under Data/ShaderCache/ORG), with
+ * RenderGraphRuntime's ORGModuleServices compiler (saved in the shared shader store), with
  * BasicRHI's descriptor-heap ABI. The shaders fetch everything else from the descriptor heap by index.
  *
  * Hot reload (docs/development/dclf-hot-reload.md): Load registers the pipeline with RenderGraphRuntime::PipelineRegistry, its source

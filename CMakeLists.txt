@@ -437,6 +437,9 @@ endif()
 
 # OpenRenderGraph on DXVK's Vulkan device; defines CS_HAS_RENDER_GRAPH.
 include(cmake/RenderGraph.cmake)
+# The persistent shader cache. Every build needs it, with or without the render graph.
+include("${CS_ORG_ROOT}/ORGModuleServices/cmake/ShaderStore.cmake")
+target_link_libraries(${PROJECT_NAME} PRIVATE ORGModuleServices::ShaderStore)
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
 if(MSVC_VERSION GREATER_EQUAL 1936 AND MSVC_IDE) # 17.6+
     # When using /std:c++latest, "Build ISO C++23 Standard Library Modules" defaults to "Yes".

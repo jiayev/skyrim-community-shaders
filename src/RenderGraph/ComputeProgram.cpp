@@ -53,9 +53,6 @@ namespace
 		// Source-level debug info for Nsight and RenderDoc; drivers ignore it, and optimization is unchanged.
 		request.debugInfo = true;
 		request.includeDirectories = { RenderGraphRuntime::kShaderDirectory };
-		// Every shader file is a potential include; the compiler re-hashes one only when it changes (size or write time), so an edited
-		// include gives every program that may read it a new key.
-		request.dependencyFiles = RenderGraphRuntime::ShaderSourceFiles();
 		request.defines.push_back({ L"BASICRHI_SHADER_API_VULKAN", L"1" });
 		for (const auto& [name, value] : a_desc.defines)
 			request.defines.push_back({ name, value });

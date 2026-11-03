@@ -787,7 +787,6 @@ namespace Util
 			if (shaderCache->IsDiskCache()) {
 				shaderCache->DeleteDiskCache();
 			}
-			shaderCache->ClearContentStore();
 			shaderCache->SetRecachePending(true);
 		}
 	}
@@ -842,20 +841,6 @@ namespace Util
 				"%s", T("ui.clear_cache_explainer",
 						  "The shader cache is the collection of compiled shaders that replace the vanilla shaders at runtime. "
 						  "The disk cache is a copy of those compiled shaders kept on disk."));
-			if (globals::shaderCache) {
-				// Measured once when the popup opens, since it walks the store directory.
-				static std::optional<SIE::ShaderCache::ContentStoreUsage> storeUsage;
-				if (ImGui::IsWindowAppearing() || !storeUsage)
-					storeUsage = globals::shaderCache->GetContentStoreUsage();
-				if (storeUsage->blobs > 0) {
-					ImGui::Spacing();
-					ImGui::TextWrapped("%s", I18n::GetSingleton()->Format("ui.clear_cache_store_note",
-																	 { { "count", std::to_string(storeUsage->blobs) },
-																		 { "size", std::format("{:.0f}", static_cast<double>(storeUsage->bytes) / (1024.0 * 1024.0)) } },
-																	 "This also deletes the persistent shader store ({count} shaders, {size} MB).")
-												 .c_str());
-				}
-			}
 			ImGui::Spacing();
 			ImGui::Spacing();
 			ImGui::Separator();

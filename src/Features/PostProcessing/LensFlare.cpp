@@ -435,7 +435,7 @@ void LensFlare::ClearShaderCache()
 	}
 	bokehFFTDirty = true;
 
-	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/LensFlare");
+	globals::shaderCache->ReloadShaderSources();
 	CompileComputeShaders();
 }
 

@@ -99,7 +99,7 @@ void Border::ClearShaderCache()
 			}
 	}
 
-	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/Border");
+	globals::shaderCache->ReloadShaderSources();
 	CompileComputeShaders();
 }
 
