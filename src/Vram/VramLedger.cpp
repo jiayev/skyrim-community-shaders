@@ -258,6 +258,7 @@ namespace Vram
 			for (const auto& src : a_rows) {
 				Row row;
 				row.bytes = src.size;
+				row.idleFrames = src.idleFrames;
 				row.uid = src.cookie;
 				row.heapIndex = src.heapIndex;
 				row.deviceLocal = src.heapIndex >= a_heaps.size() || a_heaps[src.heapIndex].deviceLocal;
@@ -572,7 +573,7 @@ namespace Vram
 		for (const auto& row : snapshot.rows)
 			json["rows"].push_back({ { "name", row.name }, { "owner", row.owner }, { "type", row.type }, { "source", row.source },
 				{ "detail", row.detail }, { "callsite", row.callsite }, { "bytes", row.bytes }, { "uid", row.uid }, { "flags", row.flags }, { "deviceLocal", row.deviceLocal },
-				{ "heap", row.heapIndex } });
+				{ "heap", row.heapIndex }, { "idle", row.idleFrames } });
 
 		const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		auto path = a_directory / fmt::format("CommunityShaders-VRAM-{}.json", stamp);

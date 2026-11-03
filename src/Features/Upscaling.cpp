@@ -609,6 +609,32 @@ bool Upscaling::IsFrameGenerationActive() const
 
 void Upscaling::BeginRenderFrame()
 {
+	{  // TEMP-FG-TEST
+		static uint64_t secondTick = 0, lastTick = 0;
+		static uint32_t frames = 0, worst = 0, stalls = 0;
+		const auto now = GetTickCount64();
+		auto* ui = RE::UI::GetSingleton();
+		const auto describe = [&] {
+			return std::format("presented x{}, setting {}x, fg {}, active {}, unusable {}, csMenu {}, paused {}, loaded {}", Streamline::GetSingleton()->GetFrameGenerationMultiplier(), settings.dlssgDynamic ? 0 : settings.frameGenMultiplier, settings.frameGeneration, IsFrameGenerationActive(), IsWindowUnusable(), globals::menu && globals::menu->ShouldSwallowInput(), ui && ui->GameIsPaused(), Streamline::GetSingleton()->IsDLSSGLoaded());
+		};
+		if (lastTick) {
+			const auto frame = static_cast<uint32_t>(now - lastTick);
+			worst = std::max(worst, frame);
+			if (frame >= 150) {
+				++stalls;
+				logger::info("[FGTEST] stall {} ms; {}", frame, describe());
+			}
+		}
+		lastTick = now;
+		++frames;
+		if (!secondTick)
+			secondTick = now;
+		if (now - secondTick >= 1000) {
+			logger::info("[FGTEST] {} fps, worst {} ms, stalls {}; {}", frames, worst, stalls, describe());
+			frames = worst = stalls = 0;
+			secondTick = now;
+		}
+	}
 	auto* dxvk = DXVKInterop::GetSingleton();
 	// Report an unrecoverable ring once, not once per frame. This runs every frame, so a fault that
 	// cannot be recovered -- a lost device above all -- used to re-enter recovery and log on every

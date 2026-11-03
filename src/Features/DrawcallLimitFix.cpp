@@ -927,6 +927,9 @@ void DrawcallLimitFix::ClearShaderCache()
 
 void DrawcallLimitFix::NoteMaterialWritten(const RE::BSShaderMaterial* a_material)
 {
+	// Not installed, nothing drains the captures. Each one holds a reference, so the materials and their textures would never be freed.
+	if (!globals::features::drawcallLimitFix.installed)
+		return;
 	// CS's PBR materials (src/TruePBR) reach Core through the material-write sink, as the features' write hooks do.
 	DCLF::Api::NoteMaterialWritten(a_material);
 }

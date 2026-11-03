@@ -36,6 +36,7 @@ namespace Vram
 		std::uint64_t bytes = 0;
 		std::uint64_t uid = 0;  // DXVK cookie or ORG resource ID
 		std::uint32_t flags = 0;
+		std::uint32_t idleFrames = 0;  // DXVK resources: frames presented since a command list last used it
 		bool deviceLocal = true;
 		std::uint32_t heapIndex = ~0u;  // Vulkan heap, ~0u where unknown (ORG)
 	};

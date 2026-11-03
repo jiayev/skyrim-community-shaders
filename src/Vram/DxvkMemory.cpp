@@ -119,6 +119,16 @@ namespace Vram
 		return 0;
 	}
 
+	void SetDxvkDefragPressure(float a_percent)
+	{
+		static const auto set = [] {
+			const HMODULE d3d11 = ::GetModuleHandleW(L"dxvk_d3d11.dll");
+			return d3d11 ? reinterpret_cast<PFN_dxvkSetDefragPressurePercent>(reinterpret_cast<void*>(::GetProcAddress(d3d11, "dxvkSetDefragPressurePercent"))) : nullptr;
+		}();
+		if (set && globals::d3d::device)
+			set(globals::d3d::device, static_cast<std::uint32_t>(a_percent));
+	}
+
 	std::vector<DxvkMemoryHeapReport> DxvkHeapReports()
 	{
 		std::vector<DxvkMemoryHeapReport> reports;
