@@ -9,7 +9,7 @@ Where the extra memory on this branch comes from, compared with Community Shader
     exterior. This is fixed.
 -   **DXVK itself costs about 1.5 to 2.4 GB more than dev,** at the same stop. Most of that is chunk slack and resources D3D11's driver avoids allocating.
 -   **DCLF now adds up to about 1.1 GB on top of DXVK,** and 0.2 to 0.5 GB at Solitude and Bleak Falls Barrow. Before, it added up to 5.4 GB. At Whiterun it reads lower than DXVK alone, because DCLF off keeps more of the previous interior's textures at that stop.
--   **Light counts do not change DCLF's allocation.** The growth that matters is shadow map layers multiplied by the scene's casters, which is now less than half of what it was.
+-   **Light counts do not change DCLF's allocation.** The growth that matters is shadow map layers multiplied by the scene's casters, which is now about a tenth of the original (about a quarter of what it was after sharing).
 
 ## VRAM
 
@@ -63,7 +63,7 @@ At Solitude, 7,319 to 7,575 against 4,928. In approximate terms:
 
 ## DCLF's own allocation
 
-At a stop: ORG resources 420 to 530 MiB, ORG allocator slack about 200 MiB, and old storages it still holds about 0 to 160 MiB. The largest is the shadow sequences, then the index pool (56 MiB), main sequences (30 to 78 MiB), LightLimitFix's list (32 MiB, also present with DCLF off).
+At a stop: ORG resources 420 to 530 MiB, ORG allocator slack about 200 MiB, and old storages it still holds about 0 to 160 MiB. The largest are the index pool (56 MiB), main sequences (30 to 78 MiB), LightLimitFix's list (32 MiB, also present with DCLF off).
 
 ### Lights
 
@@ -71,29 +71,50 @@ Allocation did not move at all from 0 to 64 added shadow-casting lights (inside 
 
 ### Shadow map layers and casters
 
-This is what can reach gigabytes on a large list. Every shadow view needs a sequence buffer sized for the scene's whole casting bound, and the placements are a catalog, not what is in use: per `kSHADOWMAPS` layer, a full-slice view in each of two modes, and two paraboloid halves.
+Every shadow view needs room for the scene's whole casting bound, since culling writes a list of what it draws. That list held a full 136-byte `DrawSequence` per draw, but only the 20 bytes of draw arguments differ by view. The rest describes the object.
+
+So the views now keep only their arguments (`ShadowResources::drawArgs`), and one shared table holds the rest (`casterRows`). A draw's first instance names its row, and a row has the `DrawSequence` layout, so the vertex stage is unchanged and reads it the way the CPU pipeline reads its resident sequences. Each frame `ShadowCasterRowsPass` hands out rows before culling.
+
+The view-type mask cannot replace the list: it says which view types an object could join, not what passed this view's cull, and an indirect draw needs its arguments in memory. There is one row per (caster, partition, view family), because a skin's partitions have their own vertex buffers and an occlusion map's key names its own technique.
 
 ```
-shadow sequences = buffers x casters x 1.25 (growth headroom) x 204 bytes
+shadow draws = casters x 1.25 (growth headroom) x (buffers x 32 bytes + families x 136 bytes)
 ```
+
+Families averaged about 2.85 here (every caster in the sun, spot and point modes shares one family; the two occlusion maps add theirs). A layer's full-slice views and first half also still share arguments (`ShareDrawArgs`). A log error fires if views that share them ever draw together.
 
 | | Buffers (8 layers) | Per 10,000 casters |
 | --- | --- | --- |
-| Before | 47 | 114 MiB |
-| Now | 22 | 53 MiB |
+| Original | 47 | 114 MiB |
+| Sharing, no headroom on slots | 22 | 53 MiB |
+| Now | 22 | 13 MiB |
 
-Two changes: a layer holds one light a frame, so its full-slice views and first half share a buffer (`ShareSequences`; a pair of halves does draw together, so a layer has two buffers), and the 25% headroom on slots (9 full-size buffers no view used) is gone. A log error fires if views that share a buffer ever draw together, and it did not fire in any run. Measured: 395 to 186 MiB after the save, 267 to 135 in Dragonsreach. Each extra `kSHADOWMAPS` layer adds 2 buffers now, where it added 4.
+Measured over the load chain, MiB of shadow draw buffers at each stop:
+
+| Stop | Before | Now |
+| --- | --- | --- |
+| Save | 121.3 | 38.5 |
+| Dragonsreach | 135.3 | 31.6 |
+| Whiterun | 62.5 | 14.2 |
+| Riverwood | 62.5 | 14.2 |
+| Solitude | 70.8 | 16.2 |
+| Bleak Falls Barrow | 45.9 | 10.4 |
+| Whiterun again | 76.7 | 17.8 |
+
+Computed from the formula, not measured at these sizes (this test scene reaches about 30,000 casters):
 
 | Casters in the scene | 8 layers before | 8 layers now | 4 layers now | 16 layers now |
 | --- | --- | --- | --- | --- |
-| 10,000 | 114 MiB | 53 MiB | 34 MiB | 92 MiB |
-| 50,000 | 570 MiB | 267 MiB | 170 MiB | 460 MiB |
-| 100,000 | 1.1 GB | 534 MiB | 340 MiB | 920 MiB |
-| 200,000 | 2.2 GB | 1.0 GB | 680 MiB | 1.8 GB |
+| 10,000 | 53 MiB | 13 MiB | 10 MiB | 19 MiB |
+| 50,000 | 267 MiB | 65 MiB | 50 MiB | 96 MiB |
+| 100,000 | 534 MiB | 130 MiB | 100 MiB | 191 MiB |
+| 200,000 | 1.0 GB | 260 MiB | 199 MiB | 382 MiB |
 
-These are from the formula, not measured at those sizes. This test scene reaches about 30,000. A 2 GB report would need roughly 180,000 casters before these changes, so the leak is the more likely cause of most reports; a large list on the old build could have both.
+A 2 GB report would have needed roughly 180,000 casters on the original build, so the leak is the more likely cause of most reports; a large list on the old build could have both.
 
-**A further cut is possible:** only 7 to 10 of the 38 views draw in a frame here, so buffers could grow only once their view is first used. A view not ready yet is already left to the engine, so that path exists. It needs per-view sizing in the shape, so it is not done.
+**Further cuts are possible:** only 7 to 10 of the 38 views draw in a frame here, so arguments could grow only once their view is first used, and a row needs 56 of its 136 bytes.
+
+To check this, `CS_DCLF_STATS=1` adds `lost for want of a caster row` to the shadow culling line, for the view it samples. It should stay 0. `shadows-ab` takes shadow screenshots at a fixed hour and weather.
 
 ## What this does not show
 

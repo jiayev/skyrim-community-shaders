@@ -291,6 +291,8 @@ namespace DCLF
 			fromZeros.fixed = true;
 			commit = a_in.latched;
 			const auto blocksKey = a_resources.viewBlocks.buffer->Key();
+			if (a_resources.casterRowsUsed)
+				fromZeros.copies.push_back({ a_resources.casterRowsUsed.get(), 0, static_cast<std::uint32_t>(sizeof(std::uint32_t)), 0 });
 			for (const auto& view : frame->views) {
 				if (view.slot >= a_resources.count.size())
 					continue;

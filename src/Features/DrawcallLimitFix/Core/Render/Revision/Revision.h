@@ -11,7 +11,7 @@ namespace DCLF::Draws
 	 */
 	struct ShadowSlotBuffers
 	{
-		std::vector<Versioned> sequences, bucketCounts;
+		std::vector<Versioned> drawArgs, bucketCounts;
 	};
 	/**
 	 * @brief The revision code's request for shadow view slots (ReserveShadowLatch): the frame makes their buffers at these sizes and

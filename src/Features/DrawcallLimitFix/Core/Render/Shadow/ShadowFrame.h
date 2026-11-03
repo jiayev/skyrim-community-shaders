@@ -140,7 +140,7 @@ namespace DCLF::Draws
 	/** @brief What a shadow shape indexes by: the units the named versions of the shadow buffers hold (MakeRevision). */
 	struct ShadowCapacity
 	{
-		// Every view slot's sequences in draws (the least slot's).
+		// Every view slot's draw arguments in draws (the least slot's).
 		std::uint32_t sequenceDraws = 0;
 		// Bucket count words per view slot (the least slot's); a pipeline past them waits for the growth (TrimmedRow).
 		std::uint32_t bucketCountWords = 0;
@@ -158,13 +158,22 @@ namespace DCLF::Draws
 		Versioned visibility;
 		// The views' inputs, geometries and material rows (ShadowMaterialRow) are the installed payload's (PayloadVersions).
 		std::shared_ptr<SceneBuffers> scene;
-		// Per view slot (occlusion views, then shadow views): sequence and count buffers. Slots that can never draw in one frame hold the
-		// same sequences (ShareSequences), since each must fit the scene's whole casting bound and there are many more slots than views.
-		std::vector<Versioned> sequences;
-		// The slot whose sequences a slot uses (itself where it owns them). Slots past its end own theirs.
-		std::vector<std::uint32_t> sequenceOwner;
-		/** @brief Whether this slot's sequences are declared under it (a pass declares each buffer once). */
-		bool OwnsSequences(std::size_t a_slot) const { return a_slot >= sequenceOwner.size() || sequenceOwner[a_slot] == a_slot; }
+		// What a shadow draw is, whichever views draw it: a row per (caster, partition, view family) with the fields of a DrawSequence the
+		// pulled vertex stage reads, at their offsets (BuildDrawsCS: StoreCasterRow). Each frame's culling writes the rows of what it draws.
+		Versioned casterRows;
+		// Each object's first row, and the words of rows handed out: BuildDrawsCS's ShadowCasterRows, each frame (ShadowCasterRowsPass).
+		Versioned casterFirsts;
+		std::shared_ptr<org::Buffer> casterRowsUsed;
+		std::shared_ptr<const ComputeProgram> assignCasterRows;
+		rhi::CommandSignaturePtr rowsDispatchSignature;
+		// Per view slot (occlusion views, then shadow views): what the slot's draws read per view (their arguments, kShadowDrawBytes each,
+		// naming their caster rows) and the count buffers. Slots that can never draw in one frame hold the same arguments (ShareDrawArgs),
+		// since each must fit the scene's whole casting bound and there are many more slots than views.
+		std::vector<Versioned> drawArgs;
+		// The slot whose arguments a slot uses (itself where it owns them). Slots past its end own theirs.
+		std::vector<std::uint32_t> drawArgsOwner;
+		/** @brief Whether this slot's arguments are declared under it (a pass declares each buffer once). */
+		bool OwnsDrawArgs(std::size_t a_slot) const { return a_slot >= drawArgsOwner.size() || drawArgsOwner[a_slot] == a_slot; }
 		std::vector<std::shared_ptr<org::Buffer>> count;
 		// Per view slot, one count word per bucket.
 		std::vector<Versioned> bucketCounts;

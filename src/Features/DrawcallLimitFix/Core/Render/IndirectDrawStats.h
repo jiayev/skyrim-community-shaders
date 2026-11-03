@@ -150,7 +150,7 @@ namespace DCLF
 		std::uint32_t cullDrawn = 0, cullRejected = 0, cullTested = 0;
 		// Before the culling: the sampled view's inputs of its caster class, and those dropped outside the sun's entry processes, at
 		// most the minimum radius, under a stood-in root fading, below the size threshold (a sun view's kCullMinTexels).
-		std::uint32_t cullClass = 0, cullSunEntryOut = 0, cullMinRadius = 0, cullRootFading = 0, cullBelowTexels = 0;
+		std::uint32_t cullClass = 0, cullSunEntryOut = 0, cullMinRadius = 0, cullRootFading = 0, cullBelowTexels = 0, cullRowsLost = 0;
 		std::uint32_t cullSampledView = ~0u, cullSampledMode = 0;
 		// The size probe's (shadowSizeProbe) drawn casters and triangles of the sampled view, by bound radius class.
 		std::array<std::uint32_t, 4> probeCasters{}, probeTriangles{};

@@ -589,6 +589,8 @@ namespace DCLF
 		rhi::PipelineLayoutHandle ShadowLayout() const { return shadowLayout->GetHandle(); }
 		// The shadow views' plain indirect draw: a DrawSequence's tail as an indexed draw from the index pool (StoreShadowSequence).
 		rhi::CommandSignaturePtr shadowDrawSignature;
+		// The shadow views' draws: their arguments alone (kShadowDrawBytes), the rest being their caster rows.
+		rhi::CommandSignaturePtr shadowViewDrawSignature;
 		bool supported = false;
 		bool deviceGenerated = false;  // DrawPipelines::DeviceGenerated: the classes' execution sets and signatures are made
 		bool attempted = false;

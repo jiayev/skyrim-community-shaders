@@ -86,6 +86,9 @@ static uint CountIndex;
 static uint LatchOffset;
 static uint PhaseTwoBase;
 static uint BucketCountsIndex;
+// A shadow view (LoadShadowView; 0 elsewhere): the caster rows every view shares, and each object's first row in them.
+static uint CasterRowsIndex;
+static uint CasterFirstsIndex;
 
 // StructuredBuffer<FadeNodeState>: FadeStateCS's states as the previous frame published them (latch fadeStatesIndex).
 static uint FadeStatesIndex;
@@ -345,6 +348,8 @@ void LoadLatch()
 	LatchOffset = PushLatchOffset;
 	PhaseTwoBase = PushPhaseTwoBase;
 	BucketCountsIndex = PushBucketCountsIndex;
+	CasterRowsIndex = 0;
+	CasterFirstsIndex = 0;
 	LoadViewLatch();
 }
 
@@ -602,6 +607,8 @@ static const uint kCountBelowTexels = 172;
 // 4096 and the rest.
 static const uint kCountProbeCasters = 176;
 static const uint kCountProbeTriangles = 192;
+// A shadow view: casters dropped for want of a caster row (ShadowCasterRows). GpuLayouts.h, kCountCasterRowsLostWord.
+static const uint kCountCasterRowsLost = 208;
 
 // The frustum stamp word: the stamp in the low 28 bits, and whether the fade test dropped the object that frame
 // (VisibilityEventsCS.hlsl compares the low bits).
@@ -791,6 +798,54 @@ void StoreShadowSequence(RWByteAddressBuffer sequences, uint slot, uint instance
 	const bool pooled = a_poolFirst != 0xFFFFFFFFu;
 	sequences.Store4(slot * kSequenceStride + kSequenceDrawOffset, uint4(pooled ? indexCount : 0, 1, pooled ? a_poolFirst + firstIndex : 0, 0));
 	sequences.Store(slot * kSequenceStride + kSequenceFirstInstance, instance);
+}
+
+// ---- A shadow view's draw: its arguments in the view's own buffer, and all that is the object's in one caster row, whichever views draw
+// it. What the pulled vertex stage reads of a DrawSequence (Utility.hlsl, DCLFShadowVertex), at the same offsets and stride, so the draw's
+// first instance finds the row as the CPU pipeline's finds its resident sequence. Views write a row's same words; a row is read only by a
+// draw this frame's culling wrote. ----
+static const uint kShadowDrawStride = 20;  // GpuLayouts.h, kShadowDrawBytes
+
+void StoreCasterRow(RWByteAddressBuffer a_rows, uint a_row, uint a_technique, uint4 a_rowWords, uint a_objectWord, uint4 a_vertexBuffer, uint4 a_streamBuffer)
+{
+	const uint base = a_row * kSequenceStride;
+	a_rows.Store(base + 0, a_technique);
+	a_rows.Store4(base + 4, a_rowWords);
+	a_rows.Store(base + 20, a_objectWord);
+	a_rows.Store4(base + 24, a_vertexBuffer);
+	a_rows.Store4(base + 40, a_streamBuffer);
+}
+
+void StoreShadowDraw(RWByteAddressBuffer a_draws, uint a_slot, uint a_row, uint a_indexCount, uint a_firstIndex, uint a_poolFirst)
+{
+	const bool pooled = a_poolFirst != 0xFFFFFFFFu;
+	const uint base = a_slot * kShadowDrawStride;
+	a_draws.Store4(base, uint4(pooled ? a_indexCount : 0, 1, pooled ? a_poolFirst + a_firstIndex : 0, 0));
+	a_draws.Store(base + 16, a_row);
+}
+
+// The partitions an input can draw in any frame: a LOD skin's levels' masks ORed, as its walk's mask is one of them.
+uint CasterPartitionMask(uint a_partitions, uint a_lod)
+{
+	if ((a_partitions & kPartitionChain) != 0)
+		return a_partitions;
+	return a_partitions | (a_lod != 0 ? ((a_lod | (a_lod >> 8) | (a_lod >> 16) | (a_lod >> 24)) & 0xFFu) : 0u);
+}
+
+// An input's rows in one view family, a row per partition.
+uint CasterSpan(uint a_mask)
+{
+	if ((a_mask & kPartitionChain) != 0)
+		return a_mask & kPartitionChainCount;
+	return a_mask == 0 ? 1u : countbits(a_mask & (kNoPartitions - 1));
+}
+
+// A partition's place among those rows.
+uint CasterOrdinal(uint a_mask, uint a_partition)
+{
+	if ((a_mask & kPartitionChain) != 0 || a_mask == 0)
+		return a_partition;
+	return countbits(a_mask & ((1u << a_partition) - 1u));
 }
 
 // ---- MaterialRowAddress: the one place a draw's material row address is computed (its sequence's VS b1 address and, from it,
@@ -1471,6 +1526,24 @@ void BuildInput(uint draw, DrawInputWords a_words)
 	uint geometryIndex = input.z;
 	const bool chain = (partitions & kPartitionChain) != 0;
 	const uint links = chain ? (partitions & kPartitionChainCount) : kMaxPartitions;
+	// A shadow view: this input's rows in its family, whose keys name a technique of their own (ShadowCasterRows' order: caster, then
+	// each occlusion map's). Dropped before any bucket slot is taken, so a bucket has no hole.
+	uint casterFirst = 0, casterMask = 0, casterSpan = 0;
+	if (CasterRowsIndex != 0) {
+		// Its draws are bucketed: its arguments hold no other range.
+		if (BucketTableOffset == 0)
+			return;
+		ByteAddressBuffer casterFirsts = ResourceDescriptorHeap[CasterFirstsIndex];
+		casterFirst = casterFirsts.Load(objectIndex * 4);
+		if (casterFirst == 0xFFFFFFFFu) {
+			count.InterlockedAdd(kCountCasterRowsLost, 1, scratch);
+			return;
+		}
+		casterMask = CasterPartitionMask(a_words.words[2].z, a_words.words[3].z);
+		casterSpan = CasterSpan(casterMask);
+		const uint4 keys = a_words.words[1];
+		casterFirst += casterSpan * ((keyWord >= 2 && keys.y != 0xFFFFFFFFu ? 1u : 0u) + (keyWord == 3 && keys.z != 0xFFFFFFFFu ? 1u : 0u));
+	}
 	[loop] for (uint partition = 0; partition < links && geometryIndex != kNoPartition; ++partition)
 	{
 		const uint geometryOffset = geometryIndex * kGeometryStride;
@@ -1485,7 +1558,14 @@ void BuildInput(uint draw, DrawInputWords a_words)
 			uint slot;
 			if (BucketTableOffset != 0) {
 				// Bucketed (shadow view, depth segment): the bucket's next slot. One plain indexed indirect draw per bucket executes the range
-				// (ShadowViewPass, MainOpaquePass); the slot is the instance by which the pulled vertex stage finds the sequence (DCLF_PULLED).
+				// (ShadowViewPass, MainOpaquePass); the slot is the instance by which the pulled vertex stage finds the sequence (DCLF_PULLED),
+				// a shadow view's the object's caster row instead.
+				const uint casterOrdinal = CasterRowsIndex != 0 ? CasterOrdinal(casterMask, partition) : 0u;
+				if (CasterRowsIndex != 0 && casterOrdinal >= casterSpan) {
+					count.InterlockedAdd(kCountCasterRowsLost, 1, scratch);
+					geometryIndex = geometries.Load(geometryOffset + 36);
+					continue;
+				}
 				RWByteAddressBuffer bucketCounts = ResourceDescriptorHeap[BucketCountsIndex];
 				bucketCounts.InterlockedAdd(bucketKey * 4, 1, slot);
 				if (slot < bucket.y) {
@@ -1497,6 +1577,11 @@ void BuildInput(uint draw, DrawInputWords a_words)
 						// in its class's entry (its pipeline its index there).
 						StoreSequence(sequences, bucket.x + slot, classIndex, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
 						StageForwardKey(sequences, bucket.x + slot, objectIndex);
+					} else if (CasterRowsIndex != 0) {
+						const uint casterRow = casterFirst + casterOrdinal;
+						RWByteAddressBuffer casterRows = ResourceDescriptorHeap[CasterRowsIndex];
+						StoreCasterRow(casterRows, casterRow, slotTechnique, rows, drawWord, vertexBuffer, secondStream);
+						StoreShadowDraw(sequences, bucket.x + slot, casterRow, indexBuffer.w, firstIndex, poolFirsts.Load(geometryIndex * 4));
 					} else {
 						StoreShadowSequence(sequences, bucket.x + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
 							firstIndex, poolFirsts.Load(geometryIndex * 4));
@@ -1663,19 +1748,23 @@ void BuildInput(uint draw, DrawInputWords a_words)
 struct ShadowBuildView
 {
 	uint LatchAt;        // bytes into the frame slot's region (the view slot's latch)
-	uint Sequences;      // RWByteAddressBuffer: the slot's DrawSequence[]
+	uint DrawArgs;       // RWByteAddressBuffer: the slot's draws' arguments (StoreShadowDraw)
 	uint Counts;         // RWByteAddressBuffer: the slot's counter words
 	uint BucketCounts;   // RWByteAddressBuffer: the slot's bucket counts
-	uint SequenceDraws;  // the slot's sequences, in draws (PhaseTwoBase)
+	uint SequenceDraws;  // the slot's draws (PhaseTwoBase)
+	uint CasterRows;     // RWByteAddressBuffer: the rows every view shares (StoreCasterRow)
+	uint CasterFirsts;   // ByteAddressBuffer: each object's first row (ShadowCasterRows)
 };
 
 void LoadShadowView(ShadowBuildView a_view)
 {
-	SequencesIndex = a_view.Sequences;
+	SequencesIndex = a_view.DrawArgs;
 	CountIndex = a_view.Counts;
 	LatchOffset = PushLatchOffset + a_view.LatchAt;
 	PhaseTwoBase = a_view.SequenceDraws;
 	BucketCountsIndex = a_view.BucketCounts;
+	CasterRowsIndex = a_view.CasterRows;
+	CasterFirstsIndex = a_view.CasterFirsts;
 	LoadViewLatch();
 }
 
@@ -1700,4 +1789,30 @@ void LoadShadowView(ShadowBuildView a_view)
 	if (ViewBits != 0 && (inputs.Load(draw * kInputStride + 16) & ViewBits) == 0)
 		return;
 	BuildInput(draw, LoadInputWords(inputs, draw));
+}
+
+// Hands out the frame's caster rows, before the shadow epoch's culling (ShadowCasterRowsPass): each caster and occluder its rows, consecutive,
+// a row per partition in each view family it has a key in. A thread per input of the shadow list. PushLatchOffset names the list in the latch
+// (ShadowLatchLayout::RowsInputsOffset), PushSequencesIndex the objects' first rows, PushCountIndex the words handed out (zeroed by the epoch),
+// VisibilityIndex the rows, which bound them. An object past the rows has none: its views leave it to count (kCountCasterRowsLost).
+[numthreads(64, 1, 1)] void ShadowCasterRows(uint3 dispatchID : SV_DispatchThreadID) {
+	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+	const uint2 list = latch.Load2(PushLatchOffset);
+	if (dispatchID.x >= list.y)
+		return;
+	ByteAddressBuffer inputs = ResourceDescriptorHeap[list.x];
+	const uint inputOffset = dispatchID.x * kInputStride;
+	const uint3 keys = inputs.Load3(inputOffset + 20);
+	const uint families = (keys.x != 0xFFFFFFFFu ? 1u : 0u) + (keys.y != 0xFFFFFFFFu ? 1u : 0u) + (keys.z != 0xFFFFFFFFu ? 1u : 0u);
+	if (families == 0)
+		return;
+	const uint rows = families * CasterSpan(CasterPartitionMask(inputs.Load(inputOffset + 40), inputs.Load(inputOffset + 56)));
+	RWByteAddressBuffer used = ResourceDescriptorHeap[PushCountIndex];
+	uint first;
+	used.InterlockedAdd(0, rows, first);
+	RWByteAddressBuffer casterRows = ResourceDescriptorHeap[VisibilityIndex];
+	uint bytes;
+	casterRows.GetDimensions(bytes);
+	RWByteAddressBuffer firsts = ResourceDescriptorHeap[PushSequencesIndex];
+	firsts.Store(inputs.Load(inputOffset + 32) * 4, first + rows <= bytes / kSequenceStride ? first : 0xFFFFFFFFu);
 }

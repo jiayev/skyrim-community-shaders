@@ -145,7 +145,7 @@ namespace DCLF
 		// The view's rasterizer state reaches the lane with the inputs after the render thread registers it.
 		const auto* input = lane.input.get();
 		if (!input || !input->utility || input->shadowFormat == DXGI_FORMAT_UNKNOWN || !input->shadowStates || a_key.viewState > input->shadowStates->size() ||
-			!shadowLayout || !shadowDrawSignature) {
+			!shadowLayout || !shadowDrawSignature || !shadowViewDrawSignature) {
 			s.blocked.push_back(a_key);
 			return;
 		}
@@ -339,7 +339,7 @@ namespace DCLF
 			state.pipelines.push_back(static_cast<const DrawPipelines::Impl::Built*>(payload.get())->pipelines[kColorVariant]->GetHandle());
 		state.vertexLayouts = version->layouts;
 		state.discards = version->discards;
-		state.drawSignature = impl.shadowDrawSignature->GetHandle();
+		state.drawSignature = impl.shadowViewDrawSignature->GetHandle();
 		state.version = std::move(version);
 		state.valid = true;
 		return state;

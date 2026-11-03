@@ -108,7 +108,7 @@ namespace DCLF
 			return false;
 		shadowPlacements = std::move(placements);
 		if (shadow)
-			ShareSequences(*shadow, shadowPlacements);
+			ShareDrawArgs(*shadow, shadowPlacements);
 		// A revision input: the next revision reserves the latch and slots (ReserveShadowLatch).
 		shadowHost.PostRevisionInputs();
 		logger::info("[DCLF] shadow view placements: {} (slots {} to {})", shadowPlacements.size(), shadowPlacements.front().slot, shadowPlacements.back().slot);

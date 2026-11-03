@@ -107,7 +107,7 @@ namespace DCLF
 		if (inputs.main && inputs.main->writers)
 			objects.Add(inputs.main->writers);
 		if (inputs.shadow)
-			objects.Add(inputs.shadow->visibility);
+			objects.Add(inputs.shadow->visibility).Add(inputs.shadow->casterFirsts);
 		objects.Require(a_build, a_tables.objects.size());
 		// The features' scene resources (Api::SceneResources::require: the vertex stream's first, its rows' vertices; Features/Fades'
 		// buffers last).
@@ -253,9 +253,11 @@ namespace DCLF
 		// Every slot the frame made (as posted) holds the scene's casting bound: a view's claims always fit the slot they draw in.
 		UnitGroup slots;
 		if (const auto& slotBuffers = producer.inputs.shadowSlots)
-			for (const auto& sequences : slotBuffers->sequences)
-				slots.Add(sequences);
+			for (const auto& args : slotBuffers->drawArgs)
+				slots.Add(args);
 		slots.Require(a_build, draws);
+		if (const auto& shadow = producer.inputs.shadow)
+			SceneBufferSet::Get().Require(a_build, shadow->casterRows, std::max<std::uint64_t>(producer.drawBound.casterRows, 64u));
 	}
 
 	void ShadowEngine::ReserveShadowLatch(ImplProducer& a_producer, GrowthBuild& a_build, ShadowResources& a_shadow, std::uint32_t a_views, std::uint32_t a_keys,
@@ -305,8 +307,8 @@ namespace DCLF
 		if (newSlots) {
 			std::uint64_t draws = 64;
 			if (const auto& slotBuffers = producer.inputs.shadowSlots)
-				for (const auto& sequences : slotBuffers->sequences)
-					draws = std::max(draws, buffers.Asked(a_build, sequences));
+				for (const auto& args : slotBuffers->drawArgs)
+					draws = std::max(draws, buffers.Asked(a_build, args));
 			a_producer.shadowSlotsSlot.Post(std::make_unique<ShadowSlotsRequest>(
 				ShadowSlotsRequest{ layout.viewSlots, static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX)), std::max(layout.keySlots, 64u) }));
 			producer.buildWanted = producer.inputs.buildGeneration + 1;

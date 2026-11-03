@@ -134,6 +134,7 @@ namespace DCLF::Schedule
 		constexpr std::string_view kShadow[] = {
 			"shadows.latched-copies",
 			"shadows.index-pool",
+			"shadows.caster-rows",
 			"shadows.build-draws",
 			"shadows.view",
 			"shadows.cull-counters",

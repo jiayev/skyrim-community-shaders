@@ -77,8 +77,8 @@ namespace DCLF
 		rhi::PipelineLayoutHandle layout{};
 		// The shadow views' plain indirect draws (ShadowViewPass): every published pipeline by its index, its geometry's vertex
 		// layout (ShadowPipelineKey::vertexLayout, which the pulling vertex stage decodes) and its class (kShadowDiscards: its pixel
-		// stage can discard or export depth, so a view draws it after the other class), and the signature of a DrawSequence's tail
-		// as a plain draw.
+		// stage can discard or export depth, so a view draws it after the other class), and the signature of their draws' arguments
+		// (kShadowDrawBytes).
 		std::vector<rhi::PipelineHandle> pipelines;
 		std::vector<std::uint64_t> vertexLayouts;
 		std::vector<std::uint8_t> discards;
