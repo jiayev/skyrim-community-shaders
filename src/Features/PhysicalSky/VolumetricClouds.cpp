@@ -1508,6 +1508,10 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		context->CSSetShaderResources(1, (uint)srvs.size(), srvs.data());
 		context->CSSetShaderResources(13, 1, &ambientShSrv);
 		lightning.QuerySource(csLightningQuery.get());
+		// Forward draws latch the final texture identities before this pass. Composite voxels into those same targets.
+		const auto& ndfTr = voxelVisible ? texVoxelCompositeTr : texVolFilteredTr;
+		const auto& ndfLum = voxelVisible ? texVoxelCompositeLum : texVolFilteredLum;
+		const auto& ndfAux = voxelVisible ? texVoxelCompositeAux : texVolFilteredAux;
 		std::array<ID3D11UnorderedAccessView*, 3> uavs = {};
 		if (!state->isMapMenuOpen) {
 			const CloudBoundaryCB boundaryData = {
@@ -1646,7 +1650,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			};
 			context->CSSetShaderResources(29, (uint)resultSrvs.size(), resultSrvs.data());
 			std::array<ID3D11UnorderedAccessView*, 3> filteredUavs = {
-				texVolFilteredTr->uav.get(), texVolFilteredLum->uav.get(), texVolFilteredAux->uav.get()
+				ndfTr->uav.get(), ndfLum->uav.get(), ndfAux->uav.get()
 			};
 			context->CSSetUnorderedAccessViews(3, (uint)filteredUavs.size(), filteredUavs.data(), nullptr);
 			context->CSSetShader(csVolFilter.get(), nullptr, 0);
@@ -1661,16 +1665,14 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			context->ClearUnorderedAccessViewFloat(texVolTr->uav.get(), clearTr);
 			context->ClearUnorderedAccessViewFloat(texVolLum->uav.get(), clearLum);
 			context->ClearUnorderedAccessViewFloat(texVolAux->uav.get(), clearLum);
-			context->ClearUnorderedAccessViewFloat(texVolFilteredTr->uav.get(), clearTr);
-			context->ClearUnorderedAccessViewFloat(texVolFilteredLum->uav.get(), clearLum);
-			context->ClearUnorderedAccessViewFloat(texVolFilteredAux->uav.get(), clearLum);
+			context->ClearUnorderedAccessViewFloat(ndfTr->uav.get(), clearTr);
+			context->ClearUnorderedAccessViewFloat(ndfLum->uav.get(), clearLum);
+			context->ClearUnorderedAccessViewFloat(ndfAux->uav.get(), clearLum);
 		}
-		outputSrvs[0] = texVolFilteredTr->srv.get();
-		outputSrvs[1] = texVolFilteredLum->srv.get();
 		if (!state->isMapMenuOpen && cbData.lightningColorIntensity.w > 0.f) {
 			ID3D11ShaderResourceView* inputs[] = { lightning.Segments(), texLightningMask->srv.get() };
 			context->CSSetShaderResources(94, 2, inputs);
-			ID3D11UnorderedAccessView* outputs[] = { texLightningChannels->uav.get(), texVolFilteredLum->uav.get() };
+			ID3D11UnorderedAccessView* outputs[] = { texLightningChannels->uav.get(), ndfLum->uav.get() };
 			context->CSSetUnorderedAccessViews(4, 2, outputs, nullptr);
 			context->CSSetShader(csLightningComposite.get(), nullptr, 0);
 			globals::profiler->BeginPass("PhysicalSky::LightningChannels");
@@ -1683,9 +1685,9 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			cloudDispatchCb->Update(voxelRect);
 			auto* constants = cloudDispatchCb->CB();
 			context->CSSetConstantBuffers(3, 1, &constants);
-			std::array<ID3D11ShaderResourceView*, 3> ndfOutputs = { texVolFilteredTr->srv.get(), texVolFilteredLum->srv.get(), texVolFilteredAux->srv.get() };
+			std::array<ID3D11ShaderResourceView*, 3> ndfOutputs = { ndfTr->srv.get(), ndfLum->srv.get(), ndfAux->srv.get() };
 			std::array<ID3D11ShaderResourceView*, 2> voxelInputs = { texVoxelViewColor->srv.get(), texVoxelViewDepth->srv.get() };
-			std::array<ID3D11UnorderedAccessView*, 3> combinedOutputs = { texVoxelCompositeTr->uav.get(), texVoxelCompositeLum->uav.get(), texVoxelCompositeAux->uav.get() };
+			std::array<ID3D11UnorderedAccessView*, 3> combinedOutputs = { texVolFilteredTr->uav.get(), texVolFilteredLum->uav.get(), texVolFilteredAux->uav.get() };
 			context->CSSetShaderResources(29, 3, ndfOutputs.data());
 			context->CSSetShaderResources(86, 2, voxelInputs.data());
 			context->CSSetUnorderedAccessViews(3, 3, combinedOutputs.data(), nullptr);
@@ -1698,14 +1700,9 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			context->CSSetUnorderedAccessViews(3, 3, nullUavs, nullptr);
 			constants = nullptr;
 			context->CSSetConstantBuffers(3, 1, &constants);
-			// Publish the complete result through the same textures consumed by
-			// ViewAtmosphere and later transparent draws. Raw NDF history is separate.
-			std::swap(texVolFilteredTr, texVoxelCompositeTr);
-			std::swap(texVolFilteredLum, texVoxelCompositeLum);
-			std::swap(texVolFilteredAux, texVoxelCompositeAux);
-			outputSrvs[0] = texVolFilteredTr->srv.get();
-			outputSrvs[1] = texVolFilteredLum->srv.get();
 		}
+		outputSrvs[0] = texVolFilteredTr->srv.get();
+		outputSrvs[1] = texVolFilteredLum->srv.get();
 
 		uavs = { texVolCubeTraceTr->uav.get(), texVolCubeTraceLum->uav.get(), texVolCubeTraceAux->uav.get() };
 		auto* cubeLightningOutput = texLightningCubeTrace->uav.get();

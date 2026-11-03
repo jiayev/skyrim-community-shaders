@@ -2000,11 +2000,15 @@ void PhysicalSky::Prepass()
 		auto* shadowMeanSrv = texCloudShadowMean ? texCloudShadowMean->srv.get() : nullptr;
 		globals::d3d::context->PSSetShaderResources(69, 1, &shadowMeanSrv);
 
-		// Bind volumetric cloud results and shadow volume for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
-		// RenderVolumetricClouds already bound the reconstructed/composited result.
-		// Do not replace it with the NDF-only trace before the sky is drawn.
-		if (texVolTr && texVolLum && (!renderVolumetricClouds || globals::features::viewAtmosphere.CompositeEnabled())) {
-			std::array<ID3D11ShaderResourceView*, 3> volSrvs = { texVolTr->srv.get(), texVolLum->srv.get(), texShadowVolume ? texShadowVolume->srv.get() : nullptr };
+		// DCLF latches these bindings here for transparent draws after the post-water cloud pass.
+		const bool cloudsAfterWater = renderVolumetricClouds && globals::features::viewAtmosphere.CompositeEnabled();
+		if (cloudsAfterWater) {
+			auto* aux = texVolFilteredAux->srv.get();
+			globals::d3d::context->PSSetShaderResources(99, 1, &aux);
+		}
+		if (texVolTr && texVolLum && (!renderVolumetricClouds || cloudsAfterWater)) {
+			std::array<ID3D11ShaderResourceView*, 3> volSrvs = { cloudsAfterWater ? texVolFilteredTr->srv.get() : texVolTr->srv.get(),
+				cloudsAfterWater ? texVolFilteredLum->srv.get() : texVolLum->srv.get(), texShadowVolume ? texShadowVolume->srv.get() : nullptr };
 			globals::d3d::context->PSSetShaderResources(110, (uint)volSrvs.size(), volSrvs.data());
 		}
 		if (texVolCubeTr && texVolCubeLum) {
