@@ -2,9 +2,10 @@
 // colour, Blood's globals; PS b13 c17-c19) and the soft effects' depth (Api::FrameTexture, t118). Sampled on the render thread by each
 // main commit (the rows) and each colour commit (the depth).
 
-#include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Features/Effects/EffectConstants.h"
+#include "Features/DrawcallLimitFix/Features/Effects/Effects.h"
+#include "Features/TerrainBlending.h"
 #include "Globals.h"
 
 #include <array>
@@ -83,8 +84,15 @@ namespace DCLF::Features::Effects
 		// deferred pass, before the forward epoch.
 		void* SoftDepthView()
 		{
-			return globals::game::renderer ? static_cast<void*>(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV) :
-			                                 nullptr;
+			if (!globals::game::renderer)
+				return nullptr;
+			auto* view = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
+			// At colour commit Terrain Blending can still expose its temporary prepass depth.
+			// The forward draw needs the texture Deferred fills after terrain and decals.
+			const auto& terrain = globals::features::terrainBlending;
+			if (terrain.loaded && terrain.blendedDepthTexture && view == terrain.blendedDepthTexture->srv.get())
+				return terrain.prepassSRVBackup;
+			return view;
 		}
 	}
 
