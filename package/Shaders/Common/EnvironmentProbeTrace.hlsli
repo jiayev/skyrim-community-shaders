@@ -128,7 +128,12 @@ bool TraceEnvironmentProbeWithOffset(float3 origin, float3 direction, float star
 				float refinedDistance = lerp(previousDistance, distance, fraction);
 				float refinedGap, refinedFootprint;
 				float2 refinedUV;
-				if (ProbeSampleDepth(origin + direction * refinedDistance, dimensions, refinedGap, refinedFootprint, refinedUV) && refinedGap >= 0) {
+				bool refinedValid = ProbeSampleDepth(origin + direction * refinedDistance, dimensions, refinedGap, refinedFootprint, refinedUV);
+#ifdef PROBE_TRACE_BRACKET_TOLERANCE
+				// A bracketed water hit may refine to either side of the surface.
+				refinedGap = abs(refinedGap);
+#endif
+				if (refinedValid && refinedGap >= 0) {
 					hitT = refinedDistance;
 					hitGap = refinedGap;
 					hitFootprint = refinedFootprint;

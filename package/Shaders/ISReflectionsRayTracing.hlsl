@@ -23,6 +23,26 @@ Texture2D<float4> DepthTex : register(t2);
 Texture2D<float4> AlphaTex : register(t3);
 TextureCube<float4> SkyReflectionTex : register(t4);
 
+#	ifdef ENABLESSR
+#		include "Common/ColorManagement.hlsli"
+Texture2D<float4> ProbeRadianceTexture : register(t5);
+Texture2D<float> ProbeDepthTexture : register(t6);
+cbuffer WaterProbe : register(b9)
+{
+	float4 ProbeOriginOffsets[8];
+	uint ProbeValidFaces;
+	float ProbeFarDistance;
+	float ProbeBoundsRadius;
+};
+// Water has no temporal probe denoiser. Use a small, deterministic march.
+static const uint ProbeMaxSteps = 8;
+#		define PROBE_TRACE_BRACKET_TOLERANCE
+#		define PROBE_TRACE_SAMPLER ColorSampler
+#		include "Common/EnvironmentProbeTrace.hlsli"
+#		undef PROBE_TRACE_SAMPLER
+#		undef PROBE_TRACE_BRACKET_TOLERANCE
+#	endif
+
 cbuffer PerGeometry : register(b2)
 {
 	float4 SSRParams : packoffset(c0);  // fReflectionRayThickness in x, fReflectionMarchingRadius in y, fAlphaWeight in z, 1 / fReflectionMarchingRadius in w
@@ -53,7 +73,8 @@ float2 ConvertRaySamplePrevious(float2 raySample)
 float4 GetReflectionColor(
 	float3 projReflectionDirection,
 	float3 projPosition,
-	float3 reflectionDirection)
+	float3 reflectionDirection,
+	float3 viewPosition)
 {
 	float3 prevRaySample;
 	float3 raySample = projPosition;
@@ -64,8 +85,10 @@ float4 GetReflectionColor(
 
 		float2 sampleUV = raySample.xy;
 
-		if (FrameBuffer::IsOutsideFrame(sampleUV))
-			return 0.0;
+		if (FrameBuffer::IsOutsideFrame(sampleUV)) {
+			raySample = prevRaySample;
+			break;
+		}
 
 		float iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV), 0).x;
 		if (iterationDepth > maxValidDepth && iterationDepth <= skyDepth)
@@ -146,10 +169,28 @@ float4 GetReflectionColor(
 				return float4(reflectionColor, fadeFactor);
 			}
 
-			return 0.0;
+			raySample = prevRaySample;
+			break;
 		}
 	}
 
+#	ifdef ENABLESSR
+	[branch] if (ProbeValidFaces != 0)
+	{
+		// Resume from the last tested interval. The screen march advances in projected
+		// coordinates, so its step count is not a distance along the world-space ray.
+		float4 resume = mul(FrameBuffer::CameraProjInverse, float4(raySample.xy * float2(2, -2) + float2(-1, 1), raySample.z, 1));
+		if (resume.w > 0) {
+			float3 direction = normalize(reflectionDirection);
+			float startDistance = max(0.5, dot(resume.xyz / resume.w - viewPosition, direction));
+			float3 radiance;
+			float hitDistance;
+			if (TraceEnvironmentProbe(FrameBuffer::ViewToWorld(viewPosition), normalize(FrameBuffer::ViewToWorld(direction, false)),
+					startDistance, 5.0, radiance, hitDistance))
+				return float4(PreExposure::Encode(ColorManagement::LinearToScene(radiance)), 1.0);
+		}
+	}
+#	endif
 	return 0.0;
 }
 
@@ -204,7 +245,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 projPosition = float3(uv, depth);
 
-	psout.Color = GetReflectionColor(projReflectionDirection, projPosition, reflectionDirection);
+	psout.Color = GetReflectionColor(projReflectionDirection, projPosition, reflectionDirection, viewPosition);
 
 	return psout;
 }

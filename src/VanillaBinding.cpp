@@ -1,6 +1,8 @@
 #include "VanillaBinding.h"
 
+#include "Features/DynamicCubemaps.h"
 #include "Globals.h"
+#include "Rendering/EnvironmentProbe/CameraPass.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
@@ -52,8 +54,39 @@ namespace VanillaBinding
 
 		if (std::string_view(static_cast<const RE::BSImagespaceShader*>(shader)->name) == "BSImagespaceShaderReflectionsRayTracing") {
 			auto* reflections = globals::game::renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS].SRV;
-			globals::d3d::context->PSSetShaderResources(4, 1, &reflections);
-			globals::game::shadowState->GetRuntimeData().PSResourceModifiedBits |= (1u << 4);
+			const auto& probe = EnvironmentProbe::GetCameraPass();
+			const auto& water = globals::features::dynamicCubemaps;
+			const bool useProbe = water.loaded && water.settings.EnabledSSR && probe.enabled && !REL::Module::IsVR();
+			ID3D11ShaderResourceView* views[]{ reflections, useProbe ? probe.Radiance() : nullptr, useProbe ? probe.Depth() : nullptr };
+			ID3D11Buffer* constants = nullptr;
+			if (views[1] && views[2] && probe.ValidFaces()) {
+				struct alignas(16) WaterProbeData
+				{
+					float4 origins[8];
+					uint32_t validFaces;
+					float farDistance;
+					float boundsRadius;
+					float padding;
+				};
+				static ConstantBuffer buffer(ConstantBufferDesc<WaterProbeData>(), "Water SSR::Probe");
+				WaterProbeData data{};
+				data.validFaces = probe.ValidFaces();
+				data.farDistance = data.boundsRadius = probe.FarDistance;
+				const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();
+				for (uint32_t i = 0; i < 8; ++i) {
+					if (!(data.validFaces & (1u << i)))
+						continue;
+					const auto& origin = probe.Origins()[i];
+					const RE::NiPoint3 offset{ origin.x - camera.x, origin.y - camera.y, origin.z - camera.z };
+					data.origins[i] = { offset.x, offset.y, offset.z, 0 };
+					data.boundsRadius = std::max(data.boundsRadius, probe.FarDistance + offset.Length());
+				}
+				buffer.Update(data);
+				constants = buffer.CB();
+			}
+			globals::d3d::context->PSSetConstantBuffers(9, 1, &constants);
+			globals::d3d::context->PSSetShaderResources(4, 3, views);
+			globals::game::shadowState->GetRuntimeData().PSResourceModifiedBits |= (7u << 4);
 		}
 	}
 }
