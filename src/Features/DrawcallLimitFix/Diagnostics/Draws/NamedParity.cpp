@@ -231,9 +231,9 @@ namespace DCLF::Diagnostics
 						finding(fmt::format("a shadow view at slot {} past the slots made", view.slot));
 						continue;
 					}
-					const std::uint64_t range = std::uint64_t(kShadowClasses) * view.sequenceDraws;
+					const std::uint64_t range = Draws::ShadowSlotSequences(view.sequenceDraws);
 					if (range * kSequence > bytes(slots->sequences[view.slot]))
-						finding(fmt::format("shadow slot {}'s {} draws a class past its sequences' {} bytes", view.slot, view.sequenceDraws, bytes(slots->sequences[view.slot])));
+						finding(fmt::format("shadow slot {}'s {} sequences exceed its {} bytes", view.slot, range, bytes(slots->sequences[view.slot])));
 					if (view.capacity > view.sequenceDraws)
 						finding(fmt::format("shadow slot {}'s max count {} past its {} draws", view.slot, view.capacity, view.sequenceDraws));
 					std::uint64_t end = 0;

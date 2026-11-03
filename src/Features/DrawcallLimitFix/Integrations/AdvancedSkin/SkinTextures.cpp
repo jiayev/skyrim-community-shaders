@@ -28,7 +28,7 @@ namespace DCLF::Integrations::AdvancedSkin
 			MaterialRow row{};
 			std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 3> views;
 			std::shared_ptr<const void> resources;
-			std::vector<std::shared_ptr<const void>> bindings;
+			std::array<std::shared_ptr<const void>, 4> bindings;
 		};
 		std::unordered_map<std::uint32_t, Captured> captured;
 		std::unordered_set<std::uint32_t> reset;
@@ -130,15 +130,14 @@ namespace DCLF::Integrations::AdvancedSkin
 					std::memcpy(row.profile, &snapshot.data.profile, sizeof(row.profile));
 					auto [it, inserted] = captured.try_emplace(slot);
 					auto& previous = it->second;
-					std::vector<std::shared_ptr<const void>> owners;
-					owners.reserve(4);
+					decltype(previous.bindings) owners;
 					for (std::size_t i = 0; i < snapshot.textures.size(); ++i) {
 						auto binding = !inserted && !changedDevice && previous.views[i] == snapshot.textures[i] &&
 						                       previous.row.textures[i] != GpuTextures::kInvalid && (!snapshot.textures[i] || !GpuTextures::Superseded(previous.bindings[i].get())) ?
 						                   GpuTextures::Binding{ previous.row.textures[i], previous.bindings[i] } :
 						                   textures.ResolveBinding(snapshot.textures[i].get(), 64 + kMaterialTextureRegisters[i]);
 						row.textures[i] = binding.index;
-						owners.push_back(std::move(binding.owner));
+						owners[i] = std::move(binding.owner);
 						if (binding.index == GpuTextures::kInvalid) {
 							if (i < 2)
 								row.flags[i] = 0;
@@ -147,11 +146,11 @@ namespace DCLF::Integrations::AdvancedSkin
 						}
 					}
 					row.textures[3] = sampler.index;
-					owners.push_back(sampler.owner);
+					owners[3] = sampler.owner;
 					if (sampler.index == GpuTextures::kInvalid)
 						row.profile[11] = 0;
 					if (inserted || changedDevice || reset.contains(slot) || std::memcmp(&previous.row, &row, sizeof(row)) != 0 || previous.views != snapshot.textures || previous.bindings != owners) {
-						auto lease = textures.Seal(owners);
+						auto lease = textures.Seal({ owners.begin(), owners.end() });
 						previous = { row, std::move(snapshot.textures), std::move(lease), std::move(owners) };
 						std::array<float, Api::kShadingFieldValueFloats> value{};
 						std::memcpy(value.data(), &row, sizeof(row));

@@ -22,6 +22,7 @@
 #include <bit>
 #include <cmath>
 #include <deque>
+#include <optional>
 
 namespace EnvironmentProbe
 {
@@ -456,12 +457,15 @@ namespace EnvironmentProbe
 			winrt::com_ptr<ID3D11Buffer> geometryConstants;
 			std::vector<std::pair<ID3D11Buffer*, ID3D11Buffer*>> copies;
 
-			SavedPipeline()
+			explicit SavedPipeline(bool saveNativeConstants)
 			{
 				auto* context = globals::d3d::context;
 				bindings.Save(context);
 				context->GSGetShader(geometryShader.put(), nullptr, nullptr);
 				context->GSGetConstantBuffers(8, 1, geometryConstants.put());
+				// Native material draws overwrite bound constants in place. The DCLF epoch owns its constants.
+				if (!saveNativeConstants)
+					return;
 				auto save = [&](ID3D11Buffer* buffer) {
 					if (!buffer || std::ranges::any_of(copies, [&](auto entry) { return entry.first == buffer; }))
 						return;
@@ -818,6 +822,16 @@ namespace EnvironmentProbe
 		bool dclf = false;
 #if defined(CS_HAS_DCLF)
 		dclf = DCLF::Features::EnvironmentProbe::OwnsCameraCapture();
+		if (dclf) {
+			if (a_request.cullDynamic || !a_request.radiance || !a_request.depth || !a_request.normals)
+				return Result::Unavailable;
+			D3D11_RENDER_TARGET_VIEW_DESC colour{}, distance{}, normal{};
+			a_request.radiance->GetDesc(&colour);
+			a_request.depth->GetDesc(&distance);
+			a_request.normals->GetDesc(&normal);
+			if (colour.Format != DXGI_FORMAT_R16G16B16A16_FLOAT || colour.Texture2D.MipSlice || distance.Texture2D.MipSlice || normal.Texture2D.MipSlice)
+				return Result::Unavailable;
+		}
 #endif
 
 		try {
@@ -840,7 +854,7 @@ namespace EnvironmentProbe
 			} timing;
 			if (!resources.Ensure(size, !dclf))
 				return Result::ShaderUnavailable;
-			SavedPipeline pipeline;
+			SavedPipeline pipeline(!dclf);
 			auto& state = *globals::state;
 			auto* graphics = globals::game::graphicsState;
 			auto& renderer = globals::game::renderer->GetRuntimeData();
@@ -848,9 +862,11 @@ namespace EnvironmentProbe
 			RestoreValue shadow{ globals::game::shadowState->GetRuntimeData() };
 			RestoreValue frame{ globals::game::frameBufferCached };
 			RestoreValue accumulator{ *globals::game::currentAccumulator };
-			RestoreRenderMode renderMode{ accumulator.saved ?
-											  static_cast<RE::BSShaderAccumulator::RENDER_MODE>(accumulator.saved->GetRuntimeData().renderMode) :
-											  RE::BSShaderAccumulator::RENDER_MODE::kNormal };
+			std::optional<RestoreRenderMode> renderMode;
+			if (!dclf)
+				renderMode.emplace(accumulator.saved ?
+									   static_cast<RE::BSShaderAccumulator::RENDER_MODE>(accumulator.saved->GetRuntimeData().renderMode) :
+									   RE::BSShaderAccumulator::RENDER_MODE::kNormal);
 			RestoreValue target{ renderer.renderTargets[targetSlot] };
 			RestoreValue depthTarget{ depthTargets[depthSlot] };
 			RestoreValue inWorld{ state.inWorld };
@@ -995,39 +1011,30 @@ namespace EnvironmentProbe
 					shared.WaterData[(x + 2) + (y + 2) * 5] = Util::TryGetWaterData(float(x) * 4096, float(y) * 4096);
 
 #if defined(CS_HAS_DCLF)
-			if (dclf && !a_request.cullDynamic && a_request.radiance && a_request.depth && a_request.normals) {
-				D3D11_RENDER_TARGET_VIEW_DESC colour{}, distance{}, normal{};
-				a_request.radiance->GetDesc(&colour);
-				a_request.depth->GetDesc(&distance);
-				a_request.normals->GetDesc(&normal);
-				if (colour.Format == DXGI_FORMAT_R16G16B16A16_FLOAT && !colour.Texture2D.MipSlice && !distance.Texture2D.MipSlice && !normal.Texture2D.MipSlice) {
-					namespace Port = DCLF::Features::EnvironmentProbe;
-					Port::Capture inputs{};
-					inputs.targets = { static_cast<ID3D11Texture2D*>(radianceResource), static_cast<ID3D11Texture2D*>(depthResource), static_cast<ID3D11Texture2D*>(normalResource), resources.depth.get() };
-					inputs.textures = { llf.loaded && llf.lights ? llf.lights->srv.get() : nullptr,
-						llf.loaded && llf.probeLightMasks ? llf.probeLightMasks->srv.get() : nullptr, capture.sunShadowMap, Shadows::Map() };
-					inputs.shared = std::as_bytes(std::span(&shared, 1));
-					inputs.usesShadowParameters = data.sunCascadeCount != 0;
-					std::array<CaptureData, Port::kOctants> octants;
-					for (uint32_t f = 0; f < Port::kOctants; ++f) {
-						if (!(a_request.faces & (1u << f)))
-							continue;
-						inputs.cameras[f] = resources.Camera(f, a_request);
-						octants[f] = data;
-						octants[f].faceMask = 1u << f;
-						octants[f].faceSign = { f & 1 ? -1.f : 1.f, f & 2 ? -1.f : 1.f, f & 4 ? -1.f : 1.f };
-						inputs.parameters[f] = std::as_bytes(std::span(&octants[f], 1));
-					}
-					timing.Next("EnvironmentProbe::DCLFDraw");
-					const auto claims = Port::Draw(inputs);
-					timing.Next("EnvironmentProbe::Restore");
-					return claims ? Result::Success : Result::Unavailable;
+			if (dclf) {
+				namespace Port = DCLF::Features::EnvironmentProbe;
+				Port::Capture inputs{};
+				inputs.targets = { static_cast<ID3D11Texture2D*>(radianceResource), static_cast<ID3D11Texture2D*>(depthResource), static_cast<ID3D11Texture2D*>(normalResource), resources.depth.get() };
+				inputs.textures = { llf.loaded && llf.lights ? llf.lights->srv.get() : nullptr,
+					llf.loaded && llf.probeLightMasks ? llf.probeLightMasks->srv.get() : nullptr, capture.sunShadowMap, Shadows::Map() };
+				inputs.shared = std::as_bytes(std::span(&shared, 1));
+				inputs.usesShadowParameters = data.sunCascadeCount != 0;
+				std::array<CaptureData, Port::kOctants> octants;
+				for (uint32_t f = 0; f < Port::kOctants; ++f) {
+					if (!(a_request.faces & (1u << f)))
+						continue;
+					inputs.cameras[f] = resources.Camera(f, a_request);
+					octants[f] = data;
+					octants[f].faceMask = 1u << f;
+					octants[f].faceSign = { f & 1 ? -1.f : 1.f, f & 2 ? -1.f : 1.f, f & 4 ? -1.f : 1.f };
+					inputs.parameters[f] = std::as_bytes(std::span(&octants[f], 1));
 				}
+				timing.Next("EnvironmentProbe::DCLFDraw");
+				const auto claims = Port::Draw(inputs);
+				timing.Next("EnvironmentProbe::Restore");
+				return claims ? Result::Success : Result::Unavailable;
 			}
 #endif
-			// An unsupported request or pending epoch cannot switch an owned view to engine draws.
-			if (dclf)
-				return Result::Unavailable;
 			// Reuse the engine's cull -> accumulate -> opaque/alpha/decal Forward dispatch.
 			// These are the same SE/AE functions used by BSCubeMapCamera, without its cameras,
 			// cubemap render targets, reflection flags, or face loop.
