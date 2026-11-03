@@ -110,7 +110,7 @@ float4 GetReflectionColor(
 	float3 clearEnd = projPosition;
 	float previousDepth = projPosition.z;
 	bool contiguous = max(abs(projReflectionDirection.x) * depthSize.x, abs(projReflectionDirection.y) * depthSize.y) < iterations * 2;
-	float screenConfidence = 0;
+	bool screenSurface = false;
 
 	for (int i = 0; i < iterations; i++) {
 		prevRaySample = raySample;
@@ -176,9 +176,9 @@ float4 GetReflectionColor(
 
 			if (fadeFactor > 0.0) {
 				if (iterationDepth <= skyDepth) {
-					screenConfidence = depthThicknessFactor * centerDistanceFadeFactorX * centerDistanceFadeFactorY;
+					screenSurface = true;
 					screen = float4(SampleScreenReflection(binaryRaySample.xy, iterationDepth), fadeFactor);
-					if (screenConfidence >= 0.999)
+					if (screen.a >= 0.999)
 						return screen;
 				} else if (!SharedData::InInterior && !SharedData::HideSky) {
 					// Sky has no finite intersection. The probe may still see a surface between samples.
@@ -199,16 +199,13 @@ float4 GetReflectionColor(
 		float4 resume = mul(FrameBuffer::CameraProjInverse, float4(clearEnd.xy * float2(2, -2) + float2(-1, 1), clearEnd.z, 1));
 		float startDistance = resume.w > 0 ? max(0.5, dot(resume.xyz / resume.w - viewPosition, direction)) : 1e30;
 		float3 radiance;
-		float hitDistance, probeCoverage;
-		if (TraceEnvironmentProbe(FrameBuffer::ViewToWorld(viewPosition), worldDirection, startDistance, 5.0, radiance, hitDistance, probeCoverage)) {
-			if (probeCoverage <= 0)
-				return screen;
-			// Empty probe texels store black. Return straight color and let the water
-			// material supply its own cubemap for the uncovered part of the footprint.
-			radiance /= probeCoverage;
+		float hitDistance;
+		float4 waterHit;
+		if (TraceEnvironmentProbe(FrameBuffer::ViewToWorld(viewPosition), worldDirection, startDistance, 5.0, radiance, hitDistance, waterHit)) {
+			float probeCoverage = waterHit.w;
 			// If this same surface is visible, use the game's lit scene and alpha history
 			// on both sides of the handoff. Reject occluders using linear view depth.
-			float3 hitVS = viewPosition + hitDistance * direction;
+			float3 hitVS = FrameBuffer::WorldToView(waterHit.xyz);
 			float4 clip = mul(FrameBuffer::CameraProj, float4(hitVS, 1));
 			if (clip.w > 0) {
 				float2 uv = clip.xy / clip.w * float2(0.5, -0.5) + 0.5;
@@ -227,8 +224,8 @@ float4 GetReflectionColor(
 				}
 			}
 			// A finite screen hit is in front. A sky sample fills only the open part behind the probe hit.
-			float screenWeight = screen.a * (screenConfidence > 0 ? 1 : 1 - probeCoverage);
-			float probeWeight = probeCoverage * (1 - screenConfidence);
+			float screenWeight = screen.a * (screenSurface ? 1 : 1 - probeCoverage);
+			float probeWeight = probeCoverage * (screenSurface ? 1 - screen.a : 1);
 			float coverage = screenWeight + probeWeight;
 			float3 fallback = PreExposure::Encode(ColorManagement::LinearToScene(radiance));
 			return float4(ColorManagement::SceneColor::LerpInLinear(fallback, screen.rgb, screenWeight / coverage), coverage);
