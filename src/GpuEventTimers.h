@@ -23,6 +23,9 @@ namespace GpuEventTimers
 	/** @brief Render-thread perf event hooks (State). */
 	void BeginEvent(std::string_view a_name);
 	void EndEvent();
+	bool PassSkipRequested();
+	bool PassSkipDropping();
+	void PassSkipAfterPresent();
 
 	/** @brief Once per frame at Present on the render thread: closes the frame, collects finished frames, logs. */
 	void OnPresent();

@@ -613,6 +613,7 @@ struct IDXGISwapChain_Present
 		// After Present (upstream #2354): frameCount and every feature's Reset (DCLF's EndFrame among them) belong to the frame just presented.
 		{
 			ZoneScopedN("CS.Present.Reset");
+			GpuEventTimers::PassSkipAfterPresent();
 			globals::state->Reset();
 		}
 

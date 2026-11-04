@@ -1,4 +1,5 @@
 #include "Globals.h"
+#include "GpuEventTimers.h"
 
 #include "CSEditor/SceneManager/SceneManager.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
@@ -544,8 +545,102 @@ namespace globals
 		}
 	}
 
+	// CS_PASS_SKIP's drops: the engine runs as usual, and these calls do nothing inside the chosen event.
+	struct PassSkipDrawIndexed
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b, INT c)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b, c);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDraw
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDrawIndexedInstanced
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b, UINT c, INT d, UINT e)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b, c, d, e);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDrawInstanced
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b, UINT c, UINT d)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b, c, d);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDrawAuto
+	{
+		static void thunk(ID3D11DeviceContext* a_context)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDrawIndexedInstancedIndirect
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a, UINT b)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDrawInstancedIndirect
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a, UINT b)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDispatch
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b, UINT c)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b, c);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDispatchIndirect
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a, UINT b)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
+		if (GpuEventTimers::PassSkipRequested()) {
+			stl::detour_vfunc<12, PassSkipDrawIndexed>(a_context);
+			stl::detour_vfunc<13, PassSkipDraw>(a_context);
+			stl::detour_vfunc<20, PassSkipDrawIndexedInstanced>(a_context);
+			stl::detour_vfunc<21, PassSkipDrawInstanced>(a_context);
+			stl::detour_vfunc<38, PassSkipDrawAuto>(a_context);
+			stl::detour_vfunc<39, PassSkipDrawIndexedInstancedIndirect>(a_context);
+			stl::detour_vfunc<40, PassSkipDrawInstancedIndirect>(a_context);
+			stl::detour_vfunc<41, PassSkipDispatch>(a_context);
+			stl::detour_vfunc<42, PassSkipDispatchIndirect>(a_context);
+		}
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		stl::detour_vfunc<48, ID3D11DeviceContext_UpdateSubresource>(a_context);
