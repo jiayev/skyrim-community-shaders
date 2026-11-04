@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <d3d11.h>
 
+class RayReconstruction;
+
 // Streamline and community upscalers run on DXVK's Vulkan device through full interposition.
 
 class Streamline
@@ -27,6 +29,7 @@ public:
 	void MarkUnavailable() { unavailable = true; }
 	[[nodiscard]] bool IsUnavailable() const { return unavailable; }
 	[[nodiscard]] bool IsDLSSSupported() const { return featureDLSS; }
+	[[nodiscard]] bool IsDLSSRRSupported() const { return featureDLSSRR; }
 	[[nodiscard]] bool IsReflexSupported() const { return featureReflex; }
 	[[nodiscard]] bool IsDLSSGSupported() const { return featureDLSSG; }
 	[[nodiscard]] bool IsXeSSSupported() const { return featureXeSS; }
@@ -48,7 +51,7 @@ public:
 		uint32_t a_renderWidth, uint32_t a_renderHeight,
 		uint32_t a_outputWidth, uint32_t a_outputHeight,
 		uint32_t a_qualityMode,
-		float a_jitterX, float a_jitterY);
+		float a_jitterX, float a_jitterY, const RayReconstruction* a_rr = nullptr);
 
 	[[nodiscard]] EvaluationResult EvaluateXeSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut,
 		ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
@@ -164,6 +167,7 @@ private:
 	bool unavailable = false;
 
 	bool featureDLSS = false;
+	bool featureDLSSRR = false;
 	bool featureReflex = false;
 	bool featureDLSSG = false;
 	bool featureXeSS = false;

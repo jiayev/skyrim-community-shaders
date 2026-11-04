@@ -28,6 +28,7 @@
 #include <sl_core_api.h>
 #include <sl_device_wrappers.h>
 #include <sl_dlss.h>
+#include <sl_dlss_d.h>
 #include <sl_dlss_g.h>
 #include <sl_fsr.h>
 #include <sl_fsr_g.h>
@@ -55,6 +56,7 @@ namespace
 
 		PFun_slDLSSGetOptimalSettings* slDLSSGetOptimalSettings = nullptr;
 		PFun_slDLSSSetOptions* slDLSSSetOptions = nullptr;
+		PFun_slDLSSDSetOptions* slDLSSDSetOptions = nullptr;
 		PFun_slReflexSetOptions* slReflexSetOptions = nullptr;
 		PFun_slReflexSleep* slReflexSleep = nullptr;
 		PFun_slPCLSetMarker* slPCLSetMarker = nullptr;
@@ -469,7 +471,7 @@ bool Streamline::Initialize()
 	// a 16 GB card). They do make the interposer enable VK_NV_low_latency on DXVK's device, which Nsight Graphics refuses to capture,
 	// so CS_STREAMLINE_REFLEX=0 leaves them out for a capture.
 	const bool reflexRequested = Util::SwitchFile::Value("CS_STREAMLINE_REFLEX") != "0";
-	std::vector<sl::Feature> featuresToLoad = { sl::kFeatureDLSS, sl::kFeatureFSR, sl::kFeatureFSR_G, sl::kFeatureXeSS };
+	std::vector<sl::Feature> featuresToLoad = { sl::kFeatureDLSS, sl::kFeatureDLSS_RR, sl::kFeatureFSR, sl::kFeatureFSR_G, sl::kFeatureXeSS };
 	if (reflexRequested) {
 		featuresToLoad.push_back(sl::kFeatureReflex);
 		featuresToLoad.push_back(sl::kFeaturePCL);
@@ -536,12 +538,18 @@ void Streamline::SetVulkanDevice()
 	};
 
 	featureDLSS = supported(sl::kFeatureDLSS);
+	featureDLSSRR = supported(sl::kFeatureDLSS_RR);
 	featureReflex = supported(sl::kFeatureReflex);
 	featureDLSSG = supported(sl::kFeatureDLSS_G);
 	featureXeSS = supported(sl::kFeatureXeSS);
 	featureFSR = supported(sl::kFeatureFSR);
 	featureFSRFG = supported(sl::kFeatureFSR_G);
 
+	if (featureDLSSRR) {
+		g_sl.slGetFeatureFunction(sl::kFeatureDLSS_RR, "slDLSSDSetOptions", reinterpret_cast<void*&>(g_sl.slDLSSDSetOptions));
+		featureDLSSRR = g_sl.slDLSSDSetOptions != nullptr;
+	}
+	logger::info("[Streamline] DLSS Ray Reconstruction supported={}", featureDLSSRR);
 	if (featureDLSS) {
 		g_sl.slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSGetOptimalSettings", reinterpret_cast<void*&>(g_sl.slDLSSGetOptimalSettings));
 		g_sl.slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSSetOptions", reinterpret_cast<void*&>(g_sl.slDLSSSetOptions));
@@ -1455,7 +1463,7 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 	ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 	uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_outputWidth, uint32_t a_outputHeight,
 	float a_jitterX, float a_jitterY, ID3D11Resource* a_hudlessColor = nullptr,
-	bool* a_outputReady = nullptr, bool* a_skipped = nullptr)
+	bool* a_outputReady = nullptr, bool* a_skipped = nullptr, const RayReconstruction* a_rr = nullptr)
 {
 	if (a_outputReady)
 		*a_outputReady = false;
@@ -1477,6 +1485,7 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 	// Pair constants and evaluation once per frame and viewport.
 	static uint32_t s_evalFrameByVp[2] = { UINT32_MAX, UINT32_MAX };
 	static uint32_t s_constFrameByVp[2] = { UINT32_MAX, UINT32_MAX };
+	static sl::Feature s_lastFeatureByVp[2] = { UINT32_MAX, UINT32_MAX };
 	const uint32_t vpId = a_viewport;
 	if (vpId < 2) {
 		if (s_evalFrameByVp[vpId] == g_sl.renderFrameId.load(std::memory_order_acquire)) {
@@ -1491,6 +1500,8 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 					*a_skipped = true;
 				return sl::Result::eOk;
 			}
+			if (s_lastFeatureByVp[vpId] != a_feature)
+				consts.reset = sl::Boolean::eTrue;
 			const sl::Result constantsRes = g_sl.slSetConstants(consts, *token, a_viewport);
 			if (constantsRes != sl::Result::eOk) {
 				logger::error("[Streamline] slSetConstants failed for viewport {} (result {})",
@@ -1524,10 +1535,16 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 	if (!vkCreateImageView || !vkDestroyImageView)
 		return sl::Result::eErrorNotInitialized;
 	ID3D11Resource* resources[] = {
-		a_colorIn, a_colorOut, a_depth, a_motionVectors, a_hudlessColor
+		a_colorIn, a_colorOut, a_depth, a_motionVectors, a_hudlessColor,
+		a_rr ? a_rr->diffuseAlbedo->resource.get() : nullptr,
+		a_rr ? a_rr->specularAlbedo->resource.get() : nullptr,
+		a_rr ? a_rr->normalRoughness->resource.get() : nullptr,
+		a_rr ? a_rr->specularHitDistance->resource.get() : nullptr,
+		a_rr ? a_rr->sssGuide->resource.get() : nullptr,
+		a_rr ? a_rr->colorBeforeTransparency->resource.get() : nullptr
 	};
-	VkImageView views[5] = {};
-	sl::SubresourceRange subresources[5]{};
+	VkImageView views[11] = {};
+	sl::SubresourceRange subresources[11]{};
 	int nv = 0;
 	int nr = 0;
 	bool viewCreationTerminalFault = false;
@@ -1556,6 +1573,11 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 		     wrap(a_colorOut, colorOutRes);
 	if (ok && haveHudless)
 		ok = wrap(a_hudlessColor, hudlessRes);
+	sl::Resource rrResources[6]{};
+	if (a_rr) {
+		for (uint32_t i = 0; i < std::size(rrResources) && ok; ++i)
+			ok = wrap(resources[5 + i], rrResources[i]);
+	}
 	if (!ok) {
 		if (viewCreationTerminalFault) {
 			// The destroy entry point already faulted on these handles; calling it again would fault
@@ -1570,7 +1592,7 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 
 	sl::Extent renderExtent{ 0, 0, a_renderWidth, a_renderHeight };
 	sl::Extent outputExtent{ 0, 0, a_outputWidth, a_outputHeight };
-	sl::ResourceTag tags[5];
+	sl::ResourceTag tags[11];
 	uint32_t nt = 0;
 	if (haveColor) {
 		tags[nt++] = sl::ResourceTag{ &colorInRes, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExtent };
@@ -1583,6 +1605,14 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 	tags[nt++] = sl::ResourceTag{ &mvecRes, sl::kBufferTypeMotionVectors, inputLifecycle, &renderExtent };
 	if (haveHudless)
 		tags[nt++] = sl::ResourceTag{ &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eOnlyValidNow, &outputExtent };
+
+	if (a_rr) {
+		const sl::BufferType types[] = { sl::kBufferTypeAlbedo, sl::kBufferTypeSpecularAlbedo,
+			sl::kBufferTypeNormalRoughness, sl::kBufferTypeSpecularHitDistance,
+			sl::kBufferTypeScreenSpaceSubsurfaceScatteringGuide, sl::kBufferTypeColorBeforeTransparency };
+		for (uint32_t i = 0; i < std::size(rrResources); ++i)
+			tags[nt++] = { &rrResources[i], types[i], sl::ResourceLifecycle::eValidUntilEvaluate, &renderExtent };
+	}
 
 	sl::Result evalRes = sl::Result::eErrorNotInitialized;
 	// Timed inside the buffer: a D3D11 timer around it would straddle the submission (DXVKInterop.h).
@@ -1645,8 +1675,10 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 			dxvk->QueueViewsForDeferredDelete(transaction, views, static_cast<uint32_t>(nv));
 			if (a_outputReady)
 				*a_outputReady = true;
-			if (vpId < 2)
+			if (vpId < 2) {
 				s_evalFrameByVp[vpId] = g_sl.renderFrameId.load(std::memory_order_acquire);
+				s_lastFeatureByVp[vpId] = a_feature;
+			}
 		} else {
 			if (a_feature == sl::kFeatureFSR_G) {
 				const bool canRelease = cs_CanReleaseFailedFSRFrame(dxvk, transaction, a_viewport,
@@ -1692,7 +1724,7 @@ Streamline::EvaluationResult Streamline::EvaluateDLSS(ID3D11Resource* a_colorIn,
 	uint32_t a_renderWidth, uint32_t a_renderHeight,
 	uint32_t a_outputWidth, uint32_t a_outputHeight,
 	uint32_t a_qualityMode,
-	float a_jitterX, float a_jitterY)
+	float a_jitterX, float a_jitterY, const RayReconstruction* a_rr)
 {
 	bool outputReady = false;
 	bool evaluationSkipped = false;
@@ -1768,11 +1800,37 @@ Streamline::EvaluationResult Streamline::EvaluateDLSS(ID3D11Resource* a_colorIn,
 		return result;
 	}
 
-	const sl::Result evalRes = cs_EvaluateFeatureCore(sl::kFeatureDLSS, g_sl.viewport,
+	if (g_sl.slDLSSDSetOptions) {
+		sl::DLSSDOptions rrOptions{};
+		rrOptions.mode = a_rr ? dlssMode : sl::DLSSMode::eOff;
+		rrOptions.outputWidth = a_outputWidth;
+		rrOptions.outputHeight = a_outputHeight;
+		rrOptions.preExposure = globals::state->preExposure;
+		rrOptions.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
+		// Guides use world-space normals and camera-relative world positions.
+		auto view = globals::game::frameBufferCached.GetCameraView().Transpose();
+		auto inverseView = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
+		rrOptions.worldToCameraView = *reinterpret_cast<const sl::float4x4*>(&view);
+		rrOptions.cameraViewToWorld = *reinterpret_cast<const sl::float4x4*>(&inverseView);
+		const auto rrResult = g_sl.slDLSSDSetOptions(g_sl.viewport, rrOptions);
+		if (rrResult != sl::Result::eOk) {
+			logger::error("[Streamline] DLSS RR options failed (result {})", static_cast<int>(rrResult));
+			if (a_rr) {
+				featureDLSSRR = false;
+				return result;
+			}
+		}
+	}
+
+	const sl::Result evalRes = cs_EvaluateFeatureCore(a_rr ? sl::kFeatureDLSS_RR : sl::kFeatureDLSS, g_sl.viewport,
 		a_colorIn, a_colorOut, a_depth, a_motionVectors,
 		a_renderWidth, a_renderHeight, a_outputWidth, a_outputHeight, a_jitterX, a_jitterY,
-		nullptr, &outputReady, &evaluationSkipped);
+		nullptr, &outputReady, &evaluationSkipped, a_rr);
 	result = cs_ClassifyEvaluation(evalRes, outputReady, evaluationSkipped);
+	if (a_rr && result == EvaluationResult::kFailed) {
+		featureDLSSRR = false;
+		logger::error("[Streamline] DLSS RR evaluation failed (result {}); returning to DLSS SR next frame", static_cast<int>(evalRes));
+	}
 
 	static sl::Result s_loggedRes = sl::Result::eErrorNotInitialized;
 	static uint32_t s_loggedDims = 0;

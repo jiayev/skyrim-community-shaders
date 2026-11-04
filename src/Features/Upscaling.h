@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Feature.h"
+#include "Upscaling/RayReconstruction.h"
 #include <array>
 #include <atomic>
 #include <d3d11_4.h>
@@ -53,6 +54,7 @@ public:
 		uint upscaleMethod = (uint)UpscaleMethod::kFSR;
 		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
 		uint qualityMode = 1;
+		bool rayReconstruction = false;
 		float sharpnessFSR = 0.0f;
 		bool reflexEnabled = false;
 		bool reflexBoost = false;
@@ -112,6 +114,12 @@ public:
 	float2 resolutionScale = { 1.0f, 1.0f };
 
 	bool IsUpscalingActive() const;
+	/** @brief Selects RR before the deferred frame chooses its denoiser. */
+	void BeginRayReconstruction();
+	/** @brief True for a supported DLSS frame whose RR resources are ready. */
+	bool IsRayReconstructionActive() const;
+	RayReconstruction rayReconstruction;
+	uint32_t rayReconstructionFrame = UINT32_MAX;
 
 	// Feature interface overrides
 	virtual void DrawSettings() override;
@@ -215,7 +223,6 @@ public:
 
 private:
 	static constexpr size_t kUpscaleMethodCount = static_cast<size_t>(UpscaleMethod::kXeSS) + 1;
-
 
 	void BeginRenderFrame();
 	void CreateUpscaledTexture();

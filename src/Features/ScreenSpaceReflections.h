@@ -170,4 +170,6 @@ struct ScreenSpaceReflections : Feature
 	bool usingEnvironmentProbe = false;
 	// True only after the current DrawSSR invocation has produced a trace output.
 	bool outputReady = false;
+	bool resolvedOutput = false;
+	winrt::com_ptr<ID3D11ComputeShader> resolveSparseCompute;
 };

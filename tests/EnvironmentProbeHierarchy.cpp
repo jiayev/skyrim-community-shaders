@@ -357,6 +357,51 @@ try {
 		}
 	}
 	std::printf("PASS: 4096 fixed/hierarchical empty versus unknown visibility certificates\n");
+	// Rays beginning behind a captured surface cannot resolve its front hit,
+	// but their misses must retain occlusion instead of selecting the sky.
+	for (unsigned scenario = 0; scenario < 4; ++scenario) {
+		constants = {};
+		constants.valid = scenario == 3 ? 0u : 255u;
+		std::fill(depths.begin(), depths.end(), scenario == 1 ? 16384.f : scenario == 2 ? NAN :
+																						  2000.f);
+		context->UpdateSubresource(depth.resource.Get(), 0, nullptr, depths.data(), size * 4, 0);
+		build(255);
+		for (auto& ray : rays) ray.origin.w = 4000;
+		for (auto shader : { reference.Get(), trace.Get() }) {
+			auto result = dispatch(shader, constants);
+			for (unsigned i = 0; i < count; ++i)
+				if (result[i * 4 + 3] != 0 || result[i * 4] != (scenario == 0 ? 1.0f : 0.0f) ||
+					result[i * 4 + 1] != (scenario == 0 ? 2.0f : 0.0f))
+					throw std::runtime_error("occluded/empty/invalid/missing probe miss mismatch");
+		}
+	}
+	std::printf("PASS: 8192 fixed/hierarchical occluded versus empty/invalid/missing probe misses\n");
+	// A thin foreground texel surrounded by bright sky must retain its own
+	// radiance on a miss, without bilinear sky contamination. Adjacent empty
+	// rays must remain empty even when their hierarchy tile contains that texel.
+	constants = {};
+	std::fill(depths.begin(), depths.end(), 16384.f);
+	std::fill(colors.begin(), colors.end(), F{ 100, 100, 100, 1 });
+	constexpr unsigned edgeX = 320, edgeY = 320;
+	depths[edgeY * size + edgeX] = 2000;
+	colors[edgeY * size + edgeX] = { 1, 2, 4, 1 };
+	context->UpdateSubresource(depth.resource.Get(), 0, nullptr, depths.data(), size * 4, 0);
+	context->UpdateSubresource(color.resource.Get(), 0, nullptr, colors.data(), size * 16, 0);
+	build(255);
+	for (unsigned i = 0; i < count; ++i) {
+		rays[i].origin = { 0, 0, 0, 4000 };
+		rays[i].direction = Decode((edgeX + (i % 2 ? 1.1f : .9f)) / size, (edgeY + .9f) / size);
+		rays[i].direction.w = 1;
+	}
+	for (auto shader : { reference.Get(), trace.Get() }) {
+		auto result = dispatch(shader, constants);
+		for (unsigned i = 0; i < count; ++i)
+			if (result[i * 4 + 3] != 0 || result[i * 4] != (i % 2 ? 0.0f : 1.0f) || result[i * 4 + 1] != (i % 2 ? 0.0f : 2.0f))
+				throw std::runtime_error("silhouette miss lost foreground radiance or occluded adjacent sky");
+	}
+	std::printf("PASS: 2048 fixed/hierarchical foreground-color and adjacent-sky misses\n");
+	std::fill(colors.begin(), colors.end(), F{ 1, 2, 4, 1 });
+	context->UpdateSubresource(color.resource.Get(), 0, nullptr, colors.data(), size * 16, 0);
 	// One-texel radial patches: every selected ray has an analytic intersection at
 	// the patch center. Empty coarse tiles must not skip these tiny occluders.
 	std::fill(depths.begin(), depths.end(), 16384.f);

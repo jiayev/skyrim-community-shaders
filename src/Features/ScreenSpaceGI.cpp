@@ -9,6 +9,7 @@
 #include "IBL.h"
 #include "NRD.h"
 #include "Rendering/EnvironmentProbe/CameraPass.h"
+#include "ScreenSpaceRadiance.h"
 #include "Skylighting.h"
 #include "State.h"
 #include "TerrainBlending.h"
@@ -46,6 +47,7 @@ void ScreenSpaceGI::RestoreDefaultSettings()
 	recompileFlag = true;
 	resetReblurHistory = true;
 	outputReady = false;
+	resolvedOutput = false;
 	hasMultiBounceHistory = false;
 	hasFullResolutionMultiBounceHistory = false;
 	multiBounceHistoryUsesNRDOutput = false;
@@ -117,19 +119,17 @@ void ScreenSpaceGI::DrawSettings()
 
 			ImGui::TableNextColumn();
 			{
-				auto halfResGuard = Util::DisableGuard(!settings.EnableREBLUR);
 				resolutionChanged |= ImGui::RadioButton(T(TKEY("half_resolution"), "1/2 Resolution"), &resolutionMode, 1);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels."));
+					ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the pixels. DLSS Ray Reconstruction uses a fixed 2x1 grid with depth- and normal-guided interpolation. Otherwise, use checkerboard sampling with spatial reconstruction when NRD is disabled."));
 				}
 			}
 
 			ImGui::TableNextColumn();
 			{
-				auto quarterResGuard = Util::DisableGuard(!settings.EnableREBLUR);
 				resolutionChanged |= ImGui::RadioButton(T(TKEY("quarter_resolution"), "1/4 Resolution"), &resolutionMode, 2);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("%s", T(TKEY("quarter_resolution_tooltip"), "Trace one pixel per 2x2 block with a rotating pattern. REBLUR reconstructs the missing pixels."));
+					ImGui::Text("%s", T(TKEY("quarter_resolution_tooltip"), "Trace one pixel per 2x2 block. DLSS Ray Reconstruction uses a fixed grid with depth- and normal-guided interpolation. Otherwise, rotate the sampling pattern with spatial reconstruction when NRD is disabled."));
 				}
 			}
 
@@ -223,16 +223,11 @@ void ScreenSpaceGI::DrawSettings()
 	ImGui::SeparatorText(T(TKEY("reblur_denoiser"), "REBLUR Denoiser"));
 
 	{
-		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
+		auto denoiseGuard = Util::DisableGuard(!settings.Enabled || globals::features::upscaling.IsRayReconstructionActive());
 
-		if (ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR)) {
-			// Reduced-resolution traces are checkerboard/phase packed and are only
-			// full-resolution consumer inputs after REBLUR reconstruction.
-			if (!settings.EnableREBLUR && (settings.HalfRes || settings.QuarterRes)) {
-				settings.HalfRes = false;
-				settings.QuarterRes = false;
-				recompileFlag = true;
-			}
+		bool reblurEnabled = settings.EnableREBLUR && !globals::features::upscaling.IsRayReconstructionActive();
+		if (ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &reblurEnabled)) {
+			settings.EnableREBLUR = reblurEnabled;
 			resetReblurHistory = true;
 			hasMultiBounceHistory = false;
 		}
@@ -285,10 +280,6 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 	settings.ProbeMaxSteps = std::clamp(settings.ProbeMaxSteps, 8u, 128u);
 	if (settings.QuarterRes)
 		settings.HalfRes = false;
-	if (!settings.EnableREBLUR) {
-		settings.HalfRes = false;
-		settings.QuarterRes = false;
-	}
 	recompileFlag = recompileFlag ||
 	                settings.HalfRes != previous.HalfRes ||
 	                settings.QuarterRes != previous.QuarterRes ||
@@ -296,6 +287,7 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 	                settings.EnableSH != previous.EnableSH;
 	resetReblurHistory = true;
 	outputReady = false;
+	resolvedOutput = false;
 	hasMultiBounceHistory = false;
 	hasFullResolutionMultiBounceHistory = false;
 	multiBounceHistoryUsesNRDOutput = false;
@@ -339,6 +331,7 @@ void ScreenSpaceGI::SetupResources()
 	auto device = globals::d3d::device;
 	resetReblurHistory = true;
 	outputReady = false;
+	resolvedOutput = false;
 	hasMultiBounceHistory = false;
 	hasFullResolutionMultiBounceHistory = false;
 	multiBounceHistoryUsesNRDOutput = false;
@@ -493,6 +486,7 @@ void ScreenSpaceGI::SetupResources()
 void ScreenSpaceGI::SetupNRDResources()
 {
 	outputReady = false;
+	resolvedOutput = false;
 	resetReblurHistory = true;
 	hasMultiBounceHistory = false;
 	hasFullResolutionMultiBounceHistory = false;
@@ -573,6 +567,7 @@ void ScreenSpaceGI::ClearShaderCache()
 {
 	queuedResetHistory = true;
 	outputReady = false;
+	resolvedOutput = false;
 	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
 		&prefilterDepthsCompute, &prefilterRadianceCompute, &prefilterNormalCompute, &giCompute[0], &giCompute[1], &compositeCompute
 	};
@@ -585,6 +580,8 @@ void ScreenSpaceGI::ClearShaderCache()
 
 void ScreenSpaceGI::CompileComputeShaders()
 {
+	usingFixedSamplingGrid = globals::features::upscaling.IsRayReconstructionActive();
+	resolveSparseCompute = ScreenSpaceRadiance::CompileResolve(settings.QuarterRes, false, settings.EnableGI && settings.EnableSH, usingFixedSamplingGrid);
 	struct ShaderCompileInfo
 	{
 		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
@@ -621,6 +618,8 @@ void ScreenSpaceGI::CompileComputeShaders()
 			info.defines.push_back({ "SSGI_QUARTER", "" });
 		else if (settings.HalfRes)
 			info.defines.push_back({ "SSGI_HALF", "" });
+		if (usingFixedSamplingGrid)
+			info.defines.push_back({ "SSGI_FIXED_GRID", "" });
 		if (globals::features::dynamicCubemaps.loaded)
 			info.defines.push_back({ "DYNAMIC_CUBEMAPS", "" });
 		if (globals::features::skylighting.loaded)
@@ -641,7 +640,7 @@ void ScreenSpaceGI::CompileComputeShaders()
 bool ScreenSpaceGI::ShadersOK()
 {
 	const bool useSH = settings.EnableGI && settings.EnableSH;
-	return texNoise && texWorkingDepth && texRadiance && texNormal && texNRDInput &&
+	return (!(settings.HalfRes || settings.QuarterRes) || resolveSparseCompute) && texNoise && texWorkingDepth && texRadiance && texNormal && texNRDInput &&
 	       prefilterDepthsCompute && prefilterRadianceCompute && prefilterNormalCompute && giCompute[0] && (!settings.EnableGI || giCompute[1]) &&
 	       (!settings.EnableGI || compositeCompute) && (!useSH || texNRDInputSH1);
 }
@@ -707,6 +706,7 @@ void ScreenSpaceGI::UpdateSB()
 void ScreenSpaceGI::DrawSSGI()
 {
 	outputReady = false;
+	resolvedOutput = false;
 
 	auto context = globals::d3d::context;
 
@@ -724,7 +724,7 @@ void ScreenSpaceGI::DrawSSGI()
 	// Compile first: enabling GI may require creating the composite shader, so
 	// checking the old shader set before recompilation can otherwise deadlock the
 	// feature in an unavailable state.
-	if (recompileFlag)
+	if (recompileFlag || usingFixedSamplingGrid != globals::features::upscaling.IsRayReconstructionActive())
 		ClearShaderCache();
 
 	if (!(settings.Enabled && ShadersOK())) {
@@ -905,7 +905,7 @@ void ScreenSpaceGI::DrawSSGI()
 	// REBLUR diffuse denoising via core NRD service
 	auto& nrdSvc = globals::features::nrd;
 	bool producedDenoisedHistory = false;
-	if (settings.EnableREBLUR && nrdReblur.IsValid() && nrdSvc.loaded && nrdSvc.AreGuidesReady()) {
+	if (!globals::features::upscaling.IsRayReconstructionActive() && settings.EnableREBLUR && nrdReblur.IsValid() && nrdSvc.loaded && nrdSvc.AreGuidesReady()) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - REBLUR");
 
 		auto commonSettings = nrdSvc.GetCommonSettings();
@@ -951,10 +951,21 @@ void ScreenSpaceGI::DrawSSGI()
 		globals::profiler->EndPass();
 	}
 
+	resolvedOutput = producedDenoisedHistory;
+	if (!producedDenoisedHistory) {
+		resetReblurHistory = true;
+		if (settings.HalfRes || settings.QuarterRes) {
+			resetViews();
+			ScreenSpaceRadiance::Resolve(resolveSparseCompute.get(), *texNRDInput, *texNRDOutput,
+				useSH ? texNRDInputSH1.get() : nullptr, useSH ? texNRDOutputSH1.get() : nullptr);
+			resolvedOutput = true;
+		}
+	}
+
 	if (trackMultiBounce) {
 		hasMultiBounceHistory = true;
-		hasFullResolutionMultiBounceHistory = (!settings.HalfRes && !settings.QuarterRes) || producedDenoisedHistory;
-		multiBounceHistoryUsesNRDOutput = producedDenoisedHistory;
+		hasFullResolutionMultiBounceHistory = (!settings.HalfRes && !settings.QuarterRes) || resolvedOutput;
+		multiBounceHistoryUsesNRDOutput = resolvedOutput;
 		lastMultiBounceHistoryFrame = globals::state->frameCount;
 		historyGeoWriteIndex ^= 1;
 	} else {
@@ -1023,8 +1034,7 @@ ID3D11ShaderResourceView* ScreenSpaceGI::GetDiffuseOutputTexture()
 {
 	if (!outputReady)
 		return nullptr;
-	if (loaded && settings.Enabled && settings.EnableREBLUR && nrdReblur.IsValid() &&
-		globals::features::nrd.loaded && globals::features::nrd.AreGuidesReady())
+	if (loaded && settings.Enabled && resolvedOutput)
 		return texNRDOutput->srv.get();
 	else if (loaded && settings.Enabled)
 		return texNRDInput->srv.get();
@@ -1035,7 +1045,7 @@ ID3D11ShaderResourceView* ScreenSpaceGI::GetDiffuseSH1Texture()
 {
 	if (!outputReady || !loaded || !settings.Enabled || !settings.EnableGI || !settings.EnableSH)
 		return nullptr;
-	if (settings.EnableREBLUR && nrdReblur.IsValid() && globals::features::nrd.loaded && globals::features::nrd.AreGuidesReady() && texNRDOutputSH1)
+	if (resolvedOutput && texNRDOutputSH1)
 		return texNRDOutputSH1->srv.get();
 	else if (texNRDInputSH1)
 		return texNRDInputSH1->srv.get();

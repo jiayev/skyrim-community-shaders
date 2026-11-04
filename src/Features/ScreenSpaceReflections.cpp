@@ -6,6 +6,7 @@
 #include "IBL.h"
 #include "NRD.h"
 #include "Rendering/EnvironmentProbe/CameraPass.h"
+#include "ScreenSpaceRadiance.h"
 #include "Skylighting.h"
 #include "State.h"
 #include "Upscaling.h"
@@ -44,6 +45,7 @@ void ScreenSpaceReflections::RestoreDefaultSettings()
 	recompileFlag = true;
 	resetReblurHistory = true;
 	outputReady = false;
+	resolvedOutput = false;
 }
 
 void ScreenSpaceReflections::DrawSettings()
@@ -67,14 +69,13 @@ void ScreenSpaceReflections::DrawSettings()
 		auto enabledGuard = Util::DisableGuard(!settings.Enabled);
 
 		{
-			auto halfResGuard = Util::DisableGuard(!settings.EnableREBLUR);
 			if (ImGui::Checkbox(T(TKEY("half_resolution_checkerboard"), "Half Resolution (Checkerboard)"), &settings.HalfRes)) {
 				recompileFlag = true;
 				resetReblurHistory = true;
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels."));
+			ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the columns in a checkerboard pattern. Missing pixels are reconstructed spatially when NRD is disabled."));
 		}
 	}
 
@@ -129,13 +130,11 @@ void ScreenSpaceReflections::DrawSettings()
 	ImGui::SeparatorText(T(TKEY("reblur_denoiser"), "REBLUR Denoiser"));
 
 	{
-		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
+		auto denoiseGuard = Util::DisableGuard(!settings.Enabled || globals::features::upscaling.IsRayReconstructionActive());
 
-		if (ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR)) {
-			if (!settings.EnableREBLUR && settings.HalfRes) {
-				settings.HalfRes = false;
-				recompileFlag = true;
-			}
+		bool reblurEnabled = settings.EnableREBLUR && !globals::features::upscaling.IsRayReconstructionActive();
+		if (ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &reblurEnabled)) {
+			settings.EnableREBLUR = reblurEnabled;
 			resetReblurHistory = true;
 		}
 
@@ -176,11 +175,10 @@ void ScreenSpaceReflections::DrawSettings()
 void ScreenSpaceReflections::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	if (!settings.EnableREBLUR)
-		settings.HalfRes = false;
 	recompileFlag = true;
 	resetReblurHistory = true;
 	outputReady = false;
+	resolvedOutput = false;
 }
 
 void ScreenSpaceReflections::SaveSettings(json& o_json)
@@ -194,6 +192,7 @@ void ScreenSpaceReflections::SetupResources()
 	auto device = globals::d3d::device;
 	resetReblurHistory = true;
 	outputReady = false;
+	resolvedOutput = false;
 
 	logger::debug("ScreenSpaceReflections: creating buffers");
 	{
@@ -317,6 +316,7 @@ void ScreenSpaceReflections::ClearShaderCache()
 {
 	resetReblurHistory = true;
 	outputReady = false;
+	resolvedOutput = false;
 	prefilterHiZDepthCompute = nullptr;
 	prefilterHiZMipsCompute = nullptr;
 	depthDownsampleCompute = nullptr;
@@ -329,6 +329,7 @@ void ScreenSpaceReflections::ClearShaderCache()
 
 void ScreenSpaceReflections::CompileComputeShaders()
 {
+	resolveSparseCompute = ScreenSpaceRadiance::CompileResolve(false, true, false);
 	{
 		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceReflections") / "prefilterHiZDepth.cs.hlsl";
 		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), {}, "cs_5_0")))
@@ -375,7 +376,7 @@ void ScreenSpaceReflections::CompileComputeShaders()
 
 bool ScreenSpaceReflections::ShadersOK()
 {
-	return prefilterHiZDepthCompute && prefilterHiZMipsCompute && depthDownsampleCompute && specularGICompute[0] && specularGICompute[1];
+	return (!settings.HalfRes || resolveSparseCompute) && prefilterHiZDepthCompute && prefilterHiZMipsCompute && depthDownsampleCompute && specularGICompute[0] && specularGICompute[1];
 }
 
 bool ScreenSpaceReflections::BuildProbeHierarchy()
@@ -549,6 +550,7 @@ void ScreenSpaceReflections::UpdateSB()
 void ScreenSpaceReflections::DrawSSR()
 {
 	outputReady = false;
+	resolvedOutput = false;
 
 	if (recompileFlag)
 		ClearShaderCache();
@@ -683,11 +685,13 @@ void ScreenSpaceReflections::DrawSSR()
 		specSRVs[10] = useProbeHierarchy ? probeHierarchy->srv.get() : nullptr;
 		ID3D11ShaderResourceView* envIBLSrv = ibl.loaded && ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr;
 
-		ID3D11UnorderedAccessView* specUAV = texNRDSpecInput->uav.get();
+		auto& upscaling = globals::features::upscaling;
+		ID3D11UnorderedAccessView* specUAVs[] = { texNRDSpecInput->uav.get(),
+			upscaling.IsRayReconstructionActive() ? upscaling.rayReconstruction.tracedSpecularHitDistance->uav.get() : nullptr };
 
 		context->CSSetShaderResources(0, (uint)specSRVs.size(), specSRVs.data());
 		context->CSSetShaderResources(76, 1, &envIBLSrv);
-		context->CSSetUnorderedAccessViews(0, 1, &specUAV, nullptr);
+		context->CSSetUnorderedAccessViews(0, 2, specUAVs, nullptr);
 		context->CSSetShader(specularGICompute[useProbeHierarchy ? 2 : usingEnvironmentProbe ? 1 :
 																							   0]
 								 .get(),
@@ -697,6 +701,8 @@ void ScreenSpaceReflections::DrawSSR()
 		uint specDispatchY = resolution[1];
 		globals::profiler->BeginPass("ScreenSpaceReflections::SpecularGI");
 		context->Dispatch((specDispatchX + 7u) >> 3, (specDispatchY + 7u) >> 3, 1);
+		std::fill(std::begin(specUAVs), std::end(specUAVs), nullptr);
+		context->CSSetUnorderedAccessViews(0, 2, specUAVs, nullptr);
 		globals::profiler->EndPass();
 
 		envIBLSrv = nullptr;
@@ -709,7 +715,7 @@ void ScreenSpaceReflections::DrawSSR()
 
 	// REBLUR denoise (specular)
 	auto& nrdSvc = globals::features::nrd;
-	if (settings.EnableREBLUR && nrdReblurSpecular.IsValid() && nrdSvc.loaded && nrdSvc.AreGuidesReady()) {
+	if (!globals::features::upscaling.IsRayReconstructionActive() && settings.EnableREBLUR && nrdReblurSpecular.IsValid() && nrdSvc.loaded && nrdSvc.AreGuidesReady()) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSR - REBLUR Specular");
 		if (globals::state->frameAnnotations)
 			globals::state->BeginPerfEvent("SSR - REBLUR Specular");
@@ -740,11 +746,20 @@ void ScreenSpaceReflections::DrawSSR()
 
 		globals::profiler->BeginPass("ScreenSpaceReflections::ReblurSpecular");
 		nrdReblurSpecular.Dispatch();
+		resolvedOutput = true;
 		resetReblurHistory = false;
 		globals::profiler->EndPass();
 
 		if (globals::state->frameAnnotations)
 			globals::state->EndPerfEvent();
+	}
+
+	if (!resolvedOutput) {
+		resetReblurHistory = true;
+		if (settings.HalfRes) {
+			ScreenSpaceRadiance::Resolve(resolveSparseCompute.get(), *texNRDSpecInput, *texNRDSpecOutput);
+			resolvedOutput = true;
+		}
 	}
 
 	// cleanup
@@ -765,7 +780,7 @@ ID3D11ShaderResourceView* ScreenSpaceReflections::GetOutputTexture()
 {
 	if (!outputReady || !loaded || !settings.Enabled)
 		return nullptr;
-	if (settings.EnableREBLUR && nrdReblurSpecular.IsValid() && globals::features::nrd.loaded && globals::features::nrd.AreGuidesReady())
+	if (resolvedOutput)
 		return texNRDSpecOutput->srv.get();
 	return texNRDSpecInput->srv.get();
 }

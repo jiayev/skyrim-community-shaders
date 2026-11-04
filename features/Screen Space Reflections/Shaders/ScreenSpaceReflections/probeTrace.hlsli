@@ -37,10 +37,20 @@ float ProbeScreenExitDistance(float4 originClip, float4 directionClip)
 // Keep the public intersection-only entry point for callers that do not resolve
 // lighting fallbacks (including raster/hierarchy regression fixtures).
 bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance, float thickness,
-	out float3 radiance, out float hitDistance)
+	out float3 radiance, out float hitDistance
+#	ifdef PROBE_TRACE_OCCLUSION
+	,
+	out bool occluded
+#	endif
+)
 {
 	bool unobstructed;
-	return TraceEnvironmentProbe(origin, direction, startDistance, thickness, radiance, hitDistance, unobstructed);
+	return TraceEnvironmentProbe(origin, direction, startDistance, thickness, radiance, hitDistance, unobstructed
+#	ifdef PROBE_TRACE_OCCLUSION
+		,
+		occluded
+#	endif
+	);
 }
 #endif
 

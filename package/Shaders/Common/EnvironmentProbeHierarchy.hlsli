@@ -107,12 +107,19 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 	,
 	out bool unobstructed
 #endif
+#ifdef PROBE_TRACE_OCCLUSION
+	,
+	out bool occluded
+#endif
 )
 {
 	radiance = 0;
 	hitDistance = 0;
 #ifdef PROBE_TRACE_VISIBILITY
 	unobstructed = false;
+#endif
+#ifdef PROBE_TRACE_OCCLUSION
+	occluded = false;
 #endif
 	if (ProbeValidFaces == 0 || !all(isfinite(origin)) || !all(isfinite(direction)) || !isfinite(startDistance))
 		return false;
@@ -228,6 +235,20 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 				bool empty = bounds.x > bounds.y;
 				bool before = hi < bounds.x;
 				bool after = lo > bounds.y + sqrt(3.0) * shell;
+#ifdef PROBE_TRACE_OCCLUSION
+				if (!occluded && known && !empty && after) {
+					// A coarse tile may also contain sky. Check the actual ray texel
+					// before retaining its color as an occluder on a later miss.
+					float3 position = localOrigin + direction * ((t + exit) * 0.5);
+					uint2 pixel = min(uint2(saturate(EnvironmentProbe::Encode(position)) * (width * 2)), width * 2 - 1);
+					float depth = ProbeDepthTexture.Load(int3(pixel, 0));
+					if (isfinite(depth) && depth > 0 && depth < ProbeFarDistance && length(position) >= depth) {
+						occluded = true;
+						float3 color = ProbeRadianceTexture.Load(int3(pixel, 0)).rgb;
+						radiance = all(isfinite(color)) ? max(color, 0) : 0;
+					}
+				}
+#endif
 				if (!empty && !before && !after && level > 0) {
 					--level;
 					continue;
@@ -246,6 +267,13 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 					float3 entryPosition = localOrigin + direction * t;
 					float radius = length(entryPosition);
 					if (isfinite(depth) && depth > 0 && depth < ProbeFarDistance) {
+#ifdef PROBE_TRACE_OCCLUSION
+						if (!occluded && radius >= depth) {
+							occluded = true;
+							float3 color = ProbeRadianceTexture.Load(int3(pixel, 0)).rgb;
+							radiance = all(isfinite(color)) ? max(color, 0) : 0;
+						}
+#endif
 						float sphereB = dot(localOrigin, direction);
 						float disc = sphereB * sphereB - dot(localOrigin, localOrigin) + depth * depth;
 						float candidate = disc >= 0 ? -sphereB + sqrt(max(0, disc)) : -1;

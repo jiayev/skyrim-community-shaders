@@ -25,7 +25,14 @@ void NRD::DrawSettings()
 		"whether denoising actually runs.");
 
 	ImGui::Separator();
-	ImGui::Checkbox("Enabled", &settings.Enabled);
+	{
+		auto guard = Util::DisableGuard(globals::features::upscaling.IsRayReconstructionActive());
+		bool enabled = settings.Enabled && !globals::features::upscaling.IsRayReconstructionActive();
+		if (ImGui::Checkbox("Enabled", &enabled))
+			settings.Enabled = enabled;
+	}
+	if (globals::features::upscaling.IsRayReconstructionActive())
+		ImGui::TextWrapped("%s", T("feature.nrd.rr_disabled", "NRD is disabled while DLSS Ray Reconstruction is active."));
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"When disabled, NRD skips the guide preparation pass and consumer "
@@ -129,7 +136,7 @@ void NRD::PrepareGuides()
 	commonSettingsValidThisFrame = false;
 	guidesReadyThisFrame = false;
 
-	if (!settings.Enabled || !prepareNRDGuidesCompute || !texNRDViewZ || !texNRDNormalRoughness || !texNRDMV)
+	if (!settings.Enabled || globals::features::upscaling.IsRayReconstructionActive() || !prepareNRDGuidesCompute || !texNRDViewZ || !texNRDNormalRoughness || !texNRDMV)
 		return;
 
 	auto context = globals::d3d::context;

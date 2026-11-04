@@ -19,11 +19,16 @@
 SamplerState LinearSampler : register(s1);
 
 #if defined(PROBE_CONTINUATION)
+#	define PROBE_TRACE_OCCLUSION
+#	define PROBE_TRACE_VISIBILITY
 #	ifndef PROBE_HIERARCHY
 #		define PROBE_TRACE_COARSE_HITS
 #	endif
 #	include "ScreenSpaceReflections/probeTrace.hlsli"
 #	undef PROBE_TRACE_COARSE_HITS
+#	undef PROBE_TRACE_OCCLUSION
+#	undef PROBE_TRACE_VISIBILITY
+#	include "Common/EnvironmentProbeVisibility.hlsli"
 #endif
 #if defined(IBL) && !defined(PROBE_CONTINUATION)
 #	include "IBL/IBL.hlsli"
@@ -43,6 +48,7 @@ TextureCube<float3> EnvReflectionsTexture : register(t5);
 #endif
 
 RWTexture2D<float4> OutSpecRadianceHitDist : register(u0);
+RWTexture2D<float> OutRayReconstructionHitDistance : register(u1);
 
 ///////////////////////////////////////////////////////////////////////////////
 // Importance sampling helpers (from ssrt_common.hlsli)
@@ -291,7 +297,9 @@ float3 SSRT_HierarchicalRaymarch(float3 origin,
 	}
 
 	left_screen = any(position.xy >= 1.0) || any(position.xy < 0.0) || position.z >= 1.0 - 1e-6 || position.z < 0.0;
-	valid_hit = num_iters <= max_traversal_intersections;
+	// A candidate is resolved only after descending through the finest mip.
+	// Budget exhaustion can leave the cursor in an untested coarse tile.
+	valid_hit = current_mip < most_detailed_mip && !left_screen;
 	return position;
 }
 
@@ -307,19 +315,23 @@ float SSRT_ValidateHit(float3 hit,
 	out float ray_length,
 	out float occlusion,
 	out bool isBackfaceHit,
+	out bool isSelfHit,
 	out bool thicknessRejected)
 {
 	ray_length = 0.0f;
 	occlusion = 1.f;
 	isBackfaceHit = false;
+	isSelfHit = false;
 	thicknessRejected = false;
 
-	if ((hit.x < 0.0f) || (hit.y < 0.0f) || (hit.x > 1.0f) || (hit.y > 1.0f)) {
+	if ((hit.x < 0.0f) || (hit.y < 0.0f) || (hit.x >= 1.0f) || (hit.y >= 1.0f)) {
 		return 0.0f;
 	}
 
 	uint2 texel_coords = uint2(screen_size * hit.xy * FrameBuffer::DynamicResolutionParams1.xy);
-	float surface_z = SSRT_LoadDepth(texel_coords / 2u, 1);
+	// Validate the same surface as the normal below. A 2x2 minimum can belong
+	// to a neighbouring leaf or branch and falsely reject a silhouette hit.
+	float surface_z = SSRT_LoadDepth(texel_coords, 0);
 	if (surface_z == 1.0) {
 		return 0;
 	}
@@ -347,6 +359,7 @@ float SSRT_ValidateHit(float3 hit,
 	float2 manhattan_dist = abs(hit.xy - uv);
 	if ((manhattan_dist.x < (2.f / render_size.x)) && (manhattan_dist.y < (2.f / render_size.y))) {
 		occlusion = 1 - confidence;
+		isSelfHit = true;
 		return 0;
 	}
 
@@ -373,6 +386,7 @@ float SSRT_ValidateHit(float3 hit,
 	outPixelPos = DTid.xy;
 #endif
 
+	OutRayReconstructionHitDistance[outPixelPos] = 0;
 	const uint2 activeScreenSize = (uint2)(screen_size * FrameBuffer::DynamicResolutionParams1.xy);
 	if (any(fullResCoords >= activeScreenSize)) {
 		OutSpecRadianceHitDist[outPixelPos] = 0;
@@ -413,6 +427,7 @@ float SSRT_ValidateHit(float3 hit,
 	float3 unbiased_view_space_ray = view_space_ray;
 #endif
 
+	float3 primarySurface = view_space_ray;
 	view_space_ray += view_space_surface_normal * NormalBias * view_space_ray.z * GAME_UNIT_TO_M;
 
 	float3 view_space_reflected_direction = SampleReflectionVector(view_space_ray_direction, view_space_surface_normal, roughness, fullResCoords);
@@ -433,10 +448,11 @@ float SSRT_ValidateHit(float3 hit,
 	float ray_length = 0.0f;
 	float occlusion = 1.0f;
 	bool isBackfaceHit = false;
+	bool isSelfHit = false;
 	bool thicknessRejected = false;
 	float confidence = 0.0f;
 	if (valid_hit && all(isfinite(hit))) {
-		confidence = SSRT_ValidateHit(hit, uv, view_space_ray, screen_size, thickness, ray_length, occlusion, isBackfaceHit, thicknessRejected);
+		confidence = SSRT_ValidateHit(hit, uv, view_space_ray, screen_size, thickness, ray_length, occlusion, isBackfaceHit, isSelfHit, thicknessRejected);
 	}
 	float screenConfidence = isBackfaceHit ? 1.0 : confidence;
 	float3 sampleColor = 0;
@@ -454,7 +470,14 @@ float SSRT_ValidateHit(float3 hit,
 		float probeDistance = 0;
 		float3 worldOrigin = 0;
 		bool probeHit = false;
-		bool probeTraced = left_screen || thicknessRejected;
+		bool probeOccluded = false;
+		bool probeUnobstructed = false;
+		// Validation leaves ray_length at zero for sky/invalid samples. A finite
+		// front-facing candidate is evidence of occlusion even at zero confidence.
+		bool hasScreenOccluder = valid_hit && ray_length > 0 && !isBackfaceHit && !isSelfHit;
+		// Low-confidence front-facing hits and exhausted screen traces still
+		// need a probe query before falling back to the reflection cubemap.
+		bool probeTraced = left_screen || thicknessRejected || !isBackfaceHit;
 		if (probeTraced) {
 			worldOrigin = mul(FrameBuffer::CameraViewInverse, float4(view_space_ray, 1)).xyz;
 			float startDistance = ray_length + 0.5;
@@ -462,10 +485,10 @@ float SSRT_ValidateHit(float3 hit,
 				startDistance = ProbeScreenExitDistance(mul(FrameBuffer::CameraProj, float4(view_space_ray, 1)),
 					mul(FrameBuffer::CameraProj, float4(view_space_reflected_direction, 0)));
 #	if defined(PROBE_HIERARCHY)
-			probeHit = TraceEnvironmentProbe(worldOrigin, worldDirection, startDistance, thickness, probeColor, probeDistance);
+			probeHit = TraceEnvironmentProbe(worldOrigin, worldDirection, startDistance, thickness, probeColor, probeDistance, probeUnobstructed, probeOccluded);
 #	else
 			float stepOffset = Random::InterleavedGradientNoise(fullResCoords, SharedData::FrameCount);
-			probeHit = TraceEnvironmentProbeWithOffset(worldOrigin, worldDirection, startDistance, thickness, stepOffset, probeColor, probeDistance);
+			probeHit = TraceEnvironmentProbeWithOffset(worldOrigin, worldDirection, startDistance, thickness, stepOffset, probeColor, probeDistance, probeUnobstructed, probeOccluded);
 #	endif
 		}
 		float3 fallbackColor = 0;
@@ -473,8 +496,30 @@ float SSRT_ValidateHit(float3 hit,
 			fallbackColor = probeColor * SharedData::ssrSettings.SpecularMult;
 			ray_length = probeDistance;
 			screenConfidence = 1;
+		} else if (hasScreenOccluder) {
+			// Keep the previously encountered foreground when continuation fails.
+			// Match the validated depth texel so sky cannot bleed across its edge.
+			uint2 hitPixel = uint2(hit.xy * screen_size * FrameBuffer::DynamicResolutionParams1.xy);
+			fallbackColor = ColorManagement::SceneToLinear(PreExposure::Decode(ScreenColorTexture.Load(int3(hitPixel, 0)).rgb)) * SharedData::ssrSettings.SpecularMult;
+			confidence = 0;
+			screenConfidence = 0;
+		} else if (probeOccluded) {
+			fallbackColor = probeColor * SharedData::ssrSettings.SpecularMult;
+			confidence = 0;
+			screenConfidence = 0;
+		} else if (isBackfaceHit) {
+			// Rejected backfaces are still blockers. Low thickness confidence
+			// must not turn them into an unoccluded cubemap lookup.
+			confidence = 0;
+			screenConfidence = 0;
 		} else if (SpecUseDynamicCubemap != 0 && ReflectionCubemapValid != 0) {
 			fallbackColor = ColorManagement::SceneToLinear(ReflectionCubemap.SampleLevel(LinearSampler, worldDirection, 0)) * SpecCubemapMult;
+#	if defined(SKYLIGHTING)
+			// A finite-budget miss is not an empty ray. Restore the independent
+			// sky visibility that cubemap fallback uses without probe continuation.
+			if (!probeUnobstructed && !SharedData::InInterior)
+				fallbackColor *= ProbeUnknownVisibility(worldOrigin, worldDirection);
+#	endif
 			float ao = lerp(1.0, occlusion, OcclusionStrength);
 			fallbackColor *= GetSpecularOcclusionFromAmbientOcclusion(saturate(dot(normalize(view_space_ray), view_space_surface_normal)), ao, roughness);
 		}
@@ -570,12 +615,16 @@ float SSRT_ValidateHit(float3 hit,
 	}
 #endif
 
+	// Include the ray-origin bias so RR receives distance from the primary surface.
+	OutRayReconstructionHitDistance[outPixelPos] = screenConfidence > 0.01f ?
+	                                                   length(view_space_ray + view_space_reflected_direction * ray_length - primarySurface) :
+	                                                   0;
 	float normHitDist;
 	if (screenConfidence > 0.01f) {
 		normHitDist = REBLUR_FrontEnd_GetNormHitDist(ray_length, viewZ, kHitDistParams, roughness);
 	} else {
-		// A resolved probe miss contains the Reflection Cubemap (or intentional
-		// black when fallback is disabled). Keep it authoritative through REBLUR
+		// A resolved probe miss contains the Reflection Cubemap or intentional
+		// occluder radiance or disabled fallback. Keep it authoritative through REBLUR
 		// and the composite, which otherwise substitutes EnvReflectionsTexture.
 		normHitDist = resolvedProbePath ? 1.0 : 0.0;
 	}

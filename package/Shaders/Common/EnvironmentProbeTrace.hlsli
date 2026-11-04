@@ -96,6 +96,10 @@ bool TraceEnvironmentProbeWithOffset(float3 origin, float3 direction, float star
 	,
 	out bool unobstructed
 #endif
+#ifdef PROBE_TRACE_OCCLUSION
+	,
+	out bool occluded
+#endif
 #ifdef PROBE_TRACE_NORMALS
 	,
 	out float3 sourceNormal
@@ -109,6 +113,9 @@ bool TraceEnvironmentProbeWithOffset(float3 origin, float3 direction, float star
 #endif
 #ifdef PROBE_TRACE_VISIBILITY
 	unobstructed = false;
+#endif
+#ifdef PROBE_TRACE_OCCLUSION
+	occluded = false;
 #endif
 #ifdef PROBE_TRACE_NORMALS
 	sourceNormal = 0;
@@ -140,6 +147,10 @@ bool TraceEnvironmentProbeWithOffset(float3 origin, float3 direction, float star
 	float previousGap, footprint;
 	float2 uv;
 	bool previousValid = ProbeSampleDepth(origin + direction * begin, dimensions, previousGap, footprint, uv);
+#ifdef PROBE_TRACE_OCCLUSION
+	occluded = previousValid && previousGap >= 0;
+	float2 occluderUV = uv;
+#endif
 #ifdef PROBE_TRACE_VISIBILITY
 	bool clear = previousValid && previousGap < 0;
 	uint2 previousPixel = min(uint2(saturate(uv) * dimensions), dimensions - 1);
@@ -152,6 +163,14 @@ bool TraceEnvironmentProbeWithOffset(float3 origin, float3 direction, float star
 		float distance = lerp(begin, end, fraction * fraction);
 		float gap;
 		bool valid = ProbeSampleDepth(origin + direction * distance, dimensions, gap, footprint, uv);
+#ifdef PROBE_TRACE_OCCLUSION
+		// A depth discontinuity can put the ray behind captured geometry without
+		// a resolvable surface crossing. A later miss must not expose sky there.
+		if (!occluded && valid && gap >= 0) {
+			occluded = true;
+			occluderUV = uv;
+		}
+#endif
 #ifdef PROBE_TRACE_VISIBILITY
 		uint2 pixel = min(uint2(saturate(uv) * dimensions), dimensions - 1);
 		// Only certify intervals contained in one captured texel cone. Their
@@ -278,6 +297,15 @@ bool TraceEnvironmentProbeWithOffset(float3 origin, float3 direction, float star
 #ifdef PROBE_TRACE_VISIBILITY
 	unobstructed = clear;
 #endif
+#ifdef PROBE_TRACE_OCCLUSION
+	if (occluded) {
+		// Retain the first observed surface on an unresolved continuation. Use
+		// its depth texel, not a bilinear footprint containing neighbouring sky.
+		uint2 pixel = min(uint2(saturate(occluderUV) * dimensions), dimensions - 1);
+		float3 color = ProbeRadianceTexture.Load(int3(pixel, 0)).rgb;
+		radiance = all(isfinite(color)) ? max(color, 0) : 0;
+	}
+#endif
 	return false;
 }
 
@@ -290,6 +318,10 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 #ifdef PROBE_TRACE_VISIBILITY
 	,
 	out bool unobstructed
+#endif
+#ifdef PROBE_TRACE_OCCLUSION
+	,
+	out bool occluded
 #endif
 #ifdef PROBE_TRACE_NORMALS
 	,
@@ -305,6 +337,10 @@ bool TraceEnvironmentProbe(float3 origin, float3 direction, float startDistance,
 #ifdef PROBE_TRACE_VISIBILITY
 		,
 		unobstructed
+#endif
+#ifdef PROBE_TRACE_OCCLUSION
+		,
+		occluded
 #endif
 #ifdef PROBE_TRACE_NORMALS
 		,

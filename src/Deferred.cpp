@@ -363,6 +363,8 @@ void Deferred::DeferredPasses()
 
 	auto& skylighting = globals::features::skylighting;
 
+	auto& upscaling = globals::features::upscaling;
+	upscaling.BeginRayReconstruction();
 	auto& nrd = globals::features::nrd;
 	if (nrd.loaded)
 		nrd.PrepareGuides();
@@ -384,8 +386,12 @@ void Deferred::DeferredPasses()
 	auto dispatchCount = Util::GetScreenDispatchCount(true);
 
 	auto& sss = globals::features::subsurfaceScattering;
+	if (upscaling.IsRayReconstructionActive())
+		upscaling.rayReconstruction.CaptureBeforeSSS(main.texture);
 	if (sss.loaded)
 		sss.DrawSSS();
+	if (upscaling.IsRayReconstructionActive())
+		upscaling.rayReconstruction.PrepareGuides(main.SRV);
 
 	auto& dynamicCubemaps = globals::features::dynamicCubemaps;
 	if (dynamicCubemaps.loaded)
@@ -516,6 +522,10 @@ void Deferred::EndDeferred()
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
 	DeferredPasses();  // Perform deferred passes and composite forward buffers
+	auto& upscaling = globals::features::upscaling;
+	if (upscaling.IsRayReconstructionActive())
+		upscaling.rayReconstruction.CaptureBeforeTransparency(
+			globals::game::renderer->GetRuntimeData().renderTargets[forwardRenderTargets[0]].texture);
 	if (globals::features::drawcallLimitFix.loaded)
 		globals::features::drawcallLimitFix.ProbeOpaqueTarget(3);
 

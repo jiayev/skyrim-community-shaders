@@ -35,6 +35,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	upscaleMethod,
 	upscaleMethodNoDLSS,
 	qualityMode,
+	rayReconstruction,
 	sharpnessFSR,
 	reflexEnabled,
 	reflexBoost,
@@ -211,6 +212,14 @@ void Upscaling::DrawSettings()
 
 		if (streamline->IsUnavailable())
 			ImGui::TextDisabled("%s", T(TKEY("sl_unavailable_note"), "Streamline could not be loaded - upscalers and frame generation are unavailable"));
+
+		{
+			auto rrGuard = Util::DisableGuard(GetUpscaleMethod() != UpscaleMethod::kDLSS || !streamline->IsDLSSRRSupported());
+			if (ImGui::Checkbox(T(TKEY("ray_reconstruction"), "DLSS Ray Reconstruction"), &settings.rayReconstruction))
+				globals::state->RequestHistoryReset();
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextWrapped("%s", T(TKEY("ray_reconstruction_tooltip"), "Reconstruct SSGI and SSR with DLSS. Requires DLSS Super Resolution and disables NRD while active."));
+		}
 
 		const UpscaleMethod cur = (UpscaleMethod)settings.upscaleMethod;
 		const bool hasPreset = (cur == UpscaleMethod::kFSR || cur == UpscaleMethod::kXeSS || cur == UpscaleMethod::kDLSS);
@@ -1504,6 +1513,8 @@ void Upscaling::SetupResources()
 
 void Upscaling::ClearShaderCache()
 {
+	rayReconstruction.ClearShaderCache();
+	rayReconstructionFrame = UINT32_MAX;
 	depthRefractionUpscalePS = nullptr;
 	underwaterMaskUpscalePS = nullptr;
 	upscaleVS = nullptr;
@@ -1697,6 +1708,20 @@ void Upscaling::SeparateFromGraphEpochs()
 	globals::d3d::context->ClearUnorderedAccessViewUint(epochSeparator.get(), values);
 }
 
+void Upscaling::BeginRayReconstruction()
+{
+	rayReconstructionFrame = UINT32_MAX;
+	if (loaded && settings.rayReconstruction && GetUpscaleMethod() == UpscaleMethod::kDLSS &&
+		Streamline::GetSingleton()->IsDLSSRRSupported() && rayReconstruction.BeginFrame())
+		rayReconstructionFrame = globals::state->frameCount;
+}
+
+bool Upscaling::IsRayReconstructionActive() const
+{
+	return loaded && settings.rayReconstruction && GetUpscaleMethod() == UpscaleMethod::kDLSS &&
+	       Streamline::GetSingleton()->IsDLSSRRSupported() && rayReconstructionFrame == globals::state->frameCount;
+}
+
 void Upscaling::Upscale()
 {
 	ZoneScoped;
@@ -1730,10 +1755,13 @@ void Upscaling::Upscale()
 		const auto displaySize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 		const auto renderSize = Util::ConvertToDynamic(displaySize);
 		auto result = Streamline::EvaluationResult::kFailed;
+		const bool useRR = method == UpscaleMethod::kDLSS && IsRayReconstructionActive() && rayReconstruction.GuidesReady();
 
 		DrawcallLimitFix::TargetDumpPoint("before upscale", upscaledTexture && upscaledTexture->resource ? upscaledTexture->resource.get() : nullptr);
 		SeparateFromGraphEpochs();
 		if (upscaledTexture && upscaledTexture->resource) {
+			if (useRR)
+				rayReconstruction.ConvertColor(main.UAV, false);
 			switch (method) {
 			case UpscaleMethod::kFSR:
 				result = Streamline::GetSingleton()->EvaluateFSR(
@@ -1747,7 +1775,8 @@ void Upscaling::Upscale()
 					main.texture, upscaledTexture->resource.get(), depthTex.texture, motionVector.texture,
 					(uint32_t)renderSize.x, (uint32_t)renderSize.y,
 					(uint32_t)displaySize.x, (uint32_t)displaySize.y,
-					settings.qualityMode, jitter.x, jitter.y);
+					settings.qualityMode, jitter.x, jitter.y,
+					useRR ? &rayReconstruction : nullptr);
 				break;
 			case UpscaleMethod::kXeSS:
 				result = Streamline::GetSingleton()->EvaluateXeSS(
@@ -1759,6 +1788,10 @@ void Upscaling::Upscale()
 			default:
 				result = Streamline::EvaluationResult::kSkipped;
 				break;
+			}
+			if (useRR) {
+				const bool outputReady = result == Streamline::EvaluationResult::kReady;
+				rayReconstruction.ConvertColor(outputReady ? upscaledTexture->uav.get() : main.UAV, true);
 			}
 		}
 

@@ -392,21 +392,29 @@ void CalculateGI(
 	const float2 frameScale = FrameDim * RcpTexDim;
 
 #if defined(SSGI_QUARTER)
+#	if defined(SSGI_FIXED_GRID)
+	uint2 phaseOffset = 0;
+#	else
 	// Trace one pixel per 2x2 block. Cycle through all four phases so REBLUR's
 	// hit-distance reconstruction and temporal accumulation receive fresh data.
 	uint2 phaseOffset = uint2(SharedData::FrameCount & 1u, (SharedData::FrameCount >> 1u) & 1u);
+#	endif
 	uint2 pxCoord = dtid * 2u + phaseOffset;
-	if (any(pxCoord >= uint2(FrameDim)))
-		return;
 	uint2 outCoord = pxCoord;
 #elif defined(SSGI_HALF)
+#	if defined(SSGI_FIXED_GRID)
+	uint colOffset = 0;
+#	else
 	uint colOffset = (dtid.y + SharedData::FrameCount) & 1;
+#	endif
 	uint2 pxCoord = uint2(dtid.x * 2 + colOffset, dtid.y);
 	uint2 outCoord = dtid.xy;
 #else
 	uint2 pxCoord = dtid;
 	uint2 outCoord = dtid;
 #endif
+	if (any(pxCoord >= uint2(FrameDim)))
+		return;
 
 	float2 uv = (pxCoord + .5) * RCP_OUT_FRAME_DIM;
 
@@ -440,7 +448,7 @@ void CalculateGI(
 
 	radiance = filterNaN(radiance);
 
-#ifdef SSGI_QUARTER
+#if defined(SSGI_QUARTER) && !defined(SSGI_FIXED_GRID)
 	// One out of four pixels carries a sample. Compensate its energy so the
 	// spatially and temporally filtered signal remains unbiased.
 	radiance *= 4.0;

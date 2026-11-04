@@ -196,4 +196,7 @@ public:
 	// Prevent downstream passes from sampling stale GI when this frame could not
 	// produce a complete SSGI output (disabled feature, shader failure, etc.).
 	bool outputReady = false;
+	bool resolvedOutput = false;
+	bool usingFixedSamplingGrid = false;
+	winrt::com_ptr<ID3D11ComputeShader> resolveSparseCompute;
 };
