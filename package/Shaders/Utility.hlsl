@@ -191,7 +191,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	else
 
 	precise float4 positionMS = float4(input.PositionMS.xyz, 1.0);
-	float4 positionCS = float4(0, 0, 0, 0);
+	DXC_PRECISE float4 positionCS = float4(0, 0, 0, 0);
 
 	float3 normalMS = float3(1, 1, 1);
 #		if defined(NORMALS)

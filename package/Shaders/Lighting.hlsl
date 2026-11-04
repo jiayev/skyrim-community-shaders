@@ -285,7 +285,8 @@ static row_major float3x4 TextureProj = DCLF_VS_TEXTURE_PROJ;
 
 // Drawcall Limit Fix draws a pipeline's depth and colour from two vertex modules when the Z-prepass is pulled (DCLF_PULLED):
 // the colour pass tests EQUAL against that depth, so the clip position is precise in every DCLF build, to the bit the same.
-#if defined(DCLF_BINDLESS)
+// So do the game's own passes under DXC, with Utility's depth (DXC_PRECISE there): FXC's output happened to match.
+#if defined(DCLF_BINDLESS) || defined(__hlsl_dx_compiler)
 #	define DCLF_PRECISE precise
 #else
 #	define DCLF_PRECISE
