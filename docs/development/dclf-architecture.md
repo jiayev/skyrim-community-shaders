@@ -2842,7 +2842,12 @@ stand-ins and the engine boundary are the GPU path's: the same objects are DCLF'
     DCLF's retirement clock counts those signals with the host's submissions (`Core/Runtime/FrameRetirement.h`).
 
 **The modes and cadences.**
--   `dclf:cpu-record=serial` (the default): the CS thread records each culled batch as it arrives, in list order (a reorder
+-   `dclf:cpu-record=indirect` (the default): each cull job writes its batch's draws into its frame slot's draw buffer
+    (`Direct/Recorder.h`, `IndirectDraw`), and the CS thread records one indirect draw per run of a pipeline. An indirect draw cannot
+    push per draw, so a draw's instance names its record, which holds its sequence's index and its object word
+    (`kDirectFlagDrawRecords`, `DCLFDrawSequence`). Colour therefore always uses the pulled pipelines; `kExpPushedColour` and
+    `kExpPushedDepth` apply only to the other modes. Decals, forward and refraction stay direct on the CS thread, as one ordered stream.
+    `serial`: the CS thread records each culled batch as it arrives, in list order (a reorder
     window by batch index). `parallel`: each cull job records its plain-list batches into a secondary of its own (a command
     pool per worker and frame slot); the callback executes them in list order. Decals, forward and refraction are one ordered
     stream on the CS thread in both.

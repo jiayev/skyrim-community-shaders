@@ -131,7 +131,10 @@ namespace DCLF::Direct
 		// into DXVK's command buffer in list order.
 		Serial,
 		// Culled and recorded in parallel, a secondary command list per batch; the site's callback executes them in list order.
-		Parallel
+		Parallel,
+		// Culled in parallel, each cull job writing its batch's draws into the frame slot's draw buffer; the site's callback records one
+		// indirect draw per run of a pipeline. Decals, forward, refraction and first person stay direct (Recorder.h, IndirectRun).
+		Indirect
 	};
 
 	/** @brief Per-lane flags (ViewBatch::flags). */
@@ -374,6 +377,8 @@ namespace DCLF::Direct
 	 * per-frame-slot arena owned by the job that culled it, never copied: consumers get a pointer (the site's queue) and the arena
 	 * is reset at the frame slot's retirement. In Parallel mode `commands` is the secondary list it was recorded into.
 	 */
+	struct IndirectRun;  // Recorder.h
+
 	struct CulledBatch
 	{
 		const ViewBatch* batch = nullptr;
@@ -386,6 +391,11 @@ namespace DCLF::Direct
 		const std::uint32_t* drawMasks = nullptr;
 		rhi::CommandList* commands = nullptr;        // Parallel mode's secondary (null in Serial mode)
 		bool last = false;                           // the view's list ends with it
+		// Indirect mode's draws, in the frame slot's draw buffer (Recorder.h): by part (0 the pass's draws, 1 and 2 main colour's terrain
+		// groups), runs[runStart[part], runStart[part + 1]). False: none written, its lanes are drawn directly.
+		const IndirectRun* runs = nullptr;
+		std::array<std::uint32_t, 4> runStart{};
+		bool hasRuns = false;
 	};
 
 	/** @brief The CS thread's queue of a site's culled batches (MPSC: the cull jobs push, the site's callback drains). */
@@ -413,6 +423,7 @@ namespace DCLF::Direct
 	};
 
 	/** @brief One frame's report counters (the [CPU] line, Diagnostics/Reports). */
+
 	struct FrameCounters
 	{
 		std::array<std::uint32_t, kViewTypes> batches{}, drawn{};
@@ -427,5 +438,7 @@ namespace DCLF::Direct
 		std::uint32_t staleGeometry = 0;
 		// The recordings' calls (RecordContext's): pipeline binds, those binding the pipeline already bound, per-draw pushes.
 		std::uint32_t binds = 0, sameBinds = 0, pushes = 0;
+		// Indirect mode: the indirect draws recorded (their draws are counted in drawn).
+		std::uint32_t indirects = 0;
 	};
 }

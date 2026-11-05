@@ -54,7 +54,7 @@ only `0` turns it off. Parity, diagnostic and test switches are off unless set.
 | `CS_DCLF_PRECOMPILE` | on (unless 0) | `0`: DCLF's SPIR-V programs compile on first use instead of alongside the engine's shaders. |
 | `CS_DCLF_CULL` | `occlusion` | `off`, `frustum` or `occlusion`: GPU culling. `off` and `frustum` count as a reduced featureset. |
 | `CS_DCLF_PIPELINE` | `gpu` | `cpu`: the CPU-driven pipeline (an experiment; dclf-architecture.md, "The CPU-driven pipeline"). Live: `dclf:pipeline=gpu\|cpu`, from the next build point. |
-| `CS_DCLF_CPU_RECORD` | `serial` | `parallel`: the CPU pipeline's plain lists recorded into a secondary per batch on the pool. Live: `dclf:cpu-record=serial\|parallel`. |
+| `CS_DCLF_CPU_RECORD` | `indirect` | `serial`: the CS thread records each draw. `parallel`: the CPU pipeline's plain lists recorded into a secondary per batch on the pool. Live: `dclf:cpu-record=indirect\|serial\|parallel`. |
 | `CS_DCLF_CPU_CADENCE` | `frame` | `frame\|snapshot`, or `<view>=frame\|snapshot,...`: a CPU pipeline view culled every frame or once per snapshot (main always per frame). Live: `dclf:cpu-cadence-<view>=frame\|snapshot`, `dclf:cpu-cadence=frame\|snapshot`. Views: `main`, `decal`, `forward`, `refraction`, `sun`, `spot`, `point`, `sky`, `precipitation`, `reflection`, `first-person`. |
 | `CS_DCLF_CPU_BATCH` | 256 | The CPU pipeline's batch lanes, at startup (a multiple of 8). |
 | `CS_DCLF_SKINNED` | on (unless 1) | `0`: skinned objects stay native. |

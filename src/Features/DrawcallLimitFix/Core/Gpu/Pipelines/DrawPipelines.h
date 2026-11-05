@@ -96,6 +96,11 @@ namespace DCLF
 	// BuildDrawsCS's MaterialRowAddress resolves it (DCLFObjects.hlsli, DCLFSequenceRows).
 	inline constexpr std::uint32_t kDirectDrawPushAnimatedRows = kDirectDrawPushRowBases + 4;
 	static_assert(kDirectDrawPushAnimatedRows + 2 <= kDrawPushWords);
+	// kDirectFlagDrawRecords: the draw is one of an indirect run's (Direct/Recorder.h, IndirectDraw). Its instance names its record in the
+	// frame slot's draw buffer, at this address (pushed once per list), which holds its sequence's index and its object word.
+	inline constexpr std::uint32_t kDirectFlagDrawRecords = 4;
+	inline constexpr std::uint32_t kDirectDrawPushDrawRecords = kDirectDrawPushAnimatedRows + 2;
+	static_assert(kDirectDrawPushDrawRecords + 2 <= kDrawPushWords && kDirectDrawPushDrawRecords % 2 == 0);
 	/** @brief Where a DrawSequence's draw arguments start, which the shadow views' plain indexed draws read. */
 	inline constexpr std::uint32_t kSequenceDrawOffset = 116;
 	static_assert(offsetof(DrawSequence, indexCount) == kSequenceDrawOffset);

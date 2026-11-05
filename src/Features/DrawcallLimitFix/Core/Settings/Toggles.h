@@ -45,8 +45,8 @@ namespace DCLF
 		// Manual's: the pipeline of interiors and of exteriors (true: CPU-driven).
 		bool interiorCpu = true;
 		bool exteriorCpu = false;
-		// dclf:cpu-record: the per-frame views' Direct::RecordMode (0 Serial, 1 Parallel).
-		std::uint8_t cpuRecord = 0;
+		// dclf:cpu-record: the per-frame views' Direct::RecordMode (0 Serial, 1 Parallel, 2 Indirect).
+		std::uint8_t cpuRecord = 2;
 		// dclf:cpu-cadence-<view>: a bit per Direct::ViewType, set for a view culled and recorded once per snapshot (Main's never set).
 		std::uint16_t cpuCadence = 0;
 

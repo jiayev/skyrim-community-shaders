@@ -85,9 +85,10 @@ cbuffer DCLFPushData : register(b190)
 	uint2 DCLFMaterialRowsAddress : packoffset(c0.z);
 	uint2 DCLFVertexLayout : packoffset(c1.x);
 	uint DCLFObjectWordOverride : packoffset(c1.z);
-	uint DCLFDirectFlags : packoffset(c1.w);  // bit 0: kDirectFlagObjectWord; bit 1: kDirectFlagRelativeRows
+	uint DCLFDirectFlags : packoffset(c1.w);  // bit 0: kDirectFlagObjectWord; bit 1: kDirectFlagRelativeRows; bit 2: kDirectFlagDrawRecords
 	uint4 DCLFRowBases : packoffset(c2);      // kDirectFlagRelativeRows: the rows' bases (xy: the pipeline rows', zw: the material rows')
 	uint2 DCLFAnimatedRows : packoffset(c3.x);  // kDirectFlagRelativeRows: the frame's copy of the animated material rows (0: none)
+	uint2 DCLFDrawRecords : packoffset(c3.z);   // kDirectFlagDrawRecords: the frame's draw buffer
 };
 
 // The object word (below), set by the stage's main from the draw's sequence (the vertex stage) or its vertex stage's output
@@ -152,11 +153,24 @@ StructuredBuffer<float4> DCLFTreeWind : register(t124);
 static const uint kDCLFSequenceStride = 136;  // BuildDrawsCS's DrawSequence
 
 // A pulled draw's sequence, by its instance: the vertex stage's SV_InstanceID, or the pixel stage's flat copy of it.
-uint64_t DCLFDrawSequence(uint a_instance) { return DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride; }
+// An indirect run's draw (kDirectFlagDrawRecords; Direct/Recorder.h, IndirectDraw): its instance names its record in the frame's draw
+// buffer, which holds its sequence's index and its object word (DCLFSequenceObjectWord, after this).
+static uint DCLFDrawRecordWord;
+uint64_t DCLFDrawSequence(uint a_instance)
+{
+	if ((DCLFDirectFlags & 4u) != 0) {
+		const uint2 record = vk::RawBufferLoad<uint2>(DCLFAddress(DCLFDrawRecords) + uint64_t(a_instance) * 28 + 20, 4);
+		DCLFDrawRecordWord = record.y;
+		return DCLFAddress(DCLFSequencesAddress) + uint64_t(record.x) * kDCLFSequenceStride;
+	}
+	return DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride;
+}
 // A pulled draw's object word (DrawSequence::objectIndex, byte 20): a direct draw's pushed one (its per-frame bits the CPU's; the
 // resident sequence's are 0), else its sequence's.
 uint DCLFSequenceObjectWord(uint64_t a_sequence)
 {
+	if ((DCLFDirectFlags & 4u) != 0)
+		return DCLFDrawRecordWord;
 	return (DCLFDirectFlags & 1u) != 0 ? DCLFObjectWordOverride : vk::RawBufferLoad<uint>(a_sequence + 20);
 }
 

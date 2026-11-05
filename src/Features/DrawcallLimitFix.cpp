@@ -762,12 +762,13 @@ void DrawcallLimitFix::DrawSettings()
 		if (toggles.pipelineMode == DCLF::PipelineMode::Auto || toggles.interiorCpu || toggles.exteriorCpu) {
 			ImGui::Indent();
 			int record = toggles.cpuRecord;
-			if (ImGui::Combo("CPU recording", &record, "serial\0parallel\0"))
+			if (ImGui::Combo("CPU recording", &record, "serial\0parallel\0indirect\0"))
 				toggles.cpuRecord = static_cast<std::uint8_t>(record);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::TextUnformatted(
+					"Indirect (default): the workers cull and write each batch's draws into a buffer, and DXVK's CS thread records one indirect draw per pipeline run. "
 					"Serial: the workers cull, and DXVK's CS thread records every batch's draws. Parallel: the workers also record each batch into "
-					"a secondary command list, which the CS thread only executes (decals, forward and refraction stay serial: one ordered stream). "
+					"a secondary command list, which the CS thread only executes (decals, forward and refraction stay direct on the CS thread: one ordered stream). "
 					"CS_DCLF_CPU_RECORD seeds it.");
 			// Applied when entered (or stepped), from the next snapshot: each change makes the view batches again.
 			int lanes = static_cast<int>(DCLF::Draws::BatchLanes());
@@ -813,7 +814,7 @@ void DrawcallLimitFix::DrawSettings()
 		return;
 	drawTools();
 	if (ImGui::TreeNodeEx("This frame", ImGuiTreeNodeFlags_DefaultOpen)) {
-		const auto pipelineOf = [&](bool a_interior) { return DCLF::CpuPipelineFor(active, a_interior) ? (active.cpuRecord ? "cpu parallel" : "cpu serial") : "gpu"; };
+		const auto pipelineOf = [&](bool a_interior) { return DCLF::CpuPipelineFor(active, a_interior) ? (active.cpuRecord == 2 ? "cpu indirect" : active.cpuRecord == 1 ? "cpu parallel" : "cpu serial") : "gpu"; };
 		std::string flags = fmt::format("Active: cull {}, pipeline {} (interiors {}, exteriors {})", active.cullMode,
 			active.pipelineMode == DCLF::PipelineMode::Manual ? "manual" : "auto", pipelineOf(true), pipelineOf(false));
 		for (const auto& toggle : DCLF::ToggleTable())

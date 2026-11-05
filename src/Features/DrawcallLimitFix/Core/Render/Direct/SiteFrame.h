@@ -17,6 +17,7 @@
 
 namespace org
 {
+	class Buffer;
 	class ExternalEpochExecution;
 }
 
@@ -208,6 +209,11 @@ namespace DCLF::Direct::detail
 		FrameCounters counters;
 		std::array<std::uint32_t, kSites> siteRuns{}, siteEmpty{};
 		std::uint32_t waits = 0;
+		// Indirect mode's draw buffer: written by the frame's cull jobs, read by the GPU until the frame's signal. It grows when a frame
+		// reserved more than it holds (EnsureDrawBuffer); that frame's other batches drew directly.
+		std::shared_ptr<org::Buffer> drawBuffer;
+		IndirectBuffer indirect;
+		std::atomic<std::uint32_t> drawCursor{ 0 };
 	};
 
 	struct State
@@ -233,6 +239,7 @@ namespace DCLF::Direct::detail
 		std::atomic<std::uint32_t> nextWorker{ 0 };
 		WindowCounters window;
 		bool loggedNoCallback = false, loggedNotAdopted = false, loggedNoLatePass = false, loggedExternal = false;
+		rhi::CommandSignaturePtr indirectSignature;  // one indexed draw at IndirectDraw's stride
 		// Emit's scratch (render thread): a site's waits and signals for DXVK's submission.
 		std::vector<RenderGraphRuntime::ExternalCommandsWait> emitWaits, emitSignals;
 	};
@@ -293,6 +300,26 @@ namespace DCLF::Direct::detail
 				then(a_frame);
 			slot->outstanding.fetch_sub(1, std::memory_order_acq_rel);
 		});
+	}
+
+	/** @brief Whether a_run draws a_view from indirect runs: Indirect mode's plain lists, with the frame slot's draw buffer made. */
+	inline bool DrawsIndirect(const SiteRun& a_run, const SiteView& a_view)
+	{
+		if (a_run.record != RecordMode::Indirect || !a_run.slot->indirect.mapped)
+			return false;
+		switch (a_view.type) {
+		case ViewType::Main:
+		case ViewType::Sun:
+		case ViewType::Spot:
+		case ViewType::Point:
+		case ViewType::SkyOccluder:
+		case ViewType::PrecipOccluder:
+		case ViewType::Reflection:
+			return true;
+		default:
+			// Ordered streams (decals, forward, refraction), and first person: its colour draws its depth view's batches with other words.
+			return false;
+		}
 	}
 
 	// ---- The callback (DXVK's CS thread) ----

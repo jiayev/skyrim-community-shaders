@@ -42,7 +42,7 @@ namespace DCLF
 		constexpr std::uint32_t kFirstRegisteredBit = kFirstFlagBit + static_cast<std::uint32_t>(std::size(kToggles));
 		static_assert(kFirstRegisteredBit < 32);
 		// The high word: the pipeline's state (pipelineMode, interiorCpu, exteriorCpu, cpuRecord, then cpuCadence's bits by Direct::ViewType).
-		constexpr std::uint32_t kPipelineModeBit = 32, kInteriorCpuBit = 33, kExteriorCpuBit = 34, kCpuRecordBit = 35, kFirstCadenceBit = 36;
+		constexpr std::uint32_t kPipelineModeBit = 32, kInteriorCpuBit = 33, kExteriorCpuBit = 34, kCpuRecordBit = 35, kFirstCadenceBit = 37;  // cpuRecord: two bits
 		static_assert(kFirstCadenceBit + Direct::kViewTypes <= 64 && Direct::kViewTypes <= 16, "the cadences fit the word and ToggleSet::cpuCadence");
 		// Main's cadence is always per frame.
 		constexpr std::uint16_t kCadenceMask = static_cast<std::uint16_t>(((1u << Direct::kViewTypes) - 1u) & ~(1u << static_cast<std::uint32_t>(Direct::ViewType::Main)));
@@ -101,7 +101,8 @@ namespace DCLF
 			set.cullMode = (cull.empty() || cull == "occlusion") ? 2 : cull == "frustum" ? 1 : 0;
 			if (const auto& pipeline = SwitchValue(Switch::CpuPipeline); !pipeline.empty() && !ApplyPipeline(set, pipeline))
 				logger::warn("[DCLF] CS_DCLF_PIPELINE={}: not a pipeline (auto, manual, gpu, cpu); auto", pipeline);
-			set.cpuRecord = SwitchValue(Switch::CpuRecord) == "parallel" ? static_cast<std::uint8_t>(Direct::RecordMode::Parallel) : static_cast<std::uint8_t>(Direct::RecordMode::Serial);
+			const auto& record = SwitchValue(Switch::CpuRecord);
+			set.cpuRecord = static_cast<std::uint8_t>(record == "parallel" ? Direct::RecordMode::Parallel : record == "serial" ? Direct::RecordMode::Serial : Direct::RecordMode::Indirect);
 			if (const auto& cadence = SwitchValue(Switch::CpuCadence); !cadence.empty() && !ApplyCpuCadence(set, cadence))
 				logger::warn("[DCLF] CS_DCLF_CPU_CADENCE={}: a view or value it names is unknown (views: main, decal, forward, refraction, sun, spot, point, sky, "
 							 "precipitation, reflection, first-person; values: frame, snapshot)",
@@ -118,7 +119,7 @@ namespace DCLF
 		{
 			for (const auto& toggle : Table())
 				SetToggleValue(a_set, toggle, ToggleValue(a_set, toggle) && NeedsMet(toggle, a_set));
-			a_set.cpuRecord &= 1u;
+			a_set.cpuRecord = a_set.cpuRecord <= static_cast<std::uint8_t>(Direct::RecordMode::Indirect) ? a_set.cpuRecord : static_cast<std::uint8_t>(Direct::RecordMode::Indirect);
 			a_set.cpuCadence &= kCadenceMask;
 			return a_set;
 		}
@@ -208,7 +209,7 @@ namespace DCLF
 	Direct::Mode ModeOf(const ToggleSet& a_set)
 	{
 		Direct::Mode mode;
-		mode.record = a_set.cpuRecord ? Direct::RecordMode::Parallel : Direct::RecordMode::Serial;
+		mode.record = static_cast<Direct::RecordMode>(a_set.cpuRecord);
 		for (std::size_t v = 0; v < Direct::kViewTypes; ++v)
 			mode.cadence[v] = ((a_set.cpuCadence & kCadenceMask) >> v) & 1u ? Direct::Cadence::PerSnapshot : Direct::Cadence::PerFrame;
 		return mode;
@@ -370,7 +371,7 @@ namespace DCLF
 		word |= static_cast<std::uint64_t>(a_set.pipelineMode == PipelineMode::Manual ? 1u : 0u) << kPipelineModeBit;
 		word |= static_cast<std::uint64_t>(a_set.interiorCpu ? 1u : 0u) << kInteriorCpuBit;
 		word |= static_cast<std::uint64_t>(a_set.exteriorCpu ? 1u : 0u) << kExteriorCpuBit;
-		word |= static_cast<std::uint64_t>(a_set.cpuRecord & 1u) << kCpuRecordBit;
+		word |= static_cast<std::uint64_t>(a_set.cpuRecord & 3u) << kCpuRecordBit;
 		word |= static_cast<std::uint64_t>(a_set.cpuCadence & kCadenceMask) << kFirstCadenceBit;
 		return word;
 	}
@@ -386,7 +387,7 @@ namespace DCLF
 		set.pipelineMode = ((a_word >> kPipelineModeBit) & 1u) != 0 ? PipelineMode::Manual : PipelineMode::Auto;
 		set.interiorCpu = ((a_word >> kInteriorCpuBit) & 1u) != 0;
 		set.exteriorCpu = ((a_word >> kExteriorCpuBit) & 1u) != 0;
-		set.cpuRecord = static_cast<std::uint8_t>((a_word >> kCpuRecordBit) & 1u);
+		set.cpuRecord = static_cast<std::uint8_t>((a_word >> kCpuRecordBit) & 3u);
 		set.cpuCadence = static_cast<std::uint16_t>((a_word >> kFirstCadenceBit) & kCadenceMask);
 		return set;
 	}

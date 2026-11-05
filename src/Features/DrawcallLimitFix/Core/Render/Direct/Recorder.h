@@ -14,6 +14,8 @@
 #include <rhi.h>
 
 #include <array>
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -27,6 +29,46 @@ namespace DCLF
 
 namespace DCLF::Direct
 {
+	class CullArena;
+
+	/**
+	 * @brief A draw in a frame slot's draw buffer: an indexed draw's arguments, which a cull job writes, then what its stages read through
+	 * its instance (firstInstance: its own index in the buffer; DCLFObjects.hlsli, DCLFDrawSequence). The stride of an indirect run.
+	 */
+	struct IndirectDraw
+	{
+		std::uint32_t indexCount;
+		std::uint32_t instanceCount;
+		std::uint32_t firstIndex;
+		std::int32_t vertexOffset;
+		std::uint32_t firstInstance;
+		std::uint32_t sequence;    // the resident sequence's index
+		std::uint32_t objectWord;  // with its per-frame bits
+	};
+	static_assert(sizeof(IndirectDraw) == 28 && offsetof(IndirectDraw, sequence) == 20);
+
+	/** @brief Consecutive draws in the buffer with one pipeline: one indirect draw. */
+	struct IndirectRun
+	{
+		rhi::PipelineHandle pipeline{};
+		std::uint64_t vertexLayout = 0;  // a shadow pipeline's, pushed with it
+		std::uint32_t first = 0;
+		std::uint32_t count = 0;
+	};
+
+	/** @brief A frame slot's draw buffer, as its recordings read it (null in RecordContext::indirect: draw directly). */
+	struct IndirectBuffer
+	{
+		rhi::CommandSignatureHandle signature{};
+		rhi::ResourceHandle buffer{};
+		std::uint64_t address = 0;
+		// The cull jobs': the mapped draws, the capacity, and the draws reserved so far (past capacity: those batches draw directly, and
+		// the next frame of the slot has a larger buffer).
+		IndirectDraw* mapped = nullptr;
+		std::uint32_t capacity = 0;
+		std::atomic<std::uint32_t>* cursor = nullptr;
+	};
+
 	/** @brief Which pass of its site a recording is in: the pipeline a lane's bucket binds (ViewBuckets). */
 	enum class RecordPass : std::uint8_t
 	{
@@ -99,6 +141,9 @@ namespace DCLF::Direct
 		bool depthPass = false;  // the main list: depth (Z pipelines) or colour; with view Decal: the decal depth pass
 		const RecordBindings& bindings;
 		FrameCounters* counters = nullptr;  // drawn[view] (atomically: parallel recordings share it); null: not counted
+		// Indirect mode's list (set before BeginList): the batches' runs drawn from this buffer, and every direct draw of the list with
+		// the pulled pipelines, as the runs' are. Null: direct draws, as RecordBatch says.
+		const IndirectBuffer* indirect = nullptr;
 
 		// Set by BeginList; RecordBatch's.
 		RecordPass pass = RecordPass::Colour;
@@ -112,8 +157,10 @@ namespace DCLF::Direct
 		std::uint32_t drawn = 0;
 		// The list's calls (FrameCounters' binds, sameBinds, pushes, flushed with drawn): pipeline binds, those that bound the pipeline
 		// already bound (another bucket of the same pipeline), and per-draw push constants.
-		std::uint32_t binds = 0, sameBinds = 0, pushes = 0;
-		std::uint32_t countedBinds = 0, countedSameBinds = 0, countedPushes = 0;
+		std::uint32_t binds = 0, sameBinds = 0, pushes = 0, indirects = 0;
+		std::uint32_t countedBinds = 0, countedSameBinds = 0, countedPushes = 0, countedIndirects = 0;
+		// Whether the draw words pushed last are a run's (a direct draw's replace them).
+		bool runWordsPushed = false;
 	};
 
 	/** @brief The pass a view type's lanes draw in at a_depthPass (RecordContext::depthPass). */
@@ -126,6 +173,13 @@ namespace DCLF::Direct
 	 * version, no refraction pipeline): nothing recorded, record nothing.
 	 */
 	bool BeginList(RecordContext& a_context);
+
+	/**
+	 * @brief A cull job, Indirect mode: a_batch's draws written into a_buffer, and its runs (in a_arena) set on it. By part: the pass's
+	 * draws, then for main colour its terrain groups' apart (RecordTerrainGroup's), in lane order, with the pulled pipelines. Draws that
+	 * would not fit are not written: hasRuns stays false, and the recorder draws its lanes directly.
+	 */
+	void WriteIndirectDraws(CulledBatch& a_batch, const ViewBatchSet& a_set, ViewType a_view, bool a_depthPass, const RecordBindings& a_bindings, const IndirectBuffer& a_buffer, CullArena& a_arena);
 
 	/**
 	 * @brief A_batch's draws in lane order: per kept lane, its sequences, the lane's bucket's pipeline bound when it changes. Main's colour

@@ -27,6 +27,7 @@
 #include <rhi_interop.h>
 #include <rhi_interop_vulkan.h>
 #include <Tracy/Tracy.hpp>
+#include <Tracy/TracyD3D11.hpp>
 
 #include <TlHelp32.h>
 #include <intrin.h>
@@ -306,6 +307,9 @@ namespace DCLF::Direct::detail
 		*out = a_culled;
 		out->last = a_index + 1 == a_view.list->size();
 		out->commands = nullptr;
+		out->hasRuns = false;
+		if (DrawsIndirect(a_run, a_view))
+			WriteIndirectDraws(*out, *a_slot.set, a_view.type, a_view.depthPass, a_bindings, a_slot.indirect, a_worker.arena);
 		if (a_secondary && out->count)
 			if (auto* commands = a_worker.lists.Next(a_run.device)) {
 				RecordContext context{ *commands, *a_slot.set, a_view.type, a_view.view.viewIndex, a_run.site, a_view.depthPass, a_bindings, &a_slot.counters };
@@ -748,6 +752,8 @@ namespace DCLF::Direct::detail
 		a_begin.contents = rhi::PassContents::Inline;
 		list.BeginPass(a_begin);
 		RecordContext context{ list, *slot.set, a_view.type, a_view.view.viewIndex, a_run.site, a_view.depthPass, a_bindings, &slot.counters };
+		if (DrawsIndirect(a_run, a_view))
+			context.indirect = &slot.indirect;
 		const bool valid = BeginList(context);
 		for (std::size_t i = 0; i < a_view.list->size(); ++i) {
 			const auto& batch = Await(a_run, a_view, i);
@@ -804,6 +810,8 @@ namespace DCLF::Direct::detail
 		BeginMain(list, a_run, true, "DCLF direct second pass");
 		RecordContext decal{ list, *slot.set, ViewType::Decal, 0, Site::Colour, false, a_run.bindings, &slot.counters };
 		RecordContext terrain{ list, *slot.set, ViewType::Main, 0, Site::Colour, false, a_run.bindings, &slot.counters };
+		if (a_run.main && DrawsIndirect(a_run, *a_run.main))
+			terrain.indirect = &slot.indirect;
 		for (const auto& range : ranges) {
 			if (range.slot < Draws::kDecalGroups) {
 				if (!decals.empty() && BeginList(decal))
@@ -1077,6 +1085,7 @@ namespace DCLF::Direct::detail
 		window.sum.binds += c.binds;
 		window.sum.sameBinds += c.sameBinds;
 		window.sum.pushes += c.pushes;
+		window.sum.indirects += c.indirects;
 		// The command pools the frame recorded into are reset on the pool (a reset is a driver call per pool, on the frame's path
 		// here), the slot taking pools already reset in their place.
 		const auto replace = [](ListPool& a_pool) {
@@ -1188,6 +1197,52 @@ namespace DCLF::Direct::detail
 			return false;
 		}
 		return true;
+	}
+
+	namespace
+	{
+		constexpr std::uint32_t kMinimumIndirectDraws = 1u << 15;
+
+		/**
+		 * @brief Render thread, a CPU frame's start, its slot retired: the slot's draw buffer, large enough for what its last frame reserved
+		 * with room to spare, or none (its draws direct) outside Indirect mode.
+		 */
+		void EnsureDrawBuffer(FrameSlot& a_slot)
+		{
+			auto& s = S();
+			const std::uint32_t reserved = a_slot.drawCursor.exchange(0, std::memory_order_relaxed);
+			if (FrameMode().record != RecordMode::Indirect) {
+				a_slot.indirect = {};
+				a_slot.drawBuffer.reset();
+				return;
+			}
+			if (!s.indirectSignature) {
+				rhi::IndirectArg draw{};
+				draw.kind = rhi::IndirectArgKind::DrawIndexed;
+				rhi::CommandSignatureDesc desc{};
+				desc.args = { &draw, 1 };
+				desc.byteStride = sizeof(IndirectDraw);
+				if (s.device.CreateCommandSignature(desc, {}, s.indirectSignature) != rhi::Result::Ok) {
+					logger::error("[DCLF] CPU pipeline: the indirect draws' signature could not be made; its views draw directly");
+					return;
+				}
+			}
+			if (a_slot.drawBuffer && reserved <= a_slot.indirect.capacity)
+				return;
+			const std::uint32_t capacity = std::max(kMinimumIndirectDraws, reserved + reserved / 4);
+			a_slot.indirect = {};
+			a_slot.drawBuffer = org::Buffer::CreateShared(rhi::HeapType::HostVisibleCoherent, std::uint64_t(capacity) * sizeof(IndirectDraw), true);
+			a_slot.drawBuffer->SetName("cs.dclf.cpu.indirect-draws");
+			auto resource = a_slot.drawBuffer->GetAPIResource();
+			void* mapped = nullptr;
+			resource.Map(&mapped);
+			const std::uint64_t address = s.device.GetBufferDeviceAddress({ resource.GetHandle(), 0 });
+			if (!mapped || !address) {
+				logger::error("[DCLF] CPU pipeline: the indirect draws' buffer has no {}; its views draw directly", mapped ? "device address" : "mapping");
+				return;
+			}
+			a_slot.indirect = { s.indirectSignature->GetHandle(), resource.GetHandle(), address, static_cast<IndirectDraw*>(mapped), capacity, &a_slot.drawCursor };
+		}
 	}
 
 	bool EnsureDevice()
@@ -1376,6 +1431,7 @@ namespace DCLF::Direct
 		}
 		auto& slot = *s.slots[s.frames++ % slots];
 		Retire(slot);
+		EnsureDrawBuffer(slot);
 		slot.used = true;
 		slot.set = a_set;
 		slot.sceneFrame = Scene::FrameView::Get().GetFrame();
@@ -1465,6 +1521,9 @@ namespace DCLF::Direct
 		auto* graph = host ? host->Graph() : nullptr;
 		if (!graph)
 			return false;
+		// The site's GPU time in Tracy: its commits' uploads, its passes and draws, which the frame's other zones leave out.
+		const auto siteZoneName = fmt::format("DCLF site {}", static_cast<std::uint32_t>(a_segment));
+		TracyD3D11ZoneTransientS(globals::state->tracyCtx, siteZone, siteZoneName.c_str(), 0, globals::state->tracyCtx != nullptr);
 		// The colour commit writes the main latch at the slot's second region, the depth commit's kept for the depth site's readers.
 		if (a_segment == RenderGraphRuntime::Segment::MainOpaque)
 			host->BeginExternalFrameSlot(s.current->colourSlot);

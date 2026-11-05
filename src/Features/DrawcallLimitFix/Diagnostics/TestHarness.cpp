@@ -575,7 +575,7 @@ namespace DCLF
 					}
 					// The CPU-driven pipeline's toggles (CS_DCLF_PIPELINE's, CS_DCLF_CPU_RECORD's and CS_DCLF_CPU_CADENCE's live values):
 					// "dclf:pipeline=auto|manual|gpu|cpu" (ApplyPipeline; from the next build point: it changes the graph's conditions),
-					// "dclf:pipeline-interior=gpu|cpu" and "dclf:pipeline-exterior=gpu|cpu" (Manual's), "dclf:cpu-record=serial|parallel",
+					// "dclf:pipeline-interior=gpu|cpu" and "dclf:pipeline-exterior=gpu|cpu" (Manual's), "dclf:cpu-record=indirect|serial|parallel",
 					// "dclf:cpu-cadence-<view>=frame|snapshot" ("dclf:cpu-cadence=frame|snapshot": every view but main), "dclf:cpu-batch=<lanes>"
 					// (CS_DCLF_CPU_BATCH's: from the next snapshot).
 					if (command.rfind("dclf:pipeline=", 0) == 0) {
@@ -599,7 +599,8 @@ namespace DCLF
 						return;
 					}
 					if (command.rfind("dclf:cpu-record=", 0) == 0) {
-						DCLF::Toggles::Get().Requested().cpuRecord = command.substr(16) == "parallel" ? 1 : 0;
+						const auto record = command.substr(16);
+						DCLF::Toggles::Get().Requested().cpuRecord = record == "parallel" ? 1 : record == "serial" ? 0 : 2;
 						return;
 					}
 					if (command.rfind("dclf:cpu-cadence", 0) == 0) {
