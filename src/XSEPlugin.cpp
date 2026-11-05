@@ -212,6 +212,8 @@ void ApplyDevEnvironmentFile()
 			continue;
 		}
 		SetEnvironmentVariableA(name.c_str(), value.c_str());
+		// std::getenv reads the C runtime's own copy, which SetEnvironmentVariable does not change.
+		_putenv_s(name.c_str(), value.c_str());
 		logger::info("[DevEnv] {}={} (from {})", name, value, path->filename().string());
 	}
 }
