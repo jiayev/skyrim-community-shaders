@@ -314,8 +314,8 @@ namespace GpuIdleTrace
 			std::string order;
 			for (std::size_t i = 0; i < spans.size(); ++i) {
 				const auto& s = spans[i];
-				order += fmt::format("\n    [{:2}] +{:6.2f} ms  {:5.2f} ms  {}", i, tickToMs(s.gpuBegin - frameBegin),
-					tickToMs(s.gpuEnd - s.gpuBegin), Describe(s));
+				order += fmt::format("\n    [{:2}] +{:6.2f} ms  {:5.2f} ms  {} ticks {} {}", i, tickToMs(s.gpuBegin - frameBegin),
+					tickToMs(s.gpuEnd - s.gpuBegin), Describe(s), s.gpuBegin, s.gpuEnd);
 			}
 			logger::info("[GpuIdle] submissions in GPU order:{}", order);
 

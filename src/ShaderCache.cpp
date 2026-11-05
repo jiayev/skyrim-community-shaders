@@ -2786,6 +2786,10 @@ namespace SIE
 					newShader->shader->Release();
 				}
 			} else {
+				if (shader.shaderType.get() == RE::BSShader::Type::ImageSpace)
+					Util::SetResourceName(reinterpret_cast<ID3D11PixelShader*>(newShader->shader), "%s", static_cast<const RE::BSImagespaceShader&>(shader).name);
+				else
+					Util::SetResourceName(reinterpret_cast<ID3D11PixelShader*>(newShader->shader), "%s:%X", std::string(magic_enum::enum_name(shader.shaderType.get())).c_str(), descriptor);
 				std::lock_guard lockGuard(pixelShadersMutex);
 				auto& entry = pixelShaders[static_cast<size_t>(shader.shaderType.get())][descriptor];
 				if (entry && entry->shader)
@@ -2819,6 +2823,10 @@ namespace SIE
 					newShader->shader->Release();
 				}
 			} else {
+				if (shader.shaderType.get() == RE::BSShader::Type::ImageSpace)
+					Util::SetResourceName(reinterpret_cast<ID3D11ComputeShader*>(newShader->shader), "%s", static_cast<const RE::BSImagespaceShader&>(shader).name);
+				else
+					Util::SetResourceName(reinterpret_cast<ID3D11ComputeShader*>(newShader->shader), "%s:%X", std::string(magic_enum::enum_name(shader.shaderType.get())).c_str(), descriptor);
 				std::lock_guard lockGuard(computeShadersMutex);
 				auto& entry = computeShaders[static_cast<size_t>(shader.shaderType.get())][descriptor];
 				if (entry && entry->shader)

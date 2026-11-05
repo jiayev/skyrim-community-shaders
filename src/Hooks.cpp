@@ -554,7 +554,12 @@ struct IDXGISwapChain_Present
 					swapChain, syncInterval, presentFlags,
 					[&](IDXGISwapChain* sc, UINT si, UINT f) {
 						ZoneScopedN("CS.Present.NativeWait");
-						return func(sc, si, f);
+						GpuEventTimers::BeginEvent("mark before native present");
+						GpuEventTimers::EndEvent();
+						const auto presented = func(sc, si, f);
+						GpuEventTimers::BeginEvent("mark after native present");
+						GpuEventTimers::EndEvent();
+						return presented;
 					});
 			});
 		}

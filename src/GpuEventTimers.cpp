@@ -1,6 +1,7 @@
 #include "GpuEventTimers.h"
 
 #include "Globals.h"
+#include "State.h"
 
 #include <algorithm>
 #include <string>
@@ -14,6 +15,7 @@
 #pragma comment(lib, "winmm.lib")
 #include <unordered_map>
 #include <vector>
+#include <tuple>
 
 #include <algorithm>
 #include <chrono>
@@ -28,10 +30,10 @@ namespace GpuEventTimers
 		// several frames ahead: with 4, every frame was dropped with DCLF off.
 		constexpr std::uint32_t kFrames = 8;
 		// Queries per frame (two an event, two for the frame); events past it are not timed, and counted.
-		constexpr std::uint32_t kMaxQueries = 4096;
+		constexpr std::uint32_t kMaxQueries = 32768;
 		constexpr std::uint32_t kNone = ~0u;
 		// Paths below this average inclusive time a frame are left out of the log.
-		constexpr double kMinLoggedMs = 0.02;
+		constexpr double kMinLoggedMs = 0.003;
 
 		std::uint32_t ReadInterval()
 		{
@@ -92,6 +94,9 @@ namespace GpuEventTimers
 			std::uint32_t collected = 0, dropped = 0, disjoint = 0, overflowed = 0;
 			// Time outside any event, by the top-level paths on either side of it.
 			std::map<std::pair<std::uint32_t, std::uint32_t>, double> gaps;
+			struct SelfGap { double sum = 0.0, worst = 0.0; };
+			std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>, SelfGap> selfGaps;
+			std::vector<double> frameList;
 			WorstGap worstGap;
 			std::uint64_t framesSeen = 0;
 			// Windows (StartWindow): the one frames open in, the one the totals are of, and each one's label ("-": not logged). Window 0
@@ -164,6 +169,8 @@ namespace GpuEventTimers
 			a_state.collected = a_state.dropped = a_state.disjoint = a_state.overflowed = 0;
 			a_state.gaps.clear();
 			a_state.worstGap = {};
+			a_state.selfGaps.clear();
+			a_state.frameList.clear();
 		}
 
 		/** @brief Adds the stretches of a frame that no top-level event covers, named by the events on either side. */
@@ -243,6 +250,52 @@ namespace GpuEventTimers
 			}
 			a_state.frameMs += span(a_frame.frameBegin, a_frame.frameEnd);
 			AccumulateGaps(a_state, a_frame, ticks, toMs);
+			a_state.frameList.push_back(span(a_frame.frameBegin, a_frame.frameEnd));
+			if (a_frame.window) {
+				std::string marks = fmt::format("[GapTicks] freq {} begin {} end {}", disjoint.Frequency, ticks[a_frame.frameBegin], ticks[a_frame.frameEnd]);
+				for (const auto& ev : a_frame.events)
+					if (ev.parent == kNone && ev.begin != kNone && ev.end != kNone && (a_state.paths[ev.path].starts_with("mark ") || a_state.paths[ev.path] == "Player View"))
+						marks += fmt::format(" | {} {} {}", a_state.paths[ev.path], ticks[ev.begin], ticks[ev.end]);
+				logger::info("{}", marks);
+				// Every stamp of one frame in eight, to place the command list boundaries among them.
+				static std::uint32_t dumpCounter = 0;
+				if ((++dumpCounter & 7) == 0) {
+					std::string all = fmt::format("[GapAll] freq {}", disjoint.Frequency);
+					for (const auto& ev : a_frame.events)
+						if (ev.begin != kNone && ev.end != kNone)
+							all += fmt::format("\t{}\t{}\t{}", a_state.paths[ev.path], ticks[ev.begin], ticks[ev.end]);
+					logger::info("{}", all);
+				}
+			}
+			{
+				std::vector<std::vector<std::uint32_t>> kids(a_frame.events.size());
+				for (std::uint32_t e = 0; e < a_frame.events.size(); ++e)
+					if (const auto& ev = a_frame.events[e]; ev.parent != kNone && inclusive[e] >= 0.0)
+						kids[ev.parent].push_back(e);
+				auto addSelf = [&](std::uint32_t a_parent, std::uint32_t a_after, std::uint32_t a_before, std::uint64_t a_from, std::uint64_t a_to) {
+					if (a_to <= a_from)
+						return;
+					const double ms = static_cast<double>(a_to - a_from) * toMs;
+					auto& gap = a_state.selfGaps[{ a_parent, a_after, a_before }];
+					gap.sum += ms;
+					gap.worst = std::max(gap.worst, ms);
+				};
+				for (std::uint32_t e = 0; e < a_frame.events.size(); ++e) {
+					const auto& ev = a_frame.events[e];
+					if (inclusive[e] < 0.0 || kids[e].empty())
+						continue;
+					std::ranges::sort(kids[e], [&](std::uint32_t a, std::uint32_t b) { return ticks[a_frame.events[a].begin] < ticks[a_frame.events[b].begin]; });
+					std::uint64_t cursor = ticks[ev.begin];
+					std::uint32_t after = kNone;
+					for (const auto k : kids[e]) {
+						const auto& kid = a_frame.events[k];
+						addSelf(ev.path, after, kid.path, cursor, ticks[kid.begin]);
+						cursor = std::max(cursor, ticks[kid.end]);
+						after = kid.path;
+					}
+					addSelf(ev.path, after, kNone, cursor, ticks[ev.end]);
+				}
+			}
 			a_state.overflowed += a_frame.overflow ? 1u : 0u;
 			++a_state.collected;
 			return true;
@@ -263,9 +316,8 @@ namespace GpuEventTimers
 				if (total.inclusive / frames < kMinLoggedMs)
 					continue;
 				const auto& path = a_state.paths[p];
-				const auto leaf = path.rfind(" / ");
 				text += fmt::format("\n    {:>6.2f} {:>6.2f} {:>5.1f}  {}{}", total.inclusive / frames, total.self / frames, static_cast<double>(total.count) / frames,
-					std::string(std::size_t(a_state.depth[p]) * 2, ' '), leaf == std::string::npos ? path : path.substr(leaf + 3));
+					std::string(std::size_t(a_state.depth[p]) * 2, ' '), path);
 			}
 			logger::info("{}", text);
 
@@ -280,6 +332,37 @@ namespace GpuEventTimers
 			for (std::size_t g = 0; g < std::min<std::size_t>(gaps.size(), 6); ++g)
 				gapText += fmt::format("\n    {:>6.3f}  {} -> {}", gaps[g].first / frames, name(gaps[g].second.first, "start"), name(gaps[g].second.second, "end"));
 			logger::info("{}", gapText);
+			{
+				auto sorted = a_state.frameList;
+				std::ranges::sort(sorted);
+				const double median = sorted.empty() ? 0.0 : sorted[sorted.size() / 2];
+				double excess = 0.0;
+				std::uint32_t slow = 0;
+				for (const auto ms : sorted)
+					if (ms > median * 1.15) {
+						excess += ms - median;
+						++slow;
+					}
+				logger::info("[GapProbe] frames: median {:.2f} ms, {} over 115% of it adding {:.3f} ms to the mean, fastest {:.2f}, slowest {:.2f}", median, slow, excess / frames, sorted.empty() ? 0.0 : sorted.front(), sorted.empty() ? 0.0 : sorted.back());
+				auto leaf = [&](std::uint32_t a_path, const char* a_none) {
+					if (a_path == kNone)
+						return std::string(a_none);
+					const auto at = a_state.paths[a_path].rfind(" / ");
+					return at == std::string::npos ? a_state.paths[a_path] : a_state.paths[a_path].substr(at + 3);
+				};
+				std::vector<std::pair<double, decltype(a_state.selfGaps)::const_iterator>> rows;
+				for (auto it = a_state.selfGaps.begin(); it != a_state.selfGaps.end(); ++it)
+					rows.emplace_back(it->second.sum, it);
+				std::ranges::sort(rows, [](const auto& a, const auto& b) { return a.first > b.first; });
+				std::string selfText = "[GapProbe] self time between children; per frame ms, worst single ms, parent: after -> before:";
+				for (std::size_t r = 0; r < std::min<std::size_t>(rows.size(), 120); ++r) {
+					if (rows[r].first / frames < 0.003)
+						break;
+					const auto& [where, gap] = *rows[r].second;
+					selfText += fmt::format("\n    {:>6.3f} {:>6.2f}  {}: {} -> {}", gap.sum / frames, gap.worst, leaf(std::get<0>(where), "?"), leaf(std::get<1>(where), "(start)"), leaf(std::get<2>(where), "(end)"));
+				}
+				logger::info("{}", selfText);
+			}
 			ResetTotals(a_state);
 		}
 	}
@@ -732,6 +815,133 @@ RWTexture2D<float> Out : register(u0);
 		}
 	}
 
+	// CS_GPU_OP_PROBE: names a D3D11 call as an event of its own, unless it sits inside a native batch (too many draws).
+	bool OpProbeRequested()
+	{
+		char value[8]{};
+		return GetEnvironmentVariableA("CS_GPU_OP_PROBE", value, sizeof(value)) != 0;
+	}
+
+	namespace
+	{
+		std::string DescribeResource(ID3D11Resource* a_resource)
+		{
+			if (!a_resource)
+				return "null";
+			D3D11_RESOURCE_DIMENSION dimension{};
+			a_resource->GetType(&dimension);
+			if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
+				D3D11_TEXTURE2D_DESC desc{};
+				static_cast<ID3D11Texture2D*>(a_resource)->GetDesc(&desc);
+				return fmt::format("{}x{}x{} m{} f{}", desc.Width, desc.Height, desc.ArraySize, desc.MipLevels, static_cast<int>(desc.Format));
+			}
+			if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER) {
+				D3D11_BUFFER_DESC desc{};
+				static_cast<ID3D11Buffer*>(a_resource)->GetDesc(&desc);
+				return fmt::format("buf{}", desc.ByteWidth);
+			}
+			return "tex";
+		}
+
+		std::string ShaderName(ID3D11DeviceChild* a_shader)
+		{
+			if (!a_shader)
+				return "none";
+			static const GUID key = { 0x429b8c22, 0x9188, 0x4b0c, { 0x87, 0x42, 0xac, 0xb0, 0xbf, 0x85, 0xc2, 0x00 } };
+			char name[128]{};
+			UINT size = sizeof(name) - 1;
+			if (SUCCEEDED(a_shader->GetPrivateData(key, &size, name)) && size)
+				return std::string(name, std::min<UINT>(size, 127));
+			return fmt::format("{:x}", reinterpret_cast<std::uint64_t>(a_shader) & 0xffffff);
+		}
+
+		std::string EngineShader()
+		{
+			const auto* shader = globals::state ? globals::state->currentShader : nullptr;
+			if (!shader)
+				return {};
+			if (shader->shaderType.get() == RE::BSShader::Type::ImageSpace)
+				return std::string(" is=") + static_cast<const RE::BSImagespaceShader*>(shader)->name;
+			return {};
+		}
+
+		std::string DescribeView(ID3D11View* a_view)
+		{
+			if (!a_view)
+				return "none";
+			winrt::com_ptr<ID3D11Resource> resource;
+			a_view->GetResource(resource.put());
+			return DescribeResource(resource.get());
+		}
+
+		std::string CallerOf(void* a_address)
+		{
+			std::uint64_t base = 0;
+			const auto name = PassSkip::ModuleOf(reinterpret_cast<std::uint64_t>(a_address), base);
+			return fmt::format("{}+{:x}", name.substr(0, name.find('.')), reinterpret_cast<std::uint64_t>(a_address) - base);
+		}
+	}
+
+	// A window labelled f<N>: N extra flushes a frame, one before each of the frame's first full-screen calls.
+	std::uint32_t probeFlushes = 0, probeFlushed = 0;
+
+	bool OpBegin(ID3D11DeviceContext* a_context, const char* a_kind, std::uint32_t a_count, ID3D11Resource* a_target, ID3D11View* a_view, void* a_caller)
+	{
+		if (!Requested())
+			return false;
+		auto& state = Get();
+		if (!state.initialized || GetCurrentThreadId() != state.thread)
+			return false;
+		auto& frame = state.frames[state.write];
+		if (!frame.open || frame.used + 2 >= kMaxQueries)
+			return false;
+		if (!state.stack.empty()) {
+			const auto parent = state.stack.back();
+			if (parent == kNone)
+				return false;
+			const auto& path = state.paths[frame.events[parent].path];
+			const auto at = path.rfind(" / ");
+			if (std::string_view(path).substr(at == std::string::npos ? 0 : at + 3).starts_with("BSBatchRenderer"))
+				return false;
+		}
+		if (probeFlushed < probeFlushes && (a_kind[0] == 'D') && !state.stack.empty()) {
+			++probeFlushed;
+			a_context->Flush();
+		}
+		std::string detail;
+		if (a_target)
+			detail = DescribeResource(a_target);
+		else if (a_view)
+			detail = DescribeView(a_view);
+		else if (a_kind[0] == 'D' && a_kind[1] == 'r') {
+			ID3D11RenderTargetView* rtv[2]{};
+			ID3D11DepthStencilView* dsv = nullptr;
+			a_context->OMGetRenderTargets(2, rtv, &dsv);
+			detail = fmt::format("rt {} rt1 {} ds {}", DescribeView(rtv[0]), rtv[1] ? "y" : "n", DescribeView(dsv));
+			for (auto* view : rtv)
+				if (view)
+					view->Release();
+			if (dsv)
+				dsv->Release();
+			winrt::com_ptr<ID3D11PixelShader> ps;
+			a_context->PSGetShader(ps.put(), nullptr, nullptr);
+			detail += " ps " + ShaderName(ps.get()) + EngineShader();
+		} else if (a_kind[0] == 'D' && a_kind[1] == 'i') {
+			winrt::com_ptr<ID3D11ComputeShader> cs;
+			a_context->CSGetShader(cs.put(), nullptr, nullptr);
+			winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+			a_context->CSGetUnorderedAccessViews(0, 1, uav.put());
+			detail = fmt::format("cs {} u0 {}", ShaderName(cs.get()), DescribeView(uav.get()));
+		}
+		BeginEvent(fmt::format("op {} n{} {} @{}", a_kind, a_count <= 6 ? a_count : (a_count > 1000 ? 1001u : 7u), detail, CallerOf(a_caller)));
+		return true;
+	}
+
+	void OpEnd()
+	{
+		EndEvent();
+	}
+
 	void OnPresent()
 	{
 		PassSkip::Present();
@@ -748,6 +958,7 @@ RWTexture2D<float> Out : register(u0);
 			}
 		}
 		state.thread = GetCurrentThreadId();
+		probeFlushed = 0;
 		auto* context = globals::d3d::context;
 
 		// Close the recording frame. An event still open at Present is not timed, and its end is ignored.
@@ -798,6 +1009,7 @@ RWTexture2D<float> Out : register(u0);
 			return;
 		auto& state = Get();
 		state.labels.emplace_back(a_label);
+		probeFlushes = a_label.starts_with("f") ? static_cast<std::uint32_t>(std::strtoul(std::string(a_label.substr(1)).c_str(), nullptr, 10)) : 0u;
 		state.window = static_cast<std::uint32_t>(state.labels.size() - 1);
 	}
 }
