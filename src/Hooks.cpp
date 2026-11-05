@@ -45,6 +45,8 @@
 #include "Utils/ImportCallSites.h"
 #include "Vram/Debug.h"
 #include "Vram/VramLedger.h"
+#include "TextureStreaming/Census.h"
+#include "TextureStreaming/Streamer.h"
 
 #include <xmmintrin.h>
 #include <unordered_map>
@@ -1408,6 +1410,8 @@ namespace Hooks
 		}
 
 		Vram::Debug::InstallGameHooks();
+		TextureStreaming::Census::InstallGameHooks();
+		TextureStreaming::InstallGameHooks();
 
 		logger::info("Hooking BSGraphics::Renderer::InitD3D");
 		stl::write_thunk_call<BSGraphics_Renderer_Init_InitD3D>(REL::RelocationID(75595, 77226).address() + REL::Relocate(0x50, 0x2BC));

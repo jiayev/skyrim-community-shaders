@@ -463,6 +463,8 @@ namespace DCLF
 		std::vector<std::uint64_t> sphereSeq;
 		std::atomic<bool> spheresWanted{ false };
 		LatestSlot<Direct::SnapshotSpheres> spheresSlot;
+		std::atomic<bool> streamSpheresWanted{ false };
+		LatestSlot<Direct::SnapshotSpheres> streamSpheresSlot;
 
 		// The moved-only sampling (dclf B) over the kept placement set: the plans applied in order (ApplyPlans), each a delta, onto movers
 		// and roots kept at stable indices (a freed one reused), and the index from move key to them (KeysOf) patched as they join,
@@ -1376,6 +1378,17 @@ namespace DCLF
 
 	void FrameValues::Impl::PostSnapshotSpheres(const Job& a_job, const std::vector<BindlessPlacement>& a_out)
 	{
+		if (streamSpheresWanted.exchange(false, std::memory_order_acq_rel)) {
+			ZoneScopedN("CS.DCLF.FrameValues.StreamingSpheres");
+			auto table = std::make_unique<Direct::SnapshotSpheres>();
+			table->seq = a_job.seq;
+			table->sphere.resize(a_out.size());
+			for (std::size_t i = 0; i < a_out.size(); ++i)
+				std::memcpy(table->sphere[i].data(), a_out[i].bound, sizeof(a_out[i].bound));
+			table->owner.assign(rowOwner.begin(), rowOwner.begin() + std::min(rowOwner.size(), a_out.size()));
+			table->owner.resize(a_out.size(), nullptr);
+			streamSpheresSlot.Post(std::move(table));
+		}
 		if (!spheresWanted.exchange(false, std::memory_order_acq_rel))
 			return;
 		ZoneScopedN("CS.DCLF.FrameValues.SnapshotSpheres");
@@ -1446,6 +1459,16 @@ namespace DCLF
 	std::unique_ptr<Direct::SnapshotSpheres> FrameValues::TakeSnapshotSpheres()
 	{
 		return impl->spheresSlot.Take();
+	}
+
+	void FrameValues::RequestStreamingSpheres()
+	{
+		impl->streamSpheresWanted.store(true, std::memory_order_release);
+	}
+
+	std::unique_ptr<Direct::SnapshotSpheres> FrameValues::TakeStreamingSpheres()
+	{
+		return impl->streamSpheresSlot.Take();
 	}
 
 	// First-person items are the render thread's (RootViewSample), except a palette rows class's (particle members, expanded from

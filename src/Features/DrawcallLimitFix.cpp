@@ -32,6 +32,7 @@
 #	include "DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #	include "Features/Skylighting.h"
 #	include "ShaderCache.h"
+#	include "TextureStreaming/Streamer.h"
 
 #	include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #	include "Features/DrawcallLimitFix/Core/Render/FrameDriver.h"
@@ -245,6 +246,7 @@ void DrawcallLimitFix::ForceOff()
 	// The scene passes apply what the hooks still push (the scene queues: kept bounded), and nothing else.
 	DCLF::Scene::Coordinator::Get().SetScenePassMode(false, false);
 	DCLF::PassCapture::Get().SetBypassed(true);
+	TextureStreaming::SetScheduler({});
 	logger::warn("[DCLF] Forced off: {}; the game renders natively", unavailableReason);
 }
 

@@ -41,6 +41,17 @@ namespace DCLF
 	 * seed requests, the switches, the retired imports) travel on the publication log (PublicationDeltas), so a publication the builder
 	 * skipped loses none of them.
 	 */
+	/**
+	 * @brief The newest publication's tables and lookups, for a reader off the frame's path (texture streaming's worker). Not the publication:
+	 * its retirement chain stays on the frame's path, and the pieces' last releases are safe on any thread.
+	 */
+	struct PublishedScene
+	{
+		std::shared_ptr<const SceneTables> tables;
+		std::shared_ptr<const Lookups> lookups;
+	};
+	PublishedScene LatestPublishedScene();
+
 	struct ScenePublication
 	{
 		std::uint64_t sequence = 0;

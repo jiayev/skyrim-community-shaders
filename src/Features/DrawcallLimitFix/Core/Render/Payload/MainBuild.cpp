@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/TextureFeedback.h"
 
 namespace DCLF::Draws
 {
@@ -870,6 +871,10 @@ namespace DCLF::Draws
 	void MainBuild::PackMaterialTextures(std::uint32_t m, bool projected, const Lookups::Material* lookup, const MaterialRecord& material, MainRows::MaterialState& state,
 		MaterialRowHeader& header) const
 	{
+		const std::uint64_t feedback = TextureFeedback::Address();
+		header.feedbackSlot = m;
+		header.feedbackAddress[0] = static_cast<std::uint32_t>(feedback);
+		header.feedbackAddress[1] = static_cast<std::uint32_t>(feedback >> 32);
 		// Textures: the material's, else a projected technique's, else the null texture. t14 is the pipeline row's.
 		const bool resolved = lookup && lookup->resolved && lookup->key.first == tables.materialSlotKey[m].first && lookup->key.second == tables.materialSlotKey[m].second;
 		// A character-light pass reads the frame's kCharacterLightRegister instead of t11: null texture there.

@@ -936,6 +936,20 @@ namespace DCLF::Scene
 		RevokeFromClaims();
 	}
 
+	namespace
+	{
+		std::mutex& LatestSceneMutex()
+		{
+			static std::mutex mutex;
+			return mutex;
+		}
+		PublishedScene& LatestScene()
+		{
+			static PublishedScene scene;
+			return scene;
+		}
+	}
+
 	void Coordinator::PublishScene()
 	{
 		ZoneScopedN("CS.DCLF.Scene.PublishScene");
@@ -978,6 +992,10 @@ namespace DCLF::Scene
 		publication->claims = publicationClaims ? publicationClaims : std::make_shared<const SetSnapshot>();
 		publication->lackingCount = setLackingCount;
 		publication->lookups = publishedLookups;
+		{
+			std::scoped_lock lock(LatestSceneMutex());
+			LatestScene() = { publication->tables, publication->lookups };
+		}
 		publication->catalog = publishedCatalog;
 		// The frame reads candidates only from the publication, never the coordinator.
 		publication->sunCandidates = sunCandidates;
@@ -2224,5 +2242,14 @@ namespace DCLF::Scene
 				p.parityFirst = fmt::format("claims: {} ({} members against {} made whole; publication {})", claimsFirst, a_claims.phases.size(),
 					claimsReference->phases.size(), publicationSequence);
 		}
+	}
+}
+
+namespace DCLF
+{
+	PublishedScene LatestPublishedScene()
+	{
+		std::scoped_lock lock(Scene::LatestSceneMutex());
+		return Scene::LatestScene();
 	}
 }

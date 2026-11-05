@@ -27,6 +27,7 @@
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/Sun.h"
 #include "Features/DrawcallLimitFix/Features/Skins/Skins.h"
 #include "Features/DrawcallLimitFix/Features/SwitchNodes/SwitchNodes.h"
+#include "Features/DrawcallLimitFix/Features/TextureStreaming/TextureStreaming.h"
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransforms.h"
 #include "Features/DrawcallLimitFix/Features/TreeLod/TreeLod.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
@@ -78,6 +79,7 @@ namespace DCLF::Features
 			HiddenNodes::Feature(),
 			Decals::Feature(),
 			Landscape::Feature(),
+			Streaming::Feature(),
 			Faces::Feature(),
 			FirstPerson::Feature(),
 			Fades::Feature(),

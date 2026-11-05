@@ -33,6 +33,9 @@ namespace Vram::Debug
 	/** @brief Installs the game texture-load hook; with the other game hooks. */
 	void InstallGameHooks();
 
+	/** @brief Labels a texture as a game texture of a_path's folder, with a_path as its name. Any thread. */
+	void TagGameTexture(ID3D11Resource* a_resource, std::string_view a_path);
+
 	/** @brief Labels textures whose queued loads have finished since the last call. Any thread. */
 	void ProcessPendingTextures();
 

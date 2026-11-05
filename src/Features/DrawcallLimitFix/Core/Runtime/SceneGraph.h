@@ -33,6 +33,8 @@ namespace DCLF::Runtime
 		Publication,        // what the render thread accepts: claims, filters and every segment's payload
 		BufferVersion,      // a versioned buffer's next version, made and filled as graph work (growth: PostGrowth)
 		PayloadPart,        // a scene payload part's next version, built from its predecessor (PostPayloadPart)
+		TextureWindow,      // a streamed texture's window: read and made on the streaming domain, a newer one replacing an unstarted one
+		TextureGate,        // a request waiting on a texture's base window (ReadyGateAtLeast), which then runs
 		Count
 	};
 
@@ -77,11 +79,22 @@ namespace DCLF::Runtime
 		 * One thread posts at a time (the snapshot builder). False when the graph refused it (shutting down): a_done does not run.
 		 */
 		bool PostPayloadPart(org::services::VersionedBufferBuildInput a_input, PayloadPartDone a_done);
+		/** @brief Any thread, lock-free: a_build makes a texture's window, on the streaming domain. A later revision replaces this one if it has not started. */
+		bool PostTextureWindow(std::uint64_t a_texture, std::uint64_t a_revision, std::function<void()> a_build);
+		/** @brief The texture is gone: its window's address goes too. */
+		void RetireTextureWindow(std::uint64_t a_texture);
+		/**
+		 * @brief Runs a_run once the texture's window has reached a_revision and is ready (a window posted before this call, on any thread). False
+		 * when the graph refused it (shutting down): a_run does not run.
+		 */
+		bool PostTextureGate(std::uint64_t a_texture, std::uint64_t a_revision, std::function<void()> a_run);
 
 	private:
 		struct PayloadPartPosts;
 		std::unique_ptr<Graph> graph;
 		std::unique_ptr<org::async::VersionGrowthPosts<org::async::DefaultStateGraphTypes>> growths;  // the posting thread's
 		std::unique_ptr<PayloadPartPosts> payloadParts;                                             // the snapshot builder's
+		struct TextureGates;
+		std::unique_ptr<TextureGates> textureGates;
 	};
 }

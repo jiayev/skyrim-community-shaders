@@ -45,6 +45,7 @@
 #include "Features/Upscaling.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
+#include "Features/TextureStreaming.h"
 #include "Features/VRAMBudget.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
@@ -53,6 +54,7 @@
 #include "State.h"
 #include "TruePBR.h"
 #include "Utils/Game.h"
+#include "TextureStreaming/Census.h"
 
 #include <array>
 #include <atomic>
@@ -98,6 +100,7 @@ namespace globals
 		UnifiedWater unifiedWater{};
 		VolumetricLighting volumetricLighting{};
 		VRAMBudget vramBudget{};
+		TextureStreamingFeature textureStreaming{};
 		WaterEffects waterEffects{};
 		PerformanceOverlay performanceOverlay{};
 		WetnessEffects wetnessEffects{};
@@ -641,6 +644,7 @@ namespace globals
 			stl::detour_vfunc<41, PassSkipDispatch>(a_context);
 			stl::detour_vfunc<42, PassSkipDispatchIndirect>(a_context);
 		}
+		TextureStreaming::Census::InstallD3DHooks(a_context);
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		stl::detour_vfunc<48, ID3D11DeviceContext_UpdateSubresource>(a_context);

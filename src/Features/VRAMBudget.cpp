@@ -1,5 +1,6 @@
 #include "VRAMBudget.h"
 
+#include "TextureStreaming/Streamer.h"
 #include "Vram/DxvkMemory.h"
 
 #include "Menu.h"
@@ -202,7 +203,9 @@ bool VRAMBudget::Sample()
 	if (!adapter || FAILED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)) || !info.Budget)
 		return false;
 	usage = info.CurrentUsage;
-	budget = info.Budget;
+	// A streaming budget above the driver's is room to use, not a reason to unload cells.
+	const std::uint64_t streaming = TextureStreaming::Active() ? std::uint64_t(TextureStreaming::GetSettings().budgetMB) << 20 : 0;
+	budget = std::max<std::uint64_t>(info.Budget, streaming);
 	return true;
 }
 

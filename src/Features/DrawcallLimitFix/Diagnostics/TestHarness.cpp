@@ -24,6 +24,9 @@
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "State.h"
 #include "Vram/VramLedger.h"
+#include "Features/DrawcallLimitFix/Features/TextureStreaming/TextureStreaming.h"
+#include "TextureStreaming/Census.h"
+#include "TextureStreaming/Streamer.h"
 
 #include <ORGModuleServices/PipelineRegistry.h>
 #include <OpenRenderGraph/GraphHost.h>
@@ -35,6 +38,65 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+namespace DCLF
+{
+	namespace
+	{
+		// "dclf:tex-stats": texture streaming's totals, in the log. "dclf:tex-force=<top>": every streamed window at this top, or -1 for the policy's
+		// choice. "dclf:tex-distance=<0|1>", "dclf:tex-feedback=<0|1>": the demand's two sources. "dclf:tex-budget=<MiB>": the budget, 0 for the driver's. "dclf:tex-offset=<mips>": how far what is on screen may step down over it. "dclf:tex-dump=<name>": every texture's state to texture-<name>.tsv, and what the materials draw, in the log. "dclf:tex-census": the texture census's rows written to the log directory (CS_TEX_CENSUS=1).
+		bool RunTextureStreamingCommand(const std::string& a_command)
+		{
+			if (a_command == "dclf:tex-stats") {
+				const auto stats = TextureStreaming::GetStats();
+				logger::info("[TextureStreaming] {} textures ({} with windows, {} pinned, {} full for native draws), {} MiB resident, {} MiB wanted, of {} MiB; {} windows built ({} upgrades, {} downgrades, {} under pressure asked), {} MiB read, {} notes, {} feedback reports ({} finer than distance), {} failed, {} bound before their base, {} needed their storage, {} left to the engine",
+					stats.textures, stats.withWindow, stats.pinned, stats.nativeFull, stats.residentBytes >> 20, stats.wantedBytes >> 20, stats.fullBytes >> 20, stats.windowsBuilt, stats.upgrades, stats.downgrades, stats.pressureDowngrades,
+					stats.bytesRead >> 20, stats.noted, stats.feedbackReported, stats.feedbackFiner, stats.loadFailures, stats.safetyNetLoads, stats.storageFills, stats.passedThrough);
+				logger::info("[TextureStreaming] budget {} MiB (card {}, driver {}): {} used, {} of it in system memory, {} not windows ({} outside DXVK), {} allowed for windows, {} wanted, {} of that on screen; pulled back {:.2f} mips by distance, {:.2f} on screen",
+					stats.budgetBytes >> 20, stats.cardBytes >> 20, stats.driverBudgetBytes >> 20, stats.usedBytes >> 20, stats.overflowBytes >> 20, stats.otherBytes >> 20, stats.outsideBytes >> 20, stats.allowanceBytes >> 20, stats.wantedBytes >> 20, stats.visibleBytes >> 20, stats.distancePullback, stats.visiblePullback);
+				logger::info("[TextureStreaming] left to the engine: {} loads, {} of them failed", stats.passedThrough, stats.engineFailures);
+				logger::info("[TextureStreaming] builds: {} first windows (read {} ms, create {} ms in all), {} later (read {} ms, create {} ms in all)", stats.baseBuilds, stats.baseReadMicroseconds / 1000,
+					stats.baseCreateMicroseconds / 1000, stats.otherBuilds, stats.otherReadMicroseconds / 1000, stats.otherCreateMicroseconds / 1000);
+				return true;
+			}
+			if (a_command.rfind("dclf:tex-force=", 0) == 0) {
+				TextureStreaming::ForceTop(std::atoi(a_command.c_str() + 15));
+				return true;
+			}
+			if (a_command == "dclf:tex-dump" || a_command.rfind("dclf:tex-dump=", 0) == 0) {
+				const auto name = a_command.size() > 14 ? a_command.substr(14) : std::string("dump");
+				if (const auto directory = SKSE::log::log_directory())
+					TextureStreaming::RequestDump((*directory / std::format("texture-{}.tsv", name)).string());
+				Features::Streaming::ReportBindings();
+				return true;
+			}
+			if (a_command.rfind("dclf:tex-offset=", 0) == 0) {
+				auto settings = TextureStreaming::GetSettings();
+				settings.visibleOffset = static_cast<float>(std::atof(a_command.c_str() + 16));
+				TextureStreaming::SetSettings(settings);
+				return true;
+			}
+			if (a_command.rfind("dclf:tex-budget=", 0) == 0) {
+				auto settings = TextureStreaming::GetSettings();
+				settings.budgetMB = static_cast<std::uint32_t>(std::atoi(a_command.c_str() + 16));
+				TextureStreaming::SetSettings(settings);
+				return true;
+			}
+			if (a_command.rfind("dclf:tex-distance=", 0) == 0 || a_command.rfind("dclf:tex-feedback=", 0) == 0) {
+				auto settings = TextureStreaming::GetSettings();
+				(a_command[9] == 'd' ? settings.distance : settings.feedback) = a_command.back() != '0';
+				TextureStreaming::SetSettings(settings);
+				return true;
+			}
+			if (a_command == "dclf:tex-census") {
+				const auto path = TextureStreaming::Census::WriteJson(logger::log_directory().value_or(std::filesystem::path{}));
+				logger::info("[DCLF] Texture census written to {}", path.string());
+				return true;
+			}
+			return false;
+		}
+	}
+}
 
 namespace DCLF
 {
@@ -328,6 +390,8 @@ namespace DCLF
 						logger::info("[DCLF] VRAM attribution written to {}", path.string());
 						return;
 					}
+					if (RunTextureStreamingCommand(command))
+						return;
 					// "dclf:pp=<sub-feature type>=0|1": a Post Processing effect's menu toggle (GetType(), e.g. "Depth of Field"), so a run
 					// can check that disabling an effect frees its textures and enabling it creates them again.
 					if (command.rfind("dclf:pp=", 0) == 0) {

@@ -167,8 +167,17 @@ namespace DCLF
 		 */
 		bool RelocatedViews(std::uint64_t& a_cursor, std::vector<ID3D11ShaderResourceView*>& a_out) const;
 
+		/**
+		 * @brief A streamed texture's shell has a new window: its import is superseded as a relocation supersedes one (the old window stays
+		 * alive, held by the import's backing, until its last owner goes). Any thread; a_shell is an identity, never dereferenced.
+		 */
+		void NoteWindowChanged(const ID3D11ShaderResourceView* a_shell);
+
 		/** @brief Whether a_owner (a view's Binding's owner: an import, never a null view's) was superseded by a relocation. Any thread. */
 		static bool Superseded(const void* a_owner);
+
+		/** @brief For a report: the window a binding's owner imported, as an identity (null: not a streamed texture's). */
+		static const void* ImportedWindow(const void* a_owner);
 
 		Stats GetStats() const;
 

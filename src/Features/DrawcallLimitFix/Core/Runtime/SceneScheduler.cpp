@@ -76,6 +76,11 @@ namespace DCLF
 				SetThreadPriority(GetCurrentThread(), SwitchValue(Switch::AsyncPriority) == "normal" ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_ABOVE_NORMAL);
 				return;
 			}
+			if (a_class.domain == SceneExecutor::Streaming.domain) {
+				SetThreadDescription(GetCurrentThread(), (L"CS DCLF texture loader " + std::to_wstring(a_index)).c_str());
+				SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+				return;
+			}
 			SetThreadDescription(GetCurrentThread(), (L"CS DCLF worker " + std::to_wstring(a_index)).c_str());
 			SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 		}, WorkerBoost(), FrameCriticalWorkers());

@@ -136,9 +136,11 @@ namespace DCLF
 	struct MaterialRowHeader
 	{
 		// The material's index among its version's animated rows (Texture Transforms: the frame's copy BuildDrawsCS's MaterialRowAddress
-		// resolves the row to), ~0u: none. Then reserved (the pulled stages read the indices below at fixed offsets).
+		// resolves the row to), ~0u: none. The pulled stages read the indices below at fixed offsets.
 		std::uint32_t animatedRow = ~0u;
-		std::uint32_t reserved[3]{};
+		// Texture streaming's feedback (Lighting.hlsl, DCLF_TEX_FEEDBACK): the material's slot, and the buffer's device address (0: none).
+		std::uint32_t feedbackSlot = 0;
+		std::uint32_t feedbackAddress[2]{};
 		std::uint32_t textures[kPixelTextureSlots]{};
 		std::uint32_t samplers[16]{};
 		std::uint32_t features[Extensions::kFeatureTextureSlots]{};

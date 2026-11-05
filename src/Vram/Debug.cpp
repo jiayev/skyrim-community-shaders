@@ -212,11 +212,7 @@ namespace Vram::Debug
 				return true;  // not a file texture: nothing to wait for
 			if (!source->rendererTexture || !source->rendererTexture->texture)
 				return false;
-			ID3D11Resource* resource = source->rendererTexture->texture;
-			SetOwner(resource, TextureOwner(a_path), true);
-			UINT size = 0;
-			if (resource->GetPrivateData(WKPDID_D3DDebugObjectName, &size, nullptr) != S_OK || size == 0)
-				resource->SetPrivateData(WKPDID_D3DDebugObjectName, static_cast<UINT>(a_path.size()), a_path.data());
+			TagGameTexture(source->rendererTexture->texture, a_path);
 			return true;
 		}
 
@@ -257,6 +253,14 @@ namespace Vram::Debug
 		}
 		configure(DXVK_MEMORY_DEBUG_CREATION_STACKS);
 		logger::info("[VRAM] DXVK records every resource's creation stack");
+	}
+
+	void TagGameTexture(ID3D11Resource* a_resource, std::string_view a_path)
+	{
+		SetOwner(a_resource, TextureOwner(a_path), true);
+		UINT size = 0;
+		if (a_resource->GetPrivateData(WKPDID_D3DDebugObjectName, &size, nullptr) != S_OK || size == 0)
+			a_resource->SetPrivateData(WKPDID_D3DDebugObjectName, static_cast<UINT>(a_path.size()), a_path.data());
 	}
 
 	void InstallGameHooks()

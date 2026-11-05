@@ -1391,12 +1391,49 @@ bool UseSkylightingShadowVisibility()
 
 #	include "Common/LightingEval.hlsli"
 
+#	if defined(DCLF_TEX_FEEDBACK) && !defined(DO_ALPHA_TEST)
+#		define DCLF_WRITES_TEX_FEEDBACK 1
+#	else
+#		define DCLF_WRITES_TEX_FEEDBACK 0
+#	endif
+
+#	if DCLF_WRITES_TEX_FEEDBACK
+// Texture streaming's feedback (Core/Gpu/TextureFeedback.h): what this material's surface wants, one value however many textures it samples.
+// The footprint is log2 of the UV one pixel covers, which needs no texture's size: the worker turns it into each texture's mip. One pixel
+// in 64 writes, on a pattern that moves each frame, keeping the finest; a write lost to a race comes back on a later frame.
+void DCLFTextureFeedback(float2 a_uv, uint2 a_pixel)
+{
+	const float2 dx = ddx(a_uv), dy = ddy(a_uv);
+	const uint frame = SharedData::FrameCount;
+	if (((a_pixel.x + frame) & 7u) != 0u || ((a_pixel.y + (frame >> 3)) & 7u) != 0u)
+		return;
+	// MaterialRowHeader (DrawPipelines.h, at kMaterialRowHeader 768): the animated row, the slot, the buffer's address.
+#		if defined(DCLF_PULLED)
+	const uint64_t row = DCLFMaterialRowAddress;
+#		else
+	const uint64_t row = (uint64_t(DCLFMaterialRowAddress.y) << 32) | uint64_t(DCLFMaterialRowAddress.x);
+#		endif
+	const uint3 feedback = vk::RawBufferLoad<uint3>(row + 768 + 4, 4);
+	const uint64_t buffer = (uint64_t(feedback.z) << 32) | uint64_t(feedback.y);
+	if (buffer == 0 || vk::RawBufferLoad<uint>(buffer, 4) == 0)
+		return;
+	const float major = max(dot(dx, dx), dot(dy, dy)), minor = min(dot(dx, dx), dot(dy, dy));
+	// Anisotropic filtering reads the mip of the minor axis, within its ratio (16).
+	const float footprint = 0.5 * log2(max(max(minor, major / 256.0), 1e-16)) + SharedData::MipBias;
+	const uint value = uint(max(footprint + 32.0, 0.0) * 256.0);
+	const uint64_t word = buffer + 4 * (uint64_t(feedback.x) + 1);
+	if (value < vk::RawBufferLoad<uint>(word, 4))
+		vk::RawBufferStore<uint>(word, value, 4);
+}
+#	endif
+
 #	if defined(DCLF_PULLED)
 PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
 #	else
-#		if defined(DCLF_OWNED_PARITY)
+#		if defined(DCLF_OWNED_PARITY) || DCLF_WRITES_TEX_FEEDBACK
 // The parity write below must be the visible fragment's: the colour pass tests EQUAL and writes no depth, so testing first
-// changes nothing else.
+// changes nothing else. So must texture streaming's feedback: occluded surfaces ask for nothing. Its stage has no alpha test (a
+// draw that writes depth here would otherwise write it for a fragment it then discards).
 [earlydepthstencil]
 #		endif
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
@@ -1492,6 +1529,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float2 uv = input.TexCoord0.xy;
 	float2 uvOriginal = uv;
+#	if DCLF_WRITES_TEX_FEEDBACK
+	DCLFTextureFeedback(uv, uint2(input.Position.xy));
+#	endif
 
 	// Lattice cell comes from the geometric UV, before the parallax block below rewrites uv.
 #	if !defined(LANDSCAPE) && (defined(TERRAIN_VARIATION_MESH) || defined(EMAT))
@@ -3931,6 +3971,9 @@ void DCLFPixelObjectStatics()
 // Keyed on a wave-uniform instance as the vertex stage's main is, so the rows, the statics and every texture's and sampler's descriptor
 // index (the material row's, read where used) are the draw's. A quad's four lanes are one primitive's, so one draw's: they take the
 // same pass, helper lanes with them, and their derivatives hold.
+#		if DCLF_WRITES_TEX_FEEDBACK
+[earlydepthstencil]
+#		endif
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	const uint64_t sequence = DCLFDrawSequence(input.DCLFDrawInstance);
