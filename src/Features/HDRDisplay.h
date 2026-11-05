@@ -70,7 +70,7 @@ public:
 	/** @brief Draws the ImGui settings UI for HDR enable, paper white, peak brightness, and UI brightness. */
 	virtual void DrawSettings() override;
 
-	/** @brief Enables the bUse64bitsHDRRenderTarget INI setting for float16 render targets. */
+	/** @brief Makes the bUse64bitsHDRRenderTarget INI setting follow HDR's, for the next launch if the game writes its prefs. */
 	virtual void DataLoaded() override;
 	/** @brief Creates HDR, output, and UI textures, constant buffer, and upgrades LDR render targets. */
 	virtual void SetupResources() override;
