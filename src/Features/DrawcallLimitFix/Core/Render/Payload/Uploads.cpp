@@ -593,6 +593,7 @@ namespace DCLF
 			revisionShape, writePlan, latchBlock, latchLayout, frameNumber, depthOnly, replayVertexInputs };
 
 		std::array<std::uint32_t, kTextureRegisters> frameTextures;
+		TracyCZoneN(cTex, "CS.DCLF.CMP.FrameTextures", true);
 		ResolveFrameTextures(commit, frameTextures);
 		CountMissingFrameTextures(commit, frameTextures);
 		// What is left unresolved reads zero through a null descriptor of its view's kind (GpuTextures::NullIndexFor: a buffer view's,
@@ -604,13 +605,19 @@ namespace DCLF
 					frameTextures[t] = textures.NullIndexFor(frameTextureBindings[t].view);
 		WriteFrameRecord(commit, frameTextures);
 		lap(2);
+		TracyCZoneEnd(cTex);
 
+		TracyCZoneN(cSlots, "CS.DCLF.CMP.LatchFrameSlots", true);
 		LatchFrameSlots(commit, a_blocks);
+		TracyCZoneEnd(cSlots);
 
 		lap(3);
+		TracyCZoneN(cStreams, "CS.DCLF.CMP.SceneStreamsAndHooks", true);
 		// The commit hooks ran there (the root states' producer's among them: Features/Fades', the roots and their write-back armed).
 		// The visibility readback reads the roots' states the depth epoch steps: armed after them.
 		UploadSceneStreams(commit);
+		TracyCZoneEnd(cStreams);
+		TracyCZoneN(cCounts, "CS.DCLF.CMP.CountsAndStats", true);
 		if (depthOnly)
 			ArmVisibilityReadback(*a_resources->scene, uploads);
 		ZeroCommitCounts(commit);
@@ -621,6 +628,8 @@ namespace DCLF
 		lap(6);
 		lap(5);
 
+		TracyCZoneEnd(cCounts);
+		TracyCZoneN(cLatch, "CS.DCLF.CMP.CullLatch", true);
 		MainCullInputs cull;
 		CountMainDraws(commit, prepassVS[kPerFrameVertexRegister], cull);
 
@@ -640,7 +649,11 @@ namespace DCLF
 		if (depthOnly)
 			a_resources->depthCommitted = { frameNumber, cull.inputCount, adopted.Serial() };
 
-		(void)latched.Finish();
+		{
+			ZoneScopedN("CS.DCLF.CMP.LatchedFinish");
+			(void)latched.Finish();
+		}
+		TracyCZoneEnd(cLatch);
 		revisions.latchedMisses += latched.Misses();
 		// The view epochs this one hosts (the depth epoch: the reflection's faces, first person's depth: Schedule/Frame.cpp), each
 		// committed into this commit by its feature's work (ViewPoint::DepthCommitted, run here: IndirectDraws::CaptureDepthPass), inside

@@ -13,6 +13,8 @@
 
 #include <thread>
 
+#include <Tracy/TracyC.h>
+
 namespace DCLF
 {
 	using org::async::RevisionFragment;
@@ -20,8 +22,13 @@ namespace DCLF
 	void IndirectDraws::PostAheadContext()
 	{
 		// Without main resources: the cleared context, the fits as they stood (the coordinator builds nothing ahead from it).
-		const bool fit = impl->MakeAheadContext(impl->aheadContext, failed);
-		impl->PostAhead(fit);
+		// Made in the post itself: the coordinator's copy is the post's.
+		auto post = std::make_unique<Impl::AheadPost>();
+		TracyCZoneN(make, "CS.DCLF.Ahead.Make", true);
+		const bool fit = impl->MakeAheadContext(post->context, failed);
+		TracyCZoneEnd(make);
+		ZoneScopedN("CS.DCLF.Ahead.Post");
+		impl->PostAhead(std::move(post), fit);
 	}
 
 	bool IndirectDraws::Impl::MakeAheadContext(AheadContext& a_out, bool a_failed)
@@ -33,7 +40,7 @@ namespace DCLF
 		if (a_failed || !resources || !resources->scene)
 			return false;
 		auto* lighting = EngineShaders::Lighting();
-		if (!lighting || !DrawPipelines::Get().Enabled() || !FrameIndirectState().valid)
+		if (!lighting || !DrawPipelines::Get().Enabled() || !FrameIndirectStateValid())
 			return true;
 		// The capacities the builds are made against are MakeRevision's (it reserves them from the newest publication's tables, the only
 		// tables the kept draw bound follows).
@@ -42,11 +49,13 @@ namespace DCLF
 			// The frame slots the epochs last supplied; the colour build replays the Z-prepass's vertex inputs.
 			if (!masks.known || (j == kAsyncColour && !prepassInputs))
 				continue;
+			ZoneScopedN("CS.DCLF.Ahead.MainInputs");
 			c.inputs[j] = PrepareMainInputs(j == kAsyncZPrepass, *resources, masks.vsMask, masks.psMask);
 			c.build[j] = true;
 		}
 		c.target = resources;
 		// The participants' parts (Revision/Participant.h: the shadow engine's payload inputs, for the last epoch's views).
+		ZoneScopedN("CS.DCLF.Ahead.Participants");
 		for (auto* participant : participants)
 			participant->PrepareAhead(c);
 		c.valid = c.build[kAsyncZPrepass] || c.build[kAsyncColour] || c.shadow;
@@ -82,13 +91,14 @@ namespace DCLF
 		return true;
 	}
 
-	void IndirectDraws::Impl::PostAhead(bool a_fit)
+	void IndirectDraws::Impl::PostAhead(std::unique_ptr<AheadPost> a_post, bool a_fit)
 	{
 		// Immutable once posted, latest wins; the coordinator takes it at its passes' start (TakeAheadContext).
-		if (a_fit)
+		if (a_fit) {
+			ZoneScopedN("CS.DCLF.Ahead.PostFit");
 			PostFit();
-		auto post = std::make_unique<AheadPost>();
-		post->context = aheadContext;
+		}
+		auto& post = a_post;
 		post->fit = postedFit;
 		post->fitSerial = postedFitSerial;
 		aheadSlot.Post(std::move(post));
@@ -106,8 +116,16 @@ namespace DCLF
 	{
 		// What the commit's set may claim (FitsScene): the buffers' versions the adopted set names (none before the first adoption).
 		const auto& adopted = Adopted();
-		const auto units = [&](const Versioned& a_buffer) { return static_cast<std::uint32_t>(std::min<std::uint64_t>(NamedUnits(adopted, a_buffer), UINT32_MAX)); };
 		const auto& shadow = shadowEngine->shadow;
+		const auto same = [](const std::weak_ptr<const void>& a_kept, const std::shared_ptr<const void>& a_now) {
+			return !a_kept.owner_before(a_now) && !a_now.owner_before(a_kept);
+		};
+		if (adopted.Serial() == fitSetSerial && same(fitMain, resources) && same(fitShadow, shadow))
+			return;
+		fitSetSerial = adopted.Serial();
+		fitMain = resources;
+		fitShadow = shadow;
+		const auto units = [&](const Versioned& a_buffer) { return static_cast<std::uint32_t>(std::min<std::uint64_t>(NamedUnits(adopted, a_buffer), UINT32_MAX)); };
 		const std::array<SceneFit, 2> fit{ SceneFitOf(adopted, *resources->scene, std::min(units(resources->visibility), units(resources->frustum))),
 			shadow && shadow->scene ? SceneFitOf(adopted, *shadow->scene, units(shadow->visibility)) : SceneFit{} };
 		if (fit != postedFit) {
@@ -783,6 +801,8 @@ namespace DCLF
 		auto& s = *impl;
 		const auto adoptedPublication = [&s]() -> std::shared_ptr<const void> { return s.adoptedSnapshot ? s.adoptedSnapshot->publication : nullptr; };
 		auto taken = s.snapshotSlot.Take();
+		ZoneScopedN("CS.DCLF.Snapshot.Adopt");
+		ZoneValue(taken ? 1 : 0);
 		if (!taken) {
 			// The producer's lag alone: nothing newer was built since the last adoption.
 			++s.snapshotFramesKept;
@@ -808,6 +828,7 @@ namespace DCLF
 		// Adopted whole: the versions its revision's set names become current (the graph host told of new ones), its revision the frame's
 		// epochs', its draws theirs.
 		std::shared_ptr<const Impl::SceneSnapshot> snapshot(std::move(taken));
+		TracyCZoneN(adoptVersions, "CS.DCLF.Snapshot.AdoptVersions", true);
 		const auto versions = snapshot->revision ? snapshot->revision->Get<NamedVersions>(Impl::SceneRevisions::kVersionsSlot) : nullptr;
 		if (versions && versions->AdoptAll()) {
 			if (auto* host = RenderGraphRuntime::Get().Host())
@@ -815,10 +836,12 @@ namespace DCLF
 			if (s.growthAdoptedFrame == ~0u)
 				s.growthAdoptedFrame = Scene::FrameView::Get().GetFrame();
 		}
+		TracyCZoneEnd(adoptVersions);
 		s.revisions.active = snapshot->revision;
 		s.adoptedSet = versions.get();
 		s.installedDraws = snapshot->draws;
 		if (s.installedPayload != snapshot->payload) {
+			ZoneScopedN("CS.DCLF.Snapshot.InstallPayload");
 			// The replaced versions are kept from reuse until what was submitted so far retires (a frame whose EndFrame did not come
 			// read them).
 			PayloadPools::BindInstalled(SubmittedRetirementPoint());
@@ -841,8 +864,11 @@ namespace DCLF
 			s.adoptionLatency.push_back(frameNow >= publication->commitFrame ? frameNow - publication->commitFrame : 0u);
 		}
 		// The replaced one back to the builder last, once nothing of the frame's holds it alone: its release is the builder's.
-		if (auto replaced = std::exchange(s.adoptedSnapshot, snapshot))
-			s.retiredSnapshots.Push(std::move(replaced));
+		{
+			ZoneScopedN("CS.DCLF.Snapshot.RetireReplaced");
+			if (auto replaced = std::exchange(s.adoptedSnapshot, snapshot))
+				s.retiredSnapshots.Push(std::move(replaced));
+		}
 		// The slot is free (a builder idle with inputs moved remakes for the frame as it is now).
 		WakeSnapshotBuilder();
 		return snapshot->publication;

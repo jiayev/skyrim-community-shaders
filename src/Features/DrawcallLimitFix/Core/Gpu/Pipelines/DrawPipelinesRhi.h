@@ -67,6 +67,13 @@ namespace DCLF
 	 * and the lane's layouts (made once, at setup).
 	 */
 	IndirectState GetIndirectState(const PipelineCatalog& a_catalog, std::uint32_t a_targetsGeneration);
+	/** @brief Whether GetIndirectState(a_catalog, a_targetsGeneration) is valid, without building it. */
+	bool IndirectStateValid(const PipelineCatalog& a_catalog, std::uint32_t a_targetsGeneration);
+	/**
+	 * @brief Whether set index a_setIndex's Z-prepass group has a depth pipeline in GetIndirectState(a_catalog, a_targetsGeneration)
+	 * (its zGroups and zPipelines), without building the state.
+	 */
+	bool ZGroupPipelineReady(const PipelineCatalog& a_catalog, std::uint32_t a_targetsGeneration, std::uint32_t a_setIndex);
 
 	/**
 	 * @brief The shadow views' pipelines (DrawPipelines::RequestShadow): the shadow set version of a catalog (GetShadowIndirectState),
@@ -99,6 +106,8 @@ namespace DCLF
 	 * place the frame's epochs take their indirect states from; a revision makes its own from its request's catalog and its inputs.
 	 */
 	IndirectState FrameIndirectState();
+	/** @brief Render thread: whether FrameIndirectState would be valid, without building it (its vectors hold an entry per pipeline). */
+	bool FrameIndirectStateValid();
 	ShadowIndirectState FrameShadowIndirectState();
 
 	/**

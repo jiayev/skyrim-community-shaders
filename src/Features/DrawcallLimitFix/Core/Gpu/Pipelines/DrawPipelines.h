@@ -600,6 +600,8 @@ namespace DCLF
 		Stats stats;
 
 		friend struct IndirectState GetIndirectState(const PipelineCatalog&, std::uint32_t);
+		friend bool IndirectStateValid(const PipelineCatalog&, std::uint32_t);
+		friend bool ZGroupPipelineReady(const PipelineCatalog&, std::uint32_t, std::uint32_t);
 		friend struct ForwardPipelineAccess;  // CatalogFamilyPipelines (DrawPipelinesRhi.h)
 		friend struct ShadowIndirectState GetShadowIndirectState(const PipelineCatalog&, DXGI_FORMAT);
 	};

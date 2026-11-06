@@ -416,15 +416,17 @@ namespace DCLF
 		// colour signature of its state class, into the main pass's attachments with the view's depth, which must be the main pass's format.
 		if (p < tables.pipelines.size() && RasterForward(tables.pipelines[p].rasterFlags))
 			return (!RasterRefraction(tables.pipelines[p].rasterFlags) && state.forwardCompatible.load(std::memory_order_acquire) &&
-			           GetIndirectState(*a_catalog, a_catalog->targetsGeneration).valid) ||
+			           IndirectStateValid(*a_catalog, a_catalog->targetsGeneration)) ||
 			       fail(2);
 		ForwardPipelineKey key;
 		if (p >= tables.pipelines.size() || !ViewForwardKey(a_view, tables, p, key))
 			return fail(3);
 		if (!ForwardPipelineOf(a_catalog, key, targets).valid())
 			return fail(4);
-		const auto indirect = GetIndirectState(*a_catalog, a_catalog->targetsGeneration);
-		const std::uint32_t group = Draws::ZGroupOf(static_cast<const Lookups*>(a_lookups), indirect, p);
-		return (indirect.valid && group < indirect.zPipelines.size() && indirect.zPipelines[group].valid()) || fail(5);
+		// The slot's Z group and its depth pipeline, as ZGroupOf and GetIndirectState find them, read in place: building the state per
+		// slot copied every pipeline's handles.
+		const auto* lookups = static_cast<const Lookups*>(a_lookups);
+		const auto setIndex = lookups && p < lookups->pipelines.size() ? lookups->pipelines[p].setIndex : Lookups::kNone;
+		return (setIndex != Lookups::kNone && ZGroupPipelineReady(*a_catalog, a_catalog->targetsGeneration, setIndex)) || fail(5);
 	}
 }

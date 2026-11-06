@@ -62,6 +62,42 @@ namespace DCLF
 
 		bool Hidden(const RE::NiAVObject* a_object) { return Engine::IsHidden(a_object); }
 
+		// The capture's listed hidden bits (render thread). The nodes are almost always last frame's, in the same order, so the order that
+		// sorted them is kept and tried first.
+		using HiddenList = std::vector<std::pair<const RE::NiAVObject*, bool>>;
+		std::vector<const RE::NiAVObject*> sortedNodes;  // the last sort's input, in collection order
+		std::vector<std::uint32_t> sortOrder;            // the positions in it, sorted
+		HiddenList sortScratch;
+
+		/** @brief a_list sorted as std::sort sorts it, reusing the last sort's order when it lists the same nodes in the same order. */
+		void SortCullHidden(HiddenList& a_list)
+		{
+			const std::size_t n = a_list.size();
+			bool same = n == sortedNodes.size();
+			for (std::size_t i = 0; same && i < n; ++i)
+				same = a_list[i].first == sortedNodes[i];
+			sortScratch.resize(n);
+			if (same) {
+				for (std::size_t i = 0; i < n; ++i)
+					sortScratch[i] = a_list[sortOrder[i]];
+				// The bits order a node listed twice: checked, and sorted afresh when they changed it.
+				if (std::is_sorted(sortScratch.begin(), sortScratch.end())) {
+					a_list.swap(sortScratch);
+					return;
+				}
+			}
+			sortedNodes.resize(n);
+			sortOrder.resize(n);
+			for (std::size_t i = 0; i < n; ++i) {
+				sortedNodes[i] = a_list[i].first;
+				sortOrder[i] = static_cast<std::uint32_t>(i);
+			}
+			std::sort(sortOrder.begin(), sortOrder.end(), [&](std::uint32_t a_a, std::uint32_t a_b) { return a_list[a_a] < a_list[a_b]; });
+			for (std::size_t i = 0; i < n; ++i)
+				sortScratch[i] = a_list[sortOrder[i]];
+			a_list.swap(sortScratch);
+		}
+
 		// One node of the first-person subtree (FrameGlobals.h).
 		using SubtreeNode = RootSubtreeNode;
 
@@ -271,6 +307,7 @@ namespace DCLF
 		if (!g->loading) {
 			// Numbered before the reads (a locked add): a store whose event is numbered before it is in them.
 			g->cullHiddenSequence = SceneCapture::NextSequence();
+			g->cullHidden.reserve(sortedNodes.size() + subtree.nodes.size());
 			for (auto* sceneNode : RE::BSShaderManager::State::GetSingleton().shadowSceneNode) {
 				const auto* graph = sceneNode ? sceneNode->GetRuntimeData().portalGraph : nullptr;
 				if (!graph)
@@ -296,7 +333,7 @@ namespace DCLF
 				Extensions::ViewEntryOf(view).captureRoot(root);
 				subtreeRoot = root.root;
 			}
-			std::sort(g->cullHidden.begin(), g->cullHidden.end());
+			SortCullHidden(g->cullHidden);
 			// CS_DCLF_FIRST_PERSON: every node and geometry under the first-person root, with the bit the engine's first-person culls saw
 			// last frame (NoteFirstPersonCulled), else as it is now (this thread, before Main::Draw touches the skeleton). The frame start's
 			// bits are not the culls' (the arms are hidden at the frame's start while the engine draws them), so the first-person members'

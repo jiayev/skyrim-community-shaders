@@ -98,6 +98,7 @@ namespace DCLF::Features::TreeWind
 		// Render thread, at Kick: every seed read since the last kick, for the frame's producer.
 		Api::FrameValueInput Kick(const Api::FrameValuePoolKick&)
 		{
+			ZoneScopedN("CS.DCLF.FV.Kick.TreeSeeds");
 			if (!unsent.empty())
 				return { std::make_shared<const SeedInput>(SeedInput{ std::exchange(unsent, {}), seedRows }), seedRows };
 			if (!idle || idle->rows != seedRows)

@@ -24,6 +24,11 @@ namespace DCLF
 	 */
 	namespace FrameData
 	{
+		/**
+		 * @brief Whether writes are counted: only under CS_DCLF_STATS, whose epoch report is the counts' one reader. Callers that build
+		 * a name for Note check it first (the names are strings made per write).
+		 */
+		bool Enabled();
 		/** @brief Render thread, at Present: a frame ended (the thread that calls it is the one counted). */
 		void EndFrame();
 		/** @brief a_bytes written by the render thread to a_where this frame; ignored on any other thread. */

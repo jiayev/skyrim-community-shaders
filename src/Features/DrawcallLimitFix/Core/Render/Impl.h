@@ -78,7 +78,7 @@ namespace DCLF
 		// The builds ahead and the snapshot builder's types and state: Impl/SnapshotBuilder.h (ImplSnapshotBuilder).
 		void PostFit();
 		/** @brief Render thread: posts the context and the fits as they are now (a_fit: PostFit first). */
-		void PostAhead(bool a_fit = true);
+		void PostAhead(std::unique_ptr<AheadPost> a_post, bool a_fit);
 		/**
 		 * @brief Render thread: a_out made from the frame as it is now (the main resources, the epochs' masks, the participants' parts),
 		 * under the newest toggles. False without main resources (a_failed, none yet): a_out holds the toggles alone and no fit is posted.

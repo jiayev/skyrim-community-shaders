@@ -287,6 +287,13 @@ namespace DCLF::Direct::detail
 	void DispatchCulls(FrameSlot& a_slot, SiteRun& a_run, SiteView& a_view, const std::shared_ptr<const CullFrame>& a_frame);
 
 	/**
+	 * @brief Any thread: a_dispatch (a site's DispatchCulls calls) run as one frame-critical pool task, held in a_slot's outstanding work.
+	 * Each dispatch wakes a worker, so the caller (often the render thread, when the cull frame is in before the commit) makes one
+	 * instead of one per cull job.
+	 */
+	void DispatchSiteCulls(FrameSlot& a_slot, std::function<void()> a_dispatch);
+
+	/**
 	 * @brief AfterCullFrame for a_slot's frame: a_then(frame) on the cull frame's publication, unless the slot moved to another frame
 	 * first (it then does nothing: Release waits only for continuations that started).
 	 */

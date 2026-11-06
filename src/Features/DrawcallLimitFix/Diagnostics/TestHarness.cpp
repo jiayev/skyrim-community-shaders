@@ -846,7 +846,10 @@ namespace DCLF
 	void RunTestHarness(std::string_view a_feature)
 	{
 		Diagnostics::TelemetryFrame();
-		MemProbe::Start(logger::log_directory().value_or(std::filesystem::path{}));
+		// Once: the log directory is a known-folder query and a path built, about 60 us in Dev-Fast, which every Present paid while the
+		// probe itself starts only once.
+		static const bool memProbeStarted = (MemProbe::Start(logger::log_directory().value_or(std::filesystem::path{})), true);
+		(void)memProbeStarted;
 		Vram::SpillLab::OnPresent();
 		if (Harness().feature.empty())
 			Harness().feature = a_feature;

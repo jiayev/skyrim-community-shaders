@@ -98,9 +98,11 @@ namespace DCLF
 		ScopedPerfEvent event("CS DCLF: scene tables");
 		// The frame number, the frame's globals captured and the frame inputs posted (an engine capture: the budget's scene captures).
 		{
+			ZoneScopedN("CS.DCLF.BF.ViewBeginFrame");
 			RenderThreadBudget::Part captures(RenderThreadBudget::Bucket::SceneCaptures);
 			view.BeginFrame();
 		}
+		TracyCZoneN(bfCamera, "CS.DCLF.BF.Camera", true);
 		// The frame's camera duties from the main camera, under the frame's number: the camera cut, then the root states' frame inputs
 		// (Features/Fades: the fade test's eye and tree height test), with the primary cull installed.
 		PrimaryCull::Get().BeginFrameCamera();
@@ -109,6 +111,8 @@ namespace DCLF
 		// The palette rows classes' frame start (Features/Particles: the main camera the frame's particle quads face, which FrameValues'
 		// producer expands them for, and the renderer's quads once).
 		Extensions::PaletteRowsFrameStart();
+		TracyCZoneEnd(bfCamera);
+		TracyCZoneN(bfAdopt, "CS.DCLF.BF.Adopt", true);
 		auto& draws = IndirectDraws::Get();
 		// A load screen's frames are claims-less whatever their snapshot (NoteLoadingScreen): neither waited for nor required covered.
 		const bool loading = Scene::FrameView::IsLoadingScreenUp();
@@ -119,9 +123,17 @@ namespace DCLF
 			// one-off stall on a rare event, never a frame handed back to the engine. Everything the builder needs is posted by now (the
 			// build point's revision inputs, the frame inputs above; AdoptCurrentSnapshot says why nothing later is).
 			RenderThreadBudget::Part exchange(RenderThreadBudget::Bucket::Exchange);
-			view.HandOverAtFrameStart(draws.AdoptCurrentSnapshot(!view.NotDrawingYet() && !loading));
-			view.SyncFrameTables();
+			TracyCZoneN(bfAdoptSnapshot, "CS.DCLF.BF.AdoptCurrentSnapshot", true);
+			auto adopted = draws.AdoptCurrentSnapshot(!view.NotDrawingYet() && !loading);
+			TracyCZoneEnd(bfAdoptSnapshot);
+			view.HandOverAtFrameStart(std::move(adopted));
+			{
+				ZoneScopedN("CS.DCLF.BF.SyncFrameTables");
+				view.SyncFrameTables();
+			}
 		}
+		TracyCZoneEnd(bfAdopt);
+		TracyCZoneN(bfViewsStart, "CS.DCLF.BF.ViewsStartAndLookups", true);
 		// The views' frame start before the coverage that decides whether their members are withheld (Features/FirstPerson's: the view's
 		// latch, targets, pipelines and resources).
 		RunViewWork(Api::ViewPoint::FrameStartBeforeCoverage);
@@ -133,7 +145,9 @@ namespace DCLF
 		Diagnostics::Notify<Diagnostics::FramePoint::LookupsInstalled>();
 		ImportRelocations::Poll();
 		draws.PostLookupInputs();
+		TracyCZoneEnd(bfViewsStart);
 		{
+			ZoneScopedN("CS.DCLF.BF.Claims");
 			// The claims are installed on every covered frame. Before the first (NotDrawingYet: tables, resources and the first revision
 			// being made) a frame has none, and the engine draws everything; after it, DCLF never hands drawing back: the frame waited for
 			// a snapshot it can draw from (AdoptCurrentSnapshot), so one it does not cover is a defect, reported with the coverage state
@@ -154,6 +168,7 @@ namespace DCLF
 			view.ClearAdoptedDeltas();
 		}
 		Diagnostics::Notify<Diagnostics::FramePoint::ClaimsInstalled>();
+		TracyCZoneN(bfKicks, "CS.DCLF.BF.AheadAndKicks", true);
 		// The CategoryRoot views' members the frame's epochs draw (the first person's): their rows and palettes taken by the frame values'
 		// kick (below) on this thread, before Main::Draw moves the skeleton into its root's space.
 		bool rootViewsCovered = false;
@@ -161,11 +176,21 @@ namespace DCLF
 			rootViewsCovered = rootViewsCovered || draws.ViewCovered(Extensions::Views().rootViews[i]);
 		FrameValues::Get().SetRootViewClaims(rootViewsCovered ? view.FrameClaims() : nullptr);
 		// What the next builds ahead take from the frame.
-		draws.PostAheadContext();
+		{
+			ZoneScopedN("CS.DCLF.BF.PostAheadContext");
+			draws.PostAheadContext();
+		}
 		// The root states' task (Features/Fades' write-back of the stood-in roots) and the visibility readbacks: tasks on DCLF's executor,
 		// never joined.
-		Extensions::RootStatesKick();
-		draws.KickVisibilityReadback();
+		{
+			ZoneScopedN("CS.DCLF.BF.RootStatesKick");
+			Extensions::RootStatesKick();
+		}
+		{
+			ZoneScopedN("CS.DCLF.BF.KickVisibilityReadback");
+			draws.KickVisibilityReadback();
+		}
+		TracyCZoneEnd(bfKicks);
 		// What the coordinator's passes asked of the render thread, served, and its captures posted for them (not while a load screen is
 		// up): the switch catch-ups (engine writes, before the culls), the category capture, the mirror's capture requests, tree LOD's mirror.
 		{
@@ -175,21 +200,46 @@ namespace DCLF
 			counters.timing.eventsMs += MillisecondsSince(eventsStart);
 		}
 		// The shadow sources' frame start, in source order (Features/Shadows/Local's point-light culls: this frame's paraboloid exclusion).
-		Extensions::ShadowSourcesFrameStart(view.GetFrame());
-		PassCapture::Get().RefreshMainRenderers();
+		TracyCZoneN(bfFamilies, "CS.DCLF.BF.SourcesAndFamilies", true);
+		{
+			ZoneScopedN("CS.DCLF.BF.ShadowSourcesFrameStart");
+			Extensions::ShadowSourcesFrameStart(view.GetFrame());
+		}
+		{
+			ZoneScopedN("CS.DCLF.BF.RefreshMainRenderers");
+			PassCapture::Get().RefreshMainRenderers();
+		}
 		// The draw families' for the frame (Features/TreeLod's), before the main camera's cull registers its passes; the views' work after
 		// it (Features/Reflection's: the water reflection's forward pipelines).
-		draws.DecideDrawFamilies(view.GetFrame());
-		RunViewWork(Api::ViewPoint::FrameStartAfterTreeLod);
-		PrimaryCull::Get().PublishListFilter();
+		{
+			ZoneScopedN("CS.DCLF.BF.DecideDrawFamilies");
+			draws.DecideDrawFamilies(view.GetFrame());
+		}
+		{
+			ZoneScopedN("CS.DCLF.BF.ViewWorkAfterTreeLod");
+			RunViewWork(Api::ViewPoint::FrameStartAfterTreeLod);
+		}
+		{
+			ZoneScopedN("CS.DCLF.BF.PublishListFilter");
+			PrimaryCull::Get().PublishListFilter();
+		}
+		TracyCZoneEnd(bfFamilies);
 		// The frame's values (FrameValues): the placements and the shading the frame draws with, made on the pool from the plans and named
 		// slots the installed publications carried, and waited for by the GPU; the shading fields captured here (Integrations/AdvancedSkin's
 		// wetness: Skin's cache is the render thread's). Then the scene payload: the installed snapshot's parts' versions (PayloadPools,
 		// built and GPU ready before it was posted), named for the frame's epochs (MakeFramePayload).
 		// The capture reads the shading changes the take empties.
-		auto fields = Extensions::CaptureShadingFields(view);
-		(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), std::move(fields), view.FrameGlobalsOfFrame());
-		(void)draws.MakeFramePayload();
+		{
+			ZoneScopedN("CS.DCLF.BF.FrameValuesKick");
+			TracyCZoneN(bfFields, "CS.DCLF.BF.CaptureShadingFields", true);
+			auto fields = Extensions::CaptureShadingFields(view);
+			TracyCZoneEnd(bfFields);
+			(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), std::move(fields), view.FrameGlobalsOfFrame());
+		}
+		{
+			ZoneScopedN("CS.DCLF.BF.MakeFramePayload");
+			(void)draws.MakeFramePayload();
+		}
 		// Under the parities the scene pass runs here, inline, so the render thread's observers keep their placement; the normal path
 		// never waits for a pass.
 		if (inlinePass)
@@ -239,14 +289,19 @@ namespace DCLF
 			EngineReadWindow::Close();
 		}
 		const auto start = std::chrono::steady_clock::now();
+		TracyCZoneN(efCull, "CS.DCLF.EF.PrimaryCull", true);
 		PrimaryCull::Get().EndFrame();
+		TracyCZoneEnd(efCull);
 		// The CPU pipeline's frame signal, behind its sites' callbacks, first: the retirement points bound below cover it.
 		Direct::EndFrame();
+		TracyCZoneN(efBind, "CS.DCLF.EF.BindAdoptedAndValues", true);
 		// The growable versions and the payload the frame read: kept from reuse until what it submitted retires.
 		IndirectDraws::Get().BindAdopted();
 		// What the frame submitted: the GPU point its frame values' buffer is free again after.
 		FrameValues::Get().EndFrame();
 		FrameData::EndFrame();
+		TracyCZoneEnd(efBind);
+		TracyCZoneN(efReports, "CS.DCLF.EF.ReportsAndReleases", true);
 		// The frame's reports, once a frame number (a menu or a load holds the number still while Presents go on).
 		if (a_running) {
 			static std::uint32_t reportedFrame = ~0u;
@@ -261,6 +316,7 @@ namespace DCLF
 			Scene::Coordinator::Get().ApplyEventsInline();
 		// What the scene work let go of: dropped on the engine's main thread with nothing reading them.
 		EngineReleases::Release();
+		TracyCZoneEnd(efReports);
 		counters.timing.eventsMs += MillisecondsSince(start);
 	}
 

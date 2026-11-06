@@ -23,6 +23,7 @@
 #include <memory>
 #include <vector>
 #include <Tracy/Tracy.hpp>
+#include <Tracy/TracyC.h>
 
 namespace DCLF::Direct::detail
 {
@@ -188,6 +189,7 @@ namespace DCLF::Direct
 		// The index pool's first indices as this commit left them: the frame's first drawing commit (UpdateIndexPool), whose ranges every
 		// site of the frame draws with (TakePoolFirsts' rule; the shadow resources' pool is the scene's, the main sites').
 		TakePoolFirsts(*slot, resources.pool.get());
+		TracyCZoneN(sState, "CS.DCLF.Cpu.Shadow.State", true);
 		auto& run = NewBareRun(*slot, Site::Shadow);
 		auto state = std::make_shared<ShadowState>();
 		state->shape = a_inputs.shape;
@@ -214,6 +216,7 @@ namespace DCLF::Direct
 		common.poolFirsts = slot->poolFirsts;
 		const auto& targets = *state->targets;
 		const bool drawable = shape.indirect.valid && common.indexPool.valid() && shape.rows;
+		TracyCZoneEnd(sState);
 		for (const auto& latched : a_inputs.views) {
 			if (!drawable || latched.index >= shape.views.size() || latched.index >= shape.rows->size())
 				continue;
@@ -267,10 +270,13 @@ namespace DCLF::Direct
 			pass.occlusion = occlusion;
 			state->passes.push_back(pass);
 		}
+		ZoneNamedN(sCull, "CS.DCLF.Cpu.Shadow.OnCullFrame", true);
 		OnCullFrame(*slot, [slot, run = &run](const std::shared_ptr<const CullFrame>& a_frame) {
 			run->cullFrame = a_frame;
-			for (auto* view : run->views)
-				DispatchCulls(*slot, *run, *view, a_frame);
+			DispatchSiteCulls(*slot, [slot, run, a_frame] {
+				for (auto* view : run->views)
+					DispatchCulls(*slot, *run, *view, a_frame);
+			});
 		});
 		SetPending(run);
 	}

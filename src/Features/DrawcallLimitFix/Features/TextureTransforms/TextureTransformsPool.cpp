@@ -38,6 +38,7 @@ namespace DCLF::Features::TextureTransforms
 		// Render thread, at Kick: the installed payload's TexcoordOffset rows for the frame's producer.
 		Api::FrameValueInput Kick(const Api::FrameValuePoolKick&)
 		{
+			ZoneScopedN("CS.DCLF.FV.Kick.TextureTransforms");
 			rowsNeeded = std::max<std::uint64_t>(rowsNeeded, (installed ? installed->entries.size() + installed->animatedSlots.size() : 0u) + 1u);
 			return { installed, rowsNeeded };
 		}

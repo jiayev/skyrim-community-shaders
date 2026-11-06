@@ -146,6 +146,7 @@ namespace DCLF::Features::Fades
 		// draws read any.
 		Api::FrameValueInput PixelRowsKick(const Api::FrameValuePoolKick& a_kick)
 		{
+			ZoneScopedN("CS.DCLF.FV.Kick.PixelRows");
 			kickedRows = static_cast<std::uint32_t>(a_kick.objectSlots);
 			return { nullptr, a_kick.objectSlots };
 		}

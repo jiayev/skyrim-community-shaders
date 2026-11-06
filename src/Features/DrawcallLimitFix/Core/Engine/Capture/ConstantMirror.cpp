@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/ConstantMirror.h"
 
 #include <cstring>
+#include <utility>
 
 namespace DCLF
 {
@@ -44,15 +45,16 @@ namespace DCLF
 		auto* entry = Find(reinterpret_cast<const ID3D11Resource*>(a_buffer));
 		if (!entry || !entry->valid)
 			return {};
-		if (entry->lastMapped && !entry->mapped)
-			std::memcpy(entry->bytes.data(), entry->lastMapped, entry->bytes.size());
+		// The mapping's memory stays the writer's last contents after Unmap (DXVK keeps the slice until it is reused).
+		if (entry->unread)
+			std::memcpy(entry->bytes.data(), std::exchange(entry->unread, nullptr), entry->bytes.size());
 		return entry->bytes;
 	}
 
 	void ConstantMirror::OnMap(ID3D11Resource* a_resource, void* a_data)
 	{
 		if (auto* entry = Find(a_resource))
-			entry->mapped = entry->lastMapped = a_data;
+			entry->mapped = a_data;
 	}
 
 	void ConstantMirror::OnUnmap(ID3D11Resource* a_resource)
@@ -60,9 +62,8 @@ namespace DCLF
 		auto* entry = Find(a_resource);
 		if (!entry || !entry->mapped)
 			return;
-		// WRITE_DISCARD: whatever the writer left in the mapping is the buffer's new contents.
-		std::memcpy(entry->bytes.data(), entry->mapped, entry->bytes.size());
-		entry->mapped = nullptr;
+		// WRITE_DISCARD: whatever the writer left in the mapping is the buffer's new contents (copied when read: Contents).
+		entry->unread = std::exchange(entry->mapped, nullptr);
 		entry->valid = true;
 	}
 
@@ -71,11 +72,13 @@ namespace DCLF
 		auto* entry = Find(a_resource);
 		if (!entry || !a_data)
 			return;
+		// A partial update applies over the last mapping's contents.
+		if (entry->unread)
+			std::memcpy(entry->bytes.data(), std::exchange(entry->unread, nullptr), entry->bytes.size());
 		const std::size_t begin = a_box ? a_box->left : 0;
 		const std::size_t end = a_box ? std::min<std::size_t>(a_box->right, entry->bytes.size()) : entry->bytes.size();
 		if (begin < end)
 			std::memcpy(entry->bytes.data() + begin, a_data, end - begin);
-		entry->lastMapped = nullptr;
 		// A partial update only counts once the buffer was fully written before.
 		entry->valid |= !a_box;
 	}

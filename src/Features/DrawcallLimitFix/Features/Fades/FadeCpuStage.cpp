@@ -35,6 +35,7 @@
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
 
 #include <Tracy/Tracy.hpp>
+#include <Tracy/TracyC.h>
 
 #include <algorithm>
 #include <array>
@@ -52,6 +53,20 @@ namespace DCLF::Features::Fades
 		constexpr std::uint32_t kNoObject = ~0u;  // a free root slot's object (FadeStateCS's kNoObject)
 
 		/** @brief What a CPU frame's kick hands its producer (held by the frame's job; no engine reference in it). */
+		/** @brief A drain handed to the producer (HandAnimatedDrainToWorker): dropped with the input if its producer never took it. */
+		struct AnimatedDrainHold
+		{
+			bool pending = false;
+			AnimatedDrainHold() = default;
+			AnimatedDrainHold(const AnimatedDrainHold&) = delete;
+			AnimatedDrainHold& operator=(const AnimatedDrainHold&) = delete;
+			~AnimatedDrainHold()
+			{
+				if (pending)
+					DropAnimatedDrain();
+			}
+		};
+
 		struct CpuStageInput
 		{
 			std::shared_ptr<const Direct::ViewBatchSet> set;
@@ -62,11 +77,13 @@ namespace DCLF::Features::Fades
 			std::shared_ptr<const SceneTables> tables;
 			std::shared_ptr<const EntrySpace> candidates;
 			std::shared_ptr<FadeScene> scene;  // the write-back's ring
-			FadeFrame frame{};
+			// The producer completes the animated batch's fields (TakeAnimatedOnWorker) before it reads them; nothing else reads them.
+			mutable FadeFrame frame{};
 			ShadowCameras::Planes camera;  // the main camera's culling planes (none active: no camera)
 			std::array<float, 4> fadeEye{};
 			std::array<float, 2> treeHeight{};
-			std::vector<std::pair<std::uint32_t, std::uint32_t>> animated;  // (root slot, updates) of the animation job's batch
+			mutable std::vector<AnimatedFadeRoot> animatedRoots;             // the animation job's batch as it queued it (CountAnimated counts it)
+			mutable AnimatedDrainHold animatedDrain;                         // its drain, the producer's (not an observer's)
 			std::shared_ptr<const std::vector<std::uint32_t>> rootPrograms;  // by root slot
 			std::vector<std::uint32_t> programs;  // the main cull input's words, this frame's walk
 			// A GPU-driven frame's (Direct::KickCpuFrameState's a_observer): the stage only reads. It steps routedRoots (the slots the set's
@@ -175,33 +192,51 @@ namespace DCLF::Features::Fades
 			return m.programs;
 		}
 
-		/** @brief The animation job's batch, as FadeCommit.cpp's SampleFadeInputs counts it: a root only where the tables still list that node. */
-		void TakeAnimated(const Api::RootListView& a_list, CpuStageInput& a_input)
+		/**
+		 * @brief The animation job's batch and its inputs (render thread). The roots go to the producer as the job queued them: it counts
+		 * them (CountAnimated), so the render thread neither sorts nor filters them.
+		 */
+		/** @brief The batch's inputs into the frame; an invalid batch is no updates. */
+		void SetAnimated(const CpuStageInput& a_input, const AnimatedFadeInputs& anim)
 		{
-			std::vector<AnimatedFadeRoot> roots;
-			AnimatedFadeInputs anim{};
-			// An observer leaves the frame's batch to FadeStateCS, and steps the copy of the last one it took.
-			TakeObserverAnimatedBatch(roots, anim);
-			if (!a_input.observer) {
-				DrainAnimatedFades();
-				TakeAnimatedBatch(roots, anim);
-			}
+			auto& roots = a_input.animatedRoots;
 			std::copy_n(anim.eye, 3, a_input.frame.animEye);
 			a_input.frame.animLodAdjust = anim.lodAdjust;
 			a_input.frame.animCounter = anim.counter;
 			a_input.frame.animDeltaTime = anim.deltaTime;
 			if (!anim.valid)
+				roots.clear();
+		}
+
+		/**
+		 * @brief Render thread, at the kick. An observer leaves the frame's batch to FadeStateCS, and steps the copy of the last one it
+		 * took, taken here. Otherwise the producer drains the batch (TakeAnimatedOnWorker): the copy of 1,400 queued updates leaves
+		 * the render thread.
+		 */
+		void TakeAnimated(CpuStageInput& a_input)
+		{
+			AnimatedFadeInputs anim{};
+			TakeObserverAnimatedBatch(a_input.animatedRoots, anim);
+			if (a_input.observer) {
+				SetAnimated(a_input, anim);
 				return;
-			std::sort(roots.begin(), roots.end(), [](const auto& a_a, const auto& a_b) { return a_a.slot < a_b.slot; });
-			for (const auto& root : roots) {
-				if (root.slot >= a_list.rows.size() || root.slot >= a_list.nodes.size() || a_list.nodes[root.slot] != root.node ||
-					a_list.rows[root.slot].generation != root.generation)
-					continue;
-				if (!a_input.animated.empty() && a_input.animated.back().first == root.slot)
-					a_input.animated.back().second = std::min(a_input.animated.back().second + 1, kFadeAnimatedCountMask);
-				else
-					a_input.animated.push_back({ root.slot, 1u });
 			}
+			a_input.animatedRoots.clear();
+			HandAnimatedDrainToWorker();
+			a_input.animatedDrain.pending = true;
+		}
+
+		/** @brief The producer, first: the handed-off drain's batch into the input. */
+		void TakeAnimatedOnWorker(const CpuStageInput& a_input)
+		{
+			if (!a_input.animatedDrain.pending)
+				return;
+			ZoneScopedN("CS.DCLF.FadeCpuStage.TakeAnimated");
+			AnimatedFadeInputs anim{};
+			TakeAnimatedBatchOnWorker(a_input.animatedRoots, anim);
+			a_input.animatedDrain.pending = false;
+			SetAnimated(a_input, anim);
+			ZoneValue(a_input.animatedRoots.size());
 		}
 
 		/** @brief The root slots a_set's lanes name, sorted, made once a set. */
@@ -226,10 +261,13 @@ namespace DCLF::Features::Fades
 
 		Api::FrameValueInput CpuStatesKick(const Api::FrameValuePoolKick&)
 		{
+			ZoneScopedN("CS.DCLF.FV.Kick.FadeCpuStates");
+			TracyCZoneN(fadeArm, "CS.DCLF.FV.Kick.Fade.Arm", true);
 			auto arm = Direct::TakeCpuFrameArm();
 			const auto& view = Scene::FrameView::Get();
 			auto tables = view.AcceptedTables();
 			const auto* scene = IndirectDraws::Get().Scene();
+			TracyCZoneEnd(fadeArm);
 			if (!arm.set || !tables || !scene)
 				return { idleInput, stateRows };
 			auto input = std::make_shared<CpuStageInput>();
@@ -244,7 +282,9 @@ namespace DCLF::Features::Fades
 			input->retirement = view.InstalledRetirement();
 			input->scene = SharedSceneOf(*scene);
 			// The frame's inputs as the depth commit samples them for FadeStateCS (SampleFadeInputs), and the camera's culling planes.
+			TracyCZoneN(fadeSample, "CS.DCLF.FV.Kick.Fade.SampleFrame", true);
 			input->frame = FadeState::SampleFrame(nullptr);
+			TracyCZoneEnd(fadeSample);
 			input->fadeEye = FadeState::FadeEye();
 			input->treeHeight = FadeState::TreeHeightTest();
 			std::copy_n(input->fadeEye.data(), 3, input->frame.eye);
@@ -255,10 +295,15 @@ namespace DCLF::Features::Fades
 				input->camera = matrices.frustum;
 			}
 			const auto list = Extensions::RootListOf(*tables);
-			TakeAnimated(list, *input);
-			input->rootPrograms = RootPrograms(*tables);
+			TakeAnimated(*input);
+			{
+				ZoneScopedN("CS.DCLF.FV.Kick.Fade.RootPrograms");
+				input->rootPrograms = RootPrograms(*tables);
+			}
 			if (const auto* cull = Extensions::MainCullInput(); cull && cull->contribution.programWords) {
+				ZoneScopedN("CS.DCLF.FV.Kick.Fade.ProgramWords");
 				const auto words = cull->contribution.programWords();
+				ZoneValue(words.size());
 				input->programs.assign(words.begin(), words.end());
 			}
 			input->tables = std::move(tables);
@@ -269,6 +314,33 @@ namespace DCLF::Features::Fades
 		}
 
 		// ---- Sample (the producer) ----
+
+		// The producer's: each root slot's updates in the frame's animated batch, and the slots it set (cleared by the next count).
+		std::vector<std::uint8_t> animatedCounts;
+		std::vector<std::uint32_t> animatedSlots;
+
+		/**
+		 * @brief The animated batch counted by root slot, as FadeCommit.cpp's SampleFadeInputs counts it: a root only where the tables still
+		 * list that node, its updates capped at kFadeAnimatedCountMask. Order does not matter, so the batch is never sorted.
+		 */
+		std::span<const std::uint8_t> CountAnimated(const CpuStageInput& a_input, const Api::RootListView& a_list)
+		{
+			for (const std::uint32_t slot : animatedSlots)
+				animatedCounts[slot] = 0;
+			animatedSlots.clear();
+			if (animatedCounts.size() < a_list.rows.size())
+				animatedCounts.resize(a_list.rows.size(), 0);
+			for (const auto& root : a_input.animatedRoots) {
+				if (root.slot >= a_list.rows.size() || root.slot >= a_list.nodes.size() || a_list.nodes[root.slot] != root.node ||
+					a_list.rows[root.slot].generation != root.generation)
+					continue;
+				auto& count = animatedCounts[root.slot];
+				if (!count)
+					animatedSlots.push_back(root.slot);
+				count = static_cast<std::uint8_t>(std::min<std::uint32_t>(count + 1u, kFadeAnimatedCountMask));
+			}
+			return std::span<const std::uint8_t>(animatedCounts.data(), a_list.rows.size());
+		}
 
 		/** @brief FadeStateCS's FadeMilestone: faded out, fading or faded in, with the leaf LOD level and transition. */
 		std::uint32_t Milestone(const FadeNodeState& a_state)
@@ -340,8 +412,8 @@ namespace DCLF::Features::Fades
 			FrameStorage& storage;
 			std::vector<FadeNodeState>& states;
 			std::vector<FadeEvent>& events;
-			std::vector<std::uint32_t>& marked;  // the slots whose state changed, for cpuStates.Mark (not thread-safe)
-			std::size_t animatedAt = 0;
+			std::vector<std::uint32_t>& marked;      // the slots whose state changed, for cpuStates.Mark (not thread-safe)
+			std::span<const std::uint8_t> animated;  // updates by root slot (CountAnimated)
 		};
 
 		/** @brief ReportMilestone: a root DCLF writes whose milestone moved appends an event (the list never overflows on the CPU). */
@@ -389,12 +461,7 @@ namespace DCLF::Features::Fades
 					const float entryRadius = a_context.rows[root.object].sunEntry[3];
 					const float radius = entryRadius >= 0.0f && entryRadius < 1e30f ? entryRadius : root.radius;
 					state.verdict = 0;
-					std::uint32_t updates = 0;
-					auto& at = a_context.animatedAt;
-					while (at < input.animated.size() && input.animated[at].first < a_slot)
-						++at;
-					if (at < input.animated.size() && input.animated[at].first == a_slot)
-						updates = input.animated[at].second;
+					const std::uint32_t updates = a_slot < a_context.animated.size() ? a_context.animated[a_slot] : 0u;
 					if (updates)
 						FadeState::AnimatedUpdate(state, root, centre, input.frame, updates);
 					const std::uint32_t program = a_slot < input.rootPrograms->size() ? (*input.rootPrograms)[a_slot] : kPortalNoProgram;
@@ -470,6 +537,8 @@ namespace DCLF::Features::Fades
 				return;
 			}
 			ZoneScopedN("CS.DCLF.FadeCpuStage");
+			TakeAnimatedOnWorker(*input);
+			TracyCZoneN(fPrep, "CS.DCLF.FadeCpuStage.Prepare", true);
 			const bool observer = input->observer;
 			if (!observer)
 				a_producer.BeginBuild(cpuStates);
@@ -496,7 +565,11 @@ namespace DCLF::Features::Fades
 				storage->rootPrograms.clear();
 				storage->programs.clear();
 			} else {
-				CopyRows(rows, *storage);
+				{
+					ZoneScopedN("CS.DCLF.FadeCpuStage.CopyRows");
+					ZoneValue(rows.size());
+					CopyRows(rows, *storage);
+				}
 				storage->rootGenerations.assign(roots, 0u);
 				storage->rootStates.assign(roots, FadeNodeState{});
 				// The members' programs: a root's past this frame's programs takes the frustum alone.
@@ -513,21 +586,23 @@ namespace DCLF::Features::Fades
 			const auto slotAt = [&](std::size_t a_step) { return routed ? routed[a_step] : static_cast<std::uint32_t>(a_step); };
 			// The roots in chunks on the pool (a root's step touches its own slot alone; the culls wait for this stage): each chunk's
 			// events and marks kept apart, then taken in root order, as one pass would make them.
-			constexpr std::size_t kRootGrain = 1024;
+			constexpr std::size_t kRootGrain = 256;
 			const std::size_t chunks = (steps + kRootGrain - 1) / kRootGrain;
 			std::vector<std::vector<FadeEvent>> chunkEvents(chunks);
 			std::vector<std::vector<std::uint32_t>> chunkMarked(chunks);
 			const auto& seeds = ProducerSeeds();
+			const auto animated = CountAnimated(*input, list);
+			TracyCZoneValue(fPrep, steps);
+			TracyCZoneEnd(fPrep);
+			TracyCZoneN(fSteps, "CS.DCLF.FadeCpuStage.Steps", true);
 			SceneScheduler::Executor().ParallelFor("CS.DCLF.FadeCpuStage.Roots", steps, kRootGrain, [&](std::size_t a_begin, std::size_t a_end) {
 				const std::size_t chunk = a_begin / kRootGrain;
-				StepContext context{ *input, list, rows, seeds, *storage, states, chunkEvents[chunk], chunkMarked[chunk] };
-				const std::size_t firstSlot = a_begin < steps ? slotAt(a_begin) : 0u;
-				context.animatedAt = static_cast<std::size_t>(std::lower_bound(input->animated.begin(), input->animated.end(), firstSlot,
-																	[](const auto& a_entry, std::size_t a_slot) { return a_entry.first < a_slot; }) -
-															  input->animated.begin());
+				StepContext context{ *input, list, rows, seeds, *storage, states, chunkEvents[chunk], chunkMarked[chunk], animated };
 				for (std::size_t r = a_begin; r < a_end; ++r)
 					StepRoot(context, slotAt(r));
 			});
+			TracyCZoneEnd(fSteps);
+			ZoneNamedN(fTail, "CS.DCLF.FadeCpuStage.Publish", true);
 			if (!observer) {
 				std::vector<FadeEvent> events;
 				for (std::size_t c = 0; c < chunks; ++c) {

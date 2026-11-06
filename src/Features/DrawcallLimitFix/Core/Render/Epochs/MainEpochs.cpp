@@ -190,7 +190,7 @@ namespace DCLF
 		impl->pending.reset();
 		auto& pipelines = DrawPipelines::Get();
 		auto* lighting = EngineShaders::Lighting();
-		if (failed || !lighting || !pipelines.Enabled() || !FrameIndirectState().valid) {
+		if (failed || !lighting || !pipelines.Enabled() || !FrameIndirectStateValid()) {
 			outcome("failed, no lighting, pipelines off or indirect state invalid, not submitted");
 			capture.Release();
 			return;

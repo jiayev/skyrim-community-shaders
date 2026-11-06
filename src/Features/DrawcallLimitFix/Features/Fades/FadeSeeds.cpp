@@ -91,6 +91,7 @@ namespace DCLF::Features::Fades
 		// Render thread, at Kick: every copy taken since the last kick, for the frame's producer.
 		Api::FrameValueInput FadeSeedsKick(const Api::FrameValuePoolKick&)
 		{
+			ZoneScopedN("CS.DCLF.FV.Kick.FadeSeeds");
 			if (!unsentSeeds.empty()) {
 				auto input = std::make_shared<SeedInput>();
 				input->values = std::exchange(unsentSeeds, {});
