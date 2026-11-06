@@ -129,7 +129,7 @@ namespace DCLF::Scene
 			DropResidentSlot(static_cast<std::uint32_t>(o), false);
 			object.flags = (object.flags & ~(kObjectMember | kObjectSunTest)) | kObjectNoBindings;
 			object.geometryIndex = object.pipelineIndex = object.materialIndex = 0;
-			tables.NoteChange(static_cast<std::uint32_t>(o), kChangeBindings | kChangeGeometry | kChangeStructure);
+			tables.NoteChange(static_cast<std::uint32_t>(o), kChangeBindings | kChangeGeometry);
 		}
 	}
 

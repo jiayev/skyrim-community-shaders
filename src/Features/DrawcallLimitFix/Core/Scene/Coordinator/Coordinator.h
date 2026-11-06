@@ -418,10 +418,8 @@ namespace DCLF
 		 * (PublicationNeeded).
 		 */
 		void RunSceneWork(bool a_task);
-		/** @brief Claims revoked mid-frame since the last call (RevokeUndrawnClaims): geometries, and main phases taken back. */
-		std::pair<std::uint64_t, std::uint64_t> TakeRevokedClaims() { return { std::exchange(revokedGeometries, 0), std::exchange(revokedMain, 0) }; }
-		/** @brief Of them, those revoked for a structural change after the selected revision's join. */
-		std::uint64_t TakeStructureRevocations() { return std::exchange(revokedStructureGeometries, 0); }
+		/** @brief Claims published that their tables do not draw, since the last call (CheckClaimsDrawable): the count and the first. */
+		std::pair<std::uint64_t, std::string> TakeUndrawnClaims() { return { std::exchange(undrawnClaims, 0), std::exchange(undrawnFirst, {}) }; }
 		struct SetStats
 		{
 			std::uint64_t commits = 0, evaluated = 0, joined = 0, left = 0, readinessEvents = 0, resyncs = 0;
@@ -1263,10 +1261,10 @@ namespace DCLF
 		// BuildAccumulatePhase's stages (AccumulatePhase.cpp): the joins run, one join's merge (its pipeline, material, derivation
 		// cache and patch), and the residency the unpatched joins leave.
 		struct JoinFrame;
-		/** @brief The scene pass's end: the actor probe RequestActorProbe asked for (ActorProbe.cpp). */
-		void RunActorProbeIfAsked();
 		struct JoinBinding;
 		void RunJoins(JoinFrame& a_frame);
+		/** @brief The scene pass's end: the actor probe RequestActorProbe asked for (ActorProbe.cpp). */
+		void RunActorProbeIfAsked();
 		void MergeJoin(const OrderEntry& a_entry, JoinResult& a_result, JoinFrame& a_frame);
 		std::uint32_t BindJoinPipeline(const JoinResult& a_result, const LightingDescriptors& a_descriptors, bool a_layer, PartTimer& a_timer);
 		std::uint32_t MakeJoinPipeline(const JoinResult& a_result, const LightingDescriptors& a_descriptors, bool a_layer);
@@ -1426,13 +1424,8 @@ namespace DCLF
 		void EmitShadowSets(bool a_rebuild, std::uint32_t a_moved);
 
 		// The DCLF set and the claims: State/Set.h (CoordinatorSet).
-		/** @brief The structural changes revokeCursor has not read, into structureChanged. */
-		void NoteStructureChanges();
-		/**
-		 * @brief After ApplySet: revokes claimed phases whose record the work stopped drawing (from the change log), so the engine draws
-		 * them.
-		 */
-		void RevokeUndrawnClaims();
+		/** @brief After PublishClaims: counts claimed phases the publication's records do not draw (from the change log). A defect, reported. */
+		void CheckClaimsDrawable();
 		/** @brief The readiness source that releases a waiting reason (SetStats::waitingBy's index). */
 		static constexpr std::uint8_t WaitCauseOf(std::uint32_t a_why)
 		{
@@ -1460,11 +1453,9 @@ namespace DCLF
 		std::size_t TakeClaimsEntry();
 		/** @brief PublishScene, after ApplySet: publicationClaims brought up to setBuilding (or the last shared when it did not change). */
 		void PublishClaims();
-		/** @brief The end of RevokeUndrawnClaims: claimsRevoked out of publicationClaims (a copy first when they were shared). */
-		void RevokeFromClaims();
 		void QueueSet(std::uint32_t a_slot);
 		/**
-		 * @brief Takes a slot out of the applied set's phases after its commit (rebound by the joins, a claim revoked): out of the commit's
+		 * @brief Takes a slot out of the applied set's phases after its commit (rebound by the joins): out of the commit's
 		 * decision and the claims snapshot, queued for the next commit and marked for ApplySet. Otherwise the commit's copy keeps the
 		 * phases and nobody draws the record. A base and its layer leave the main phases together.
 		 */
@@ -1498,8 +1489,6 @@ namespace DCLF
 		std::uint8_t VetoedPhases(std::uint32_t a_slot, std::uint8_t a_phases, bool a_wait, std::uint32_t a_drawn, bool a_live);
 		/** @brief Whether a_slot's entry is vetoed (VetoedPhases' withholding alone: the set parity's). */
 		bool EntryVetoed(std::uint32_t a_slot) const;
-		/** @brief Whether a_slot's structure changed since the last publication's revocation (revokeCursor's unread changes), once a commit. */
-		bool RestructuredSincePublication(std::uint32_t a_slot);
 		/** @brief Whether everything the main phase draws with is ready; a_why: waitingBy's index when not. */
 		bool MainReady(std::uint32_t a_slot, std::uint32_t& a_why) const;
 		/** @brief The CategoryRoot view whose entry a slot's geometry is (a first-person entry's), EngineView::Count for none. */
@@ -1525,7 +1514,7 @@ namespace DCLF
 			a_references.clear();
 		}
 		/**
-		 * @brief The pass's publication: ApplySet, PublishClaims, RevokeUndrawnClaims, PublishTables, then the deltas onto the log before the publication
+		 * @brief The pass's publication: ApplySet, PublishClaims, CheckClaimsDrawable, PublishTables, then the deltas onto the log before the publication
 		 * goes to the snapshot builder, so whoever adopts it finds its node.
 		 */
 		void PublishScene();

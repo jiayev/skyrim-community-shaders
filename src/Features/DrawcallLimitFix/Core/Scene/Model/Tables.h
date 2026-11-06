@@ -41,21 +41,15 @@ namespace DCLF
 		kChangeShadow = 1u << 5,      // shadow technique and reason, sky technique, shadow material and diffuse
 		kChangeGeometry = 1u << 6,    // geometry slot, the draw's geometry half, face stream, the object's geometry
 		kChangeMembership = 1u << 7,  // residency
-		// Noted beside another cause when a scene revision's shapes change: pipelines (buckets and capacities), the geometry half
-		// and partitions (the draws), shadow and occlusion techniques and rejection (the shadow keys).
-		kChangeStructure = 1u << 8,
 	};
 	// No placement, palette or shading: those are FrameValues', never a column.
-	inline constexpr std::uint32_t kChangeCauseCount = 9;
+	inline constexpr std::uint32_t kChangeCauseCount = 8;
 	// What a shadow input carries (IndirectDraws' shadow build). Not placements: a caster's bound and sun entry are its record's.
 	inline constexpr std::uint32_t kShadowChangeCauses = kChangeShadow | kChangeBindings | kChangeGeometry | kChangeSkin | kChangeMembership;
 	// The retired bit keeps its name: kChangeAll notes still count it, and the reports print it.
 	inline constexpr std::array<const char*, kChangeCauseCount> kChangeCauseNames{ "bindings", "lights", "tree", "skin", "extras", "shadow", "geometry",
-		"membership", "structure" };
+		"membership" };
 	inline constexpr std::uint32_t kChangeAll = (1u << kChangeCauseCount) - 1;
-	// What revokes an earlier claim. Not residency (the accumulate phase makes every joiner resident), flags, materials or the
-	// fade distance: the revision's shapes do not size by them.
-	inline constexpr std::uint32_t kStructureCauses = kChangeStructure;
 
 	/** @brief The scene phase's flags the accumulate phase's patch keeps; the rest of an object's flags are the patch's. */
 	inline constexpr std::uint32_t kSceneKeptFlags = kObjectPaletteBlock | kObjectNoShadow | kObjectVolumetricOnly | kObjectShadowOnly;

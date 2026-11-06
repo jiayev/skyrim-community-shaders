@@ -264,11 +264,6 @@ namespace DCLF::Api
 		return coordinator.TrackedStateOf(a_entry);
 	}
 
-	bool CoordinatorComponentContext::RestructuredSincePublication(std::uint32_t a_slot) const
-	{
-		return coordinator.RestructuredSincePublication(a_slot);
-	}
-
 	void CoordinatorComponentContext::Requeue(const void* a_entry, std::uint8_t a_flags) const
 	{
 		const auto it = coordinator.tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(a_entry)));

@@ -516,6 +516,7 @@ These need no parity switch. Most come with `CS_DCLF_STATS=1`.
 | --- | --- | --- |
 | `[DCLF] main camera since the last report: N native passes drawn, N of them set members' ...` | `<- LEAK` | A set member the engine drew in the main camera. Must be 0. Printed in every run. |
 | `[DCLF] persistent draws (last frame, colour): N kept inputs, N sequences, ...` | | Sequences must be thousands in a populated cell, never 0. |
+| `[DCLF] claims published that their records do not draw: N (first: ...)` | `<- UNDRAWN CLAIM` | A claim its publication's tables do not draw (`CheckClaimsDrawable`). Printed only when N > 0. Must never appear: such an object is drawn by nobody until the next publication. |
 | `[DCLF] indirect draws (last frame): N candidates ..., skipped: ...` | | Per reason: `pipeline`, `geometry`, `texture`, `sampler`, `constants`, `capacity`, `not-in-set`, `candidate-only`. `constants` and `texture` must be 0. |
 | `[DCLF] N pairs read constant registers no frame slot supplies (...): their members are not drawn` | (warning) | Every pair of a pipeline whose constant register the commit does not supply is rejected: its members are withheld and drawn by nobody. |
 | `[DCLF] frame textures (last colour epoch): N reads of registers the commit could not resolve, which read zero: ...` | (warning) | A frame texture a pipeline reads that the commit could not resolve. |

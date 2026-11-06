@@ -295,12 +295,12 @@ namespace DCLF::Scene
 			const auto reason = [&](PublishReason a_why) { return p.byReason[static_cast<std::size_t>(a_why)]; };
 			logger::info("[DCLF] publication pacing (W3: a publication only once the snapshot builder took the last, or for the frame's pass): {} full passes over {} frames "
 						 "({:.2f} a frame, max {}), {} publications ({:.2f} a frame, max {}; {} the frame's pass, {} the last taken, {} inline, {} the first), {} passes deferred "
-						 "({} folded into a later publication); claims {} replayed ({:.1f} keys each), {} copied whole, {} shared again, {} revoked; tables' whole-copied rest "
+						 "({} folded into a later publication); claims {} replayed ({:.1f} keys each), {} copied whole, {} shared again; tables' whole-copied rest "
 						 "{:.3f} ms a publication; paced parity {} checks, {} tables differ, {} claims differ{}{}",
 				p.passes, p.frames, static_cast<double>(p.passes) / frames, p.maxPasses, p.published, static_cast<double>(p.published) / frames, p.maxPublished,
 				reason(PublishReason::Frame), reason(PublishReason::Taken), reason(PublishReason::Inline), reason(PublishReason::First), p.deferred, p.folded,
 				p.claimsReplayed, static_cast<double>(p.claimsKeys) / static_cast<double>((std::max)(p.claimsReplayed, std::uint64_t(1))), p.claimsWhole,
-				p.claimsShared, p.claimsRevoked, p.restMs / publications, p.parityChecks, p.parityTables, p.parityClaims,
+				p.claimsShared, p.restMs / publications, p.parityChecks, p.parityTables, p.parityClaims,
 				!p.parityChecks ? "" : (p.parityTables || p.parityClaims) ? " <- PACED PUBLICATION DIFFERS; first: " : " <- OK", p.parityFirst);
 			// The key's words in CurrentPublishKey's order.
 			static constexpr std::array<const char*, std::tuple_size_v<decltype(PublishKey::words)> + 2> kKeyNames{ "tables generation", "change log",

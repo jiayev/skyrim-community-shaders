@@ -56,7 +56,7 @@ namespace DCLF
 		Placements,        // PublishPlacementPlan: the roots taken, and the walk's plan for FrameValues
 		Joins,             // BuildAccumulatePhase, new pipelines' blocks, bindings, lookups
 		Commit,            // CommitSet, after the joins
-		Publish,           // PublishScene: set applied, claims revoked, tables and lookups published
+		Publish,           // PublishScene: set applied, claims checked, tables and lookups published
 		// Nested in the parts above (ScenePartNested): the two halves of each fan-out.
 		EvaluateFanout,    // EvaluateEntry over the round (the pool from 128 entries)
 		EvaluateMerge,     // MergeEntry over the round, in order

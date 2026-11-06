@@ -51,8 +51,7 @@ namespace DCLF::Scene
 		residentPatches.pop_back();
 		residentPos[a_slot] = kNotResident;
 		ComponentsLeft(a_slot);
-		// The scene work's drops reach PrimaryCull as set changes (ApplySet) or as revoked claims (RevokeUndrawnClaims); the
-		// accumulate phase's, at once.
+		// The scene work's drops reach PrimaryCull as set changes (ApplySet); the accumulate phase's, at once.
 		if (a_slot < tables.objectGeometry.size() && tables.objectGeometry[a_slot]) {
 			if (!holdPrimaryNotes)
 				PrimaryCull::Get().NoteMemberLost(tables.objectGeometry[a_slot]);

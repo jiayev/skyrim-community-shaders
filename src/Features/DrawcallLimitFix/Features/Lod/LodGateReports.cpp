@@ -102,9 +102,9 @@ namespace DCLF::Features::Lod::Gates
 			unmirrored, unclassified, noRecord, unbound, waiting.empty() ? "-" : waiting, partial);
 		if (noIncoming)
 			text += fmt::format("; {} open gates lost every incoming root (waiting for a forced release)", noIncoming);
-		text += fmt::format("; {} flips deferred for an incoming record not published yet; reused blocks: {} kept notices, {} geometries released from their "
+		text += fmt::format("; reused blocks: {} kept notices, {} geometries released from their "
 							"hold-out (committed again), {} outgoing tags dropped before their flip",
-			s.structureDeferred, s.keptNotices, s.keptCleared, s.keptUntagged);
+			s.keptNotices, s.keptCleared, s.keptUntagged);
 		auto& observed = state.observed;
 		if (observed.publishHoles)
 			text += fmt::format("; {} flipped incoming geometries not claimed by the flip's own publication, first {} <- GATE HOLE (publication)", observed.publishHoles,

@@ -402,11 +402,9 @@ namespace DCLF::Reports
 				logger::info("[DCLF] set leaves by cause (T6b3d): {} left; scene not built {}, no phase to take part in (freed, ineligible, phases off) {}, not bound (the joins "
 							 "dropped its membership) {}, waiting {} (by the waiting-for index: {}), its layer partner or a phase of the whole object {}",
 					set.left, set.leftBy[0], set.leftBy[1], set.leftBy[2], set.leftBy[3], waitingText.empty() ? "-" : waitingText, set.leftBy[4]);
-				const auto [revoked, revokedMainPhase] = s.TakeRevokedClaims();
-				const auto structural = s.TakeStructureRevocations();
-				logger::info("[DCLF] claims revoked mid-frame (the engine drew them that frame): {} geometries, {} of them in the main phase; {} for a structural change "
-							 "after the selected revision's join",
-					revoked, revokedMainPhase, structural);
+				// A claim the publication cannot draw: a defect (CheckClaimsDrawable). Claims are never taken back from a publication.
+				if (const auto [undrawn, first] = s.TakeUndrawnClaims(); undrawn)
+					logger::warn("[DCLF] claims published that their records do not draw: {} (first: {}) <- UNDRAWN CLAIM", undrawn, first);
 			}
 			// The joins' membership.
 			if (V::residentStats(s).frames) {

@@ -274,22 +274,6 @@ namespace DCLF::Features::Lod::Gates
 					++gate.pending;
 			if (!a_live || gate.pending || gate.unmirrored || gate.incoming.empty())
 				continue;
-			// Ready, but an incoming record not published yet: its structure changed since the last publication's revocation (a record
-			// written or rewritten since: RestructuredSincePublication). The publication this commit makes takes their claims back whole
-			// (RevokeUndrawnClaims: the shapes were made without the change) and claims them only at the next one: a gate flipped on one would
-			// be released with its incoming unclaimed (every incoming geometry of a gate flipped in the pass that wrote its records: <- GATE
-			// HOLE). The flip waits for the commit after that publication (the change log's notes queue the slot there), so the flip's
-			// publication claims every incoming geometry.
-			std::uint32_t unpublishedRecords = 0;
-			for (auto* geometry : gate.incomingGeometries)
-				if (const auto entry = a_context.TrackedStateOf(geometry);
-					entry.tracked && (a_context.RestructuredSincePublication(entry.slot) || a_context.RestructuredSincePublication(entry.layerSlot)))
-					++unpublishedRecords;
-			if (unpublishedRecords) {
-				gate.pending = unpublishedRecords;
-				++gateStats.structureDeferred;
-				continue;
-			}
 			// The flip: the incoming slots' observed phases and the outgoing slots' none, in this commit (the vetoes the settle drops or sets
 			// apply in it); the publication carries it.
 			GateFlip flip;

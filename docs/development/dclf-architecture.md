@@ -627,10 +627,18 @@ phase (`Core/Scene/Model/SceneSet.h`, `Core/Scene/Coordinator/SceneSet.cpp`).
     smaller buffers, as at startup) and a member past it has no build input (`CommitReadinessSources`).
 -   **`ApplySet`** applies the commits inside `PublishScene` into `Tables::setPhases`, the record's `kObjectMember` and the lacking
     counts; a slot freed or reassigned since takes no phase. Records and `setPhases` change only there.
--   **Structural changes.** `kChangeStructure` is noted when what a revision's shapes are made from changes (the record's or draw's
-    pipeline, the geometry half and partitions, the shadow and occlusion techniques). `RevokeUndrawnClaims` takes a slot's claim
-    back whole when it changed structurally since the last publication, or when the work stopped drawing a claimed phase; the next
-    publication claims it again.
+-   **A claim is never taken back.** The commit runs in the pass that publishes, right before the publication, and judges every slot the
+    change log named since the last one (a structural change always carries a cause the commit reads). Nothing writes the tables
+    between them, and the snapshot builder makes the draws, payload and revision from that publication's own tables. So every claim
+    is one its publication draws. `CheckClaimsDrawable` checks this from the change log and reports a claim the records do not draw
+    (`<- UNDRAWN CLAIM`); it hands nothing back to the engine.
+    -   Until 2026-11-06 a revocation (`RevokeUndrawnClaims`, from the async model of October, when claims were installed apart from
+        an older revision) took back any claim whose slot had a structural change since the last publication. That window included
+        the commit's own pass, so every object that joined in the pass that wrote its record was revoked for one publication. A
+        revoked caster was then drawn by nobody in the shadow views the engine no longer culls (the empty light culls, the sun's
+        whole skip), which showed as a one-frame shadow flicker. In the Bannered Mare, Havok clutter (plates, a wine bottle, a book)
+        moves between the cell's nodes as it wakes and sleeps, with DCLF on or off, and every move re-tracks the object. A Whiterun
+        tour revoked 20,194 claims in 30 seconds.
 -   **The claims** (`SetSnapshot`, published to the hooks through `PassCapture::PublishSet` and to DCLF's readers as
     `FrameView::FrameClaims`) are installed with the revision from the same publication, so a frame draws exactly the set its
     claims name.
@@ -726,7 +734,7 @@ hold (`Core/Runtime/KeptState.h`). One implementation each:
     (`Tracked::objectStamp`, `objectId`).
 -   **The change log** (`Tables::changeLog`, a `SharedEventLog<Change>` in `Core/Scene/Model/Tables.h`). Each entry is a slot and its
     `ChangeCause` bits: `kChangeBindings`, `kChangeAncestorValue` (Light Limit Fix's room index), `kChangeSkin`, `kChangeExtras`,
-    `kChangeShadow`, `kChangeGeometry`, `kChangeMembership`, `kChangeStructure`. There is no placement, palette or shading cause:
+    `kChangeShadow`, `kChangeGeometry`, `kChangeMembership`. There is no placement, palette or shading cause:
     those are FrameValues', never a column. `Tables::NoteChange` notes only non-empty causes; writers in full compare columns
     before and after (`ColumnsOf`, `CausesBetween`, `NoteWrite`). `InvalidateChangeLog` makes every reader resync.
 -   **Other logs**: `geometryLog` (geometry slot writes, which `GeometryStore` repacks by), `materialLog` (material version moves),
@@ -2337,9 +2345,8 @@ the incoming blocks for the frames before DCLF claims them, and the engine draws
 -   **The scene side.** The mirror marks each incoming root gated (`SceneMirror::SetGated`), and `HiddenForWalk` ignores a gated node's
     own hidden bit, so the incoming are classified, bound and joined while hidden. An incoming geometry carries `kVetoObserve` (its
     phases recorded, none applied); the outgoing get `kVetoHold` after the flip. A gate flips when no incoming geometry is pending,
-    none is unmirrored, and it has an incoming root. The flip (`GateFlip`) is a component delta on the publication log. A ready gate
-    whose incoming records were written since the last publication waits one commit (structurally changed slots are unclaimed in that
-    publication).
+    none is unmirrored, and it has an incoming root. The flip (`GateFlip`) is a component delta on the publication log, and its
+    publication claims every incoming geometry the commit found ready.
 -   **Adoption.** The frame start hands the installed publications' flips to the component (`Extensions::ComponentsAdopt`), which calls
     `LodGates::Flip` (incoming shown, outgoing hidden) in the frame whose claims are post-swap; outcomes (`LodGates::DrainOutcomes`)
     retire gates, and the next LOD drain releases the outgoing through the engine's own functions. A reattached held block posts a

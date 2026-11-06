@@ -30,7 +30,7 @@ namespace DCLF::Scene
 		std::uint32_t passesDeferred = 0;   // passes deferred since the last publication (folded into the next)
 		std::uint64_t pacedPublications = 0;  // publications that folded deferred passes in (the paced parity's schedule)
 		bool pacedCheckDue = false;           // this publication is the paced parity's (Policy::CheckPacedPublication)
-		std::shared_ptr<SetSnapshot> claimsReference;  // its claims made whole (PublishClaims, RevokeFromClaims), compared after
+		std::shared_ptr<SetSnapshot> claimsReference;  // its claims made whole (PublishClaims), compared after
 		enum class PublishReason : std::uint8_t
 		{
 			First,   // nothing published yet
@@ -52,7 +52,7 @@ namespace DCLF::Scene
 			std::array<std::uint64_t, 6> lookupsMoved{};
 			std::uint32_t frames = 0, lastFrame = ~0u, passesThisFrame = 0, maxPasses = 0, publishedThisFrame = 0, maxPublished = 0;
 			// The claims (PublishClaims): replayed from the phases log (keys replayed), copied whole, or the last shared again.
-			std::uint64_t claimsReplayed = 0, claimsKeys = 0, claimsWhole = 0, claimsShared = 0, claimsRevoked = 0;
+			std::uint64_t claimsReplayed = 0, claimsKeys = 0, claimsWhole = 0, claimsShared = 0;
 			double restMs = 0.0;  // PublishTables' whole-copied rest, per publication summed
 			// The replay (W6): change- and publication-log entries read, material-log entries read, the object slots and material records
 			// copied, slot columns copied and skipped (no cause of the slot's covers the column), contiguous runs copied, replays whose

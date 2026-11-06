@@ -1117,7 +1117,7 @@ namespace DCLF::Scene
 		skinnedObjects.push_back(a_geometry);
 		++stats.lightSkins;
 		if (tables.skinPartitions[slot] != a_result.skinPartitions || tables.skinLodPartitions[slot] != a_result.skinLodPartitions)
-			tables.NoteChange(slot, kChangeSkin | kChangeStructure);
+			tables.NoteChange(slot, kChangeSkin);
 		// The features' components follow a partition change (Features/Decals: blood decals' slots follow the partitions).
 		if (tables.skinPartitions[slot] != a_result.skinPartitions)
 			ComponentsRewritten(slot, false, tables.skinPartitions[slot], a_result.skinPartitions);

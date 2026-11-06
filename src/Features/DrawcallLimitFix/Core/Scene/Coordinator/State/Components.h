@@ -39,9 +39,5 @@ namespace DCLF::Scene
 		// (settleApply, applied after the settle as the commit's own decisions).
 		bool settling = false;
 		std::vector<std::pair<std::uint32_t, std::uint8_t>> settleApply;
-		// The slots whose structure changed since the last publication's revocation (RestructuredSincePublication), read once a commit:
-		// restructuredTaken is reset at the settle.
-		bool restructuredTaken = false;
-		ankerl::unordered_dense::set<std::uint32_t> restructured;
 	};
 }

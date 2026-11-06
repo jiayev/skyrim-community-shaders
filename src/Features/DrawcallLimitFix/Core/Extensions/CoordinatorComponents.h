@@ -152,8 +152,6 @@ namespace DCLF::Api
 		TrackedState TrackedStateOf(const void* a_entry) const;
 		/** @brief A delta the next publication carries for the component (forces one), handed to its adoption (AdoptionContext::deltas). */
 		void PublishDelta(std::shared_ptr<const void> a_delta) const;
-		/** @brief Whether a_slot's structure changed since the last publication's revocation (its claim is taken back by the next one). */
-		bool RestructuredSincePublication(std::uint32_t a_slot) const;
 		/**
 		 * @brief The tracked entries under a_root as the mirror holds the subtree (the tracking walk's), into a_out (appended); a_lacking set
 		 * when the mirror lacks a record of the root or a node under it.
