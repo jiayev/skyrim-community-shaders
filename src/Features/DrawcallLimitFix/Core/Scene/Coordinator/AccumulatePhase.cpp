@@ -1039,7 +1039,9 @@ namespace DCLF::Scene
 		const auto* material = record ? static_cast<const RE::BSShaderMaterial*>(record->material) : nullptr;
 		const bool alphaBelowOne = record && record->materialAlpha < 1.0f;
 		const std::uint32_t alphaState = layer ? 0u : leaf.AlphaState();
-		return derived.valid && derived.alphaState == alphaState && derived.generation == tablesGeneration && derived.geometrySlot == tables.objects[a_slot].geometryIndex &&
+		// A blended fade starting or ending changes the synthetic pass's hint (BlendFading): the binding goes with it.
+		const bool fading = !layer && BlendFading(leaf, record) && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward);
+		return derived.valid && (derived.hint == kFadingHint) == fading && derived.alphaState == alphaState && derived.generation == tablesGeneration && derived.geometrySlot == tables.objects[a_slot].geometryIndex &&
 		       derived.property == property && derived.material == material && derived.fadeState == FadeStateOf(record) &&
 		       derived.alphaBelowOne == alphaBelowOne && derived.interior == frameInterior && derived.pipelineSlot == tables.objects[a_slot].pipelineIndex &&
 		       derived.materialSlot == tables.objects[a_slot].materialIndex;

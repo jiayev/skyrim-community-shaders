@@ -1763,7 +1763,24 @@ root's fade (Features/Fades; `Core/Scene/Model/Records.h`, `FadeRootStatic`; `Fa
     material's alpha; the object record names the root (`recordFlags` bits 9-31 = root slot + 1); the frame record binds the states
     at t120 and the static rows at t119. A generation-0 row means no fade. The Z-prepass reads the same row, so it tests the same
     alpha.
--   **Blended fades** (hint 9) are drawn in their opaque group with the faded alpha: DCLF has no blended pass for them.
+-   **Blended fades** (hint 9). While a member's fade node is fading (the mirror's `currentFade` below 1) and the fade is not a
+    screen-door fade of an unblended property, the engine draws its pass in geometry group 7 (`FUN_1414b3390`, right before the
+    blended list): blended with the alpha property's mode, else mode 1; depth tested, never written; no shadow bits, no depth pass.
+    DCLF follows it with the binding. The synthetic pass gives such a member hint 9 (`BlendFading`, `PrimaryCull::SyntheticPass`),
+    and `DeriveForward` makes it a forward key with that state, so the forward epoch draws it while the fade lasts. Each member lists
+    its fade node in `propertyDependents`, and the mirror apply marks the node changed when `currentFade` crosses 1 or its door byte
+    changes, so the members bind again at the start and end of a fade. The binding lags a publication at each end, while the alpha is
+    near 1.
+    -   **Two differences from the engine.** A fading part writes depth when its property has `kZBufferWrite`, and a fading root's parts
+        sort as one group at the fade node's centre, last child first (`StoreForwardSort`). The engine writes no depth there and relies on
+        its group 7 order to hide an actor's back parts. Sorted by each part's own bound with no depth, DCLF's faded NPCs drew their
+        head as a dark mask over the hair and under the mouth (the "black face" seen on NPCs fading in after a cell load), and no
+        fixed order hides both. Checked with `dclf:npc-alpha` at 0.9 and 0.5 against the engine (`dclf:actors=0`) in the Bannered Mare.
+    -   **Not a difference: shadow lights.** A fading pass has no shadow lights (`numShadowLights` 0, measured on the engine's own
+        pass), so Light Limit Fix ignores every shadow-casting light for it, the engine's draw and DCLF's alike. An NPC fading in by
+        a shadowed hearth is lit by ambient and the unshadowed lights alone, in both.
+-   **The alpha test's reference** takes the fade, as the engine's does (`FUN_14150bae0`: `int(threshold * property alpha) / 255`):
+    the pixel row scales it by the faded alpha (`DCLFPixelObjectRowOf`), so a fading cut-out keeps its shape.
 
 ### DCLF as the single fade writer
 
@@ -1787,7 +1804,8 @@ milestones are written back onto them (`Features/Fades/FadeRecords.h`, `FadeScen
 -   For each root DCLF writes, FadeStateCS appends a `FadeEvent` to `cs.dclf.fade-events` when its milestone changes from the one in
     `cs.dclf.fade-reported`. The event carries root, generation, flags, `currentFade`, `levels` (`+0x152 | +0x153 << 8`) and `blend`
     (`+0x14C`). A milestone is faded out, fading or faded in, combined with the leaf LOD level (`+0x152 & 0xF`) and transition
-    (`+0x153 & 0x70`), so a level step and its settling are events; blend steps are not.
+    (`+0x153 & 0x70`), so a level step and its settling are events; blend steps are not. A root that is not stood in has parts the
+    engine draws, which read the node's fade, so while it fades each of 32 fade steps is a milestone too.
 -   The `fades.events` copy pass takes the list to the host on the `HostEventRing` scheme (one host buffer per frame slot, harvest
     then arm, staging sets kept, growth by `wanted`); the depth commit writes the list header whether or not anything is appended
     (`FadeCommit.cpp`).
@@ -2842,7 +2860,7 @@ stand-ins and the engine boundary are the GPU path's: the same objects are DCLF'
     DCLF's retirement clock counts those signals with the host's submissions (`Core/Runtime/FrameRetirement.h`).
 
 **The modes and cadences.**
--   `dclf:cpu-record=indirect` (the default): each cull job writes its batch's draws into its frame slot's draw buffer
+-   `dclf:cpu-record=indirect` (the default off NVIDIA; NVIDIA defaults to `serial`, whose pushed colour saves 0.21 ms of GPU time on an RTX 5080): each cull job writes its batch's draws into its frame slot's draw buffer
     (`Direct/Recorder.h`, `IndirectDraw`), and the CS thread records one indirect draw per run of a pipeline. An indirect draw cannot
     push per draw, so a draw's instance names its record, which holds its sequence's index and its object word
     (`kDirectFlagDrawRecords`, `DCLFDrawSequence`). Colour therefore always uses the pulled pipelines; `kExpPushedColour` and

@@ -1143,11 +1143,11 @@ namespace DCLF
 		const std::uint64_t flags = lighting->flags;
 		const bool blended = a_leaf.AlphaBlending();
 		// Settled state, not the current fade: GetRenderPasses (1414adfb0) draws a screen-door fade of an unblended opaque material
-		// as the plain opaque pass with alpha = materialAlpha. Translucent objects take hints 1 and 9; not modelled.
+		// as the plain opaque pass with alpha = materialAlpha. A blended fade (hint 9) is BlendFading's, below.
 		const bool translucent = lighting->materialAlpha < 1.0f || blended;
 		// The bits taken inside a cascade; BuildDraws drops them on a miss (kObjectSunTest). A layer takes none: the registrations
 		// write light masks on the main property alone (FUN_1414b2140).
-		const std::uint32_t sun = a_layer ? 0u : SunShadowStatic(a_leaf);
+		std::uint32_t sun = a_layer ? 0u : SunShadowStatic(a_leaf);
 		std::uint32_t hint = 0;
 		syntheticFail = a_layer ? 4 : 5;
 		if (a_layer) {
@@ -1164,7 +1164,12 @@ namespace DCLF
 			hint = 4;
 		} else if (flags & 0xc000000ull)
 			hint = translucent ? 3 : 2;  // the decal groups
-		else if (translucent && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward))
+		else if (BlendFading(a_leaf, lighting) && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward)) {
+			// The root is fading: the engine's fading pass (hint 9), drawn by the forward epoch while the fade lasts. Translucent,
+			// so GetRenderPasses gives it no shadow bits.
+			hint = kFadingHint;
+			sun = 0;
+		} else if (translucent && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward))
 			return false;
 		else if (translucent)
 			hint = 1;  // the blended group (FUN_1414b2330's hint 1), drawn by the forward epoch

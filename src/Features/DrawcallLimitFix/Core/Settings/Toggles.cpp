@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <dxgi.h>
 #include <string>
 #include <vector>
 
@@ -94,6 +95,34 @@ namespace DCLF
 			return a_info.member ? SwitchValue(a_info.seed) : SwitchValue(a_info.registeredSeed);
 		}
 
+		/**
+		 * @brief The record mode with no CS_DCLF_CPU_RECORD: serial on NVIDIA, indirect elsewhere.
+		 *
+		 * Indirect colour needs the pulled pipelines, and on an RTX 5080 their record lookup takes 0.21 ms of a frame's GPU time, with the same
+		 * instructions and pixels. Recording each draw there costs the CS thread about 0.4 ms in Dev-Fast. On an RX 6600 the driver's recording
+		 * costs far more than that, so it keeps indirect. Toggles seed before the game's device exists, so this asks DXGI for the largest adapter.
+		 */
+		Direct::RecordMode DefaultRecordMode()
+		{
+			static const Direct::RecordMode mode = [] {
+				winrt::com_ptr<IDXGIFactory1> factory;
+				if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(factory.put()))))
+					return Direct::RecordMode::Indirect;
+				UINT vendor = 0;
+				SIZE_T largest = 0;
+				winrt::com_ptr<IDXGIAdapter1> adapter;
+				for (UINT i = 0; factory->EnumAdapters1(i, adapter.put()) != DXGI_ERROR_NOT_FOUND; ++i, adapter = nullptr) {
+					DXGI_ADAPTER_DESC1 desc{};
+					if (SUCCEEDED(adapter->GetDesc1(&desc)) && desc.DedicatedVideoMemory > largest) {
+						largest = desc.DedicatedVideoMemory;
+						vendor = desc.VendorId;
+					}
+				}
+				return vendor == 0x10DE ? Direct::RecordMode::Serial : Direct::RecordMode::Indirect;
+			}();
+			return mode;
+		}
+
 		ToggleSet FromSwitches()
 		{
 			ToggleSet set;
@@ -102,7 +131,10 @@ namespace DCLF
 			if (const auto& pipeline = SwitchValue(Switch::CpuPipeline); !pipeline.empty() && !ApplyPipeline(set, pipeline))
 				logger::warn("[DCLF] CS_DCLF_PIPELINE={}: not a pipeline (auto, manual, gpu, cpu); auto", pipeline);
 			const auto& record = SwitchValue(Switch::CpuRecord);
-			set.cpuRecord = static_cast<std::uint8_t>(record == "parallel" ? Direct::RecordMode::Parallel : record == "serial" ? Direct::RecordMode::Serial : Direct::RecordMode::Indirect);
+			set.cpuRecord = static_cast<std::uint8_t>(record == "parallel" ? Direct::RecordMode::Parallel :
+													  record == "serial"   ? Direct::RecordMode::Serial :
+													  record == "indirect" ? Direct::RecordMode::Indirect :
+																			 DefaultRecordMode());
 			if (const auto& cadence = SwitchValue(Switch::CpuCadence); !cadence.empty() && !ApplyCpuCadence(set, cadence))
 				logger::warn("[DCLF] CS_DCLF_CPU_CADENCE={}: a view or value it names is unknown (views: main, decal, forward, refraction, sun, spot, point, sky, "
 							 "precipitation, reflection, first-person; values: frame, snapshot)",

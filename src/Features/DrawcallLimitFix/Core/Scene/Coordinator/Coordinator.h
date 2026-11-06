@@ -267,6 +267,11 @@ namespace DCLF
 		bool ScenePumpFailed() const;
 		/** @brief The test harness's (dclf:kill-scene-pump): the next scene pass throws past its handler, so the pump stops for good. */
 		void ThrowNextScenePass();
+		/**
+		 * @brief Any thread (dclf:actor-probe, CS_DCLF_ACTOR_PROBE): the next scene pass logs, per actor in the tables, how DCLF binds
+		 * its geometry (records, fade state against the binding's hint, forward or deferred descriptors, verdicts), naming what looks wrong.
+		 */
+		void RequestActorProbe(std::string a_label);
 
 		// Scene members (dclf-architecture.md, "Eligibility and classification"): a member's accumulated half is patched once from its membership pass and kept across
 		// frames until a rewrite breaks its binding, a release or a failed patch.
@@ -1258,6 +1263,8 @@ namespace DCLF
 		// BuildAccumulatePhase's stages (AccumulatePhase.cpp): the joins run, one join's merge (its pipeline, material, derivation
 		// cache and patch), and the residency the unpatched joins leave.
 		struct JoinFrame;
+		/** @brief The scene pass's end: the actor probe RequestActorProbe asked for (ActorProbe.cpp). */
+		void RunActorProbeIfAsked();
 		struct JoinBinding;
 		void RunJoins(JoinFrame& a_frame);
 		void MergeJoin(const OrderEntry& a_entry, JoinResult& a_result, JoinFrame& a_frame);

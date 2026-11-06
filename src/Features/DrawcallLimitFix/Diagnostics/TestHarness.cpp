@@ -286,6 +286,87 @@ namespace DCLF
 							});
 						return;
 					}
+					// "dclf:face-npc=<n>": the player placed 110 units in front of the n-th nearest loaded actor (0 the nearest), facing it,
+					// on the main thread, so a scripted run sees an NPC's face wherever a coc lands.
+					if (command.rfind("dclf:face-npc=", 0) == 0) {
+						// "=<n>,<distance>,<side>": that far in front, and that far to the NPC's right (a third-person camera sees past the player).
+						const std::string args = command.substr(14);
+						const auto index = static_cast<std::size_t>(std::strtoul(args.c_str(), nullptr, 10));
+						float distance = 110.0f, side = 0.0f;
+						if (const auto comma = args.find(','); comma != std::string::npos) {
+							distance = std::strtof(args.c_str() + comma + 1, nullptr);
+							if (const auto second = args.find(',', comma + 1); second != std::string::npos)
+								side = std::strtof(args.c_str() + second + 1, nullptr);
+						}
+						if (auto* tasks = SKSE::GetTaskInterface())
+							tasks->AddTask([index, distance, side] {
+								auto* player = RE::PlayerCharacter::GetSingleton();
+								auto* lists = RE::ProcessLists::GetSingleton();
+								if (!player || !lists)
+									return;
+								std::vector<std::pair<float, RE::Actor*>> actors;
+								for (auto& handle : lists->highActorHandles) {
+									auto actor = handle.get();
+									if (actor && actor.get() != player && !actor->IsDead() && actor->GetParentCell() == player->GetParentCell())
+										actors.emplace_back(actor->GetPosition().GetDistance(player->GetPosition()), actor.get());
+								}
+								std::sort(actors.begin(), actors.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+								if (index >= actors.size()) {
+									logger::info("[DCLF] face-npc: {} actors loaded, none at {}", actors.size(), index);
+									return;
+								}
+								auto* actor = actors[index].second;
+								const float heading = actor->GetAngleZ();
+								auto position = actor->GetPosition();
+								position.x += std::sin(heading) * distance + std::cos(heading) * side;
+								position.y += std::cos(heading) * distance - std::sin(heading) * side;
+								player->SetPosition(position, true);
+								player->SetHeading(heading + RE::NI_PI);
+								logger::info("[DCLF] face-npc: {} ({:08X}) at {} units, player placed at ({:.0f} {:.0f} {:.0f})", actor->GetDisplayFullName(), actor->GetFormID(),
+									actors[index].first, position.x, position.y, position.z);
+							});
+						return;
+					}
+					// "dclf:npc-alpha=<n>,<alpha>": Actor::SetAlpha on the n-th nearest loaded actor (a fade, as an invisibility effect makes one).
+					if (command.rfind("dclf:npc-alpha=", 0) == 0) {
+						const std::string args = command.substr(15);
+						const auto index = static_cast<std::size_t>(std::strtoul(args.c_str(), nullptr, 10));
+						const auto comma = args.find(',');
+						const float alpha = comma == std::string::npos ? 1.0f : std::strtof(args.c_str() + comma + 1, nullptr);
+						if (auto* tasks = SKSE::GetTaskInterface())
+							tasks->AddTask([index, alpha] {
+								auto* player = RE::PlayerCharacter::GetSingleton();
+								auto* lists = RE::ProcessLists::GetSingleton();
+								if (!player || !lists)
+									return;
+								std::vector<std::pair<float, RE::Actor*>> actors;
+								for (auto& handle : lists->highActorHandles)
+									if (auto actor = handle.get(); actor && actor.get() != player && actor->GetParentCell() == player->GetParentCell())
+										actors.emplace_back(actor->GetPosition().GetDistance(player->GetPosition()), actor.get());
+								std::sort(actors.begin(), actors.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+								if (index < actors.size()) {
+									actors[index].second->SetAlpha(alpha);
+									logger::info("[DCLF] npc-alpha: {} ({:08X}) set to {}", actors[index].second->GetDisplayFullName(), actors[index].second->GetFormID(), alpha);
+								}
+							});
+						return;
+					}
+					// "dclf:menu=<menu name>=show|hide": a menu opened or closed through the UI message queue (e.g. "Journal Menu", the
+					// system menu Escape opens), so a scripted run pauses the game as a player does.
+					if (command.rfind("dclf:menu=", 0) == 0) {
+						const auto rest = command.substr(10);
+						const auto equals = rest.rfind('=');
+						if (equals != std::string::npos)
+							if (auto* queue = RE::UIMessageQueue::GetSingleton())
+								queue->AddMessage(RE::BSFixedString(rest.substr(0, equals)),
+									rest.substr(equals + 1) == "show" ? RE::UI_MESSAGE_TYPE::kShow : RE::UI_MESSAGE_TYPE::kHide, nullptr);
+						return;
+					}
+					// "dclf:actor-probe=<label>": the next scene pass logs how DCLF binds each actor's geometry (Coordinator::RequestActorProbe).
+					if (command.rfind("dclf:actor-probe", 0) == 0) {
+						Scene::Coordinator::Get().RequestActorProbe(command.size() > 17 ? command.substr(17) : std::string{});
+						return;
+					}
 					// "dclf:kill-scene-pump": the scene pump stopped for good, as a pass throwing past its handler stops it, for the watchdog
 					// (DrawcallLimitFix::WatchScenePump) to hand the game back.
 					if (command == "dclf:kill-scene-pump") {

@@ -229,6 +229,7 @@ namespace DCLF::Scene
 			// set its publication is committed under), never the frame's or the live ones; its pool chunks bind the same (ShardScope).
 			ToggleSnapshotScope toggles(&passSnapshot.toggles);
 			RunSceneWork(!a_inline);
+			RunActorProbeIfAsked();
 		} catch (const std::exception& e) {
 			// Never out of the drain (the pump would close for good): the pass's flags put back, the next wake runs another.
 			if (pumpStats.failed++ < 4)

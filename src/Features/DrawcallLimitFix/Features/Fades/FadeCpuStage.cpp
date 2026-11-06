@@ -342,11 +342,15 @@ namespace DCLF::Features::Fades
 			return std::span<const std::uint8_t>(animatedCounts.data(), a_list.rows.size());
 		}
 
-		/** @brief FadeStateCS's FadeMilestone: faded out, fading or faded in, with the leaf LOD level and transition. */
-		std::uint32_t Milestone(const FadeNodeState& a_state)
+		/**
+		 * @brief FadeStateCS's FadeMilestone: faded out, fading or faded in, with the leaf LOD level and transition. A root that is not
+		 * stood in has parts the engine draws, which read the node's fade: while it fades, each of 32 fade steps is a milestone too.
+		 */
+		std::uint32_t Milestone(const FadeNodeState& a_state, std::uint32_t a_rootBits)
 		{
 			const std::uint32_t fade = a_state.currentFade <= 0.0f ? 0u : (a_state.currentFade >= 1.0f ? 2u : 1u);
-			return fade | ((a_state.levels & 0xFu) << 2) | (((a_state.levels >> 12) & 0x7u) << 6);
+			const std::uint32_t step = fade == 1u && !(a_rootBits & kFadeRootStoodIn) ? std::min(static_cast<std::uint32_t>(a_state.currentFade * 32.0f), 31u) : 0u;
+			return fade | ((a_state.levels & 0xFu) << 2) | (((a_state.levels >> 12) & 0x7u) << 6) | (step << 9);
 		}
 
 		/** @brief The cull test without a program (FrustumInView): always-draw passes untested, else the camera's planes. */
@@ -421,8 +425,8 @@ namespace DCLF::Features::Fades
 		{
 			auto& last = reported[a_root];
 			if (last.first != a_row.generation)
-				last = { a_row.generation, Milestone(a_row.initial) };
-			const std::uint32_t milestone = Milestone(a_state);
+				last = { a_row.generation, Milestone(a_row.initial, a_row.bits) };
+			const std::uint32_t milestone = Milestone(a_state, a_row.bits);
 			if ((a_row.bits & kFadeRootWritten) && last.second != milestone) {
 				FadeEvent event;
 				event.root = a_root;

@@ -139,12 +139,25 @@ namespace DCLF
 			if (!blended)
 				if (const auto* lighting = netimmerse_cast<RE::BSLightingShaderProperty*>(data.shaderProperty.get()); lighting && lighting->material)
 					blended = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material)->materialAlpha < 1.0f;
-			if (!blended)
+			// A part of a root that is fading (the engine's fading pass, hint 9) draws with its root's parts as one group at the fade
+			// node's centre, last child first. FUN_1414b2330 inserts hint 9 into geometry group 7 (FUN_1414f5090 at 0x1414b2543),
+			// which FUN_1414b3390 draws before the blended list; the engine's faded actors draw the head over the mouth and the hair
+			// and the clothes over the body, which is the reverse of the order under the node. Sorted by each part's own bound
+			// instead, a faded head drew as a dark mask over the hair and under the mouth.
+			const RE::NiNode* fading = nullptr;
+			if (const auto* property = data.shaderProperty.get(); property && property->fadeNode &&
+				const_cast<RE::BSFadeNode*>(property->fadeNode)->GetRuntimeData().currentFade < 1.0f)
+				fading = property->fadeNode;
+			if (!blended && !fading)
 				return;
-			const auto* ordered = NearestOrderedNode(a_geometry);
+			const RE::NiNode* ordered = NearestOrderedNode(a_geometry);
+			if (!ordered)
+				ordered = fading;
 			std::uint32_t index = 0;
 			if (!ordered || !OrdinalUnder(*ordered, a_geometry, index))
 				return;
+			if (ordered == fading)
+				index = 0xFFFFu - (std::min)(index, 0xFFFEu);
 			const auto& bound = ordered->worldBound;
 			a_out[0] = bound.center.x;
 			a_out[1] = bound.center.y;

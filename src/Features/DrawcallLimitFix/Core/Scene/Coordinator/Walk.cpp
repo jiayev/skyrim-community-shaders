@@ -1199,6 +1199,16 @@ namespace DCLF::Scene
 				List(propertyDependents, propertyDependentsAt, emittance, a_geometry);
 			a_tracked.listedEmittance = emittance;
 		}
+		// The property's fade node: its currentFade crossing 1 (or its door byte) changes the synthetic pass's hint (BlendFading).
+		const auto* fadeRecord = lighting && lighting->fadeNode ? leaf.FadeNodeOf(lighting) : nullptr;
+		const void* fadeNode = fadeRecord ? fadeRecord->key : nullptr;
+		if (fadeNode != a_tracked.listedFadeNode) {
+			if (a_tracked.listedFadeNode)
+				Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedFadeNode, a_geometry);
+			if (fadeNode)
+				List(propertyDependents, propertyDependentsAt, fadeNode, a_geometry);
+			a_tracked.listedFadeNode = fadeNode;
+		}
 		// A multi-index shape's layer property.
 		const void* layer = leaf.geometry ? leaf.geometry->Layer() : nullptr;
 		if (layer != a_tracked.listedLayerProperty) {
@@ -1220,6 +1230,9 @@ namespace DCLF::Scene
 			Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedEmittance, a_geometry);
 		if (a_tracked.listedLayerProperty)
 			Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedLayerProperty, a_geometry);
+		if (a_tracked.listedFadeNode)
+			Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedFadeNode, a_geometry);
+		a_tracked.listedFadeNode = nullptr;
 		a_tracked.listedProperty = nullptr;
 		a_tracked.listedAlpha = nullptr;
 		a_tracked.listedEmittance = nullptr;
@@ -2063,6 +2076,7 @@ namespace DCLF::Scene
 			entry.bucket = Tracked::kNoBucket;
 			entry.listedProperty = nullptr;
 			entry.listedAlpha = nullptr;
+			entry.listedFadeNode = nullptr;
 		}
 		BuildFullOrder();
 	}

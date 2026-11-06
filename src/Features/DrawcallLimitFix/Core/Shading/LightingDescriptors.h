@@ -281,6 +281,16 @@ namespace DCLF
 		return (a_subPass == 1 || a_subPass == 3 || a_subPass == 4) ? (a_descriptor | kPassDoAlphaTest) : a_descriptor;
 	}
 
+	/** @brief GetRenderPasses' hint for a fading pass (geometry group 7, drawn blended right before the blended list). */
+	inline constexpr std::uint32_t kFadingHint = 9;
+
+	/**
+	 * @brief GetRenderPasses' (AE 0x1414adfb0) hint 9 for a main pass: the property's fade node is fading (the mirror's currentFade below 1),
+	 * it is not a decal, refraction or bit-19 property, and it is not a screen-door fade of an unblended property. The engine draws such a
+	 * pass blended, with no depth write and no shadow bits. DCLF's members follow it while their root fades.
+	 */
+	bool BlendFading(const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord* a_property);
+
 	/** @brief The engine's alphaBlendWriteMode for the blended group (FUN_1414b3390 sets 11 before FUN_1414b39d0's draws). */
 	inline constexpr std::uint32_t kForwardWriteMode = 11;
 

@@ -502,8 +502,22 @@ namespace DCLF::Scene
 
 		// A mirror update, its record moved into the mirror; the trait and skin inputs it names and its hidden store noted.
 		void ApplyMirrorUpdate(SceneMirror& a_mirror, SceneTracker::Event& a_event, ankerl::unordered_dense::set<const void*>& a_mirrorMotionNodes,
-			ankerl::unordered_dense::set<const void*>& a_mirrorSkinGeometries, std::vector<CoordinatorHidden::BatchHidden>& a_batchHidden)
+			ankerl::unordered_dense::set<const void*>& a_mirrorSkinGeometries, std::vector<CoordinatorHidden::BatchHidden>& a_batchHidden,
+			std::vector<const void*>& a_fadeChanged)
 		{
+			// A fade node's currentFade crossing 1, or its door byte changing: its members' synthetic pass changes hint (BlendFading). The
+			// node is their listed key (ListDependents), so it goes in as a property event.
+			using Node = SceneCapture::NodeRecord;
+			const void* fadeKey = nullptr;
+			bool fadingBefore = false;
+			std::uint8_t doorBefore = 0;
+			if (a_event.update.fields & (Node::kFadeCurrent | Node::kFadeDoor))
+				if (const auto* record = std::get_if<Node>(&a_event.update.record))
+					if (const auto* before = a_mirror.Node(record->key)) {
+						fadeKey = record->key;
+						fadingBefore = before->currentFade < 1.0f;
+						doorBefore = before->fadeDoor;
+					}
 			// The update's record is the mirror's to keep from here (moved; the event's fields, leaf, sequence and site stay).
 			const auto* hidden = a_event.update.hiddenSite != ~0u ? std::get_if<SceneCapture::NodeRecord>(&a_event.update.record) : nullptr;
 			const CoordinatorHidden::BatchHidden hiddenEvent = hidden ? CoordinatorHidden::BatchHidden{ hidden->key, a_event.update.hiddenSite, (hidden->flags & 1u) != 0, a_event.update.sequence } : CoordinatorHidden::BatchHidden{};
@@ -518,6 +532,9 @@ namespace DCLF::Scene
 			// A hidden store, for DrainHiddenEvents (same batch as the mirror's bit).
 			if (hidden)
 				a_batchHidden.push_back(hiddenEvent);
+			if (fadeKey)
+				if (const auto* after = a_mirror.Node(fadeKey); after && ((after->currentFade < 1.0f) != fadingBefore || after->fadeDoor != doorBefore))
+					a_fadeChanged.push_back(fadeKey);
 		}
 	}
 
@@ -577,7 +594,7 @@ namespace DCLF::Scene
 					ComponentsStacked(Api::EngineChannelId{ event->stackedChannel },
 						Api::Stacked{ event->stackedToken, event->stackedPinned, event->stackedNamed, event->stampNs, event->stampFrame });
 				} else {
-					ApplyMirrorUpdate(mirror, *event, mirrorMotionNodes, mirrorSkinGeometries, batchHidden);
+					ApplyMirrorUpdate(mirror, *event, mirrorMotionNodes, mirrorSkinGeometries, batchHidden, propertyChanged);
 				}
 			}
 		};
