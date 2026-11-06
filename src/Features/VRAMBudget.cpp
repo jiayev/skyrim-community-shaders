@@ -1,5 +1,8 @@
 #include "VRAMBudget.h"
 
+#include "TextureStreaming/Streamer.h"
+#include "Vram/DxvkMemory.h"
+
 #include "Menu.h"
 #include "Utils/UI.h"
 
@@ -7,7 +10,8 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VRAMBudget::Settings,
-	ThresholdPercent)
+	ThresholdPercent,
+	DeferTextureAllocation)
 
 namespace
 {
@@ -136,7 +140,15 @@ void VRAMBudget::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("threshold_tooltip"),
 							  "Share of the GPU's VRAM budget above which the oldest cached cells are unloaded. "
-							  "100% leaves the game's own cell caching alone."));
+							  "100% leaves the game's own cell caching alone. "
+							  "Above it, DXVK also stops keeping free space in its memory blocks."));
+	}
+
+	ImGui::Checkbox(T(TKEY("defer_texture_allocation"), "Allocate Textures on First Use"), &settings.DeferTextureAllocation);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T(TKEY("defer_texture_allocation_tooltip"),
+							  "Render targets take no VRAM until something uses them, as with native D3D11. "
+							  "Takes effect after a restart."));
 	}
 
 	ImGui::Text(T(TKEY("usage"), "VRAM use: %.0f of %.0f MiB"), usage.load() / kMiB, budget.load() / kMiB);
@@ -149,6 +161,9 @@ void VRAMBudget::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	settings.ThresholdPercent = std::clamp(settings.ThresholdPercent, 50.0f, 100.0f);
+	// Settings load before the device is made, which is when DXVK reads this. An environment value from a test stays.
+	if (!settings.DeferTextureAllocation)
+		SetEnvironmentVariableA("DXVK_DEFER_TEXTURE_ALLOCATION", "0");
 }
 
 void VRAMBudget::SaveSettings(json& o_json)
@@ -163,6 +178,8 @@ void VRAMBudget::RestoreDefaultSettings()
 
 void VRAMBudget::EarlyPrepass()
 {
+	Vram::SetDxvkDefragPressure(settings.ThresholdPercent);
+
 	// Only the cadence lives here; the controller runs on the main thread, as an SKSE task, one at a time.
 	const std::int64_t now = Now();
 	std::int64_t due = nextTick.load(std::memory_order_relaxed);
@@ -186,7 +203,9 @@ bool VRAMBudget::Sample()
 	if (!adapter || FAILED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)) || !info.Budget)
 		return false;
 	usage = info.CurrentUsage;
-	budget = info.Budget;
+	// A streaming budget above the driver's is room to use, not a reason to unload cells.
+	const std::uint64_t streaming = TextureStreaming::Active() ? std::uint64_t(TextureStreaming::GetSettings().budgetMB) << 20 : 0;
+	budget = std::max<std::uint64_t>(info.Budget, streaming);
 	return true;
 }
 

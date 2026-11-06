@@ -9,6 +9,10 @@
 
 #include "RenderGraph/DxvkOrgInterop.h"
 #include "RenderGraph/RenderGraphRuntime.h"
+#include "TextureStreaming/Census.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/TextureFeedback.h"
+#include "TextureStreaming/Streamer.h"
 
 #include <OpenRenderGraph/GraphHost.h>
 #include <Render/BindingTable.h>
@@ -230,6 +234,7 @@ namespace DCLF
 			// the old storage once superseded).
 			std::uint64_t cookie = 0, storageSerial = 0;
 			bool pinned = false;
+			const void* window = nullptr;  // a streamed texture's: the window imported (an identity)
 			std::uint32_t sourceTag = ~0u;  // who first asked for it (ResolveBinding's tags), for DescribeSuperseded
 			std::weak_ptr<ImportedBacking> backing;
 			// The fields above are the importing thread's until it stores the state (release); a lookup reads it first.
@@ -451,12 +456,43 @@ namespace DCLF
 			return Found::Unknown;
 		}
 
+		// A streamed texture's shell has no storage of its own: the import is of its current window (the entry stays keyed by the shell). A view
+		// that was not gated (a frame texture, or a load that lost its race) makes its base now, on this thread. False: no window can be made.
+		static bool StreamedWindow(Entry& a_entry, winrt::com_ptr<ID3D11ShaderResourceView>& a_window)
+		{
+			a_window.attach(TextureStreaming::CurrentWindow(a_entry.view.get()));
+			if (!a_window) {
+				const auto streamed = TextureStreaming::IdOf(a_entry.view.get());
+				if (!streamed)
+					return true;
+				TextureStreaming::BuildWindow(streamed, TextureStreaming::kBaseTop);
+				a_window.attach(TextureStreaming::CurrentWindow(a_entry.view.get()));
+				if (!a_window)
+					return false;
+			}
+			a_entry.window = a_window.get();
+			return true;
+		}
+
+		static void NoteImported(ID3D11ShaderResourceView* a_view, [[maybe_unused]] std::uint32_t a_sourceTag, [[maybe_unused]] const void* a_image)
+		{
+			TextureStreaming::Census::NoteRendererUse(a_view);
+			TracyPlot("CS.DCLF.Texture.ImportSource", static_cast<std::int64_t>(a_sourceTag));
+			if (!SwitchValue(Switch::TraceTexturePaths).empty()) {
+				TracyPlot("CS.DCLF.Texture.ImportView", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(a_view)));
+				TracyPlot("CS.DCLF.Texture.ImportImage", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(a_image)));
+			}
+		}
+
 		// The import: marks the image stable in DXVK (a synchronous chunk on its CS thread), wraps it in BasicRHI and writes
 		// its view into ORG's heap. Any thread; the entry is the caller's until Settle.
 		static Reject Import(Entry& a_entry, const ImportContext& a_context, Counters& a_counters, [[maybe_unused]] std::uint32_t a_sourceTag)
 		{
 			a_entry.sourceTag = a_sourceTag;
-			auto* view = a_entry.view.get();
+			winrt::com_ptr<ID3D11ShaderResourceView> window;
+			if (!StreamedWindow(a_entry, window))
+				return Reject::NotImage;
+			auto* view = window ? window.get() : a_entry.view.get();
 			D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
 			view->GetDesc(&viewDesc);
 			rhi::SrvDesc srv{};
@@ -577,11 +613,7 @@ namespace DCLF
 			if (!a_entry.binding)
 				return Reject::View;
 			a_entry.index = a_entry.binding.Index();
-			TracyPlot("CS.DCLF.Texture.ImportSource", static_cast<std::int64_t>(a_sourceTag));
-			if (!SwitchValue(Switch::TraceTexturePaths).empty()) {
-				TracyPlot("CS.DCLF.Texture.ImportView", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(view)));
-				TracyPlot("CS.DCLF.Texture.ImportImage", structured ? 0 : static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(info.image.image)));
-			}
+			NoteImported(view, a_sourceTag, structured ? nullptr : reinterpret_cast<const void*>(info.image.image));
 			return Reject::None;
 		}
 
@@ -659,6 +691,13 @@ namespace DCLF
 							MarkRejected(found->second, *entry);
 					} else {
 						Register(table, entry);
+						// The window changed between the import and here: the listener found no entry to supersede.
+						if (entry->window) {
+							winrt::com_ptr<ID3D11ShaderResourceView> window;
+							window.attach(TextureStreaming::CurrentWindow(entry->view.get()));
+							if (window.get() != entry->window)
+								Supersede(table, *entry, {});
+						}
 					}
 				}
 				binding = AnswerOf(entry, reject);
@@ -727,6 +766,9 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.Texture.ResolveBinding");
 		if (!a_view)
 			return NullBinding();
+		// These holders keep their first import and do not follow a swap: the full window, and they ask again until it is there.
+		if (!TextureStreaming::PinFull(a_view))
+			return { kInvalid, {} };
 		auto registry = impl->registry;
 		if (registry) {
 			ZoneScopedN("CS.DCLF.Texture.RegistryLookup");
@@ -781,6 +823,15 @@ namespace DCLF
 		work.replies = &a_replies;
 		work.cookie = a_cookie;
 		impl->importer->requestsPending.fetch_add(1, std::memory_order_relaxed);
+		// A streamed texture's request is answered once its base window exists: until then its material is unresolved, and its objects are not
+		// admitted. The graph runs the request when the window's artifact is ready.
+		if (const auto streamed = TextureStreaming::IdOf(a_view); streamed && !TextureStreaming::BaseReady(a_view)) {
+			TextureStreaming::RequestBase(a_view);
+			auto gated = std::make_shared<Impl::Work>(std::move(work));
+			if (SceneScheduler::Graph().PostTextureGate(streamed, TextureStreaming::kBaseRevision, [impl = impl.get(), gated] { impl->Queue(std::move(*gated)); }))
+				return;
+			work = std::move(*gated);
+		}
 		impl->Queue(std::move(work));
 	}
 
@@ -789,6 +840,9 @@ namespace DCLF
 		Impl::ImportContext context;
 		if (!Impl::MakeContext(context))
 			return;
+		// Before any material row is packed: a row is written once, and names the feedback buffer.
+		if (TextureStreaming::Enabled() && !TextureStreaming::FullMode())
+			TextureFeedback::Ensure();
 		impl->cleanup = context.cleanup;
 		if (!impl->registry)
 			impl->registry = context.cleanup->Make<Impl::Registry>();
@@ -986,9 +1040,26 @@ namespace DCLF
 		return complete;
 	}
 
+	void GpuTextures::NoteWindowChanged(const ID3D11ShaderResourceView* a_shell)
+	{
+		const auto published = impl->importer->published.load(std::memory_order_acquire);
+		if (!published || !published->registry)
+			return;
+		auto& registry = *published->registry;
+		std::scoped_lock lock(registry.mutex);
+		if (const auto found = registry.entries.find(const_cast<ID3D11ShaderResourceView*>(a_shell)); found != registry.entries.end())
+			if (const auto entry = found->second.live.lock())
+				Impl::Supersede(registry, *entry, {});
+	}
+
 	bool GpuTextures::Superseded(const void* a_owner)
 	{
 		return a_owner && static_cast<const Impl::Entry*>(a_owner)->superseded.load(std::memory_order_acquire);
+	}
+
+	const void* GpuTextures::ImportedWindow(const void* a_owner)
+	{
+		return a_owner ? static_cast<const Impl::Entry*>(a_owner)->window : nullptr;
 	}
 
 	std::string GpuTextures::DescribeSuperseded() const

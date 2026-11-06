@@ -57,10 +57,29 @@ namespace DCLF::Features::Fades
 	 */
 	void TakeAnimatedBatch(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs);
 	/**
+	 * @brief Render thread: a copy of the batch FadeStateCS's frame took, for the CPU fade stage's next observer frame (it steps the same
+	 * updates a frame later), and that copy taken, emptied.
+	 */
+	void KeepAnimatedBatchForObserver(const std::vector<AnimatedFadeRoot>& a_roots, const AnimatedFadeInputs& a_inputs);
+	void TakeObserverAnimatedBatch(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs);
+	/**
 	 * @brief Render thread, at the list jobs' Finish (the stand-in observer's listJobsDone): the animation job's queued updates and
 	 * inputs become the batch TakeAnimatedBatch hands out.
 	 */
 	void DrainAnimatedFades();
+	/**
+	 * @brief Render thread, at the CPU fade stage's kick: its producer drains the batch (TakeAnimatedBatchOnWorker), not this thread.
+	 * Nothing pushes between the frame's start and the producer's drain: the cell animations job pushes inside Main::Draw only after
+	 * the frame's sampling, which the drain is part of (WindowWriters: FrameValues::WaitSampled), and Main::Update's jobs push after its
+	 * entry, which waits for the drain (WaitAnimatedDrain). So the producer's drain takes the batch the frame start's took.
+	 */
+	void HandAnimatedDrainToWorker();
+	/** @brief The CPU fade stage's producer, once a handed-off drain: DrainAnimatedFades then TakeAnimatedBatch. */
+	void TakeAnimatedBatchOnWorker(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs);
+	/** @brief A handed-off drain whose producer never ran: drained and dropped, as a dropped kick's batch was. */
+	void DropAnimatedDrain();
+	/** @brief Waits until no handed-off drain is outstanding (Main::Update's entry, and the render thread's own drains). */
+	void WaitAnimatedDrain();
 
 	/**
 	 * @brief The root test (per join): where FUN_14147b110's fade value falls below BSFadeNode::OnVisible's fade-out threshold

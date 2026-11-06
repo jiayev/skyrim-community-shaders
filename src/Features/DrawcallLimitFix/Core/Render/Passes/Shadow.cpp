@@ -21,8 +21,12 @@ namespace DCLF::Draws
 			RegisterSceneBuffers(a_graph, *resources->scene);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.visibility"), resources->visibility);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.view-blocks"), resources->viewBlocks.buffer);
-			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
-				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.shadow.sequences{}", s)), resources->sequences[s]);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.caster-rows"), resources->casterRows);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.caster-firsts"), resources->casterFirsts);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.caster-rows-used"), resources->casterRowsUsed);
+			for (std::size_t s = 0; s < resources->drawArgs.size(); ++s) {
+				if (resources->OwnsDrawArgs(s))
+					Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-args{}", s)), resources->drawArgs[s]);
 				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-count{}", s)), resources->count[s]);
 				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.shadow.bucket-counts{}", s)), resources->bucketCounts[s]);
 			}

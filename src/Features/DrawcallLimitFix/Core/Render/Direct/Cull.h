@@ -153,6 +153,8 @@ namespace DCLF::Direct
 		std::shared_ptr<const SceneTables> tables;
 		std::shared_ptr<const EntrySpace> candidates;
 		bool visibilityReset = false;  // CpuFrameArm::visibilityReset
+		// Its culls stamp the main camera's verdicts for the visibility decoder. False (an observer's frame): the GPU's events report them.
+		bool reportsVisibility = true;
 		std::shared_ptr<const void> storage;  // owns every span above
 		// The main camera's batches (Main, Decal, Forward, Refraction) still to cull this frame, plus the publication's one: the last one to
 		// finish diffs the frame's verdicts into the visibility decoder (Cull.cpp).
@@ -164,9 +166,11 @@ namespace DCLF::Direct
 	/**
 	 * @brief Render thread, FrameDriver::BeginFrame, before FrameValues::Kick (never blocks): arms the frame's CPU state with the batches its
 	 * culls read. FrameValues' producer then runs the CPU fade stage right after it samples the placements (the "fade-states-cpu" pool,
-	 * Features/Fades), which publishes the frame's CullFrame (AfterCullFrame). A frame not armed has none (GPU mode).
+	 * Features/Fades), which publishes the frame's CullFrame (AfterCullFrame). A frame not armed has none.
+	 * a_observer (a GPU-driven frame's forward draws): the stage only reads. It steps the roots a_set's lanes name, in states of its own, for
+	 * a CullFrame that reports nothing. FadeStateCS stays the fades' authority: its states stay bound, and its events the only ones.
 	 */
-	void KickCpuFrameState(std::shared_ptr<const ViewBatchSet> a_set);
+	void KickCpuFrameState(std::shared_ptr<const ViewBatchSet> a_set, bool a_observer = false);
 	/** @brief What KickCpuFrameState armed, taken by the CPU fade stage's kick (render thread, in FrameValues::Kick); null set: not armed. */
 	struct CpuFrameArm
 	{
@@ -175,6 +179,7 @@ namespace DCLF::Direct
 		// The frame before was not armed (the first CPU frame, or GPU frames between): the CPU's reported verdicts start again, and so does
 		// the visibility decoder (CullFrame::visibilityReset, Readback::Batch::reset).
 		bool visibilityReset = false;
+		bool observer = false;  // KickCpuFrameState's a_observer
 	};
 	CpuFrameArm TakeCpuFrameArm();
 	/** @brief Any thread: whether the frame's root states are the CPU stage's (its bindings: the fade states the draws read). */
@@ -190,6 +195,11 @@ namespace DCLF::Direct
 
 	/** @brief The CPU fade stage (producer thread): the frame's CullFrame, published; continuations waiting for its frame run here. */
 	void PublishCullFrame(std::shared_ptr<CullFrame> a_frame);
+	/**
+	 * @brief The publisher's, with no CPU frame running: lets go of the newest frame. Its tables and retirement node would otherwise stay
+	 * held until the next CPU frame, and everything the scene retires after them with them.
+	 */
+	void DropCullFrame();
 	/**
 	 * @brief Any thread: a_then(frame) once the CullFrame of a_sceneFrame (or a later one) is published: at once if it is, else on the
 	 * publishing thread. Lock-free (a stack the publication drains; each continuation runs once).

@@ -261,7 +261,9 @@ namespace DCLF::Draws
 			if (now == RenderGraphRuntime::Segment::MainOpaque && a_bindings.objectGates.layout)
 				views.Set(constants, constants.objectGatesIndex, a_bindings.objectGates);
 			// The forward range (its classes' halves: the class table's): colour segment only.
-			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->forwardCapacity) {
+			// With the forward family on the CPU (GraphConditions::forwardDirect) nothing reads either range: no capacity, so the build stages none.
+			const bool forwardOnCpu = CurrentGraphConditions().forwardDirect;
+			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->forwardCapacity && !forwardOnCpu) {
 				constants.forwardBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));
 				constants.forwardCapacity = frame->forwardCapacity;
 			}
@@ -270,7 +272,7 @@ namespace DCLF::Draws
 				views.Set(constants, constants.poolFirstsIndex, a_bindings.poolFirsts);
 			// The refraction range follows the forward halves (forwardBase + 2 * forwardCapacity), so forwardBase is set even
 			// without forward capacity.
-			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->refractionCapacity && resources->pool) {
+			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->refractionCapacity && resources->pool && !forwardOnCpu) {
 				constants.forwardBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));
 				constants.refractionCapacity = frame->refractionCapacity;
 				views.Set(constants, constants.poolFirstsIndex, a_bindings.poolFirsts);

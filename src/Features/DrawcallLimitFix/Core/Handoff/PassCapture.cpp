@@ -15,6 +15,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
+#include "TextureStreaming/Streamer.h"
 
 namespace DCLF
 {
@@ -429,6 +430,35 @@ namespace DCLF
 		return passesOnThisThread;
 	}
 
+	namespace
+	{
+		bool ViewWaits(const RE::NiPointer<RE::NiSourceTexture>& a_texture)
+		{
+			const auto* renderer = a_texture ? a_texture->rendererTexture : nullptr;
+			const auto* view = renderer ? renderer->resourceView : nullptr;
+			if (TextureStreaming::BaseReady(view))
+				return false;
+			TextureStreaming::RequestBase(view);
+			return true;
+		}
+
+		/**
+		 * @brief Texture streaming: every pass of a lit object whose diffuse or normal map has no base window yet stays off the engine's lists
+		 * until it has one, and its load is asked for: its depth and shadow passes too (Utility's, not Lighting's), or its depth without its colour
+		 * would show the empty G-buffer. Only for a pass the engine is registering, never a sweep; the rarer slots wait in the bind (the safety net).
+		 */
+		bool WaitsForBaseMips(const RE::BSRenderPass* a_pass)
+		{
+			if (!TextureStreaming::Enabled() || TextureStreaming::FullMode() || !a_pass->shaderProperty || !netimmerse_cast<const RE::BSLightingShaderProperty*>(a_pass->shaderProperty))
+				return false;
+			const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
+			if (!material)
+				return false;
+			const bool diffuse = ViewWaits(material->diffuseTexture), normal = ViewWaits(material->normalTexture);
+			return diffuse || normal;
+		}
+	}
+
 	struct PassCapture::Hook
 	{
 		static void thunk(RE::BSBatchRenderer* a_this, RE::BSRenderPass* a_pass, std::uint32_t a_techniqueID)
@@ -441,7 +471,7 @@ namespace DCLF
 			}
 			// Withholding is the whole of ownership: the pass is built, lit and shadowed as the engine would - only the batch
 			// renderer never receives it, so the native loop has nothing to draw. Record notes it for the observers.
-			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.WithholdOwn(a_this, a_pass) || capture.Withhold(a_this, a_pass);
+			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.WithholdOwn(a_this, a_pass) || capture.Withhold(a_this, a_pass) || WaitsForBaseMips(a_pass);
 			capture.Record(a_this, a_pass, a_techniqueID, withheld);
 			Diagnostics::Notify(Diagnostics::PointLightPass{ a_this, a_pass, withheld, 0 });
 			if (withheld)

@@ -471,51 +471,9 @@ extension fits the direction best: DCLF keeps its own selection, with no relianc
 
 ### 6.3 DXC compilation of Community Shaders' game shaders
 
--   **Goal.** CS's replacement game shaders (`src/ShaderCache.cpp`, `SShaderCache::CompileShader`) compile with DXC.
--   **Why.** FXC takes 14-15 s per Lighting pixel variant, and the startup set is about 3,400 variants.
--   **State.** Designed, not started. `src/ShaderCache.cpp` compiles with FXC (`d3dcompiler_47`); `extern/dxvk` has no `SPRV`
-    ingestion. DCLF's own programs already compile with DXC (`Core/Gpu/Pipelines/ShaderPrograms.cpp`: `vs_6_6`/`ps_6_6`,
-    `-HV 2018`, `-fvk-{b,t,s,u}-shift`), under the `DCLF_*` defines only.
--   **Constraints.**
-    -   DXC cannot emit DXBC, and the DXVK fork creates D3D11 shaders only from DXBC. It has `DxvkSpirvShader`
-        (`src/dxvk/dxvk_shader_spirv.{h,cpp}`) for internal prebuilt SPIR-V.
-    -   The engine keeps the VS blob and calls `CreateInputLayout` with it; DXVK reads its ISGN. The output must stay a DXBC
-        container with an ISGN chunk.
-    -   VS and PS are replaced independently (`src/Hooks.cpp`), so a DXC VS runs with a vanilla DXBC PS and the reverse. DXC
-        numbers locations by declaration without FXC's packing: mixed pairs link by semantic.
--   **Design.**
-    -   **Container.** A DXBC container through the normal `Create*Shader` calls: `ISGN`/`OSGN` synthesised from SPIR-V
-        reflection, `SPRV` (the SPIR-V), `SPRM` (version, stage, binding convention, flags). No call site changes.
-    -   **DXVK** (a new fork file, e.g. `src/d3d11/d3d11_shader_spirv.cpp`, listed in `FORK.md`): `CreateShaderModule`
-        branches on `SPRV` (key from its MD5); reflection maps the shifted binding ranges back to slots through one header
-        shared with DCLF's shifts and rejects anything else (`$Globals`, heap bindings, UAV counters); samplers are rewritten to
-        heap indices in per-stage push data; semantic I/O linking (D3D9's `SemanticIo`) when either stage of a pair is
-        ingested; `D3D11CommonShader` from a ready `Rc<DxvkShader>`; a version export CS checks at startup.
-    -   **DXC arguments.** The ORG wrapper's `-spirv -fspv-target-env=vulkan1.3 -fvk-use-dx-layout`, plus `-HV 2018
-        -fspv-reflect -fvk-use-dx-position-w -fspv-preserve-interface`, the four shifts, an unknown-image-format option for
-        typed UAVs; never `-fvk-invert-y`.
-    -   **CS.** A dedicated `org::services::ShaderCompiler` on CS's workers (wrapper additions: include list for hot reload,
-        memory-cache opt-out, per-thread `IDxcCompiler3`); SPIR-V reflection replaces `D3DReflect`; new cache extensions, the
-        DXC version and argument hash in `Info.ini`. Effects11 stays on FXC; `CS_NATIVE_D3D11=1` forces FXC.
-    -   **Policy (to confirm).** One process-wide `ShaderCompiler = FXC | DXC`, no per-shader fallback (a DXC failure is a
-        failed shader); a parity mode compares FXC and DXC renders of one frame and the reflection per variant.
--   **HLSL risks.** Never-compiled branches hit DXC's usual rejects (loop variables after the loop, ambiguous min/max,
-    resources in structs, non-static globals). Silent differences: float-to-int saturation, min/max NaN, contraction without
-    `precise`, float controls and DXVK's per-vendor workarounds, no `PARTIAL_PRECISION`/`AVOID_FLOW_CONTROL`.
--   **Stages.**
-    1.  Offline: DXC on the slowest Lighting variants with CS's defines, timed against FXC, `spirv-val`, reflected offsets
-        against `D3DReflect`. Pass: 3x faster or more, offsets equal. No DXVK change.
-    2.  DXVK ingestion, tested with a standalone D3D11 sample: a DXC triangle, mixed pairs both ways, packed interpolants, a
-        comparison sampler, a typed UAV.
-    3.  CS: wrapper extensions, container writer and reflection, cache format, the setting. Gate: one Lighting VS+PS in game,
-        reflection identical, pixel diff within threshold, hot reload working.
-    4.  All Lighting, Utility, Effect and DistantTree variants: cache build time, frame-time A/B, parity captures.
-    5.  The remaining shader types, ordered by compile time times count.
-    6.  DXC by default; FXC for A/B and native D3D11; then `Utils/D3D.cpp`.
-
-    Estimated at 5-8 engineer-weeks. Critical files: `extern/dxvk/src/d3d11/d3d11_device.cpp` (`CreateShaderModule`,
-    `CreateInputLayout`), `d3d11_shader.{h,cpp}`, `extern/dxvk/src/dxvk/dxvk_shader_spirv.cpp`, `src/ShaderCache.cpp`,
-    `extern/ORGModuleServices/src/ShaderCompiler.cpp`, `src/Hooks.cpp`.
+-   **Goal.** CS's replacement game shaders compile with DXC and reach DXVK as SPIR-V, because the dxbc-spirv route costs GPU time (34% more
+    instructions on grass).
+-   **State.** Offline survey done, ingestion started. The plan, the measurements and the design are in [dxc-game-shaders.md](./dxc-game-shaders.md).
 
 ### 6.4 Checks not built
 

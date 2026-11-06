@@ -23,6 +23,12 @@ namespace GpuEventTimers
 	/** @brief Render-thread perf event hooks (State). */
 	void BeginEvent(std::string_view a_name);
 	void EndEvent();
+	bool OpProbeRequested();
+	bool OpBegin(ID3D11DeviceContext* a_context, const char* a_kind, std::uint32_t a_count, ID3D11Resource* a_target, ID3D11View* a_view, void* a_caller);
+	void OpEnd();
+	bool PassSkipRequested();
+	bool PassSkipDropping();
+	void PassSkipAfterPresent();
 
 	/** @brief Once per frame at Present on the render thread: closes the frame, collects finished frames, logs. */
 	void OnPresent();

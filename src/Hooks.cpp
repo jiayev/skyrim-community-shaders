@@ -47,6 +47,8 @@
 #include "Utils/ImportCallSites.h"
 #include "Vram/Debug.h"
 #include "Vram/VramLedger.h"
+#include "TextureStreaming/Census.h"
+#include "TextureStreaming/Streamer.h"
 
 #include <unordered_map>
 #include <xmmintrin.h>
@@ -575,7 +577,12 @@ struct IDXGISwapChain_Present
 						swapChain, syncInterval, presentFlags,
 						[&](IDXGISwapChain* sc, UINT si, UINT f) {
 							ZoneScopedN("CS.Present.NativeWait");
-							return func(sc, si, f);
+							GpuEventTimers::BeginEvent("mark before native present");
+							GpuEventTimers::EndEvent();
+							const auto presented = func(sc, si, f);
+							GpuEventTimers::BeginEvent("mark after native present");
+							GpuEventTimers::EndEvent();
+							return presented;
 						});
 				});
 		}
@@ -636,6 +643,7 @@ struct IDXGISwapChain_Present
 		// After Present (upstream #2354): frameCount and every feature's Reset (DCLF's EndFrame among them) belong to the frame just presented.
 		{
 			ZoneScopedN("CS.Present.Reset");
+			GpuEventTimers::PassSkipAfterPresent();
 			globals::state->Reset();
 		}
 
@@ -1436,6 +1444,8 @@ namespace Hooks
 		}
 
 		Vram::Debug::InstallGameHooks();
+		TextureStreaming::Census::InstallGameHooks();
+		TextureStreaming::InstallGameHooks();
 
 		logger::info("Hooking BSGraphics::Renderer::InitD3D");
 		stl::write_thunk_call<BSGraphics_Renderer_Init_InitD3D>(REL::RelocationID(75595, 77226).address() + REL::Relocate(0x50, 0x2BC));

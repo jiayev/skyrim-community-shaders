@@ -94,6 +94,8 @@ namespace DCLF::Draws
 		// or not. The shadow views' capacities are sized from it (ShadowBounds), so they change with the scene, not the frame's casters.
 		std::vector<ShadowShare> shadow;  // by object slot
 		std::array<ankerl::unordered_dense::map<ShadowPipelineKey, std::uint64_t, ShadowPipelineKeyHash>, kShadowModeCount> modeKeyDraws;
+		// The caster rows those draws take, over all the modes: a draw in each view family, not each mode (ShadowResources::casterRows).
+		std::uint64_t casterRows = 0;
 		// Since the last report.
 		std::uint64_t updates = 0, changes = 0, resyncs = 0;
 		// Moves whenever an object's casting share does (modeKeyDraws changed): what the revisions' shadow shapes are sized from.

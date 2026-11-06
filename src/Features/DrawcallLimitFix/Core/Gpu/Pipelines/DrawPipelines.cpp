@@ -14,6 +14,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/LatestSlot.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
@@ -212,6 +213,13 @@ namespace DCLF
 		drawDesc.args = { &draw, 1 };
 		drawDesc.byteStride = sizeof(DrawSequence);
 		if (device.CreateCommandSignature(drawDesc, ShadowLayout(), shadowDrawSignature) != rhi::Result::Ok) {
+			supported = false;
+			logger::error("[DCLF] Could not create the shadow views' draw signature");
+			return false;
+		}
+		rhi::CommandSignatureDesc shadowViewDrawDesc = drawDesc;
+		shadowViewDrawDesc.byteStride = Draws::kShadowDrawBytes;
+		if (device.CreateCommandSignature(shadowViewDrawDesc, ShadowLayout(), shadowViewDrawSignature) != rhi::Result::Ok) {
 			supported = false;
 			logger::error("[DCLF] Could not create the shadow views' draw signature");
 			return false;

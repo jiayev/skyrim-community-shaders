@@ -35,6 +35,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 #include <ORGModuleServices/ShaderCompiler.h>
+#include "TextureStreaming/Streamer.h"
 
 namespace DCLF
 {
@@ -545,6 +546,10 @@ namespace DCLF
 				if (Diagnostics::Observe().foliageLand)
 					request.defines.push_back({ L"DCLF_FOLIAGE_PARITY_ALL", L"1" });
 			}
+			// Texture streaming's feedback: the colour draws report their UV footprint (Lighting.hlsl). A define, so a run without streaming
+			// keeps the shaders and pipelines it had.
+			if (a_pixel && !a_depthOnly && a_sourceName == kSourcePath && TextureStreaming::Enabled() && !TextureStreaming::FullMode())
+				request.defines.push_back({ L"DCLF_TEX_FEEDBACK", L"1" });
 			// The first few define sets, to reproduce builds with the DXC command line.
 			static std::atomic<std::uint32_t> logged = 0;
 			if (logged.fetch_add(1) < 4) {

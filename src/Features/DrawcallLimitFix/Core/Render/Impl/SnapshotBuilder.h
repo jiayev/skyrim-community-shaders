@@ -47,10 +47,16 @@ namespace DCLF
 			// The toggles it was made under (SceneToggles: the next commit's): paired with a publication committed under others, its
 			// shadow part is not that publication's (BuildSnapshotDraws drops it, and the snapshot is not passed through to).
 			ToggleSet toggles{};
-		} aheadContext;  // the render thread's, made at the frame's start (PostAheadContext)
-		// Render thread (PostFit): the fits the builds ahead are made against (main, shadow), posted with aheadContext; changes counted.
+		};
+		// Render thread (PostFit): the fits the builds ahead are made against (main, shadow), posted with the frame start's context;
+		// changes counted.
 		std::array<SceneFit, 2> postedFit{};
 		std::uint64_t postedFitSerial = 0;
+		// What postedFit was made from: the adopted set (by serial) and the main and shadow resources (by identity). A fit reads only
+		// them (the sealed set's entries, the resources' buffers and scene resources, fixed once made), so it is made again only when one
+		// changes.
+		std::uint64_t fitSetSerial = ~0ull;
+		std::weak_ptr<const void> fitMain, fitShadow;
 		/** @brief The frame's start's post for the coordinator, immutable, latest wins; it reads only its copy (aheadTaken). */
 		struct AheadPost
 		{

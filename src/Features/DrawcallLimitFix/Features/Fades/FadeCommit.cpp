@@ -40,6 +40,7 @@ namespace DCLF::Features::Fades
 			std::vector<AnimatedFadeRoot> roots;
 			AnimatedFadeInputs anim{};
 			TakeAnimatedBatch(roots, anim);
+			KeepAnimatedBatchForObserver(roots, anim);
 			std::copy_n(anim.eye, 3, a_inputs.animEye);
 			a_inputs.animLodAdjust = anim.lodAdjust;
 			a_inputs.animCounter = anim.counter;

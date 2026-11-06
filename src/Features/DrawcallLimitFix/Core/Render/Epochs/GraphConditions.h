@@ -33,6 +33,11 @@ namespace DCLF::Draws
 		// person's depth and colour) are the direct sites'; the builds, the HZB and phase 2, the visibility and fade-event readbacks and
 		// fade state are left out (the CPU's).
 		bool cpuPipeline = false;
+		// The GPU-driven graph sends the forward family through the CPU pipeline's cull, sort and forward site (CS_DCLF_FORWARD_DIRECT,
+		// Direct/Sites.h). Only when the epoch is in DXVK's stream: ORG records a pass per frame in an external epoch alone.
+		bool forwardDirect = false;
+		// With it, first person's forward part too, while its colour epoch is in DXVK's stream.
+		bool firstPersonForwardDirect = false;
 		std::string cuts;              // diagnostics (dclf:cut=): comma-separated pass key prefixes left out ("*": every pass)
 
 		bool operator==(const GraphConditions&) const = default;

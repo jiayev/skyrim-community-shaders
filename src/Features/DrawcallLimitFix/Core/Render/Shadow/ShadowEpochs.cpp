@@ -178,10 +178,15 @@ namespace DCLF
 		 * its table's rows, or more, which the shader idles).
 		 */
 		void WriteBuildDispatch(const org::LatchBlock& a_latchBlock, const ShadowLatchLayout& a_layout, std::uint32_t a_latchSlot, std::uint32_t a_inputs,
-			const ShadowFrame& a_shape)
+			std::uint32_t a_inputsIndex, const ShadowFrame& a_shape)
 		{
 			const std::uint32_t dispatch[4] = { (a_inputs + 63) / 64, ShadowBuildRows(a_shape), 1, 0 };
 			LatchWrite(a_latchBlock, "shadow culling dispatch", a_latchSlot, a_layout.BuildDispatchOffset(), std::as_bytes(std::span(dispatch)));
+			// The caster rows' dispatch, over the list: what they hand out before the culling reads them.
+			const std::uint32_t rowsDispatch[4] = { (a_inputs + 63) / 64, 1, 1, 0 };
+			LatchWrite(a_latchBlock, "shadow caster rows dispatch", a_latchSlot, a_layout.RowsDispatchOffset(), std::as_bytes(std::span(rowsDispatch)));
+			const std::uint32_t list[4] = { a_inputsIndex, a_inputs, 0, 0 };
+			LatchWrite(a_latchBlock, "shadow caster rows list", a_latchSlot, a_layout.RowsInputsOffset(), std::as_bytes(std::span(list)));
 		}
 	}
 
@@ -587,7 +592,8 @@ namespace DCLF
 				std::uint64_t a_active)
 			{
 				const std::size_t variant = NarrowestShadowVariant(a_variants, a_active, a_commit.stats);
-				WriteBuildDispatch(*a_commit.target.latch, a_commit.target.latchLayout, a_latchSlot, static_cast<std::uint32_t>(a_commit.payload.Inputs()), *a_variants[variant]);
+				WriteBuildDispatch(*a_commit.target.latch, a_commit.target.latchLayout, a_latchSlot, static_cast<std::uint32_t>(a_commit.payload.Inputs()),
+					a_commit.parts[PayloadPart::Inputs].srvIndex, *a_variants[variant]);
 				return variant;
 			}
 
@@ -756,6 +762,20 @@ namespace DCLF
 			const auto record = Draws::UploadShadowArena(commit);
 			impl->revisions.latchedMisses += Draws::LatchShadowCsBlocks(commit, latchSlot, record);
 			engine.lastActiveViews = active;
+			// Views that share draw arguments (ShareDrawArgs) must not draw in one frame: their draws would overwrite each other's.
+			if (revisionShape) {
+				std::uint64_t ownersSeen = 0;
+				const auto& views = revisionShape->views;
+				for (std::size_t v = 0; v < views.size() && v < 64; ++v) {
+					if (!((active >> v) & 1) || views[v].slot >= resources->drawArgsOwner.size())
+						continue;
+					const std::uint64_t bit = 1ull << (resources->drawArgsOwner[views[v].slot] % 64);
+					static std::uint32_t reported = 0;
+					if ((ownersSeen & bit) && reported++ < 8)
+						logger::error("[DCLF] shadow views that share draw arguments drew in one frame (slot {})", views[v].slot);
+					ownersSeen |= bit;
+				}
+			}
 			// The CPU pipeline's graph: no recording; the shadow site culls and draws the latched views from this commit (its pre-work the
 			// shape's latched copies and index pool copies).
 			if (revision.direct) {
@@ -939,6 +959,7 @@ namespace DCLF
 					a_stats.cullRootFading = a_words[5];
 					a_stats.cullClass = a_words[16];
 					a_stats.cullBelowTexels = a_words[Draws::kCountBelowTexelsWord];
+					a_stats.cullRowsLost = a_words[Draws::kCountCasterRowsLostWord];
 					for (std::uint32_t c = 0; c < 4; ++c) {
 						a_stats.probeCasters[c] = a_words[Draws::kCountProbeCastersWord + c];
 						a_stats.probeTriangles[c] = a_words[Draws::kCountProbeTrianglesWord + c];

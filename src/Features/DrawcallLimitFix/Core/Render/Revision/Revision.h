@@ -11,7 +11,7 @@ namespace DCLF::Draws
 	 */
 	struct ShadowSlotBuffers
 	{
-		std::vector<Versioned> sequences, bucketCounts;
+		std::vector<Versioned> drawArgs, bucketCounts;
 	};
 	/**
 	 * @brief The revision code's request for shadow view slots (ReserveShadowLatch): the frame makes their buffers at these sizes and
@@ -79,6 +79,9 @@ namespace DCLF::Draws
 		// passes (Draws::CpuPipelineRecords) have passes, so the revision records only those (AssembleRevision), covered by their
 		// recordings too (DecideEpochCoverage).
 		bool cpuPipeline = false;
+		// The GPU-driven graph's forward family is the CPU's (GraphConditions::forwardDirect): each snapshot has that family's view batches.
+		bool forwardDirect = false;
+		bool firstPersonForwardDirect = false;
 	};
 
 	/** @brief A latch layout's key for the scene's set (GrowthBuild::Require of a latch): another layout, another block. */

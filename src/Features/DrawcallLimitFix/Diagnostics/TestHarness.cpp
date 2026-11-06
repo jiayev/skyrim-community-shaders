@@ -3,6 +3,8 @@
 #include "TestHarness.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
+#include "Vram/MemProbe.h"
+#include "Vram/SpillLab.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
@@ -25,6 +27,9 @@
 #include "State.h"
 #include "Vram/VramLedger.h"
 #include <Tracy/Tracy.hpp>
+#include "Features/DrawcallLimitFix/Features/TextureStreaming/TextureStreaming.h"
+#include "TextureStreaming/Census.h"
+#include "TextureStreaming/Streamer.h"
 
 #include <ORGModuleServices/PipelineRegistry.h>
 #include <OpenRenderGraph/GraphHost.h>
@@ -36,6 +41,65 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+namespace DCLF
+{
+	namespace
+	{
+		// "dclf:tex-stats": texture streaming's totals, in the log. "dclf:tex-force=<top>": every streamed window at this top, or -1 for the policy's
+		// choice. "dclf:tex-distance=<0|1>", "dclf:tex-feedback=<0|1>": the demand's two sources. "dclf:tex-budget=<MiB>": the budget, 0 for the driver's. "dclf:tex-offset=<mips>": how far what is on screen may step down over it. "dclf:tex-dump=<name>": every texture's state to texture-<name>.tsv, and what the materials draw, in the log. "dclf:tex-census": the texture census's rows written to the log directory (CS_TEX_CENSUS=1).
+		bool RunTextureStreamingCommand(const std::string& a_command)
+		{
+			if (a_command == "dclf:tex-stats") {
+				const auto stats = TextureStreaming::GetStats();
+				logger::info("[TextureStreaming] {} textures ({} with windows, {} pinned, {} full for native draws), {} MiB resident, {} MiB wanted, of {} MiB; {} windows built ({} upgrades, {} downgrades, {} under pressure asked), {} MiB read, {} notes, {} feedback reports ({} finer than distance), {} failed, {} bound before their base, {} needed their storage, {} left to the engine",
+					stats.textures, stats.withWindow, stats.pinned, stats.nativeFull, stats.residentBytes >> 20, stats.wantedBytes >> 20, stats.fullBytes >> 20, stats.windowsBuilt, stats.upgrades, stats.downgrades, stats.pressureDowngrades,
+					stats.bytesRead >> 20, stats.noted, stats.feedbackReported, stats.feedbackFiner, stats.loadFailures, stats.safetyNetLoads, stats.storageFills, stats.passedThrough);
+				logger::info("[TextureStreaming] budget {} MiB (card {}, driver {}): {} used, {} of it in system memory, {} not windows ({} outside DXVK), {} allowed for windows, {} wanted, {} of that on screen; pulled back {:.2f} mips by distance, {:.2f} on screen",
+					stats.budgetBytes >> 20, stats.cardBytes >> 20, stats.driverBudgetBytes >> 20, stats.usedBytes >> 20, stats.overflowBytes >> 20, stats.otherBytes >> 20, stats.outsideBytes >> 20, stats.allowanceBytes >> 20, stats.wantedBytes >> 20, stats.visibleBytes >> 20, stats.distancePullback, stats.visiblePullback);
+				logger::info("[TextureStreaming] left to the engine: {} loads, {} of them failed", stats.passedThrough, stats.engineFailures);
+				logger::info("[TextureStreaming] builds: {} first windows (read {} ms, create {} ms in all), {} later (read {} ms, create {} ms in all)", stats.baseBuilds, stats.baseReadMicroseconds / 1000,
+					stats.baseCreateMicroseconds / 1000, stats.otherBuilds, stats.otherReadMicroseconds / 1000, stats.otherCreateMicroseconds / 1000);
+				return true;
+			}
+			if (a_command.rfind("dclf:tex-force=", 0) == 0) {
+				TextureStreaming::ForceTop(std::atoi(a_command.c_str() + 15));
+				return true;
+			}
+			if (a_command == "dclf:tex-dump" || a_command.rfind("dclf:tex-dump=", 0) == 0) {
+				const auto name = a_command.size() > 14 ? a_command.substr(14) : std::string("dump");
+				if (const auto directory = SKSE::log::log_directory())
+					TextureStreaming::RequestDump((*directory / std::format("texture-{}.tsv", name)).string());
+				Features::Streaming::ReportBindings();
+				return true;
+			}
+			if (a_command.rfind("dclf:tex-offset=", 0) == 0) {
+				auto settings = TextureStreaming::GetSettings();
+				settings.visibleOffset = static_cast<float>(std::atof(a_command.c_str() + 16));
+				TextureStreaming::SetSettings(settings);
+				return true;
+			}
+			if (a_command.rfind("dclf:tex-budget=", 0) == 0) {
+				auto settings = TextureStreaming::GetSettings();
+				settings.budgetMB = static_cast<std::uint32_t>(std::atoi(a_command.c_str() + 16));
+				TextureStreaming::SetSettings(settings);
+				return true;
+			}
+			if (a_command.rfind("dclf:tex-distance=", 0) == 0 || a_command.rfind("dclf:tex-feedback=", 0) == 0) {
+				auto settings = TextureStreaming::GetSettings();
+				(a_command[9] == 'd' ? settings.distance : settings.feedback) = a_command.back() != '0';
+				TextureStreaming::SetSettings(settings);
+				return true;
+			}
+			if (a_command == "dclf:tex-census") {
+				const auto path = TextureStreaming::Census::WriteJson(logger::log_directory().value_or(std::filesystem::path{}));
+				logger::info("[DCLF] Texture census written to {}", path.string());
+				return true;
+			}
+			return false;
+		}
+	}
+}
 
 namespace DCLF
 {
@@ -195,6 +259,8 @@ namespace DCLF
 			{
 				{
 					logger::info("[DCLF] test command at frame {}: {}", a_frame, command);
+					if (Vram::SpillLab::Command(command))
+						return;
 					// The command in a capture too: a timing run's phases are found in its Tracy capture by these zones.
 					ZoneScopedN("CS.DCLF.TestCommand");
 					ZoneText(command.data(), command.size());
@@ -304,8 +370,10 @@ namespace DCLF
 						return;
 					}
 					// "dclf:mark[=<label>]": nothing but this line in the log, a phase's boundary for the run's analysis.
-					if (command == "dclf:mark" || command.rfind("dclf:mark=", 0) == 0)
+					if (command == "dclf:mark" || command.rfind("dclf:mark=", 0) == 0) {
+						MemProbe::Mark(command.size() > 10 ? std::string_view(command).substr(10) : std::string_view{}, a_frame);
 						return;
+					}
 					// "dclf:telemetry=<label>": a BasicTelemetry session for this phase, in place of the running one, whose files it writes. "=off": none.
 					if (command.rfind("dclf:telemetry=", 0) == 0) {
 						Diagnostics::TelemetryPhase(std::string_view(command).substr(15));
@@ -345,6 +413,8 @@ namespace DCLF
 						logger::info("[DCLF] VRAM attribution written to {}", path.string());
 						return;
 					}
+					if (RunTextureStreamingCommand(command))
+						return;
 					// "dclf:pp=<sub-feature type>=0|1": a Post Processing effect's menu toggle (GetType(), e.g. "Depth of Field"), so a run
 					// can check that disabling an effect frees its textures and enabling it creates them again.
 					if (command.rfind("dclf:pp=", 0) == 0) {
@@ -598,7 +668,7 @@ namespace DCLF
 					}
 					// The CPU-driven pipeline's toggles (CS_DCLF_PIPELINE's, CS_DCLF_CPU_RECORD's and CS_DCLF_CPU_CADENCE's live values):
 					// "dclf:pipeline=auto|manual|gpu|cpu" (ApplyPipeline; from the next build point: it changes the graph's conditions),
-					// "dclf:pipeline-interior=gpu|cpu" and "dclf:pipeline-exterior=gpu|cpu" (Manual's), "dclf:cpu-record=serial|parallel",
+					// "dclf:pipeline-interior=gpu|cpu" and "dclf:pipeline-exterior=gpu|cpu" (Manual's), "dclf:cpu-record=indirect|serial|parallel",
 					// "dclf:cpu-cadence-<view>=frame|snapshot" ("dclf:cpu-cadence=frame|snapshot": every view but main), "dclf:cpu-batch=<lanes>"
 					// (CS_DCLF_CPU_BATCH's: from the next snapshot).
 					if (command.rfind("dclf:pipeline=", 0) == 0) {
@@ -622,7 +692,8 @@ namespace DCLF
 						return;
 					}
 					if (command.rfind("dclf:cpu-record=", 0) == 0) {
-						DCLF::Toggles::Get().Requested().cpuRecord = command.substr(16) == "parallel" ? 1 : 0;
+						const auto record = command.substr(16);
+						DCLF::Toggles::Get().Requested().cpuRecord = record == "parallel" ? 1 : record == "serial" ? 0 : 2;
 						return;
 					}
 					if (command.rfind("dclf:cpu-cadence", 0) == 0) {
@@ -804,6 +875,11 @@ namespace DCLF
 	void RunTestHarness(std::string_view a_feature)
 	{
 		Diagnostics::TelemetryFrame();
+		// Once: the log directory is a known-folder query and a path built, about 60 us in Dev-Fast, which every Present paid while the
+		// probe itself starts only once.
+		static const bool memProbeStarted = (MemProbe::Start(logger::log_directory().value_or(std::filesystem::path{})), true);
+		(void)memProbeStarted;
+		Vram::SpillLab::OnPresent();
 		if (Harness().feature.empty())
 			Harness().feature = a_feature;
 		{

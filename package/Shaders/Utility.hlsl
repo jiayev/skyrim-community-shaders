@@ -9,12 +9,24 @@
 #if defined(RENDER_SHADOWMASK) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB) || defined(RENDER_SHADOWMASKDPB)
 #	define RENDER_SHADOWMASK_ANY
 #endif
+// A pulled point light's view clips its hemisphere with a clip distance (DCLFShadowVertex), the plane the engine's stage discards at:
+// the value is linear over a triangle either way. So its opaque casters need no pixel stage and keep early depth testing.
+#if defined(DCLF_PULLED) && defined(RENDER_SHADOWMAP_PB)
+#	define DCLF_PARABOLA_CLIP
+#endif
 // Drawcall Limit Fix's depth-only draws of a technique without an alpha test: the pixel stage is compiled empty (main, below), so
 // the vertex stage passes it nothing either. Both stages are built from one technique (ShaderPrograms::FindShadow), so both see this.
 #if defined(DCLF_BINDLESS) && (defined(RENDER_SHADOWMAP) || defined(RENDER_DEPTH)) && !defined(ALPHA_TEST) && !defined(ADDITIONAL_ALPHA_MASK) && \
-	!defined(RENDER_SHADOWMAP_PB) && !defined(RENDER_SHADOWMASK_ANY) && !defined(DEBUG_SHADOWSPLIT) && !defined(DEBUG_COLOR) && \
+	(!defined(RENDER_SHADOWMAP_PB) || defined(DCLF_PARABOLA_CLIP)) && !defined(RENDER_SHADOWMASK_ANY) && !defined(DEBUG_SHADOWSPLIT) && !defined(DEBUG_COLOR) && \
 	!defined(DEPTH_WRITE_DECALS) && !defined(STENCIL_ABOVE_WATER) && !(defined(DCLF_PULLED) && defined(RENDER_NORMAL))
 #	define DCLF_EMPTY_PIXEL
+#endif
+// A pulled shadow view's alpha test, the plain kind: the pixel stage only discards. So it takes its reference flat from the vertex stage,
+// reads the diffuse without a per-lane descriptor loop (a draw's lanes share it), does not take the upscaler's mip bias, and exports
+// nothing (the view has no colour target). Foliage overdraws these views many times, so each of these is many wave's memory waits.
+#if defined(DCLF_PULLED) && defined(RENDER_SHADOWMAP) && defined(ALPHA_TEST) && !defined(ADDITIONAL_ALPHA_MASK) && !defined(GRAYSCALE_TO_ALPHA) && \
+	!defined(GRAYSCALE_MASK) && !defined(OPAQUE_EFFECT) && !defined(RENDER_SHADOWMASK_ANY) && !defined(DEBUG_SHADOWSPLIT) && !defined(DEBUG_COLOR)
+#	define DCLF_SHADOW_ALPHA
 #endif
 // Drawcall Limit Fix's refraction draw (T7d; DrawPipelines::RequestRefraction, kRefractionTechnique): the pulled RENDER_NORMAL build,
 // whose stages below replace the shadow views' pulled ones. One pipeline draws every refraction object: the technique's other variants
@@ -95,8 +107,15 @@ struct VS_OUTPUT
 #if defined(DCLF_PULLED)
 	// The draw's diffuse descriptor and object word, for the pixel stage of a pulled draw (DCLF_PULLED, below).
 	nointerpolation uint2 DCLFDraw: TEXCOORD7;
-	// The view's depth clipping, as its viewport's depth range would have it (DCLFDepthRange, below).
+#	if defined(DCLF_SHADOW_ALPHA)
+	nointerpolation float DCLFAlphaRef: TEXCOORD8;
+#	endif
+	// The view's depth clipping, as its viewport's depth range would have it (DCLFDepthRange, below), and a point light's hemisphere.
+#	if defined(DCLF_PARABOLA_CLIP)
+	float3 DCLFClip: SV_ClipDistance0;
+#	else
 	float2 DCLFClip: SV_ClipDistance0;
+#	endif
 #endif
 #if defined(DCLF_REFRACTION)
 	// The draw's diffuse's sampler, from its material row (DCLFMaterialSamplerIndex).
@@ -191,7 +210,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	else
 
 	precise float4 positionMS = float4(input.PositionMS.xyz, 1.0);
-	float4 positionCS = float4(0, 0, 0, 0);
+	DXC_PRECISE float4 positionCS = float4(0, 0, 0, 0);
 
 	float3 normalMS = float3(1, 1, 1);
 #		if defined(NORMALS)
@@ -421,7 +440,11 @@ VS_OUTPUT DCLFShadowVertex(uint index, uint a_instance)
 	// own viewport gives (depth bias applies after it either way), and the clip distances keep its clipping, z in [0, w]
 	// before the transform (the views' rasterizer states clip depth, never clamp it: DrawPipelines::ShadowRasterStateId).
 	const float clipZ = vsout.PositionCS.z;
+#		if defined(DCLF_PARABOLA_CLIP)
+	vsout.DCLFClip = float3(clipZ, vsout.PositionCS.w - clipZ, vsout.TexCoord1.z);
+#		else
 	vsout.DCLFClip = float2(clipZ, vsout.PositionCS.w - clipZ);
+#		endif
 	vsout.PositionCS.z = DCLFDepthRange.x * vsout.PositionCS.w + clipZ * DCLFDepthRange.y;
 	// The pixel stage's: the diffuse's descriptor (the shadow material row's, kShadowRowDiffuseOffset) and the object word; nothing for
 	// an empty one (DCLF_EMPTY_PIXEL).
@@ -429,6 +452,9 @@ VS_OUTPUT DCLFShadowVertex(uint index, uint a_instance)
 	vsout.DCLFDraw = uint2(0, 0);
 #		else
 	vsout.DCLFDraw = uint2(vk::RawBufferLoad<uint>(materialRow + 16), DCLFObjectWord);
+#			if defined(DCLF_SHADOW_ALPHA)
+	vsout.DCLFAlphaRef = DCLFObjects[DCLFObjectIndex].AlphaTestRef;
+#			endif
 #		endif
 	return vsout;
 }
@@ -599,7 +625,11 @@ SamplerState SampGrayscaleSampler : register(s7);
 // A pulled draw's diffuse, by the descriptor its vertex stage passes (DCLFDraw.x): the draw has no binding record of its own.
 Texture2D<float4> DCLFDiffuse(uint a_index)
 {
+#		if defined(DCLF_SHADOW_ALPHA)
+	return ResourceDescriptorHeap[a_index];
+#		else
 	return ResourceDescriptorHeap[NonUniformResourceIndex(a_index)];
+#		endif
 }
 #		define TexBaseSampler DCLFDiffuse(input.DCLFDraw.x)
 #	else
@@ -662,7 +692,10 @@ float2 GetShadowPCFOffset(uint index)
 #	endif
 }
 
-#	if defined(DCLF_PULLED)
+#	if defined(DCLF_SHADOW_ALPHA)
+static float DCLFShadowAlphaRef;  // set by main, from its input
+#		define AlphaTestRefRS DCLFShadowAlphaRef
+#	elif defined(DCLF_PULLED)
 // One pipeline draws every threshold, so the reference is the object's own (its word set by main, below).
 #		define AlphaTestRefRS (DCLFObjects[DCLFObjectIndex].AlphaTestRef)
 #	elif defined(DCLF_BINDLESS)
@@ -766,6 +799,9 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(DCLF_PULLED)
 	DCLFObjectWord = input.DCLFDraw.y;  // what AlphaTestRefRS reads
 #	endif
+#	if defined(DCLF_SHADOW_ALPHA)
+	DCLFShadowAlphaRef = input.DCLFAlphaRef;
+#	endif
 
 #	if defined(ADDITIONAL_ALPHA_MASK)
 	uint2 alphaMask = input.PositionCS.xy;
@@ -803,9 +839,13 @@ PS_OUTPUT main(PS_INPUT input)
 	baseTexCoord = input.TexCoord0.xy;
 #		endif
 #	endif
+#	if defined(DCLF_SHADOW_ALPHA)
+	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, baseTexCoord);
+#	else
 	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, baseTexCoord, SharedData::MipBias);
+#	endif
 
-#	if defined(RENDER_SHADOWMAP_PB)
+#	if defined(RENDER_SHADOWMAP_PB) && !defined(DCLF_PARABOLA_CLIP)
 	if (input.TexCoord1.z < 0) {
 		discard;
 	}
@@ -1075,6 +1115,11 @@ PS_OUTPUT main(PS_INPUT input)
 	if (-AlphaTestRefRS + testAlpha < 0) {
 		discard;
 	}
+#	endif
+
+#	if defined(DCLF_SHADOW_ALPHA)
+	psout.Color = 0;
+	return psout;
 #	endif
 
 #	if defined(RENDER_SHADOWMASK_ANY)

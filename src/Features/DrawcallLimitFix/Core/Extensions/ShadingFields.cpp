@@ -92,6 +92,8 @@ namespace DCLF::Extensions
 		for (const auto& item : a_view.ShadingChanges())
 			changedObjects.push_back(item.slot);
 		for (const auto& entry : State().fields) {
+			ZoneScopedN("CS.DCLF.ShadingField");
+			ZoneText(entry.name.data(), entry.name.size());
 			Api::ShadingFieldCapture capture{ entry.contribution.field, geometry, values, changedObjects };
 			// A slot that left the field's class first: its value zero (a member's own value follows: a slot that left and joined again
 			// takes its new owner's, which its capture puts as a joined member's).

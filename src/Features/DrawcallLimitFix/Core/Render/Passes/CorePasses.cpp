@@ -4,6 +4,7 @@
 // epoch's forward.*: Features/Forward; the shadow epoch's shadows.*, the occlusion maps' with it: Features/Shadows/Engine).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
@@ -139,7 +140,9 @@ namespace DCLF::Draws
 			const auto& resources = a_context.Main();
 			if (!resources->forwardSort)
 				return nullptr;
-			return MakeForwardSortPass(resources->sequences, { nullptr, resources->classCounts }, [main = resources](const org::PassPrepareContext& a_preparation) {
+			// The CPU sorts the forward draws (GraphConditions::forwardDirect): the decal buckets are this pass's alone.
+			const bool decalsOnly = CurrentGraphConditions().forwardDirect;
+			return MakeForwardSortPass(resources->sequences, { nullptr, resources->classCounts }, [main = resources, decalsOnly](const org::PassPrepareContext& a_preparation) {
 				const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::MainOpaque);
 				if (!frame || !BuildsDraws(a_preparation, *main, RenderGraphRuntime::Segment::MainOpaque))
 					return ForwardSortSource{};
@@ -151,6 +154,8 @@ namespace DCLF::Draws
 						const auto& bucket = frame->classPlan->decals[b];
 						source.ranges.push_back({ bucket.first, bucket.capacity, frame->classPlan->DecalCountWord(b) * kWord, ForwardSortConstants::kRankInstance });
 					}
+				if (decalsOnly)
+					return source;
 				// The forward buckets' pairs (CS_DCLF_FORWARD_PLAIN), each counted by its classCounts word past the classes', ranked into
 				// firstInstance for the plain draw.
 				if (frame->classPlan && !frame->classPlan->forward.empty()) {

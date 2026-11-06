@@ -215,9 +215,9 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 				logger::info("{}", DCLF::IndirectDraws::Get().ShadowCapabilityReport());
 			if (shadow.cullTested || shadow.cullClass)
 				logger::info("[DCLF] shadow culling (view {} mode {:#x}, sampled): {} of the caster class, {} outside the sun's entry, {} small, {} under a fading root, "
-							 "{} below the size threshold ({} texels); {} tested, {} drawn, {} rejected by the frustum",
+							 "{} below the size threshold ({} texels); {} tested, {} drawn, {} rejected by the frustum, {} lost for want of a caster row",
 					shadow.cullSampledView, shadow.cullSampledMode, shadow.cullClass, shadow.cullSunEntryOut, shadow.cullMinRadius, shadow.cullRootFading,
-					shadow.cullBelowTexels, DCLF::Draws::shadowMinTexels.load(std::memory_order_relaxed), shadow.cullTested, shadow.cullDrawn, shadow.cullRejected);
+					shadow.cullBelowTexels, DCLF::Draws::shadowMinTexels.load(std::memory_order_relaxed), shadow.cullTested, shadow.cullDrawn, shadow.cullRejected, shadow.cullRowsLost);
 			if (DCLF::Draws::shadowSizeProbe.load(std::memory_order_relaxed) >= 0)
 				logger::info("[DCLF] shadow size probe (view {} mode {:#x}): drawn casters / triangles by bound radius <256 {} / {}, <1024 {} / {}, <4096 {} / {}, larger {} / {}",
 					shadow.cullSampledView, shadow.cullSampledMode, shadow.probeCasters[0], shadow.probeTriangles[0], shadow.probeCasters[1], shadow.probeTriangles[1],

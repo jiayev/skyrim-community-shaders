@@ -27,9 +27,15 @@ namespace LandscapeSeams
 	{
 		return DCLFShading[DCLFObjectIndex].LandscapeSeamsTextures[index >> 2][index & 3];
 	}
+	// A heap index that stays in the heap on a row with no seam data (zero). A compiler may load a descriptor before the branch that
+	// guards its use, and 0xFFFFFFFF reads past the heap: a GPU page fault on AMD.
+	uint HeapIndex(uint index)
+	{
+		return max(Descriptor(index), 1u) - 1u;
+	}
 	Texture2D<float4> Borrowed(uint layer, uint texture)
 	{
-		return ResourceDescriptorHeap[Descriptor(2 + layer * 3 + texture) - 1];
+		return ResourceDescriptorHeap[HeapIndex(2 + layer * 3 + texture)];
 	}
 #else
 	Texture2DArray<float4> Weights : register(t117);
@@ -55,7 +61,7 @@ namespace LandscapeSeams
 	float4 FetchSlice(int2 cell, float2 blend, int slice)
 	{
 #if defined(DCLF_BINDLESS_DRAW)
-		Texture2DArray<float4> Weights = ResourceDescriptorHeap[Descriptor(0) - 1];
+		Texture2DArray<float4> Weights = ResourceDescriptorHeap[HeapIndex(0)];
 #endif
 		float4 w00 = Weights.Load(int4(cell, slice, 0));
 		float4 w10 = Weights.Load(int4(cell + int2(1, 0), slice, 0));
@@ -71,7 +77,7 @@ namespace LandscapeSeams
 		Data = (QuadData)0;
 		if (Descriptor(0) == 0 || Descriptor(1) == 0)
 			return;
-		StructuredBuffer<QuadData> Quad = ResourceDescriptorHeap[Descriptor(1) - 1];
+		StructuredBuffer<QuadData> Quad = ResourceDescriptorHeap[HeapIndex(1)];
 #endif
 		Data = Quad[0];
 		[branch] if ((Data.Flags & FlagValid) != 0)

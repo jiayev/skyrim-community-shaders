@@ -4,6 +4,11 @@
 #include "State.h"
 #include "Utils/SharedShaderStore.h"
 
+#include <fstream>
+#include <mutex>
+
+#include <nlohmann/json.hpp>
+
 namespace Util
 {
 	namespace
@@ -75,6 +80,38 @@ namespace Util
 		bool IsTransient(HRESULT a_result, const std::string& a_diagnostics)
 		{
 			return a_result == E_OUTOFMEMORY || a_diagnostics.empty();
+		}
+
+		// CS_FXC_REQUEST_DUMP=<folder>: one line per request in fxc-requests.jsonl, with what is needed to repeat the build outside the
+		// game and its artifact's key in the store. tools/shader-compare/dxc_survey.py reads it.
+		void DumpRequest(const FxcRequest& a_request, const org::services::ShaderStoreResult& a_store)
+		{
+			static const auto folder = []() -> std::filesystem::path {
+				wchar_t value[MAX_PATH];
+				const DWORD length = GetEnvironmentVariableW(L"CS_FXC_REQUEST_DUMP", value, MAX_PATH);
+				return length && length < MAX_PATH ? std::filesystem::path(value) : std::filesystem::path{};
+			}();
+			if (folder.empty())
+				return;
+			static std::mutex mutex;
+			static std::ofstream out = [] {
+				std::error_code ec;
+				std::filesystem::create_directories(folder, ec);
+				return std::ofstream(folder / "fxc-requests.jsonl", std::ios::binary | std::ios::trunc);
+			}();
+			nlohmann::json line;
+			line["root"] = Util::WStringToString(a_request.root.generic_wstring());
+			line["entry"] = a_request.entryPoint;
+			line["profile"] = a_request.profile;
+			line["flags"] = a_request.flags;
+			line["key"] = a_store.compileKey.ToHex();
+			line["failed"] = a_store.outcome == org::services::ShaderStoreOutcome::Failed;
+			auto& defines = line["defines"] = nlohmann::json::array();
+			for (const auto* define = a_request.defines; define && define->Name; ++define)
+				defines.push_back({ define->Name, define->Definition ? define->Definition : "" });
+			std::lock_guard lock(mutex);
+			out << line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) << "\n";
+			out.flush();
 		}
 
 		class FxcBuild final : public org::services::ShaderVariantBuild
@@ -168,6 +205,7 @@ namespace Util
 		FxcResult result;
 		result.variantKey = request.variantKey;
 		result.store = SharedShaderStore()->Resolve(request);
+		DumpRequest(a_request, result.store);
 		if (result.store.outcome != ShaderStoreOutcome::Failed && SUCCEEDED(D3DCreateBlob(result.store.binary.size(), result.blob.put()))) {
 			std::memcpy(result.blob->GetBufferPointer(), result.store.binary.data(), result.store.binary.size());
 			result.store.binary = {};

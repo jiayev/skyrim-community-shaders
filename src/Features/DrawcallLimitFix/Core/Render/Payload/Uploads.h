@@ -124,7 +124,8 @@ namespace DCLF::Draws
 		void Stage(const Target& a_target, const void* a_data, std::size_t a_bytes, std::uint64_t a_offset)
 		{
 			batch->Stage(org::runtime::UploadTarget::FromShared(a_target), static_cast<std::size_t>(a_offset), a_data, a_bytes);
-			FrameData::Note(FrameDataWhere("staged", a_target, a_offset), a_bytes);
+			if (FrameData::Enabled())
+				FrameData::Note(FrameDataWhere("staged", a_target, a_offset), a_bytes);
 		}
 		// A versioned buffer: the version the adopted set names (every target is one of its buffers: a buffer of the set is named by
 		// every set sealed after its registration, and a commit writes only what its revision's shapes name).
@@ -185,12 +186,12 @@ namespace DCLF::Draws
 	private:
 		void Write(const std::shared_ptr<org::Buffer>& a_target, const void* a_data, std::size_t a_bytes, std::uint64_t a_offset)
 		{
-			if (Latch(a_target.get(), a_data, a_bytes, a_offset, [&] { fallback.Stage(a_target, a_data, a_bytes, a_offset); }))
+			if (Latch(a_target.get(), a_data, a_bytes, a_offset, [&] { fallback.Stage(a_target, a_data, a_bytes, a_offset); }) && FrameData::Enabled())
 				FrameData::Note(FrameDataWhere("latched", a_target, a_offset), a_bytes);
 		}
 		void Write(const Versioned& a_target, const void* a_data, std::size_t a_bytes, std::uint64_t a_offset)
 		{
-			if (Latch(a_target->Key(), a_data, a_bytes, a_offset, [&] { fallback.Stage(a_target, a_data, a_bytes, a_offset); }))
+			if (Latch(a_target->Key(), a_data, a_bytes, a_offset, [&] { fallback.Stage(a_target, a_data, a_bytes, a_offset); }) && FrameData::Enabled())
 				FrameData::Note(FrameDataWhere("latched", fallback.TargetOf(a_target), a_offset), a_bytes);
 		}
 		// True when the value went into the latch block (false: nothing, or staged by a_fallback).

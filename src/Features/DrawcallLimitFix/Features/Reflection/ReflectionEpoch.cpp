@@ -73,7 +73,7 @@ namespace DCLF::Features::Reflection
 		IndirectDraws::ViewListed listed;
 		if (draws.TakeViewInputs(kView, IndirectDraws::ViewInputsFrom::DepthThisFrameTargetAfter, listed) != IndirectDraws::ViewInputsTaken::Taken)
 			return skip(3);
-		if (!FrameIndirectState().valid || !draws.SetUpView(kView) || !draws.ImportViewTarget(kView, reflection.cube.get()))
+		if (!FrameIndirectStateValid() || !draws.SetUpView(kView) || !draws.ImportViewTarget(kView, reflection.cube.get()))
 			return skip(4);
 		// Not DCLF's this frame (no claims, or the cube was imported since the graph was built): the engine rendered the faces whole.
 		if (!draws.ViewCovered(kView))

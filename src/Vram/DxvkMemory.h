@@ -18,6 +18,9 @@ namespace Vram
 	/** @brief Whether DXVK's VRAM attribution exports resolved. */
 	bool DxvkAvailable();
 
+	/** @brief The share of the driver's VRAM budget above which DXVK stops keeping slack in its memory chunks. A no-op without DXVK. */
+	void SetDxvkDefragPressure(float a_percent);
+
 	/**
 	 * @brief Labels every buffer and image DXVK creates on this thread while it lives with a_owner ("CS/ScreenSpaceGI",
 	 * "Game/RenderTarget"). Scopes nest; the innermost wins. a_owner must outlive the scope.

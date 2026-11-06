@@ -296,7 +296,8 @@ namespace DCLF::Direct::detail
 				auto& site = NewView(a_slot, a_depth, a_view.type, face.view, !reflection);
 				site.bindings = &b;
 				face.site = &site;
-				if (!a_view.valid || (reflection && face.face >= a_view.targets->faces))
+				// A GPU-driven frame culls it for its forward part alone: no depth of its own to record.
+				if (!a_slot.ownsEpochs || !a_view.valid || (reflection && face.face >= a_view.targets->faces))
 					continue;
 				auto& inheritance = site.inheritance;
 				site.secondary = true;
@@ -495,16 +496,19 @@ namespace DCLF::Direct::detail
 		begin.minDepth = 0.0f;
 		begin.maxDepth = shape.depthRange;
 		begin.debugName = "DCLF direct first person";
-		list.BeginPass(begin);
-		RecordContext colour{ list, *slot.set, ViewType::FirstPerson, 0, Site::FirstPerson, false, run->colour, &slot.counters };
-		if (BeginList(colour))
-			for (const auto* batch : batches)
-				if (batch->count)
-					RecordBatch(colour, *batch);
-		list.EndPass();
+		// A GPU-driven frame's graph draws the buckets, and its lanes are the forward part's alone.
+		if (slot.ownsEpochs) {
+			list.BeginPass(begin);
+			RecordContext colour{ list, *slot.set, ViewType::FirstPerson, 0, Site::FirstPerson, false, run->colour, &slot.counters };
+			if (BeginList(colour))
+				for (const auto* batch : batches)
+					if (batch->count)
+						RecordBatch(colour, *batch);
+			list.EndPass();
+		}
 		// The forward part: the forward lanes with the main set's pipelines (the others have none there), farthest first, onto every main
 		// target.
-		if (shape.forwardRanges.empty())
+		if (slot.ownsEpochs && shape.forwardRanges.empty())
 			return;
 		Barrier(list, kAttachments);
 		begin.colors = { colours.data(), main.count };
@@ -607,13 +611,15 @@ namespace DCLF::Direct
 		state->forward = face.bindings;
 		state->forward.main = &view->shape->indirect;
 		state->forward.viewProj = face.view.viewProj;
-		if (!view->shape->forwardRanges.empty()) {
+		bool rowsDone = true;
+		if (!slot->ownsEpochs || !view->shape->forwardRanges.empty()) {
 			// The forward lanes' rows (the producer's rows change at the next Kick); a frame whose producer is not done waits here (counted).
 			const auto* rows = FrameValues::Get().RowsIfDone();
 			if (!rows) {
 				++s.window.rowWaits;
 				rows = FrameValues::Get().RowsIfDone(true);
 			}
+			rowsDone = rows != nullptr;
 			if (rows) {
 				auto& kept = FirstPersonRowsOf(*slot);
 				if (kept.size() < rows->size())
@@ -628,6 +634,8 @@ namespace DCLF::Direct
 		// Its view is the depth site's (for the report's drawn counts and the callback's drain; its batches already arrived).
 		run.views.push_back(face.site);
 		run.viewState = std::move(state);
+		if (!slot->ownsEpochs)
+			return HandOffRun(run, rowsDone);
 		SetPending(run);
 		return true;
 	}

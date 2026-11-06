@@ -83,8 +83,8 @@ namespace DCLF
 	inline constexpr std::uint32_t kFrameLightingRows = 6;
 	using FrameLighting = std::array<float, kFrameLightingRows * 4>;
 	// Fog (VS PerTechnique FogParam, FogNearColor, FogFarColor) is the frame's and drifts with the time of day; the DCLF_BINDLESS
-	// vertex stage reads it from DCLFFrameFog (VS b13), so no technique row changes with it. PS FogColor drifts too but no Lighting
-	// stage reads it: a technique row keeps the one it was made with.
+	// vertex stage reads it from DCLFFrameFog (VS b13), so no technique row changes with it. PS FogColor's colour drifts too but no Lighting
+	// stage reads it: a technique row keeps the one it was made with. The forward stage reads its w (the fade, invFrameBufferRange).
 	inline constexpr std::uint32_t kVSFrameFog[3] = { 13, 14, 15 };
 	inline constexpr std::uint32_t kFrameFogRegister = 13;
 	inline constexpr std::uint32_t kFrameFogRows = 3;

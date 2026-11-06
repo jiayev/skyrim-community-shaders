@@ -114,6 +114,7 @@ namespace DCLF
 			domains[Coordinator.domain]->workers = 1;
 			domains[Preparation.domain]->workers = preparationWorkers;
 			domains[Scene.domain]->workers = 1;
+			domains[Streaming.domain]->workers = kStreamingWorkers;
 		}
 		// Every worker of every domain looks again (a cancelled scope's timers, shutdown).
 		void WakeAll()
@@ -273,7 +274,7 @@ namespace DCLF
 	SceneExecutor::SceneExecutor(unsigned preparationWorkers, ThreadStart onThreadStart, ThreadPriority priority, unsigned frameCriticalWorkers) :
 		state(std::make_shared<State>(preparationWorkers, frameCriticalWorkers, std::move(priority))), threads(std::make_unique<Threads>())
 	{
-		threads->workers.reserve(2 + preparationWorkers + frameCriticalWorkers);
+		threads->workers.reserve(2 + kStreamingWorkers + preparationWorkers + frameCriticalWorkers);
 		try {
 			threads->workers.emplace_back([shared = state, onThreadStart] {
 				if (onThreadStart)
@@ -291,6 +292,12 @@ namespace DCLF
 					onThreadStart(Scene, 0);
 				shared->Run(2);
 			});
+			for (unsigned i = 0; i < kStreamingWorkers; ++i)
+				threads->workers.emplace_back([shared = state, onThreadStart, i] {
+					if (onThreadStart)
+						onThreadStart(Streaming, i);
+					shared->Run(Streaming.domain);
+				});
 			for (unsigned i = 0; i < frameCriticalWorkers; ++i)
 				threads->workers.emplace_back([shared = state, onThreadStart, i] {
 					if (onThreadStart)

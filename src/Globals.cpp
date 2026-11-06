@@ -1,4 +1,5 @@
 #include "Globals.h"
+#include "GpuEventTimers.h"
 
 #include "CSEditor/SceneManager/SceneManager.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
@@ -52,6 +53,7 @@
 #include "Features/ViewAtmosphere.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
+#include "Features/TextureStreaming.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
 #include "Menu.h"
@@ -61,6 +63,7 @@
 #include "TruePBR.h"
 #include "Utils/Game.h"
 #include "Utils/SwitchFile.h"
+#include "TextureStreaming/Census.h"
 
 #include <array>
 #include <atomic>
@@ -113,6 +116,7 @@ namespace globals
 		VolumetricLighting volumetricLighting{};
 		ViewAtmosphere viewAtmosphere{};
 		VRAMBudget vramBudget{};
+		TextureStreamingFeature textureStreaming{};
 		WaterEffects waterEffects{};
 		PerformanceOverlay performanceOverlay{};
 		WetnessEffects wetnessEffects{};
@@ -562,8 +566,310 @@ namespace globals
 		}
 	}
 
+	// CS_PASS_SKIP's drops: the engine runs as usual, and these calls do nothing inside the chosen event.
+	struct PassSkipDrawIndexed
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b, INT c)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b, c);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDraw
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDrawIndexedInstanced
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b, UINT c, INT d, UINT e)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b, c, d, e);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDrawInstanced
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b, UINT c, UINT d)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b, c, d);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDrawAuto
+	{
+		static void thunk(ID3D11DeviceContext* a_context)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDrawIndexedInstancedIndirect
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a, UINT b)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDrawInstancedIndirect
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a, UINT b)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDispatch
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b, UINT c)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b, c);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct PassSkipDispatchIndirect
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a, UINT b)
+		{
+			if (!GpuEventTimers::PassSkipDropping())
+				func(a_context, a, b);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct OpDrawIndexed
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b, INT c)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "DrawIndexed", a, nullptr, nullptr, _ReturnAddress());
+			func(a_context, a, b, c);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpDraw
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "Draw", a, nullptr, nullptr, _ReturnAddress());
+			func(a_context, a, b);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpDrawIndexedInstanced
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b, UINT c, INT d, UINT e)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "DrawIdxInst", a, nullptr, nullptr, _ReturnAddress());
+			func(a_context, a, b, c, d, e);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpDrawInstanced
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b, UINT c, UINT d)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "DrawInst", a, nullptr, nullptr, _ReturnAddress());
+			func(a_context, a, b, c, d);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpDrawIndexedInstancedIndirect
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a, UINT b)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "DrawIdxIndirect", 0, nullptr, nullptr, _ReturnAddress());
+			func(a_context, a, b);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpDrawInstancedIndirect
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a, UINT b)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "DrawIndirect", 0, nullptr, nullptr, _ReturnAddress());
+			func(a_context, a, b);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpDispatch
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a, UINT b, UINT c)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "Dispatch", a * b * c, nullptr, nullptr, _ReturnAddress());
+			func(a_context, a, b, c);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpDispatchIndirect
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a, UINT b)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "DispatchIndirect", 0, nullptr, nullptr, _ReturnAddress());
+			func(a_context, a, b);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpCopyRegion
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a, UINT b, UINT c, UINT d, UINT e, ID3D11Resource* f, UINT g, const D3D11_BOX* h)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "CopyRegion", h ? 1 : 0, a, nullptr, _ReturnAddress());
+			func(a_context, a, b, c, d, e, f, g, h);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpCopy
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a, ID3D11Resource* b)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "Copy", 0, a, nullptr, _ReturnAddress());
+			func(a_context, a, b);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpUpdate
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a, UINT b, const D3D11_BOX* c, const void* d, UINT e, UINT f)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "Update", 0, a, nullptr, _ReturnAddress());
+			func(a_context, a, b, c, d, e, f);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpClearRTV
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a, const FLOAT* b)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "ClearRTV", 0, nullptr, a, _ReturnAddress());
+			func(a_context, a, b);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpClearUAVU
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11UnorderedAccessView* a, const UINT* b)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "ClearUAVU", 0, nullptr, a, _ReturnAddress());
+			func(a_context, a, b);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpClearUAVF
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11UnorderedAccessView* a, const FLOAT* b)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "ClearUAVF", 0, nullptr, a, _ReturnAddress());
+			func(a_context, a, b);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpClearDSV
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11DepthStencilView* a, UINT b, FLOAT c, UINT8 d)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "ClearDSV", 0, nullptr, a, _ReturnAddress());
+			func(a_context, a, b, c, d);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpGenMips
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "GenMips", 0, nullptr, a, _ReturnAddress());
+			func(a_context, a);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct OpResolve
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a, UINT b, ID3D11Resource* c, UINT d, DXGI_FORMAT e)
+		{
+			const bool on = GpuEventTimers::OpBegin(a_context, "Resolve", 0, a, nullptr, _ReturnAddress());
+			func(a_context, a, b, c, d, e);
+			if (on)
+				GpuEventTimers::OpEnd();
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
+		if (GpuEventTimers::PassSkipRequested()) {
+			stl::detour_vfunc<12, PassSkipDrawIndexed>(a_context);
+			stl::detour_vfunc<13, PassSkipDraw>(a_context);
+			stl::detour_vfunc<20, PassSkipDrawIndexedInstanced>(a_context);
+			stl::detour_vfunc<21, PassSkipDrawInstanced>(a_context);
+			stl::detour_vfunc<38, PassSkipDrawAuto>(a_context);
+			stl::detour_vfunc<39, PassSkipDrawIndexedInstancedIndirect>(a_context);
+			stl::detour_vfunc<40, PassSkipDrawInstancedIndirect>(a_context);
+			stl::detour_vfunc<41, PassSkipDispatch>(a_context);
+			stl::detour_vfunc<42, PassSkipDispatchIndirect>(a_context);
+		}
+		TextureStreaming::Census::InstallD3DHooks(a_context);
+		if (GpuEventTimers::OpProbeRequested()) {
+			stl::detour_vfunc<12, OpDrawIndexed>(a_context);
+			stl::detour_vfunc<13, OpDraw>(a_context);
+			stl::detour_vfunc<20, OpDrawIndexedInstanced>(a_context);
+			stl::detour_vfunc<21, OpDrawInstanced>(a_context);
+			stl::detour_vfunc<39, OpDrawIndexedInstancedIndirect>(a_context);
+			stl::detour_vfunc<40, OpDrawInstancedIndirect>(a_context);
+			stl::detour_vfunc<41, OpDispatch>(a_context);
+			stl::detour_vfunc<42, OpDispatchIndirect>(a_context);
+			stl::detour_vfunc<46, OpCopyRegion>(a_context);
+			stl::detour_vfunc<47, OpCopy>(a_context);
+			stl::detour_vfunc<48, OpUpdate>(a_context);
+			stl::detour_vfunc<50, OpClearRTV>(a_context);
+			stl::detour_vfunc<51, OpClearUAVU>(a_context);
+			stl::detour_vfunc<52, OpClearUAVF>(a_context);
+			stl::detour_vfunc<53, OpClearDSV>(a_context);
+			stl::detour_vfunc<54, OpGenMips>(a_context);
+			stl::detour_vfunc<57, OpResolve>(a_context);
+		}
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		stl::detour_vfunc<48, ID3D11DeviceContext_UpdateSubresource>(a_context);

@@ -28,10 +28,13 @@ namespace DCLF
 		static constexpr org::async::TaskClass Coordinator{ 0, 0 };
 		static constexpr org::async::TaskClass Preparation{ 0, 1 };
 		static constexpr org::async::TaskClass Scene{ 0, 2 };
+		// Texture streaming's window builds: blocking reads, so apart from the preparation pool the frame's work runs on.
+		static constexpr org::async::TaskClass Streaming{ 0, 3 };
 		// A frame-critical thread's class in ThreadStart alone (not a dispatch class: DispatchFrameCritical reaches them).
-		static constexpr org::async::TaskClass FrameCriticalThread{ 0, 3 };
-		static constexpr org::async::GraphSchedulingLayout Layout{ 1, 3, Coordinator, Coordinator };
-		static constexpr std::size_t kDomains = 3;
+		static constexpr org::async::TaskClass FrameCriticalThread{ 0, 4 };
+		static constexpr org::async::GraphSchedulingLayout Layout{ 1, 4, Coordinator, Coordinator };
+		static constexpr std::size_t kDomains = 4;
+		static constexpr unsigned kStreamingWorkers = 2;
 
 		struct Statistics
 		{

@@ -1,13 +1,13 @@
 #pragma once
 
 // Forward (CS_DCLF_FORWARD, CS_DCLF_REFRACTION; dclf-architecture.md, "The forward epoch"): DCLF's blended objects, drawn by the forward
-// epoch (a GPU depth sort, back to front, before the engine's blended draws), and refraction (kRefraction, kTempRefraction), drawn into
+// epoch (sorted back to front, on the CPU across pipelines or on the GPU within each, before the engine's blended draws), and refraction (kRefraction, kTempRefraction), drawn into
 // the refraction normals by the forward epoch's refraction range. The feature registers its switches and live toggles, the forward and
 // refraction object classes' contributions (Api::ObjectClass: the forward epoch's coverage, recording and execution and the Lighting
 // port's derivation read the toggles through them, as data), and the engine's two forward points (ForwardHooks.cpp): the main pass's
 // blended draw, where the epoch runs (ForwardEpoch.cpp: SubmitForwardEpoch, through Core's IndirectDraws::SubmitSharedEpoch) and the
 // refraction normals it drew are marked for the engine, and Main::Draw's refraction point. It owns the epoch's passes (ForwardPasses.cpp:
-// forward.draw, forward.refraction), refraction's preparation and counters, and the epoch's report lines.
+// forward.draw, forward.refraction; on the CPU they are Core's forward site), refraction's preparation and counters, and the epoch's report lines.
 //
 // Core keeps what blended Lighting, Features/Effects (Features/Particles and Features/Billboards through it) and Features/FirstPerson's
 // forward part share: the forward and refraction ranges, the kRasterForward and refraction record bits and keys, ForwardSortCS and the

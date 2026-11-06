@@ -58,6 +58,8 @@ namespace DCLF
 				"0: the passes that prefer the compute queue (build-draws' queries, fades, portal batches, tree wind) run on the graphics queue" },
 			{ ForwardPlain, "CS_DCLF_FORWARD_PLAIN", F, Reduced::Zero, false,
 				"0: the forward epoch draws its range device-generated, a call per state class, instead of a plain draw per pipeline" },
+			{ ForwardDirect, "CS_DCLF_FORWARD_DIRECT", F, Reduced::Zero, false,
+				"0: the GPU-driven graph keeps its forward family (blended, refraction, first person's forward part) on the GPU, sorted per pipeline, instead of the CPU pipeline" },
 			{ MainPlain, "CS_DCLF_MAIN_PLAIN", F, Reduced::Zero, false,
 				"0: the colour pass draws its main range device-generated, a call per state class, instead of a plain draw per pipeline" },
 			{ TerrainPlain, "CS_DCLF_TERRAIN_PLAIN", F, Reduced::Zero, false,
@@ -81,7 +83,7 @@ namespace DCLF
 			{ Cull, "CS_DCLF_CULL", F, Reduced::Cull, false, "off|frustum|occlusion (default): GPU culling, the live toggle's seed" },
 			// The CPU-driven pipeline (an experiment; dclf-architecture.md, "The CPU-driven pipeline"): the live toggles' seeds.
 			{ CpuPipeline, "CS_DCLF_PIPELINE", F, N, false, "auto (default: exteriors GPU-driven, interiors CPU-driven)|manual|gpu|cpu: the draws culled and recorded on the GPU, or culled on the CPU and recorded as direct draws into DXVK's command buffer; gpu and cpu are manual with both kinds of cell (live toggle's seed)" },
-			{ CpuRecord, "CS_DCLF_CPU_RECORD", F, N, false, "serial (default)|parallel: the CPU pipeline's per-frame views recorded by DXVK's CS thread, or into a secondary list per batch on the pool (live toggle's seed)" },
+			{ CpuRecord, "CS_DCLF_CPU_RECORD", F, N, false, "indirect (default)|serial|parallel: the CPU pipeline's per-frame views as indirect draws the cull jobs write, recorded by DXVK's CS thread, or into a secondary list per batch on the pool (live toggle's seed)" },
 			{ CpuCadence, "CS_DCLF_CPU_CADENCE", F, N, false,
 				"frame|snapshot, or <view>=frame|snapshot,...: the CPU pipeline's views culled and recorded every frame (default) or once per snapshot (main is always per frame; live toggles' seeds)" },
 			{ CpuBatch, "CS_DCLF_CPU_BATCH", F, N, false, "the CPU pipeline's batch lanes (default 4096, rounded up to a multiple of 8; the live setting's seed: dclf:cpu-batch, the menu)" },

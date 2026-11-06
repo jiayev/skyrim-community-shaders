@@ -150,6 +150,23 @@ namespace DCLF::Draws
 			return out;
 		}
 
+		/** @brief The caster rows a_share takes (ShadowResources::casterRows): its draws in each view family it has a key in. */
+		std::uint64_t CasterRowsOf(const DrawBoundStore::ShadowShare& a_share)
+		{
+			ShadowPipelineKey key;
+			std::uint64_t families = 0;
+			bool caster = false;
+			for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+				if (!a_share.KeyOf(m, key))
+					continue;
+				if (IsOcclusionMode(m))
+					++families;
+				else
+					caster = true;
+			}
+			return std::uint64_t(a_share.produced) * (families + (caster ? 1u : 0u));
+		}
+
 		/** @brief Adds a_share's draws to its key in each mode it draws in, or takes them out. */
 		void CountShadowShare(ModeKeyDraws& a_out, const DrawBoundStore::ShadowShare& a_share, bool a_add)
 		{
@@ -174,13 +191,16 @@ namespace DCLF::Draws
 		void AddShadowViewSlots(ShadowResources& a_state, std::uint32_t a_slots, std::uint32_t a_draws, std::uint32_t a_words)
 		{
 			const std::uint32_t draws = a_draws;
-			for (auto s = static_cast<std::uint32_t>(a_state.sequences.size()); s < a_slots; ++s) {
-				// A unit: a draw (ShadowSlotSequences' sequences). Every slot holds the scene's casting bound, so they grow a quarter past it,
+			for (auto s = static_cast<std::uint32_t>(a_state.drawArgs.size()); s < a_slots; ++s) {
+				// A unit: a draw (ShadowSlotSequences). Every slot holds the scene's casting bound, so they grow a quarter past it,
 				// not to a power of two (32 slots in a large list's interiors).
-				static_assert(sizeof(DrawSequence) * 3 / 2 % 4 == 0);
-				a_state.sequences.push_back(MakeVersioned(CreateWords(std::uint64_t(draws) * (sizeof(DrawSequence) * 3 / 2) / 4, true,
-															  fmt::format("cs.dclf.shadow.sequences{}", s).c_str()),
-					{ .extent = { 0, sizeof(DrawSequence) * 3 / 2, 4 }, .policy = org::services::GrowthPolicy::Headroom(25, 64) }));
+				static_assert(kShadowDrawBytes * 3 / 2 <= kShadowDrawUnitBytes && kShadowDrawUnitBytes % 4 == 0);
+				if (s < a_state.drawArgsOwner.size() && a_state.drawArgsOwner[s] < s)
+					a_state.drawArgs.push_back(a_state.drawArgs[a_state.drawArgsOwner[s]]);
+				else
+					a_state.drawArgs.push_back(MakeVersioned(CreateWords(std::uint64_t(draws) * kShadowDrawUnitBytes / 4, true,
+																  fmt::format("cs.dclf.shadow.draw-args{}", s).c_str()),
+						{ .extent = { 0, kShadowDrawUnitBytes, 4 }, .policy = org::services::GrowthPolicy::Headroom(25, 64) }));
 				a_state.count.push_back(CreateWords(kCountWords, true, fmt::format("cs.dclf.shadow.draw-count{}", s).c_str()));
 				// A word per key slot: the latch layout's key slots exactly (doubled there).
 				a_state.bucketCounts.push_back(MakeVersioned(CreateWords(std::max(a_words, 64u), true, fmt::format("cs.dclf.shadow.bucket-counts{}", s).c_str()),
@@ -544,6 +564,7 @@ namespace DCLF
 			if (auto share = ShadowShareOf(a_tables, a_slot, produced); !(share == s.shadow[a_slot])) {
 				CountShadowShare(s.modeKeyDraws, s.shadow[a_slot], false);
 				CountShadowShare(s.modeKeyDraws, share, true);
+				s.casterRows += CasterRowsOf(share) - CasterRowsOf(s.shadow[a_slot]);
 				s.shadow[a_slot] = share;
 				++s.shadowVersion;
 			}
@@ -568,6 +589,7 @@ namespace DCLF
 			s.shadow.assign(count, {});
 			for (auto& keys : s.modeKeyDraws)
 				keys.clear();
+			s.casterRows = 0;
 			s.draws = 0;
 			s.partitioned = partitioned;
 			for (std::size_t o = 0; o < count; ++o)
@@ -685,6 +707,27 @@ namespace DCLF
 		// flight keep the block their set names.
 	}
 
+	void ShareDrawArgs(ShadowResources& a_state, std::span<const ShadowViewLayout> a_placements)
+	{
+		// A light's map slice holds one light a frame: its full-slice views and a paraboloid's first half never draw together, and only
+		// a pair of halves does. Cascades and their volumetric copies do draw together, as do the occlusion maps: they keep their own.
+		std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>, std::uint32_t> owners;
+		for (const auto& placement : a_placements) {
+			if (a_state.drawArgsOwner.size() <= placement.slot) {
+				const auto first = static_cast<std::uint32_t>(a_state.drawArgsOwner.size());
+				a_state.drawArgsOwner.resize(placement.slot + 1);
+				std::iota(a_state.drawArgsOwner.begin() + first, a_state.drawArgsOwner.end(), first);
+			}
+			if (placement.target != kShadowLightTarget)
+				continue;
+			const auto owner = owners.try_emplace({ placement.target, placement.slice, placement.y }, placement.slot).first->second;
+			a_state.drawArgsOwner[placement.slot] = owner;
+			// Slots made before the placements were known.
+			if (placement.slot < a_state.drawArgs.size() && owner != placement.slot)
+				a_state.drawArgs[placement.slot] = a_state.drawArgs[owner];
+		}
+	}
+
 	bool ShadowEngine::SetupShadow()
 	{
 		if (shadow)
@@ -718,6 +761,21 @@ namespace DCLF
 		// At the scene's objects; they grow with them (RequireSceneTables).
 		const std::uint32_t objects = InitialObjectUnits();
 		state->visibility = MakeVersioned(CreateWords(objects, true, "cs.dclf.shadow.visibility"), { .extent = { 0, 4, 4 } });
+		// The caster rows: a unit a row, at the scene's casting bound (RequireShadowSequences); each object's first, as the objects.
+		state->casterRows = MakeVersioned(CreateWords(64u * sizeof(DrawSequence) / 4, true, "cs.dclf.shadow.caster-rows"),
+			{ .extent = { 0, sizeof(DrawSequence), 4 }, .policy = org::services::GrowthPolicy::Headroom(25, 64) });
+		state->casterFirsts = MakeVersioned(CreateWords(objects, true, "cs.dclf.shadow.caster-firsts"), { .extent = { 0, 4, 4 } });
+		state->casterRowsUsed = CreateWords(4u, true, "cs.dclf.shadow.caster-rows-used");
+		state->assignCasterRows = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .entry = L"ShadowCasterRows", .constantWords = kBuildDrawsConstantWords });
+		if (!state->assignCasterRows) {
+			shadowSetupFailed = true;
+			return ShadowNotReady(1, "the caster rows' compute program could not be created");
+		}
+		state->rowsDispatchSignature = CreateDispatchSignature(device, state->assignCasterRows->layout->GetHandle());
+		if (!state->rowsDispatchSignature) {
+			shadowSetupFailed = true;
+			return ShadowNotReady(1, "the caster rows' dispatch signature could not be created");
+		}
 		// Every view of an epoch in one dispatch (BuildDrawsCS's ShadowViews: ShadowBuildDrawsPass).
 		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .entry = L"ShadowViews", .constantWords = kBuildDrawsConstantWords });
 		if (!state->buildDraws) {
@@ -752,7 +810,7 @@ namespace DCLF
 		// Makes the shadow view slots the revision code asked for (render thread) and rebuilds the graph; the revision code waits.
 		auto* host = RenderGraphRuntime::Get().Host();
 		auto& shadow = shadowEngine->shadow;
-		if (const auto request = shadowSlotsSlot.Take(); request && host && shadow && request->slots > shadow->sequences.size()) {
+		if (const auto request = shadowSlotsSlot.Take(); request && host && shadow && request->slots > shadow->drawArgs.size()) {
 			AddShadowViewSlots(*shadow, request->slots, request->sequenceDraws, request->bucketCountWords);
 			host->AddExtension(kShadowExtensionId, [state = shadow] { return Diagnostics::ScheduleDumped(kShadowExtensionId, MakeShadowExtension(state)); });
 			PostRevisionInputs();

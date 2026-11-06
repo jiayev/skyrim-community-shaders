@@ -21,6 +21,7 @@
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
+#include <ORGModuleServices/BackingPool.h>
 #include <Render/RenderGraph/ExternalEpochExecution.h>
 #include <Render/Runtime/ScopedActiveGraphServices.h>
 #include <Resources/Buffers/Buffer.h>
@@ -28,6 +29,7 @@
 #include <rhi.h>
 #include <rhi_interop.h>
 #include <rhi_interop_vulkan.h>
+#include <Tracy/TracyD3D11.hpp>
 
 #include <TlHelp32.h>
 #include <intrin.h>
@@ -139,14 +141,14 @@ namespace DCLF::Direct::detail
 	 * @brief Render thread: the main resources' targets (made once per resources: RTVs and a DSV in heaps of DCLF's own; the ones before
 	 * are kept by the slot of the frame that replaced them, as frames in flight attach them).
 	 */
-	std::shared_ptr<const TargetViews> TargetsOf(FrameSlot& a_slot, const Draws::Resources& a_resources)
+	std::shared_ptr<const TargetViews> TargetsOf(std::vector<std::shared_ptr<const void>>& a_holds, const Draws::Resources& a_resources)
 	{
 		auto& s = S();
 		if (s.targets && s.targets->count == a_resources.targetCount && s.targets->native == a_resources.native &&
 			s.targets->nativeDepth == a_resources.nativeDepth && s.targets->refractionNormals == a_resources.refractionNormals)
 			return s.targets;
 		if (s.targets)
-			a_slot.holds.push_back(std::move(s.targets));
+			a_holds.push_back(std::move(s.targets));
 		auto views = std::make_shared<TargetViews>();
 		views->native = a_resources.native;
 		views->nativeDepth = a_resources.nativeDepth;
@@ -195,6 +197,7 @@ namespace DCLF::Direct::detail
 
 	SiteView& NewView(FrameSlot& a_slot, SiteRun& a_run, ViewType a_type, const CullView& a_view, bool a_depthPass)
 	{
+		ZoneScopedN("CS.DCLF.Cpu.NewView");
 		auto& view = a_slot.views.emplace_back();
 		view.type = a_type;
 		view.view = a_view;
@@ -207,30 +210,41 @@ namespace DCLF::Direct::detail
 		return view;
 	}
 
+	namespace
+	{
+		/**
+		 * @brief A slot's first only while its range is of the index buffer the set's sequences were resolved against: one the frame's tables
+		 * gave other geometry since the set (released, reassigned, re-pointed: a cell's streaming) holds that geometry's indices, which
+		 * the set's sequence would pull its own vertex buffer with, unbounded (a fault past it). Its draws wait for a newer set.
+		 */
+		void PoolFirstsOf(const ViewBatchSet& a_set, const Draws::IndexPool& a_pool, std::vector<std::uint32_t>& a_firsts, std::uint32_t& a_stale)
+		{
+			const auto& resolved = a_set.geometryIndexAddress;
+			a_firsts.assign(a_pool.slotFirst.size(), Draws::IndexPool::kNoRange);
+			for (std::size_t g = 0; g < a_pool.slotFirst.size(); ++g) {
+				if (a_pool.slotFirst[g] == Draws::IndexPool::kNoRange || g >= resolved.size() || !resolved[g])
+					continue;
+				if (g < a_pool.slots.size() && a_pool.slots[g].address == resolved[g])
+					a_firsts[g] = a_pool.slotFirst[g];
+				else
+					++a_stale;
+			}
+		}
+	}
+
 	/** @brief Render thread: the slot's copy of the index pool's first indices, once a frame (the first site's, after its commit). */
 	void TakePoolFirsts(FrameSlot& a_slot, const Draws::IndexPool* a_pool)
 	{
 		if (a_slot.poolFirstsTaken || !a_pool || !a_slot.set)
 			return;
-		// A slot's first only while its range is of the index buffer the set's sequences were resolved against: one the frame's tables
-		// gave other geometry since the set (released, reassigned, re-pointed: a cell's streaming) holds that geometry's indices, which
-		// the set's sequence would pull its own vertex buffer with, unbounded (a fault past it). Its draws wait for a newer set.
-		const auto& pool = *a_pool;
-		const auto& resolved = a_slot.set->geometryIndexAddress;
-		a_slot.poolFirsts.assign(pool.slotFirst.size(), Draws::IndexPool::kNoRange);
-		for (std::size_t g = 0; g < pool.slotFirst.size(); ++g) {
-			if (pool.slotFirst[g] == Draws::IndexPool::kNoRange || g >= resolved.size() || !resolved[g])
-				continue;
-			if (g < pool.slots.size() && pool.slots[g].address == resolved[g])
-				a_slot.poolFirsts[g] = pool.slotFirst[g];
-			else
-				++a_slot.counters.staleGeometry;
-		}
+		ZoneScopedN("CS.DCLF.Cpu.TakePoolFirsts");
+		ZoneValue(a_pool->slotFirst.size());
+		PoolFirstsOf(*a_slot.set, *a_pool, a_slot.poolFirsts, a_slot.counters.staleGeometry);
 		a_slot.poolFirstsTaken = true;
 	}
 
 	/** @brief Render thread: what a main site's recordings bind (the frame's adopted state; immutable while they read it). */
-	void MainBindings(FrameSlot& a_slot, SiteRun& a_run, const MainCommitInputs& a_inputs)
+	void MainBindings(std::vector<std::shared_ptr<const void>>& a_holds, std::span<const std::uint32_t> a_poolFirsts, SiteRun& a_run, const MainCommitInputs& a_inputs)
 	{
 		auto& b = a_run.bindings;
 		const auto& shape = *a_inputs.shape;
@@ -240,9 +254,9 @@ namespace DCLF::Direct::detail
 		if (a_inputs.adopted && a_inputs.resources->pool)
 			if (auto version = a_inputs.adopted->Find(*a_inputs.resources->pool->indices); version && version->buffer) {
 				b.indexPool = version->buffer->GetAPIResource().GetHandle();
-				a_slot.holds.push_back(std::move(version));
+				a_holds.push_back(std::move(version));
 			}
-		b.poolFirsts = a_slot.poolFirsts;
+		b.poolFirsts = a_poolFirsts;
 		b.framePush = Draws::MainFramePushWords(a_inputs.resources->frameConstantsAddress);
 		// The frame's copy of the animated rows, as the commit latched it (BuildDrawsCS's MaterialRowAddress reads the same).
 		if (const auto* latch = a_inputs.latch)
@@ -269,10 +283,10 @@ namespace DCLF::Direct::detail
 		auto& run = NewBareRun(a_slot, a_site);
 		run.shape = a_inputs.shape;
 		run.resources = a_inputs.resources;
-		run.targets = TargetsOf(a_slot, *a_inputs.resources);
+		run.targets = TargetsOf(a_slot.holds, *a_inputs.resources);
 		run.valid = run.targets && run.targets->valid;
-		MainBindings(a_slot, run, a_inputs);
-		if (a_site == Site::Depth || a_site == Site::Colour)
+		MainBindings(a_slot.holds, a_slot.poolFirsts, run, a_inputs);
+		if (a_slot.ownsEpochs && (a_site == Site::Depth || a_site == Site::Colour))
 			PrepareFamilies(a_slot, run, a_inputs);
 		return run;
 	}
@@ -298,6 +312,9 @@ namespace DCLF::Direct::detail
 		*out = a_culled;
 		out->last = a_index + 1 == a_view.list->size();
 		out->commands = nullptr;
+		out->hasRuns = false;
+		if (DrawsIndirect(a_run, a_view))
+			WriteIndirectDraws(*out, *a_slot.set, a_view.type, a_view.depthPass, a_bindings, a_slot.indirect, a_worker.arena);
 		if (a_secondary && out->count)
 			if (auto* commands = a_worker.lists.Next(a_run.device)) {
 				RecordContext context{ *commands, *a_slot.set, a_view.type, a_view.view.viewIndex, a_run.site, a_view.depthPass, a_bindings, &a_slot.counters };
@@ -493,6 +510,7 @@ namespace DCLF::Direct::detail
 		}
 		if (FrameMode().cadence[static_cast<std::size_t>(a_view.type)] != Cadence::PerSnapshot || !a_slot.set || !a_view.inheritance.width)
 			return;
+		ZoneScopedN("CS.DCLF.Cpu.PrepareSnapshotView");
 		auto& s = S();
 		const auto& bindings = a_view.bindings ? *a_view.bindings : a_run.bindings;
 		const std::uint64_t identity = IdentityOf(a_view, bindings);
@@ -537,6 +555,7 @@ namespace DCLF::Direct::detail
 	{
 		if (a_view.fromSnapshot)
 			return;
+		ZoneScopedN("CS.DCLF.Cpu.DispatchCulls");
 		if (a_view.snapshot) {
 			a_slot.outstanding.fetch_add(1, std::memory_order_acq_rel);
 			if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "dclf cpu snapshot view",
@@ -558,6 +577,16 @@ namespace DCLF::Direct::detail
 					}))
 				stl::report_and_fail("Drawcall Limit Fix: the preparation pool refused a CPU-pipeline cull");
 		}
+	}
+
+	void DispatchSiteCulls(FrameSlot& a_slot, std::function<void()> a_dispatch)
+	{
+		a_slot.outstanding.fetch_add(1, std::memory_order_acq_rel);
+		if (!SceneScheduler::Executor().DispatchFrameCritical(SceneScheduler::Scope(), "dclf cpu site culls", [slot = &a_slot, dispatch = std::move(a_dispatch)](const auto&) {
+				dispatch();
+				slot->outstanding.fetch_sub(1, std::memory_order_acq_rel);
+			}))
+			stl::report_and_fail("Drawcall Limit Fix: the preparation pool refused a CPU-pipeline site's culls");
 	}
 
 	/** @brief The colour gate's arrival: its last (the depth site's culls done, the colour site's cull frame in) dispatches main colour. */
@@ -741,6 +770,8 @@ namespace DCLF::Direct::detail
 		a_begin.contents = rhi::PassContents::Inline;
 		list.BeginPass(a_begin);
 		RecordContext context{ list, *slot.set, a_view.type, a_view.view.viewIndex, a_run.site, a_view.depthPass, a_bindings, &slot.counters };
+		if (DrawsIndirect(a_run, a_view))
+			context.indirect = &slot.indirect;
 		const bool valid = BeginList(context);
 		for (std::size_t i = 0; i < a_view.list->size(); ++i) {
 			const auto& batch = Await(a_run, a_view, i);
@@ -797,6 +828,8 @@ namespace DCLF::Direct::detail
 		BeginMain(list, a_run, true, "DCLF direct second pass");
 		RecordContext decal{ list, *slot.set, ViewType::Decal, 0, Site::Colour, false, a_run.bindings, &slot.counters };
 		RecordContext terrain{ list, *slot.set, ViewType::Main, 0, Site::Colour, false, a_run.bindings, &slot.counters };
+		if (a_run.main && DrawsIndirect(a_run, *a_run.main))
+			terrain.indirect = &slot.indirect;
 		for (const auto& range : ranges) {
 			if (range.slot < Draws::kDecalGroups) {
 				if (!decals.empty() && BeginList(decal))
@@ -867,8 +900,23 @@ namespace DCLF::Direct::detail
 	bool RecordExecutingSite(Site a_site, rhi::CommandList& a_list, const rhi::PassBeginInfo* a_probe)
 	{
 		auto* run = executing;
+		// A GPU-driven frame's: no site callback runs its execution, so its run came through the stream (ForwardReached).
+		const bool handed = !run;
+		if (handed) {
+			run = S().handedOff.load(std::memory_order_acquire);
+			if (run && run->site == a_site)
+				S().handedOff.store(nullptr, std::memory_order_release);
+		}
 		if (!run || run->site != a_site || !run->valid)
 			return false;
+		const auto start = Clock::now();
+		const auto drawnNow = [&] {
+			std::uint32_t drawn = 0;
+			for (const auto* view : run->views)
+				drawn += std::atomic_ref<std::uint32_t>(run->slot->counters.drawn[static_cast<std::size_t>(view->type)]).load(std::memory_order_relaxed);
+			return drawn;
+		};
+		const std::uint32_t drawnBefore = handed ? drawnNow() : 0u;
 		auto full = rhi::FullMemoryBarrier();
 		rhi::BarrierBatch barrier{};
 		barrier.globals = { &full, 1u };
@@ -901,6 +949,14 @@ namespace DCLF::Direct::detail
 		}
 		out.Flush();
 		run->recordedDraws = true;
+		if (handed) {
+			auto& slot = *run->slot;
+			const std::size_t site = static_cast<std::size_t>(run->site);
+			Add(slot.siteRuns[site], 1u);
+			if (drawnNow() == drawnBefore)
+				Add(slot.siteEmpty[site], 1u);
+			Add(slot.counters.recordUs[site], MicrosecondsSince(start));
+		}
 		return true;
 	}
 
@@ -1019,6 +1075,45 @@ namespace DCLF::Direct::detail
 		return true;
 	}
 
+	namespace
+	{
+		/**
+		 * @brief A released slot's frame: what it made and held, destroyed together on the pool (ReleaseLater). Its frame's signal has
+		 * completed and nothing of it runs (Release), so nothing reads any of it; what it holds is safe to drop on any thread:
+		 * - BasicRHI's objects (the adopted DXVK lists' wrappers, the views' targets and heaps): their destroys take the device's locks
+		 *   (the registries', descriptorViewsMutex, deviceMemoryMutex), which is why they leave the render thread;
+		 * - ORG's (executions, buffers, versions, imports): their deletions go to DeletionManager under its lock, the command lists back
+		 *   to their pools under theirs, as ORG's host drops execution owners on its own thread;
+		 * - DCLF's (cull frames, tables, view batch sets, site states, texture bindings): engine references never die here (the tables'
+		 *   retirement nodes return their batches lock-free, and EngineReleases releases them at Present), imports untrack through
+		 *   DXVK's interop and their registry's lock, snapshot recordings' pools go to ResetLater, descriptor slots retire under the
+		 *   descriptor manager's lock.
+		 * Members are destroyed in reverse order: the runs first, then their views, as the render thread released them before.
+		 */
+		struct ReleasedFrame
+		{
+			std::shared_ptr<void> familyState, viewState, shadowState;
+			std::function<void()> colourDispatch;
+			std::unique_ptr<std::atomic<const CulledBatch*>[]> mainDepth;
+			std::shared_ptr<const ViewBatchSet> set;
+			std::vector<std::shared_ptr<const void>> holds;
+			std::deque<SiteView> views;
+			std::deque<SiteRun> runs;
+		};
+
+		/** @brief Render thread: a_frame destroyed on DCLF's pool; refused (shutdown), here. */
+		void ReleaseLater(std::unique_ptr<ReleasedFrame> a_frame)
+		{
+			// Shared, as a task is copyable; the body destroys the frame itself, so no copy of the task left on this thread ends it here.
+			auto frame = std::make_shared<std::unique_ptr<ReleasedFrame>>(std::move(a_frame));
+			(void)SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu,
+				"dclf cpu frame release", [frame](const auto&) {
+					ZoneScopedN("CS.DCLF.Cpu.ReleaseFrame");
+					frame->reset();
+				});
+		}
+	}
+
 	/** @brief Render thread: a slot's last frame's state released (its signal completed), its counters into the window. */
 	void Release(FrameSlot& a_slot)
 	{
@@ -1054,6 +1149,7 @@ namespace DCLF::Direct::detail
 		window.sum.binds += c.binds;
 		window.sum.sameBinds += c.sameBinds;
 		window.sum.pushes += c.pushes;
+		window.sum.indirects += c.indirects;
 		// The command pools the frame recorded into are reset on the pool (a reset is a driver call per pool, on the frame's path
 		// here), the slot taking pools already reset in their place.
 		const auto replace = [](ListPool& a_pool) {
@@ -1066,24 +1162,29 @@ namespace DCLF::Direct::detail
 		}
 		replace(a_slot.cs.lists);
 		a_slot.queuesUsed = 0;
-		a_slot.runs.clear();
-		a_slot.views.clear();
-		a_slot.holds.clear();
-		a_slot.set.reset();
+		// The frame's own objects leave the slot whole (the slot keeps fresh empty ones) and are destroyed on the pool.
+		auto released = std::make_unique<ReleasedFrame>();
+		std::swap(released->runs, a_slot.runs);
+		std::swap(released->views, a_slot.views);
+		std::swap(released->holds, a_slot.holds);
+		released->set = std::move(a_slot.set);
+		released->mainDepth = std::move(a_slot.mainDepth);
+		released->colourDispatch = std::exchange(a_slot.colourDispatch, nullptr);
+		released->shadowState = std::move(a_slot.shadowState);
+		released->viewState = std::move(a_slot.viewState);
+		released->familyState = std::move(a_slot.familyState);
+		ReleaseLater(std::move(released));
 		a_slot.poolFirstsTaken = false;
-		a_slot.mainDepth.reset();
 		a_slot.mainDepthCount = 0;
-		a_slot.colourDispatch = nullptr;
 		a_slot.depthRan = false;
 		a_slot.forwardRun = nullptr;
-		a_slot.shadowState.reset();
-		a_slot.viewState.reset();
-		a_slot.familyState.reset();
 		a_slot.counters = {};
 		a_slot.siteRuns = {};
 		a_slot.siteEmpty = {};
 		a_slot.waits = 0;
 		a_slot.signal = 0;
+		a_slot.retirePoint = 0;
+		a_slot.retireNoted = false;
 		a_slot.used = false;
 	}
 
@@ -1099,6 +1200,116 @@ namespace DCLF::Direct::detail
 			s.window.slotWaitMs += MicrosecondsSince(start) / 1000.0;
 		}
 		Release(a_slot);
+	}
+
+	namespace
+	{
+		std::unique_ptr<FrameSlot> NewSlot(std::uint32_t a_index)
+		{
+			auto slot = std::make_unique<FrameSlot>();
+			slot->index = a_index;
+			slot->workerCount = SceneScheduler::PreparationWorkers() + SceneScheduler::FrameCriticalWorkers();  // the threads a cull runs on
+			slot->workers = std::make_unique<Worker[]>(slot->workerCount);
+			return slot;
+		}
+
+		/** @brief Render thread: a forward slot's frame is over: what it drew retires with everything submitted so far. */
+		void CloseForwardSlot(FrameSlot& a_slot)
+		{
+			a_slot.retirePoint = SubmittedRetirementPoint();
+			a_slot.retireNoted = true;
+			// The set's sequences, bound with the payload's.
+			if (a_slot.set)
+				Draws::BindViewBatches(*a_slot.set, a_slot.retirePoint);
+		}
+
+		/** @brief Render thread: the forward slots whose frames' GPU work is done released, never waited for. */
+		void ReleaseForwardSlots()
+		{
+			auto& s = S();
+			const std::uint64_t completed = FrameRetirement()->Completed();
+			for (auto& slot : s.forwardSlots)
+				if (slot->used && slot->retireNoted && completed >= slot->retirePoint)
+					Release(*slot);
+		}
+
+		/**
+		 * @brief Render thread: a slot for a GPU-driven frame's forward family: one released, else a new one, never a wait. They are as many as
+		 * frames in flight. Their indices are past the host's frame slots, which a CPU frame's index names.
+		 */
+		FrameSlot& TakeForwardSlot(const org::GraphHost& a_host)
+		{
+			auto& s = S();
+			for (auto& slot : s.forwardSlots)
+				if (!slot->used)
+					return *slot;
+			auto slot = NewSlot(std::max(1u, a_host.FrameSlots()) + static_cast<std::uint32_t>(s.forwardSlots.size()));
+			slot->ownsEpochs = false;
+			s.forwardSlots.push_back(std::move(slot));
+			return *s.forwardSlots.back();
+		}
+	}
+
+	bool HandOffRun(SiteRun& a_run, bool a_rowsDone)
+	{
+		auto& s = S();
+		const auto frame = LatestCullFrame();
+		if (!a_rowsDone || !frame || frame->sceneFrame != a_run.slot->sceneFrame) {
+			++s.window.forwardSkipped;
+			return false;
+		}
+		const auto handOff = [](void* a_user, VkCommandBuffer) { S().handedOff.store(static_cast<SiteRun*>(a_user), std::memory_order_release); };
+		if (!RenderGraphRuntime::Get().EmitExternalCommands(handOff, &a_run, {}, {}, false, "DCLF forward draws")) {
+			++s.window.notQueued;
+			return false;
+		}
+		return true;
+	}
+
+	namespace
+	{
+		constexpr std::uint32_t kMinimumIndirectDraws = 1u << 15;
+
+		/**
+		 * @brief Render thread, a CPU frame's start, its slot retired: the slot's draw buffer, large enough for what its last frame reserved
+		 * with room to spare, or none (its draws direct) outside Indirect mode.
+		 */
+		void EnsureDrawBuffer(FrameSlot& a_slot)
+		{
+			auto& s = S();
+			const std::uint32_t reserved = a_slot.drawCursor.exchange(0, std::memory_order_relaxed);
+			if (FrameMode().record != RecordMode::Indirect) {
+				a_slot.indirect = {};
+				a_slot.drawBuffer.reset();
+				return;
+			}
+			if (!s.indirectSignature) {
+				rhi::IndirectArg draw{};
+				draw.kind = rhi::IndirectArgKind::DrawIndexed;
+				rhi::CommandSignatureDesc desc{};
+				desc.args = { &draw, 1 };
+				desc.byteStride = sizeof(IndirectDraw);
+				if (s.device.CreateCommandSignature(desc, {}, s.indirectSignature) != rhi::Result::Ok) {
+					logger::error("[DCLF] CPU pipeline: the indirect draws' signature could not be made; its views draw directly");
+					return;
+				}
+			}
+			if (a_slot.drawBuffer && reserved <= a_slot.indirect.capacity)
+				return;
+			const std::uint32_t capacity = std::max(kMinimumIndirectDraws, reserved + reserved / 4);
+			a_slot.indirect = {};
+			a_slot.drawBuffer = org::Buffer::CreateShared(rhi::HeapType::HostVisibleCoherent, std::uint64_t(capacity) * sizeof(IndirectDraw), true);
+			a_slot.drawBuffer->SetName("cs.dclf.cpu.indirect-draws");
+			auto resource = a_slot.drawBuffer->GetAPIResource();
+			void* mapped = nullptr;
+			resource.Map(&mapped);
+			const std::uint64_t address = s.device.GetBufferDeviceAddress({ resource.GetHandle(), 0 });
+			if (!mapped || !address) {
+				logger::error("[DCLF] CPU pipeline: the indirect draws' buffer has no {}; its views draw directly", mapped ? "device address" : "mapping");
+				return;
+			}
+			a_slot.indirect = { s.indirectSignature->GetHandle(), resource.GetHandle(), address, static_cast<IndirectDraw*>(mapped), capacity, &a_slot.drawCursor };
+		}
 	}
 
 	bool EnsureDevice()
@@ -1132,6 +1343,18 @@ namespace DCLF::Direct
 	bool CpuFrame()
 	{
 		return Draws::GraphBuiltForCpu();
+	}
+
+	const ViewBatchSet* ForwardBatches()
+	{
+		const auto* slot = S().current;
+		return slot ? slot->set.get() : nullptr;
+	}
+
+	void ForwardHandOffCancel()
+	{
+		const auto cancel = [](void*, VkCommandBuffer) { S().handedOff.store(nullptr, std::memory_order_release); };
+		(void)RenderGraphRuntime::Get().EmitExternalCommands(cancel, nullptr, {}, {}, false, "DCLF forward hand-off cancelled");
 	}
 
 	Mode FrameMode()
@@ -1228,6 +1451,13 @@ namespace DCLF::Direct
 			s.window.wallUs += wallUs;
 		}
 		PollRetirement();
+		// A forward slot whose frame never reached EndFrame, then those done: every frame, or one left behind during CPU frames would hold
+		// its cull frame, and with it the tables and their retirement node.
+		if (s.current && !s.current->ownsEpochs) {
+			CloseForwardSlot(*s.current);
+			s.current = nullptr;
+		}
+		ReleaseForwardSlots();
 		auto* host = RenderGraphRuntime::Get().Host();
 		const bool cpu = CpuFrame() && host && EnsureDevice();
 		if (!cpu) {
@@ -1238,7 +1468,19 @@ namespace DCLF::Direct
 				SubmitQueued();
 			}
 			ReleaseCompletedSlots();
-			FrameValues::Get().SetViewBatches(nullptr);
+			// The GPU-driven graph's forward family, with its live spheres (GraphConditions::forwardDirect), and its roots' states, read-only:
+			// FadeStateCS stays the fades' authority.
+			std::shared_ptr<const ViewBatchSet> forward;
+			if (Draws::CurrentGraphConditions().forwardDirect && host && EnsureDevice() && a_set && a_set->forwardOnly) {
+				forward = std::move(a_set);
+				auto& slot = TakeForwardSlot(*host);
+				slot.used = true;
+				slot.set = forward;
+				slot.sceneFrame = Scene::FrameView::Get().GetFrame();
+				s.current = &slot;
+			}
+			FrameValues::Get().SetViewBatches(forward);
+			KickCpuFrameState(std::move(forward), true);
 			return;
 		}
 		s.wasCpu = true;
@@ -1250,15 +1492,13 @@ namespace DCLF::Direct
 		const std::uint32_t hostSlots = std::max(1u, host->FrameSlots());
 		const std::uint32_t slots = std::max(1u, hostSlots / 2);
 		while (s.slots.size() < slots) {
-			auto slot = std::make_unique<FrameSlot>();
-			slot->index = static_cast<std::uint32_t>(s.slots.size());
+			auto slot = NewSlot(static_cast<std::uint32_t>(s.slots.size()));
 			slot->colourSlot = hostSlots >= 2 ? slot->index + slots : slot->index;
-			slot->workerCount = SceneScheduler::PreparationWorkers() + SceneScheduler::FrameCriticalWorkers();  // the threads a cull runs on
-			slot->workers = std::make_unique<Worker[]>(slot->workerCount);
 			s.slots.push_back(std::move(slot));
 		}
 		auto& slot = *s.slots[s.frames++ % slots];
 		Retire(slot);
+		EnsureDrawBuffer(slot);
 		slot.used = true;
 		slot.set = a_set;
 		slot.sceneFrame = Scene::FrameView::Get().GetFrame();
@@ -1283,6 +1523,7 @@ namespace DCLF::Direct
 		for (auto& slot : s.slots)
 			if (slot->used && slot.get() != s.current && slot->signal <= completed)
 				Release(*slot);
+		ReleaseForwardSlots();
 	}
 
 	void SubmitQueued()
@@ -1301,7 +1542,7 @@ namespace DCLF::Direct
 	const ViewBatchSet* FrameBatches()
 	{
 		const auto* slot = S().current;
-		return slot ? slot->set.get() : nullptr;
+		return slot && slot->ownsEpochs ? slot->set.get() : nullptr;
 	}
 
 	void EndFrame()
@@ -1311,6 +1552,11 @@ namespace DCLF::Direct
 		auto* slot = std::exchange(s.current, nullptr);
 		if (!slot)
 			return;
+		if (!slot->ownsEpochs) {
+			CloseForwardSlot(*slot);
+			++s.window.frames;
+			return;
+		}
 		// The frame's signal behind its sites' callbacks in DXVK's stream: the slot's (and the clock's) retirement point. The last one
 		// was submitted with this frame's work, before its Present.
 		s.submitted = s.signalled;
@@ -1335,13 +1581,16 @@ namespace DCLF::Direct
 	bool ExecuteEpoch(RenderGraphRuntime::Segment a_segment, const std::function<void()>& a_body, std::shared_ptr<const void> a_owner)
 	{
 		auto& s = S();
-		if (!CpuFrame() || !s.current)
+		if (!CpuFrame() || !s.current || !s.current->ownsEpochs)
 			return RenderGraphRuntime::Get().ExecuteEpoch(a_segment, [&](org::RenderGraph&) { a_body(); }, std::move(a_owner));
 		s.pending = nullptr;
 		auto* host = RenderGraphRuntime::Get().Host();
 		auto* graph = host ? host->Graph() : nullptr;
 		if (!graph)
 			return false;
+		// The site's GPU time in Tracy: its commits' uploads, its passes and draws, which the frame's other zones leave out.
+		const auto siteZoneName = fmt::format("DCLF site {}", static_cast<std::uint32_t>(a_segment));
+		TracyD3D11ZoneTransientS(globals::state->tracyCtx, siteZone, siteZoneName.c_str(), 0, globals::state->tracyCtx != nullptr);
 		// The colour commit writes the main latch at the slot's second region, the depth commit's kept for the depth site's readers.
 		if (a_segment == RenderGraphRuntime::Segment::MainOpaque)
 			host->BeginExternalFrameSlot(s.current->colourSlot);
@@ -1385,6 +1634,22 @@ namespace DCLF::Direct
 		if (!slot || !slot->set || !a_inputs.shape || !a_inputs.resources || !a_inputs.latch)
 			return;
 		TakePoolFirsts(*slot, a_inputs.resources->pool.get());
+		// A GPU-driven frame: no depth site. Only the hosted view its forward family holds (first person's forward part), culled with this commit.
+		if (!slot->ownsEpochs) {
+			if (!slot->viewState)
+				return;
+			auto& run = NewRun(*slot, Site::Depth, a_inputs);
+			Draws::RevisionShapes shapes;
+			AttachHostedViews(*slot, run, shapes);
+			OnCullFrame(*slot, [slot, run = &run](const std::shared_ptr<const CullFrame>& a_frame) {
+				run->cullFrame = a_frame;
+				DispatchSiteCulls(*slot, [slot, run, a_frame] {
+					for (auto* view : run->views)
+						DispatchCulls(*slot, *run, *view, a_frame);
+				});
+			});
+			return;
+		}
 		auto& run = NewRun(*slot, Site::Depth, a_inputs);
 		Draws::RevisionShapes shapes;
 		shapes.main[Draws::kDepthShape] = a_inputs.shape;
@@ -1404,8 +1669,10 @@ namespace DCLF::Direct
 			ArriveColour(*slot);
 		OnCullFrame(*slot, [slot, run = &run](const std::shared_ptr<const CullFrame>& a_frame) {
 			run->cullFrame = a_frame;
-			for (auto* view : run->views)
-				DispatchCulls(*slot, *run, *view, a_frame);
+			DispatchSiteCulls(*slot, [slot, run, a_frame] {
+				for (auto* view : run->views)
+					DispatchCulls(*slot, *run, *view, a_frame);
+			});
 		});
 		SetPending(run);
 	}
@@ -1418,7 +1685,8 @@ namespace DCLF::Direct
 		if (!slot || !slot->set || !a_inputs.shape || !a_inputs.resources || !a_inputs.latch)
 			return;
 		TakePoolFirsts(*slot, a_inputs.resources->pool.get());
-		auto& run = NewRun(*slot, Site::Colour, a_inputs);
+		// A CPU frame's colour site; a GPU-driven frame's graph draws what it holds.
+		SiteRun* run = slot->ownsEpochs ? &NewRun(*slot, Site::Colour, a_inputs) : nullptr;
 		const auto& latch = *a_inputs.latch;
 		// The colour views read the cascades and volumes the commit latched: copied, held by the slot for the culls' duration.
 		auto cascades = std::make_shared<const std::vector<Draws::GpuCascade>>(a_inputs.cascades.begin(), a_inputs.cascades.end());
@@ -1434,14 +1702,16 @@ namespace DCLF::Direct
 			slot->holds.push_back(strict);
 		slot->holds.push_back(cascades);
 		slot->holds.push_back(volumes);
-		auto& main = NewView(*slot, run, ViewType::Main, colourView(ViewType::Main), false);
-		main.colourWords = true;
-		main.mainView = MainCullView(latch);
-		if (run.valid)
-			SetMainSecondary(run, main);
-		run.main = &main;
-		if (!slot->set->List(ViewType::Decal).empty())
-			run.decal = &NewView(*slot, run, ViewType::Decal, colourView(ViewType::Decal), false);
+		if (run) {
+			auto& main = NewView(*slot, *run, ViewType::Main, colourView(ViewType::Main), false);
+			main.colourWords = true;
+			main.mainView = MainCullView(latch);
+			if (run->valid)
+				SetMainSecondary(*run, main);
+			run->main = &main;
+			if (!slot->set->List(ViewType::Decal).empty())
+				run->decal = &NewView(*slot, *run, ViewType::Decal, colourView(ViewType::Decal), false);
+		}
 		// The forward site's views are this commit's (Features/Forward's epoch shares the colour shape); its callback is queued at the
 		// forward trigger (ForwardReached).
 		auto& forward = NewRun(*slot, Site::Forward, a_inputs);
@@ -1449,20 +1719,28 @@ namespace DCLF::Direct
 		forward.refractionView = &NewView(*slot, forward, ViewType::Refraction, colourView(ViewType::Refraction), false);
 		slot->forwardRun = &forward;
 		// The main colour culls wait for the depth site's batches (their lanes) and this frame's cull frame: the colour gate.
-		slot->colourDispatch = [slot, run = &run] { DispatchCulls(*slot, *run, *run->main, run->cullFrame); };
-		OnCullFrame(*slot, [slot, run = &run, forward = &forward](const std::shared_ptr<const CullFrame>& a_frame) {
-			run->cullFrame = a_frame;
+		if (run)
+			slot->colourDispatch = [slot, run] { DispatchCulls(*slot, *run, *run->main, run->cullFrame); };
+		OnCullFrame(*slot, [slot, run, forward = &forward](const std::shared_ptr<const CullFrame>& a_frame) {
 			forward->cullFrame = a_frame;
-			if (run->decal)
-				DispatchCulls(*slot, *run, *run->decal, a_frame);
-			DispatchCulls(*slot, *forward, *forward->forward, a_frame);
-			DispatchCulls(*slot, *forward, *forward->refractionView, a_frame);
-			ArriveColour(*slot);
+			if (run)
+				run->cullFrame = a_frame;
+			// The colour gate's arrival after the decal culls are dispatched, as before (it may dispatch main colour's).
+			DispatchSiteCulls(*slot, [slot, run, forward, a_frame] {
+				if (run && run->decal)
+					DispatchCulls(*slot, *run, *run->decal, a_frame);
+				DispatchCulls(*slot, *forward, *forward->forward, a_frame);
+				DispatchCulls(*slot, *forward, *forward->refractionView, a_frame);
+				if (run)
+					ArriveColour(*slot);
+			});
 		});
+		if (!run)
+			return;
 		// No depth site this frame: nothing to wait for (the colour culls cull the main list themselves).
 		if (!slot->depthRan)
 			ArriveColour(*slot);
-		s.pending = &run;
+		s.pending = run;
 	}
 
 	bool ForwardReached(bool a_refraction)
@@ -1494,8 +1772,12 @@ namespace DCLF::Direct
 		run->bindings.viewProj = run->forward->view.viewProj;
 		run->refractionBindings.viewProj = run->refractionView->view.viewProj;
 		run->refraction = a_refraction;
-		s.pending = run;
-		return true;
+		if (slot->ownsEpochs) {
+			s.pending = run;
+			return true;
+		}
+		// A GPU-driven frame: the graph's execution records the epoch's late pass.
+		return HandOffRun(*run, rows != nullptr);
 	}
 
 	WindowCounters TakeWindowCounters()

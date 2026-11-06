@@ -96,6 +96,11 @@ namespace DCLF
 	// BuildDrawsCS's MaterialRowAddress resolves it (DCLFObjects.hlsli, DCLFSequenceRows).
 	inline constexpr std::uint32_t kDirectDrawPushAnimatedRows = kDirectDrawPushRowBases + 4;
 	static_assert(kDirectDrawPushAnimatedRows + 2 <= kDrawPushWords);
+	// kDirectFlagDrawRecords: the draw is one of an indirect run's (Direct/Recorder.h, IndirectDraw). Its instance names its record in the
+	// frame slot's draw buffer, at this address (pushed once per list), which holds its sequence's index and its object word.
+	inline constexpr std::uint32_t kDirectFlagDrawRecords = 4;
+	inline constexpr std::uint32_t kDirectDrawPushDrawRecords = kDirectDrawPushAnimatedRows + 2;
+	static_assert(kDirectDrawPushDrawRecords + 2 <= kDrawPushWords && kDirectDrawPushDrawRecords % 2 == 0);
 	/** @brief Where a DrawSequence's draw arguments start, which the shadow views' plain indexed draws read. */
 	inline constexpr std::uint32_t kSequenceDrawOffset = 116;
 	static_assert(offsetof(DrawSequence, indexCount) == kSequenceDrawOffset);
@@ -131,9 +136,11 @@ namespace DCLF
 	struct MaterialRowHeader
 	{
 		// The material's index among its version's animated rows (Texture Transforms: the frame's copy BuildDrawsCS's MaterialRowAddress
-		// resolves the row to), ~0u: none. Then reserved (the pulled stages read the indices below at fixed offsets).
+		// resolves the row to), ~0u: none. The pulled stages read the indices below at fixed offsets.
 		std::uint32_t animatedRow = ~0u;
-		std::uint32_t reserved[3]{};
+		// Texture streaming's feedback (Lighting.hlsl, DCLF_TEX_FEEDBACK): the material's slot, and the buffer's device address (0: none).
+		std::uint32_t feedbackSlot = 0;
+		std::uint32_t feedbackAddress[2]{};
 		std::uint32_t textures[kPixelTextureSlots]{};
 		std::uint32_t samplers[16]{};
 		std::uint32_t features[Extensions::kFeatureTextureSlots]{};
@@ -592,6 +599,8 @@ namespace DCLF
 		Stats stats;
 
 		friend struct IndirectState GetIndirectState(const PipelineCatalog&, std::uint32_t);
+		friend bool IndirectStateValid(const PipelineCatalog&, std::uint32_t);
+		friend bool ZGroupPipelineReady(const PipelineCatalog&, std::uint32_t, std::uint32_t);
 		friend struct ForwardPipelineAccess;  // CatalogFamilyPipelines (DrawPipelinesRhi.h)
 		friend struct ShadowIndirectState GetShadowIndirectState(const PipelineCatalog&, DXGI_FORMAT);
 	};

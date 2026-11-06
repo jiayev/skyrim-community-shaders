@@ -40,7 +40,8 @@ struct VRAMBudget : Feature
 
 	struct Settings
 	{
-		float ThresholdPercent = 80.0f;  // Share of the driver's VRAM budget above which cells are unloaded
+		float ThresholdPercent = 80.0f;  // Share of the driver's VRAM budget above which cells are unloaded, and DXVK stops keeping slack
+		bool DeferTextureAllocation = true;  // DXVK backs a texture without initial data at its first use. Read when the device is made.
 	};
 
 	Settings settings;

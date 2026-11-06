@@ -17,6 +17,7 @@
 
 namespace org
 {
+	class Buffer;
 	class ExternalEpochExecution;
 }
 
@@ -169,6 +170,12 @@ namespace DCLF::Direct::detail
 		std::uint32_t colourSlot = 0;
 		std::uint64_t signal = 0;  // the CPU-frame timeline's value of the frame that used it last (0: none)
 		bool used = false;         // a frame used it since its last Release
+		// Whether its frame is the CPU pipeline's, and owns the frame's epochs: the host's latch regions, every site, the frame's signal.
+		// False: a GPU-driven frame's forward family alone (GraphConditions::forwardDirect), in a slot of State::forwardSlots. No signal: it
+		// retires by its point on the retirement clock, noted at the frame's end.
+		bool ownsEpochs = true;
+		std::uint64_t retirePoint = 0;
+		bool retireNoted = false;
 		std::unique_ptr<Worker[]> workers;
 		std::uint32_t workerCount = 0;
 		Worker cs;                                         // DXVK's CS thread's
@@ -202,6 +209,11 @@ namespace DCLF::Direct::detail
 		FrameCounters counters;
 		std::array<std::uint32_t, kSites> siteRuns{}, siteEmpty{};
 		std::uint32_t waits = 0;
+		// Indirect mode's draw buffer: written by the frame's cull jobs, read by the GPU until the frame's signal. It grows when a frame
+		// reserved more than it holds (EnsureDrawBuffer); that frame's other batches drew directly.
+		std::shared_ptr<org::Buffer> drawBuffer;
+		IndirectBuffer indirect;
+		std::atomic<std::uint32_t> drawCursor{ 0 };
 	};
 
 	struct State
@@ -214,9 +226,12 @@ namespace DCLF::Direct::detail
 		std::uint64_t submitted = 0;      // the last value known submitted (SubmitQueued's flush, or a frame's own work after it)
 		std::uint64_t hostSubmitted = 0;  // the host's submissions made at SubmitQueued's last flush
 		std::vector<std::unique_ptr<FrameSlot>> slots;
+		std::vector<std::unique_ptr<FrameSlot>> forwardSlots;  // FrameSlot::ownsEpochs false
 		std::uint64_t frames = 0;
 		FrameSlot* current = nullptr;  // the frame's (FrameStart to EndFrame)
 		SiteRun* pending = nullptr;    // the site the epoch body being run opened (ExecuteEpoch)
+		// A GPU-driven frame's forward run, on its way to its epoch's late pass (ForwardReached, in DXVK's stream; RecordExecutingSite).
+		std::atomic<SiteRun*> handedOff{ nullptr };
 		// The per-snapshot views' recordings of the newest set (PrepareSnapshotView; a released one's pool goes to ResetLater).
 		std::vector<std::shared_ptr<SnapshotRecording>> snapshots;
 		bool wasCpu = false;
@@ -224,6 +239,7 @@ namespace DCLF::Direct::detail
 		std::atomic<std::uint32_t> nextWorker{ 0 };
 		WindowCounters window;
 		bool loggedNoCallback = false, loggedNotAdopted = false, loggedNoLatePass = false, loggedExternal = false;
+		rhi::CommandSignaturePtr indirectSignature;  // one indexed draw at IndirectDraw's stride
 		// Emit's scratch (render thread): a site's waits and signals for DXVK's submission.
 		std::vector<RenderGraphRuntime::ExternalCommandsWait> emitWaits, emitSignals;
 	};
@@ -258,11 +274,24 @@ namespace DCLF::Direct::detail
 	void SetPending(SiteRun& a_run);
 	/** @brief Render thread: a_run's callback queued (with the uploads its commits staged and the frame values' wait). False: not queued. */
 	bool Emit(SiteRun& a_run);
+	/**
+	 * @brief Render thread, a GPU-driven frame, before an epoch whose late pass draws a_run: the run handed to that pass in DXVK's stream.
+	 * a_run's culls ran when the frame's cull frame was published, which a_rowsDone (the producer done) means. Without one its recording
+	 * would wait for a later frame's, which a frame's start may wait on this frame's GPU work for: false, no draws this frame (counted).
+	 */
+	bool HandOffRun(SiteRun& a_run, bool a_rowsDone);
 
 	// ---- The culls (DCLF's pool) ----
 
 	/** @brief Any thread: a_view's culls dispatched on DCLF's pool (never run on the caller: it may be the render thread). */
 	void DispatchCulls(FrameSlot& a_slot, SiteRun& a_run, SiteView& a_view, const std::shared_ptr<const CullFrame>& a_frame);
+
+	/**
+	 * @brief Any thread: a_dispatch (a site's DispatchCulls calls) run as one frame-critical pool task, held in a_slot's outstanding work.
+	 * Each dispatch wakes a worker, so the caller (often the render thread, when the cull frame is in before the commit) makes one
+	 * instead of one per cull job.
+	 */
+	void DispatchSiteCulls(FrameSlot& a_slot, std::function<void()> a_dispatch);
 
 	/**
 	 * @brief AfterCullFrame for a_slot's frame: a_then(frame) on the cull frame's publication, unless the slot moved to another frame
@@ -278,6 +307,26 @@ namespace DCLF::Direct::detail
 				then(a_frame);
 			slot->outstanding.fetch_sub(1, std::memory_order_acq_rel);
 		});
+	}
+
+	/** @brief Whether a_run draws a_view from indirect runs: Indirect mode's plain lists, with the frame slot's draw buffer made. */
+	inline bool DrawsIndirect(const SiteRun& a_run, const SiteView& a_view)
+	{
+		if (a_run.record != RecordMode::Indirect || !a_run.slot->indirect.mapped)
+			return false;
+		switch (a_view.type) {
+		case ViewType::Main:
+		case ViewType::Sun:
+		case ViewType::Spot:
+		case ViewType::Point:
+		case ViewType::SkyOccluder:
+		case ViewType::PrecipOccluder:
+		case ViewType::Reflection:
+			return true;
+		default:
+			// Ordered streams (decals, forward, refraction), and first person: its colour draws its depth view's batches with other words.
+			return false;
+		}
 	}
 
 	// ---- The callback (DXVK's CS thread) ----

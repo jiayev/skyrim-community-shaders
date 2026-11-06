@@ -120,7 +120,7 @@ namespace DCLF
 			ptr(s.get());
 			raw(latches.shadow);
 			ptr(s->latchedTargets.load(std::memory_order_acquire).get());
-			mix(inputs.shadowSlots ? inputs.shadowSlots->sequences.size() : 0);
+			mix(inputs.shadowSlots ? inputs.shadowSlots->drawArgs.size() : 0);
 		}
 		for (const auto& view : inputs.shadowPlacements)
 			raw(view);
@@ -155,7 +155,7 @@ namespace DCLF
 		// shapes are what a layout's capacities grow from.
 		auto previousShadow = std::exchange(made.shadow, {});
 		// The slots the frame made (as posted): a layout past them waits for them.
-		const std::size_t shadowSlotCount = inputs.shadowSlots ? inputs.shadowSlots->sequences.size() : 0;
+		const std::size_t shadowSlotCount = inputs.shadowSlots ? inputs.shadowSlots->drawArgs.size() : 0;
 		if ((inputs.shadowPlacements.empty() && producer.occlusionLayouts.empty()) || !shadowState || !shadowIndirect.valid)
 			return;
 		// Sized from the scene's casting bound alone (ShadowBounds), not a payload: the shapes move with the scene's objects, not with the
@@ -165,7 +165,7 @@ namespace DCLF
 		{
 			UnitGroup sequences, counts;
 			if (const auto& slotBuffers = inputs.shadowSlots) {
-				for (const auto& buffer : slotBuffers->sequences)
+				for (const auto& buffer : slotBuffers->drawArgs)
 					sequences.Add(buffer);
 				for (const auto& buffer : slotBuffers->bucketCounts)
 					counts.Add(buffer);
@@ -266,8 +266,8 @@ namespace DCLF
 		a_next.occlusionLayouts = PredictedOcclusion(nullptr);
 		a_next.shadowPlacements = shadowPlacements;
 		a_next.shadowActiveViews = lastActiveViews;
-		if (shadow && (!postedShadowSlots || postedShadowSlots->sequences.size() != shadow->sequences.size()))
-			postedShadowSlots = std::make_shared<const ShadowSlotBuffers>(ShadowSlotBuffers{ shadow->sequences, shadow->bucketCounts });
+		if (shadow && (!postedShadowSlots || postedShadowSlots->drawArgs.size() != shadow->drawArgs.size()))
+			postedShadowSlots = std::make_shared<const ShadowSlotBuffers>(ShadowSlotBuffers{ shadow->drawArgs, shadow->bucketCounts });
 		a_next.shadowSlots = shadow ? postedShadowSlots : nullptr;
 	}
 

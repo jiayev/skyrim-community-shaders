@@ -5,7 +5,7 @@
 // roots its faces draw: ViewRoots.cpp.)
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
@@ -309,7 +309,9 @@ namespace DCLF
 		// values, its owners with the host's), and the view is posted for the depth site (Direct/ViewSites.h), which draws it.
 		if (EpochTraitsOf(epoch).hostedBy != kNoEpoch) {
 			const auto submitted = impl->CommitHostedView(a_view, epoch, a_listed, a_faces, a_drawn, a_nullTextures);
-			if (!Direct::CpuFrame() || submitted != ViewSubmit::Submitted || a_faces.empty())
+			// A GPU-driven frame posts first person alone: its forward part is the CPU's (GraphConditions::firstPersonForwardDirect).
+			const bool posted = Direct::CpuFrame() || (a_view == Api::EngineView::FirstPerson && CurrentGraphConditions().firstPersonForwardDirect);
+			if (!posted || submitted != ViewSubmit::Submitted || a_faces.empty())
 				return submitted;
 			impl->PostHostedView(a_view, epoch, a_faces);
 			return submitted;
@@ -376,6 +378,8 @@ namespace DCLF
 		if (trees)
 			rows = impl->ViewFaceRows(a_view, *shape, owners.List());
 		std::uint32_t drawn = 0;
+		// First person's forward part, the CPU's: its run handed to the epoch's late pass in DXVK's stream ahead of its execution.
+		const bool handedOff = a_faces.empty() && a_view == Api::EngineView::FirstPerson && CurrentGraphConditions().firstPersonForwardDirect && Direct::FirstPersonColourReached();
 		const auto commit = [&] {
 			if (!a_faces.empty())
 				drawn = impl->CommitView(*shape, a_faces, a_listed.inputs, trees ? &rows : nullptr);
@@ -402,6 +406,8 @@ namespace DCLF
 		} else {
 			ok = RenderGraphRuntime::Get().ExecuteEpoch(epochs.segments[a_epoch], [&](org::RenderGraph&) { commit(); }, owners.Handle());
 		}
+		if (!ok && handedOff)
+			Direct::ForwardHandOffCancel();
 		if (!ok)
 			return ViewSubmit::Failed;
 		if (a_drawn)
@@ -460,15 +466,17 @@ namespace DCLF
 		// colour signature of its state class, into the main pass's attachments with the view's depth, which must be the main pass's format.
 		if (p < tables.pipelines.size() && RasterForward(tables.pipelines[p].rasterFlags))
 			return (!RasterRefraction(tables.pipelines[p].rasterFlags) && state.forwardCompatible.load(std::memory_order_acquire) &&
-					   GetIndirectState(*a_catalog, a_catalog->targetsGeneration).valid) ||
+			           IndirectStateValid(*a_catalog, a_catalog->targetsGeneration)) ||
 			       fail(2);
 		ForwardPipelineKey key;
 		if (p >= tables.pipelines.size() || !ViewForwardKey(a_view, tables, p, key))
 			return fail(3);
 		if (!ForwardPipelineOf(a_catalog, key, targets).valid())
 			return fail(4);
-		const auto indirect = GetIndirectState(*a_catalog, a_catalog->targetsGeneration);
-		const std::uint32_t group = Draws::ZGroupOf(static_cast<const Lookups*>(a_lookups), indirect, p);
-		return (indirect.valid && group < indirect.zPipelines.size() && indirect.zPipelines[group].valid()) || fail(5);
+		// The slot's Z group and its depth pipeline, as ZGroupOf and GetIndirectState find them, read in place: building the state per
+		// slot copied every pipeline's handles.
+		const auto* lookups = static_cast<const Lookups*>(a_lookups);
+		const auto setIndex = lookups && p < lookups->pipelines.size() ? lookups->pipelines[p].setIndex : Lookups::kNone;
+		return (setIndex != Lookups::kNone && ZGroupPipelineReady(*a_catalog, a_catalog->targetsGeneration, setIndex)) || fail(5);
 	}
 }

@@ -839,7 +839,7 @@ namespace DCLF
 		const auto& pipelines = DrawPipelines::Get();
 		const auto& impl = *pipelines.impl;
 		IndirectState state;
-		if (!a_catalog.setVersion || a_catalog.targetsGeneration != a_targetsGeneration || !impl.layout)
+		if (!IndirectStateValid(a_catalog, a_targetsGeneration))
 			return state;
 		auto version = std::static_pointer_cast<const DrawPipelines::Impl::SetVersion>(a_catalog.setVersion);
 		state.classes.resize(version->classes.size());
@@ -889,6 +889,32 @@ namespace DCLF
 		state.layout = impl.layout->GetHandle();
 		state.valid = true;
 		return state;
+	}
+
+	bool IndirectStateValid(const PipelineCatalog& a_catalog, std::uint32_t a_targetsGeneration)
+	{
+		return a_catalog.setVersion && a_catalog.targetsGeneration == a_targetsGeneration && DrawPipelines::Get().impl->layout;
+	}
+
+	bool ZGroupPipelineReady(const PipelineCatalog& a_catalog, std::uint32_t a_targetsGeneration, std::uint32_t a_setIndex)
+	{
+		if (!IndirectStateValid(a_catalog, a_targetsGeneration))
+			return false;
+		// As GetIndirectState makes them: zGroups is the version's zGroupOf, zPipelines[g] the pulled depth pipeline of zGroupFirst[g].
+		const auto& version = *static_cast<const DrawPipelines::Impl::SetVersion*>(a_catalog.setVersion.get());
+		if (a_setIndex >= version.zGroupOf.size())
+			return false;
+		const std::uint32_t group = version.zGroupOf[a_setIndex];
+		if (group >= version.zGroupFirst.size())
+			return false;
+		const auto& pulledDepth = static_cast<const DrawPipelines::Impl::Built*>(version.pipelines[version.zGroupFirst[group]].get())->pulledDepth;
+		return pulledDepth && pulledDepth->GetHandle().valid();
+	}
+
+	bool FrameIndirectStateValid()
+	{
+		const auto* catalog = FrameCatalog();
+		return catalog && IndirectStateValid(*catalog, DrawPipelines::Get().Generation());
 	}
 
 	IndirectState FrameIndirectState()

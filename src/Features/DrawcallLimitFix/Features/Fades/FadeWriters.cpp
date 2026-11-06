@@ -64,7 +64,14 @@ namespace DCLF::Features::Fades
 		AnimatedFadeInputs animatedInputs{};  // written by the claimer only, read once published (and by DrainAnimatedFades)
 		std::atomic<std::uint32_t> animatedVaried{ 0 };
 		EventQueue<AnimatedFadeInputs, 64> animatedUnpublished;  // compared by DrainAnimatedFades
-		AnimatedFadeInputs batchInputs{};  // render thread
+		AnimatedFadeInputs batchInputs{};  // render thread, or the CPU fade stage's producer while a drain is handed off
+		// A drain handed to the CPU fade stage's producer and not yet done (HandAnimatedDrainToWorker).
+		std::atomic<bool> animatedDrainHanded{ false };
+		void EndAnimatedDrain()
+		{
+			animatedDrainHanded.store(false, std::memory_order_release);
+			animatedDrainHanded.notify_all();
+		}
 		// FadeWrittenByDclf's set: immutable SceneTables from Main::Update's entry, held by the main thread until the next entry
 		// (no OnVisible or gate runs then). Lock-free.
 		std::atomic<const void*> fadeWriterTables{ nullptr };
@@ -253,6 +260,9 @@ namespace DCLF::Features::Fades
 
 	void WriteFadeWriters(bool a_running)
 	{
+		// Main::Update's jobs push again once its job cycle starts: a drain handed off last frame ends first (in practice long done:
+		// the cell animations job, inside the last Main::Draw, already waited for the sampling that holds it).
+		WaitAnimatedDrain();
 		// The fade write-back on every root the accepted tables list with kFadeRootWritten, published first as the set the gate
 		// and fade OnVisibles skip.
 		PublishWriterTables(a_running);
@@ -285,20 +295,85 @@ namespace DCLF::Features::Fades
 		return c;
 	}
 
+	// DrainAnimatedFades without the wait: the producer's, which holds the hand-off.
+	std::size_t DrainAnimatedFadesNow();
+
+	void WaitAnimatedDrain()
+	{
+		if (!animatedDrainHanded.load(std::memory_order_acquire))
+			return;
+		ZoneScopedN("CS.DCLF.Fade.WaitAnimatedDrain");
+		while (animatedDrainHanded.load(std::memory_order_acquire))
+			animatedDrainHanded.wait(true, std::memory_order_acquire);
+	}
+
+	void HandAnimatedDrainToWorker()
+	{
+		WaitAnimatedDrain();
+		animatedDrainHanded.store(true, std::memory_order_release);
+	}
+
+	void TakeAnimatedBatchOnWorker(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs)
+	{
+		DrainAnimatedFadesNow();
+		a_roots.assign(animatedBatch.begin(), animatedBatch.end());
+		animatedBatch.clear();
+		a_inputs = std::exchange(batchInputs, {});
+		EndAnimatedDrain();
+	}
+
+	void DropAnimatedDrain()
+	{
+		DrainAnimatedFadesNow();
+		animatedBatch.clear();
+		batchInputs = {};
+		EndAnimatedDrain();
+	}
+
 	void TakeAnimatedBatch(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs)
 	{
-		// Render thread, as DrainAnimatedFades, which made the batch.
-		a_roots.swap(animatedBatch);
+		WaitAnimatedDrain();
+		// Render thread, as DrainAnimatedFades, which made the batch. Copied, so the batch keeps its storage for the next drain.
+		a_roots.assign(animatedBatch.begin(), animatedBatch.end());
 		animatedBatch.clear();
 		a_inputs = std::exchange(batchInputs, {});
 	}
 
+	namespace
+	{
+		std::vector<AnimatedFadeRoot> observerBatch;  // render thread
+		AnimatedFadeInputs observerInputs{};
+	}
+
+	void KeepAnimatedBatchForObserver(const std::vector<AnimatedFadeRoot>& a_roots, const AnimatedFadeInputs& a_inputs)
+	{
+		observerBatch.assign(a_roots.begin(), a_roots.end());
+		observerInputs = a_inputs;
+	}
+
+	void TakeObserverAnimatedBatch(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs)
+	{
+		a_roots.swap(observerBatch);
+		observerBatch.clear();
+		a_inputs = std::exchange(observerInputs, {});
+	}
+
 	void DrainAnimatedFades()
+	{
+		// The render thread's (listJobsDone). A CPU frame handed its drain to the fade stage's producer, which owns the queue until it
+		// ends the hand-off. Nothing is pushed between the frame's start and the list jobs' end (measured: 0 in every frame; the cell
+		// animations job runs after the shadow cull), so this drain would find nothing: skipped rather than waited for.
+		if (animatedDrainHanded.load(std::memory_order_acquire))
+			return;
+		DrainAnimatedFadesNow();
+	}
+
+	std::size_t DrainAnimatedFadesNow()
 	{
 		// The animation job runs between two culls, so its updates are complete now: its queued nodes and published inputs become
 		// the batch, and the record is free for the next update.
 		animatedBatch.clear();
-		animatedNodes.Drain([&](AnimatedFadeRoot&& a_root) { animatedBatch.push_back(a_root); });
+		const std::size_t drained = animatedNodes.Drain([&](AnimatedFadeRoot&& a_root) { animatedBatch.push_back(a_root); });
 		batchInputs = {};
 		if (animatedState.load(std::memory_order_acquire) == kAnimatedPublished) {
 			batchInputs = animatedInputs;
@@ -310,6 +385,7 @@ namespace DCLF::Features::Fades
 		});
 		animatedVaried.store(0, std::memory_order_relaxed);
 		animatedState.store(kAnimatedEmpty, std::memory_order_release);
+		return drained;
 	}
 
 	float FadeDistanceOf(const SceneCapture::NodeRecord& a_root)

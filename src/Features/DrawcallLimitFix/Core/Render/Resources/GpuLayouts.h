@@ -56,6 +56,7 @@ namespace DCLF::Draws
 	// kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM: the engine's second draw of each cascade's accumulator (flag 0x100) draws batch group 15
 	// alone (FUN_1414b44f0), i.e. the accumulation-hint-8 volumetric-only casters (kCullVolumetricOnly). [3] depth target 10 as
 	// Skylighting swaps it in; [4] depth target 10 itself, the precipitation mask.
+	constexpr std::uint32_t kShadowLightTarget = 1;
 	constexpr std::uint32_t kFirstOcclusionTarget = 3;
 	constexpr std::uint32_t kProbeSunTarget = kFirstOcclusionTarget + kOcclusionViews;
 	constexpr std::uint32_t kShadowDepthTargets = kProbeSunTarget + 1;
@@ -77,7 +78,9 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kNoSkip = ~0u;
 	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; a shadow view's [3] outside the sun's entry, [4] small, [5]
 	// under a fading root, [16] of its caster class, [43] below the size threshold (kCullMinTexels).
-	constexpr std::uint32_t kCountWords = 52;
+	constexpr std::uint32_t kCountWords = 53;
+	// A shadow view's [52]: casters it dropped for want of a caster row (BuildDrawsCS: past the rows' buffer, or a partition past its share).
+	constexpr std::uint32_t kCountCasterRowsLostWord = 52;
 	/** @brief Zeros an epoch uploads to reset the counters it appends through. */
 	inline constexpr std::uint32_t kZeroCounts[kCountWords] = {};
 	// The sun test (kObjectSunTest): the colour dispatch's tested inputs, and those that missed every cascade.
@@ -559,13 +562,22 @@ namespace DCLF::Draws
 	 */
 	struct ShadowBuildView
 	{
-		std::uint32_t latchAt = 0;         // the view slot's BuildDrawsLatch, bytes into the frame slot's region
-		std::uint32_t sequencesIndex = 0;  // the slot's sequences, count words and bucket counts (UAVs)
+		std::uint32_t latchAt = 0;          // the view slot's BuildDrawsLatch, bytes into the frame slot's region
+		std::uint32_t drawArgsIndex = 0;    // the slot's draw arguments, count words and bucket counts (UAVs)
 		std::uint32_t countIndex = 0;
 		std::uint32_t bucketCountsIndex = 0;
-		std::uint32_t sequenceDraws = 0;  // the slot's sequences, in draws (BuildDrawsConstants::phaseTwoBase)
+		std::uint32_t sequenceDraws = 0;    // the slot's draws (BuildDrawsConstants::phaseTwoBase)
+		std::uint32_t casterRowsIndex = 0;  // the caster rows every view shares (UAV), and each object's first row (SRV)
+		std::uint32_t casterFirstsIndex = 0;
 	};
-	static_assert(sizeof(ShadowBuildView) == 20);
+	static_assert(sizeof(ShadowBuildView) == 28);
+	/**
+	 * @brief A shadow view's draw (ShadowResources::drawArgs): DrawIndexedIndirect's arguments alone, the first instance naming its caster
+	 * row. Everything else about the draw is the object's, whichever view draws it: its one row of the caster rows.
+	 */
+	constexpr std::uint32_t kShadowDrawBytes = 20;
+	// A slot's unit of its draw arguments: half again a draw (ShadowSlotSequences), to a word.
+	constexpr std::uint32_t kShadowDrawUnitBytes = 32;
 
 	/**
 	 * @brief A sun plane set in a latch block (a SunRegion: a 16-byte count header, then records): the full-frustum processes here,
@@ -671,10 +683,14 @@ namespace DCLF::Draws
 		// The epoch's culling dispatch (ShadowBuildDrawsPass: one for all its views, the occlusion maps' among them), its groups (x, y, z,
 		// then a word unused), written by each commit.
 		std::uint32_t BuildDispatchOffset() const { return PoolOffset() + 4u * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
+		// The caster rows' dispatch (ShadowCasterRowsPass: the groups of the list, written by each commit), then the list it reads: the
+		// inputs' descriptor and their count, two words of four.
+		std::uint32_t RowsDispatchOffset() const { return BuildDispatchOffset() + 4u * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
+		std::uint32_t RowsInputsOffset() const { return RowsDispatchOffset() + 4u * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		// A view slot's blocks, copied to the view-blocks buffer by LatchedCopiesPass (the commit records no copy).
 		std::uint32_t ViewBlockOffset(std::uint32_t a_slot) const
 		{
-			const std::uint32_t first = (BuildDispatchOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)) + 255u) & ~255u;
+			const std::uint32_t first = (RowsInputsOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)) + 255u) & ~255u;
 			return first + a_slot * static_cast<std::uint32_t>(kShadowViewSlotBytes);
 		}
 		std::uint32_t Bytes() const { return ViewBlockOffset(viewSlots); }

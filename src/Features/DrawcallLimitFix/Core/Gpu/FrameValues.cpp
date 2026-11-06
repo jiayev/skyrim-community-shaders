@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include <Tracy/TracyC.h>
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Engine/SkinPalettes.h"
@@ -334,6 +335,7 @@ namespace DCLF
 			std::atomic<std::uint64_t> newestContentEpoch{ 0 };                          // the content epoch the newest producer brought its backing to
 			std::atomic<std::uint64_t> floor{ 0 };                                       // the trim floor at the last Kick (diagnostics)
 			std::atomic<std::uint64_t> acquires{ 0 }, made{ 0 }, runs{ 0 }, bytes{ 0 };  // since the last take
+			std::string backingName;  // render thread: its backings' name, made at the first lease
 		};
 
 		// A pool's class grows a quarter past the rows asked, not to a power of two: every class is held a frame in flight times
@@ -462,6 +464,8 @@ namespace DCLF
 		std::vector<std::uint64_t> sphereSeq;
 		std::atomic<bool> spheresWanted{ false };
 		LatestSlot<Direct::SnapshotSpheres> spheresSlot;
+		std::atomic<bool> streamSpheresWanted{ false };
+		LatestSlot<Direct::SnapshotSpheres> streamSpheresSlot;
 
 		// The moved-only sampling (dclf B) over the kept placement set: the plans applied in order (ApplyPlans), each a delta, onto movers
 		// and roots kept at stable indices (a freed one reused), and the index from move key to them (KeysOf) patched as they join,
@@ -624,7 +628,11 @@ namespace DCLF
 			bool settles = false;  // a written slot (not a mover): kept while its transforms differ
 			bool mover = false;    // a plan's mover: due again next frame when its sample changed a row or palette
 		};
-		static constexpr std::size_t kSampleGrain = 64;
+		static constexpr std::size_t kSampleGrain = 64;  // a chunk's most items (DeferredChunk's capacity)
+		// A chunk's cost (SampleBounds): an item counts 1, a palette rows class's item also its rows over kSampleRowsPerUnit (a particle
+		// system expands every particle, 5 rows each: one of 100 particles costs about 20 plain items).
+		static constexpr std::size_t kSampleChunkCost = 64;
+		static constexpr std::size_t kSampleRowsPerUnit = 24;
 		// Per chunk, marked afterwards (the journals are single-threaded).
 		struct Changed
 		{
@@ -646,6 +654,7 @@ namespace DCLF
 		// SampleShadingRows' items, SendRows' runs for one backing.
 		std::vector<Listed> sampleItems;
 		std::vector<Changed> sampleChanged;
+		std::vector<std::size_t> sampleBounds;  // the chunks' first items, then the items' count (SampleBounds)
 		std::vector<const ShadingItem*> shadingItemsScratch;
 		std::vector<org::StreamingUploadRange> uploadRanges;
 		// The build's rows and palettes, after its one Mutable() each (written from many threads after it).
@@ -685,12 +694,13 @@ namespace DCLF
 		struct ItemScratch
 		{
 			BindlessPlacement row, layer;
-			std::unique_ptr<DeferredChunk> deferred;                      // made at the chunk's first deferred item
+			DeferredChunk* deferred = nullptr;                            // the thread's, taken at the chunk's first deferred item (Defer)
 			std::array<std::size_t, Api::kPaletteRowsClasses> cursors{};  // per class: its next item in the run's
 		};
 		void ListItem(const Plan::Item& a_item, bool a_settles, bool a_mover, std::size_t a_rows, std::size_t a_blocks, std::vector<Listed>& a_items);
 		void MarkSampledRoots();
 		void ApplyRootViewSamples(const Job& a_job, const SampleOut& a_out, std::uint64_t& a_marked, std::uint64_t& a_paletteMarked);
+		static void SampleBounds(const std::vector<Listed>& a_items, std::vector<std::size_t>& a_bounds);
 		void SampleItems(const Job& a_job, const std::vector<Listed>& a_items, const SampleOut& a_out, std::vector<Changed>& a_changed,
 			std::atomic<std::uint64_t>& a_refused);
 		static void BeginPaletteRuns(const Job& a_job, const std::vector<Listed>& a_items, PaletteRuns& a_runs);
@@ -1258,6 +1268,7 @@ namespace DCLF
 	{
 		ZoneScopedN("CS.DCLF.FrameValues.Sample");
 		const auto& work = *a_job.plan;
+		TracyCZoneN(sBegin, "CS.DCLF.FV.S.BeginBuild", true);
 		BeginBuild(a_job, kPlacements, rows);
 		BeginBuild(a_job, kPalettes, palettes);
 		auto& out = rows.Mutable();
@@ -1273,8 +1284,10 @@ namespace DCLF
 			paletteOut.resize(paletteRows, PaletteRow{});
 			palettes.MarkRange(first, paletteRows - first);
 		}
+		TracyCZoneEnd(sBegin);
 		// The movers and roots that moved (MarkDue).
 		MarkDue(a_job);
+		TracyCZoneN(sList, "CS.DCLF.FV.S.ListItems", true);
 		// Each slot and palette block once, by its newest item.
 		auto& items = sampleItems;
 		items.clear();
@@ -1308,6 +1321,9 @@ namespace DCLF
 		} handOver{ carried };
 		for (const auto& item : carried)
 			ListItem(item, true, false, slots, blocks, items);
+		TracyCZoneValue(sList, items.size());
+		TracyCZoneEnd(sList);
+		TracyCZoneN(sRoots0, "CS.DCLF.FV.S.MarkRootsAndRootView", true);
 		MarkSampledRoots();
 		const SampleOut sampleOut{ out, paletteOut };
 		std::uint64_t rootViewMarked = 0, rootViewPaletteMarked = 0;
@@ -1315,13 +1331,21 @@ namespace DCLF
 		auto& changed = sampleChanged;
 		for (auto& chunk : changed)
 			chunk.Clear();
-		changed.resize((items.size() + kSampleGrain - 1) / kSampleGrain);
+		SampleBounds(items, sampleBounds);
+		changed.resize(sampleBounds.size() - 1);
 		std::atomic<std::uint64_t> refusedHere{ 0 };
+		TracyCZoneEnd(sRoots0);
+		TracyCZoneN(sItems, "CS.DCLF.FV.S.SampleItems", true);
 		SampleItems(a_job, items, sampleOut, changed, refusedHere);
+		TracyCZoneEnd(sItems);
+		TracyCZoneN(sRoots, "CS.DCLF.FV.S.SampleRoots", true);
+		TracyCZoneValue(sRoots, dueRoots.size());
 		// Roots: their dependents' sun entries and fade nodes, after the items wrote theirs.
 		std::vector<std::vector<std::uint32_t>> rootChanged(dueRoots.size());
 		std::vector<std::uint8_t> rootRefused(dueRoots.size(), 0);
 		SampleRoots(sampleOut, rootChanged, rootRefused, refusedHere);
+		TracyCZoneEnd(sRoots);
+		TracyCZoneN(sMarked, "CS.DCLF.FV.S.MarkSampled", true);
 		std::uint64_t marked = 0, paletteMarked = 0;
 		MarkSampled(changed, rootChanged, rootRefused, marked, paletteMarked);
 		sampled += static_cast<std::uint64_t>(items.size() + a_job.rootViewSamples.size());
@@ -1344,13 +1368,18 @@ namespace DCLF
 			blockListed[block] = 0;
 		listedSlots.clear();
 		listedBlocks.clear();
+		TracyCZoneEnd(sMarked);
 		SampleShadingRows(a_job, a_job.shadingSlots);
 		// The CPU pipeline's: the rows are this frame's from here (the registered pools' samples write none). The view batches' live spheres,
 		// the builder's snapshot spheres when it asked, then the CPU stages' hook (Features/Fades' CPU fade states, a registered pool, read
 		// what it stashes).
 		StoreLiveSpheres(a_job, out);
 		PostSnapshotSpheres(a_job, out);
-		Direct::OnFrameValuesSampled(a_job.seq, std::span<const BindlessPlacement>(out));
+		{
+			ZoneScopedN("CS.DCLF.FV.S.OnSampled");
+			Direct::OnFrameValuesSampled(a_job.seq, std::span<const BindlessPlacement>(out));
+		}
+		ZoneNamedN(sRegistered, "CS.DCLF.FV.S.Registered", true);
 		ForEachRegistered(a_job, [](const Extensions::FrameValuePoolEntry& a_entry, Api::FrameValuePoolProducer& a_producer) { a_entry.sample(a_producer); });
 	}
 
@@ -1375,6 +1404,17 @@ namespace DCLF
 
 	void FrameValues::Impl::PostSnapshotSpheres(const Job& a_job, const std::vector<BindlessPlacement>& a_out)
 	{
+		if (streamSpheresWanted.exchange(false, std::memory_order_acq_rel)) {
+			ZoneScopedN("CS.DCLF.FrameValues.StreamingSpheres");
+			auto table = std::make_unique<Direct::SnapshotSpheres>();
+			table->seq = a_job.seq;
+			table->sphere.resize(a_out.size());
+			for (std::size_t i = 0; i < a_out.size(); ++i)
+				std::memcpy(table->sphere[i].data(), a_out[i].bound, sizeof(a_out[i].bound));
+			table->owner.assign(rowOwner.begin(), rowOwner.begin() + std::min(rowOwner.size(), a_out.size()));
+			table->owner.resize(a_out.size(), nullptr);
+			streamSpheresSlot.Post(std::move(table));
+		}
 		if (!spheresWanted.exchange(false, std::memory_order_acq_rel))
 			return;
 		ZoneScopedN("CS.DCLF.FrameValues.SnapshotSpheres");
@@ -1445,6 +1485,16 @@ namespace DCLF
 	std::unique_ptr<Direct::SnapshotSpheres> FrameValues::TakeSnapshotSpheres()
 	{
 		return impl->spheresSlot.Take();
+	}
+
+	void FrameValues::RequestStreamingSpheres()
+	{
+		impl->streamSpheresWanted.store(true, std::memory_order_release);
+	}
+
+	std::unique_ptr<Direct::SnapshotSpheres> FrameValues::TakeStreamingSpheres()
+	{
+		return impl->streamSpheresSlot.Take();
 	}
 
 	// First-person items are the render thread's (RootViewSample), except a palette rows class's (particle members, expanded from
@@ -1526,13 +1576,35 @@ namespace DCLF
 		// each particle member's snapshot record).
 		PaletteRuns paletteRuns;
 		BeginPaletteRuns(a_job, a_items, paletteRuns);
-		executor.ParallelFor("CS.DCLF.FrameValues.Items", a_items.size(), kSampleGrain, [&](std::size_t a_begin, std::size_t a_end) {
-			ZoneScopedN("CS.DCLF.FrameValues.Items");
-			SampleChunk(a_job, a_items, paletteRuns, a_begin, a_end, a_out, a_changed[a_begin / kSampleGrain], a_refused);
+		executor.ParallelFor("CS.DCLF.FrameValues.Items", a_changed.size(), 1, [&](std::size_t a_begin, std::size_t a_end) {
+			for (std::size_t c = a_begin; c < a_end; ++c) {
+				ZoneScopedN("CS.DCLF.FrameValues.Items");
+				SampleChunk(a_job, a_items, paletteRuns, sampleBounds[c], sampleBounds[c + 1], a_out, a_changed[c], a_refused);
+			}
 		});
 		for (std::size_t c = 0; c < paletteRuns.size(); ++c)
 			if (paletteRuns[c].entry)
 				paletteRuns[c].entry->contribution.endRun({ a_job.paletteInputs[c], paletteRuns[c].items });
+	}
+
+	// Sample's chunks: runs of the items in order, each of about kSampleChunkCost and at most kSampleGrain items, so the frame's particle
+	// systems (which a run lists together) spread over the pool instead of filling one or two chunks.
+	void FrameValues::Impl::SampleBounds(const std::vector<Listed>& a_items, std::vector<std::size_t>& a_bounds)
+	{
+		a_bounds.clear();
+		a_bounds.push_back(0);
+		std::size_t cost = 0;
+		for (std::size_t i = 0; i < a_items.size(); ++i) {
+			const auto& listed = a_items[i];
+			const bool classRows = listed.palette && listed.item->itemClass != Api::FrameValueItemClass::None;
+			cost += 1 + (classRows ? listed.item->boneRows / kSampleRowsPerUnit : 0);
+			if (cost >= kSampleChunkCost || i + 1 - a_bounds.back() == kSampleGrain) {
+				a_bounds.push_back(i + 1);
+				cost = 0;
+			}
+		}
+		if (a_bounds.back() != a_items.size())
+			a_bounds.push_back(a_items.size());
 	}
 
 	// Each registered class's items with a block, in the run's order, handed to its beginRun.
@@ -1650,8 +1722,15 @@ namespace DCLF
 	// A deferred item's place in the chunk's: its class, its class's state for it, and its block in the chunk's rows.
 	FrameValues::Impl::Deferred& FrameValues::Impl::Defer(const Listed& a_listed, std::uint32_t a_class, const Api::PaletteRowsItem& a_classItem, ItemScratch& a_scratch)
 	{
-		if (!a_scratch.deferred)
-			a_scratch.deferred = std::make_unique<DeferredChunk>();
+		if (!a_scratch.deferred) {
+			// One per thread, reused chunk after chunk (a chunk runs on one thread, start to end): about 20 KB, which a chunk would
+			// otherwise allocate and zero for its first deferred item. Every field of an item is written before it is read.
+			static thread_local std::unique_ptr<DeferredChunk> threadChunk;
+			if (!threadChunk)
+				threadChunk = std::make_unique<DeferredChunk>();
+			threadChunk->count = threadChunk->rowCount = 0;
+			a_scratch.deferred = threadChunk.get();
+		}
 		auto& chunk = *a_scratch.deferred;
 		auto& deferred = chunk.items[chunk.count++];
 		deferred.listed = &a_listed;
@@ -1666,7 +1745,7 @@ namespace DCLF
 	void FrameValues::Impl::WriteDeferred(const Job& a_job, const PaletteRuns& a_runs, DeferredChunk& a_deferred)
 	{
 		auto& chunk = a_deferred;
-		chunk.rows.resize(chunk.rowCount);
+		chunk.rows.assign(chunk.rowCount, PaletteRow{});
 		std::uint32_t next = 0;
 		for (std::uint32_t c = 0; c < a_runs.size(); ++c) {
 			const std::uint32_t first = next;
@@ -2324,9 +2403,10 @@ namespace DCLF
 		// The class follows the rows asked both ways: a smaller one once they stayed much smaller (a fresh backing, written whole: its
 		// contentEpoch is 0); the larger class's backings are released as they come back.
 		org::services::FitCapacity(a_pool.capacity, a_pool.window, std::max<std::uint64_t>(a_needed, 1), kPoolGrowth, PooledBackings::Shrink());
-		const auto name = fmt::format("cs.dclf.frame-values.{}", a_name);
+		if (a_pool.backingName.empty())
+			a_pool.backingName = fmt::format("cs.dclf.frame-values.{}", a_name);
 		org::services::BackingPool::AcquireInfo info;
-		auto lease = a_pool.pool->Acquire({ .capacityClass = a_pool.capacity, .stride = a_stride, .flags = { .deviceAddress = a_deviceAddress }, .name = name },
+		auto lease = a_pool.pool->Acquire({ .capacityClass = a_pool.capacity, .stride = a_stride, .flags = { .deviceAddress = a_deviceAddress }, .name = a_pool.backingName },
 			a_pool.newestContentEpoch.load(std::memory_order_acquire), &info);
 		if (!lease)
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: the frame values' {} pool returned no backing", a_name));
@@ -2410,12 +2490,17 @@ namespace DCLF
 	{
 		auto& s = *impl;
 		s.kicked = false;
+		TracyCZoneN(kBind, "CS.DCLF.FV.K.BindAndRetire", true);
 		// A frame whose EndFrame did not come: its backings are bound to what was submitted so far.
 		BindFrameLeases(s.frameLeases, s.registeredFrameLeases, s.boundPoints);
 		s.RetireFieldOwners();
+		TracyCZoneEnd(kBind);
+		TracyCZoneN(kStart, "CS.DCLF.FV.K.FrameStartRegistered", true);
 		// The registered pools' frame-start reads (Api::FrameValuePool::frameStart), whether or not the frame has a producer: Features/Fades'
 		// seeds' the last.
 		Impl::FrameStartRegistered(a_globals);
+		TracyCZoneEnd(kStart);
+		TracyCZoneN(kPlans, "CS.DCLF.FV.K.Plans", true);
 		// The refused items first (the oldest), then those not yet taken, then the frame's (newest last).
 		if (auto refused = s.TakeRefusedShading(); !refused.empty())
 			s.unsampledShading.insert(s.unsampledShading.begin(), std::make_move_iterator(refused.begin()), std::make_move_iterator(refused.end()));
@@ -2441,6 +2526,8 @@ namespace DCLF
 		}
 		// Every plan since the last frame, in order: the producer applies each onto its kept set and samples its written slots.
 		s.QueuePlans(a_plans);
+		TracyCZoneEnd(kPlans);
+		TracyCZoneN(kJob, "CS.DCLF.FV.K.Job", true);
 		// Release finished producers' plans here on the render thread (they hold engine references).
 		const auto finished = s.done.load(std::memory_order_acquire);
 		while (!s.plans.empty() && s.plans.front().first <= finished)
@@ -2472,12 +2559,18 @@ namespace DCLF
 				job.shadingSlots = std::max<std::size_t>(job.shadingSlots, std::size_t(value.slot) + 1);
 		job.globals = a_globals;
 		job.viewBatches = viewBatches;
+		TracyCZoneEnd(kJob);
 		// The registered pools' inputs for the frame's producer, and the rows each asks for.
+		TracyCZoneN(kReg, "CS.DCLF.FV.K.KickRegistered", true);
 		s.KickRegistered(job, a_globals.get());
+		TracyCZoneEnd(kReg);
+		TracyCZoneN(kLease, "CS.DCLF.FV.K.LeaseBackings", true);
 		// Each part's backing, holding every row the producer leaves (a class of kPoolGrowth), the one that holds
 		// most of the journal preferred; the floor (the oldest content in circulation, this lease's included) is what the
 		// producer's journal keeps.
 		s.LeaseBackings(job);
+		TracyCZoneEnd(kLease);
+		TracyCZoneN(kRoot, "CS.DCLF.FV.K.PaletteKicksAndRootViews", true);
 		job.timeline = std::move(timeline);
 		job.uploads = std::move(uploads);
 		// The palette rows classes' frame inputs (Features/Particles: the cameras its quads face, the main one and the first person's).
@@ -2488,8 +2581,10 @@ namespace DCLF
 		// (FUN_1414cb020), palettes included: the engine draws none of them, so none of its reads see a world-space palette.
 		if (const auto claims = std::exchange(rootViewClaims, nullptr))
 			s.SampleRootViews(job, *claims);
+		TracyCZoneEnd(kRoot);
 		if (s.plan)
 			s.plans.emplace_back(seq, s.plan);
+		ZoneScopedN("CS.DCLF.FV.K.Dispatch");
 		frameIndex = s.frameLeases[Impl::kPlacements]->srvIndex;
 		paletteIndex = s.frameLeases[Impl::kPalettes]->srvIndex;
 		shadingIndex = s.frameLeases[Impl::kShading]->srvIndex;

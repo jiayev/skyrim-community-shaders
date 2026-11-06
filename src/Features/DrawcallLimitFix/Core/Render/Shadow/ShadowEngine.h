@@ -11,6 +11,9 @@
 
 namespace DCLF
 {
+	/** @brief Render thread: slots whose views never draw in one frame come to share their draw arguments (ShadowResources::drawArgsOwner). */
+	void ShareDrawArgs(ShadowResources& a_state, std::span<const ShadowViewLayout> a_placements);
+
 	/** @brief What the shadow engine reaches of the rest of the implementation (Impl): at setup and the captures, never per object. */
 	struct ShadowHost
 	{

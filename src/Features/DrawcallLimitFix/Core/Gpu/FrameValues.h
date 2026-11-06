@@ -111,6 +111,10 @@ namespace DCLF
 		void RequestSnapshotSpheres();
 		/** @brief The snapshot builder: the newest bounds a producer posted since the last take (null: none). */
 		std::unique_ptr<Direct::SnapshotSpheres> TakeSnapshotSpheres();
+		/** @brief Any thread (texture streaming's worker): as RequestSnapshotSpheres, in a slot of its own; its table holds spheres and owners only. */
+		void RequestStreamingSpheres();
+		/** @brief The newest bounds posted for streaming since the last take (null: none). */
+		std::unique_ptr<Direct::SnapshotSpheres> TakeStreamingSpheres();
 		/**
 		 * @brief The first-person report: the palette rows classes' first-person writes since the last call that gave their placement
 		 * (Api::PaletteRowsChunk::NoteFirstPerson; Features/Particles: the first-person particle members' expansions), their units (the

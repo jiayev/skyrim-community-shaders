@@ -98,7 +98,7 @@ namespace DCLF::Direct
 		{
 			std::shared_ptr<const ViewBatchSet> set;
 			std::uint32_t frame = 0, lastArmed = 0;
-			bool armed = false, everArmed = false;
+			bool armed = false, everArmed = false, observer = false;
 		};
 		Arm arm;  // render thread
 		std::atomic<std::uint32_t> cpuStatesFrame{ ~0u };
@@ -523,7 +523,7 @@ namespace DCLF::Direct
 			const bool portalPassed = a_inFrustum && !(a_portalRejected ? *a_portalRejected != 0 : PortalRejected(a_frame, a_lane.root, a_lane.bound, a_view.planeMargin));
 			bool fadeHidden = false;
 			// Only a per-frame cull stamps: a per-snapshot one's verdicts are not the frame's (its lists get a stamp-only pass a frame).
-			if (portalPassed && a_live)
+			if (portalPassed && a_live && a_frame.reportsVisibility)
 				fadeHidden = StampFrustum(a_frame, a_lane.object, a_lane.root, a_lane.flags, a_lane.fadeDistance);
 			if (a_view.stampOnly || (a_lane.flags & kLaneCullOnly))
 				return false;
@@ -712,11 +712,12 @@ namespace DCLF::Direct
 
 	// ---- The frame state ----
 
-	void KickCpuFrameState(std::shared_ptr<const ViewBatchSet> a_set)
+	void KickCpuFrameState(std::shared_ptr<const ViewBatchSet> a_set, bool a_observer)
 	{
 		arm.set = std::move(a_set);
 		arm.frame = Scene::FrameView::Get().GetFrame();
 		arm.armed = arm.set != nullptr;
+		arm.observer = a_observer;
 	}
 
 	CpuFrameArm TakeCpuFrameArm()
@@ -727,8 +728,11 @@ namespace DCLF::Direct
 			arm.set.reset();
 			return {};
 		}
-		CpuFrameArm taken{ std::move(arm.set), frame, !arm.everArmed || arm.lastArmed + 1 != frame };
 		arm.armed = false;
+		// An observer's frame stays a GPU frame: the GPU's states stay bound, and the next CPU frame still starts the visibility again.
+		if (arm.observer)
+			return { std::move(arm.set), frame, false, true };
+		CpuFrameArm taken{ std::move(arm.set), frame, !arm.everArmed || arm.lastArmed + 1 != frame };
 		arm.everArmed = true;
 		arm.lastArmed = frame;
 		cpuStatesFrame.store(frame, std::memory_order_release);
@@ -789,8 +793,20 @@ namespace DCLF::Direct
 			retired.clear();
 		}
 		RunReady();
-		if (a_frame->pendingStamps.fetch_sub(1, std::memory_order_acq_rel) == 1)
+		if (a_frame->pendingStamps.fetch_sub(1, std::memory_order_acq_rel) == 1 && a_frame->reportsVisibility)
 			DiffVisibility(*a_frame);
+	}
+
+	void DropCullFrame()
+	{
+		const Held* replaced = latest.exchange(nullptr, std::memory_order_seq_cst);
+		if (replaced)
+			retired.push_back(replaced);
+		if (!retired.empty() && latestReaders.load(std::memory_order_seq_cst) == 0) {
+			for (const Held* old : retired)
+				delete old;
+			retired.clear();
+		}
 	}
 
 	void AfterCullFrame(std::uint32_t a_sceneFrame, std::function<void(const std::shared_ptr<const CullFrame>&)> a_then)
@@ -1030,7 +1046,7 @@ namespace DCLF::Direct
 		out.objectWords = words;
 		out.drawMasks = masks;
 		// The main camera's per-frame lists: the frame's last one diffs the verdicts for kAccumulated.
-		if (mainCamera && a_live && a_frame.pendingStamps.fetch_sub(1, std::memory_order_acq_rel) == 1)
+		if (mainCamera && a_live && a_frame.reportsVisibility && a_frame.pendingStamps.fetch_sub(1, std::memory_order_acq_rel) == 1)
 			DiffVisibility(a_frame);
 		return out;
 	}

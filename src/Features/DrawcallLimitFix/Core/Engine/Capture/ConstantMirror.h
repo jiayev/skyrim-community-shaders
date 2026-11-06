@@ -47,7 +47,9 @@ namespace DCLF
 			ID3D11Buffer* buffer = nullptr;  // referenced while watched
 			std::vector<std::byte> bytes;
 			void* mapped = nullptr;
-			void* lastMapped = nullptr;  // null once UpdateSubresource wrote the buffer
+			// The last finished mapping, not copied into bytes yet: copied once, by the first read after it (Contents) or a partial
+			// UpdateSubresource, rather than at every Unmap (a buffer is unmapped more often than it is read).
+			void* unread = nullptr;
 			bool valid = false;
 		};
 

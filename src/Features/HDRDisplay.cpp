@@ -622,11 +622,18 @@ void HDRDisplay::RestoreDefaultSettings()
 
 void HDRDisplay::DataLoaded()
 {
-	// Use Skyrim's built-in ini setting to upgrade all HDR render targets to 16-bit float format.
+	// Skyrim's ini setting that makes its HDR render targets 16-bit float. The targets exist by now, so this reaches them only through
+	// the next launch, if the game writes SkyrimPrefs.ini. So it follows HDR's setting: forced on without HDR, one write made every
+	// later launch's main target 64-bit (about 2 ms a frame on an RX 6600). Off also clears a value such a write left.
 	auto setting = RE::GetINISetting("bUse64bitsHDRRenderTarget:Display");
 	if (setting) {
-		setting->data.b = true;
-		logger::info("[HDR Display] Enabled bUse64bitsHDRRenderTarget - all required render targets will use R16G16B16A16_FLOAT");
+		bool enableHDR = false;
+		{
+			std::lock_guard lock(settingsMutex);
+			enableHDR = settings.enableHDR;
+		}
+		setting->data.b = enableHDR;
+		logger::info("[HDR Display] bUse64bitsHDRRenderTarget set to {}, as HDR is", enableHDR);
 	} else {
 		logger::warn("[HDR Display] bUse64bitsHDRRenderTarget ini setting not found");
 	}

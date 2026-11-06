@@ -64,6 +64,8 @@ namespace DCLF::Api
 	 * - recordAtExecution (with cpuPipeline): the pass is in the CPU-driven pipeline only, recorded by its site's execution on DXVK's CS
 	 *   thread into DXVK's command buffer (ORG's late batch: ExternalPassDesc::RecordAtExecution), once its views' culls are in: the
 	 *   direct sites' draws (Core/Render/Direct/SitePasses.cpp).
+	 * - gpuLate (with recordAtExecution): the pass is in the GPU-driven graph too, where its make decides, recorded by its in-stream epoch's
+	 *   execution: the forward site's (GraphConditions::forwardDirect).
 	 */
 	/** @brief A pass's frame rows (PassDef::frameRows): its frame's backing's device address and rows (0: none this frame). */
 	struct FrameRows
@@ -86,5 +88,6 @@ namespace DCLF::Api
 		FrameRows (*frameRows)() = nullptr;
 		bool cpuPipeline = false;
 		bool recordAtExecution = false;
+		bool gpuLate = false;
 	};
 }

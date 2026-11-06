@@ -37,6 +37,7 @@ struct VanillaFresnel;
 struct VolumetricLighting;
 class ViewAtmosphere;
 struct VRAMBudget;
+struct TextureStreamingFeature;
 struct WaterEffects;
 struct PerformanceOverlay;
 struct WetnessEffects;
@@ -139,6 +140,7 @@ namespace globals
 		extern VolumetricLighting volumetricLighting;
 		extern ViewAtmosphere viewAtmosphere;
 		extern VRAMBudget vramBudget;
+		extern TextureStreamingFeature textureStreaming;
 		extern WaterEffects waterEffects;
 		extern PerformanceOverlay performanceOverlay;
 		extern WetnessEffects wetnessEffects;
