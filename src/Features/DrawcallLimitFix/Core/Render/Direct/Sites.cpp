@@ -1493,6 +1493,7 @@ namespace DCLF::Direct
 		slot.set = a_set;
 		slot.sceneFrame = Scene::FrameView::Get().GetFrame();
 		slot.colourGate.store(2, std::memory_order_relaxed);
+		s.signalQueuedFor = nullptr;
 		s.current = &slot;
 		// The commits write their latch regions at this slot: no GPU work reads it now (Retire).
 		host->BeginExternalFrameSlot(slot.index);
@@ -1535,20 +1536,15 @@ namespace DCLF::Direct
 		return slot && slot->ownsEpochs ? slot->set.get() : nullptr;
 	}
 
-	void EndFrame()
+	void QueueFrameSignal()
 	{
-		ZoneScopedN("CS.DCLF.Cpu.EndFrame");
 		auto& s = S();
-		auto* slot = std::exchange(s.current, nullptr);
-		if (!slot)
+		auto* slot = s.current;
+		if (!slot || !slot->ownsEpochs || std::exchange(s.signalQueuedFor, slot) == slot)
 			return;
-		if (!slot->ownsEpochs) {
-			CloseForwardSlot(*slot);
-			++s.window.frames;
-			return;
-		}
-		// The frame's signal behind its sites' callbacks in DXVK's stream: the slot's (and the clock's) retirement point. The last one
-		// was submitted with this frame's work, before its Present.
+		// The frame's signal behind its sites' callbacks in DXVK's stream: the slot's (and the clock's) retirement point. Queued before
+		// the Present, which sends it to the device with the frame's work. After it, it would ride the next frame's command list: a
+		// wait for it (a producer reusing a copy this frame bound) would then wait for that next frame's own work.
 		s.submitted = s.signalled;
 		const std::uint64_t value = s.signalled + 1;
 		const RenderGraphRuntime::ExternalCommandsWait signals[1]{ { s.semaphore, value, 0 } };
@@ -1559,6 +1555,22 @@ namespace DCLF::Direct
 		} else {
 			// Without DXVK's external commands no site queued anything either: nothing of the slot is in flight.
 			++s.window.notQueued;
+		}
+	}
+
+	void EndFrame()
+	{
+		ZoneScopedN("CS.DCLF.Cpu.EndFrame");
+		auto& s = S();
+		QueueFrameSignal();
+		s.signalQueuedFor = nullptr;
+		auto* slot = std::exchange(s.current, nullptr);
+		if (!slot)
+			return;
+		if (!slot->ownsEpochs) {
+			CloseForwardSlot(*slot);
+			++s.window.frames;
+			return;
 		}
 		// The view batches' sequences, bound with the payload's (the point covers this frame's signal).
 		if (slot->set)

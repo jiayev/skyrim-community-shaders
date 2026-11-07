@@ -229,6 +229,7 @@ namespace DCLF::Direct::detail
 		std::vector<std::unique_ptr<FrameSlot>> forwardSlots;  // FrameSlot::ownsEpochs false
 		std::uint64_t frames = 0;
 		FrameSlot* current = nullptr;  // the frame's (FrameStart to EndFrame)
+		FrameSlot* signalQueuedFor = nullptr;  // the slot whose signal QueueFrameSignal queued (until EndFrame)
 		SiteRun* pending = nullptr;    // the site the epoch body being run opened (ExecuteEpoch)
 		// A GPU-driven frame's forward run, on its way to its epoch's late pass (ForwardReached, in DXVK's stream; RecordExecutingSite).
 		std::atomic<SiteRun*> handedOff{ nullptr };

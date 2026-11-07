@@ -39,6 +39,8 @@ namespace DCLF
 			std::deque<TakenPoint> pending;
 			// The newest point noted: SubmittedRetirementPoint's callers are on several threads (the render thread, the builder's binds).
 			std::atomic<std::uint64_t> lastTaken{ 0 };
+			// The CPU frames signalled before the last present (SealCpuFrames).
+			std::atomic<std::uint64_t> cpuSealed{ 0 };
 		};
 
 		Sources& State()
@@ -83,6 +85,38 @@ namespace DCLF
 		if (const std::uint64_t cpu = s.cpuSignalled.load(std::memory_order_relaxed); cpu && s.cpuTimeline)
 			point.points.emplace_back(s.cpuTimeline, cpu);
 		return point;
+	}
+
+	void SealCpuFrames()
+	{
+		auto& s = State();
+		s.cpuSealed.store(s.cpuSignalled.load(std::memory_order_relaxed), std::memory_order_release);
+	}
+
+	org::GraphHost::GpuPoint SealedGpuPoint()
+	{
+		const auto* host = RenderGraphRuntime::Get().Host();
+		org::GraphHost::GpuPoint point = host ? host->SealedPoint() : org::GraphHost::GpuPoint{};
+		auto& s = State();
+		if (const std::uint64_t cpu = s.cpuSealed.load(std::memory_order_acquire); cpu && s.cpuTimeline)
+			point.points.emplace_back(s.cpuTimeline, cpu);
+		return point;
+	}
+
+	bool Sealed(const org::GraphHost::GpuPoint& a_point)
+	{
+		const auto sealed = SealedGpuPoint();
+		// Before the first present nothing is sealed, and nothing can be said.
+		if (sealed.points.empty())
+			return true;
+		for (const auto& [timeline, value] : a_point.points) {
+			if (!timeline || !*timeline || (*timeline)->GetCompletedValue() >= value)
+				continue;
+			const auto known = std::ranges::find_if(sealed.points, [&](const auto& a_sealed) { return a_sealed.first.get() == timeline.get(); });
+			if (known == sealed.points.end() || known->second < value)
+				return false;
+		}
+		return true;
 	}
 
 	void NoteGraphSubmissionsRetired(std::uint64_t a_submissions)

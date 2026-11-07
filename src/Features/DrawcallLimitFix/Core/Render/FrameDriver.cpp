@@ -18,6 +18,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/LatePoses.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PrimaryView.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
@@ -28,6 +29,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowPoints.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
@@ -234,6 +236,14 @@ namespace DCLF
 			TracyCZoneN(bfFields, "CS.DCLF.BF.CaptureShadingFields", true);
 			auto fields = Extensions::CaptureShadingFields(view);
 			TracyCZoneEnd(bfFields);
+			// The CPU frames signalled before the last present join its seal: the producers' uploads may wait for those points only.
+			SealCpuFrames();
+			// The late poses' backings, leased with the frame's when a late pose names a reference now (it names it again at the depth commit).
+			for (const auto& pose : Extensions::LatePoses())
+				if (pose.reference()) {
+					FrameValues::Get().ReserveLatePoses();
+					break;
+				}
 			(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), std::move(fields), view.FrameGlobalsOfFrame());
 		}
 		{
@@ -253,6 +263,16 @@ namespace DCLF
 		// The Z-prepass and the views' work here (the reflection's faces and first person's depth, which the depth epoch hosts) are submitted
 		// under depth.committed.
 		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::DepthCommitted));
+		// The late poses (Api/LatePoses.h): skins a plugin posed again after the shadow maps, sampled again for the epochs from here on. Before
+		// the depth epoch is submitted, so it and the epochs after it wait for them on the GPU.
+		if (const auto poses = Extensions::LatePoses(); !poses.empty()) {
+			std::array<const void*, 8> references{};
+			std::size_t count = 0;
+			for (const auto& pose : poses)
+				if (const void* reference = pose.reference(); reference && count < references.size())
+					references[count++] = reference;
+			FrameValues::Get().KickLatePoses(std::span<const void* const>(references.data(), count));
+		}
 		// The views' work at the depth commit (Features/Reflection's: the frame's reflection faces, every TESWaterReflections::Update of the
 		// frame having run, two a frame, a face each, drawn by DCLF before the water reads the cube; dclf-architecture.md, "Water
 		// reflections"; then Features/FirstPerson's: the frame's first-person depth, its camera set by Main::Draw before RenderDepth, drawn
@@ -281,6 +301,14 @@ namespace DCLF
 				run(context);
 	}
 
+	void FrameDriver::BeforePresent()
+	{
+		// The CPU pipeline's frame signal behind its sites' callbacks: the present sends it on with the frame's work. EndFrame runs after
+		// the present (State::Reset), where it would ride the next frame's command list.
+		Direct::QueueFrameSignal();
+		FrameValues::Get().WaitSignalSubmitted();
+	}
+
 	void FrameDriver::EndFrame(bool a_running)
 	{
 		// The engine's next update follows Present: no worker may be inside its memory from here (EngineReadWindow).
@@ -292,7 +320,7 @@ namespace DCLF
 		TracyCZoneN(efCull, "CS.DCLF.EF.PrimaryCull", true);
 		PrimaryCull::Get().EndFrame();
 		TracyCZoneEnd(efCull);
-		// The CPU pipeline's frame signal, behind its sites' callbacks, first: the retirement points bound below cover it.
+		// The CPU pipeline's frame (its signal queued before the present, BeforePresent), first: the retirement points bound below cover it.
 		Direct::EndFrame();
 		TracyCZoneN(efBind, "CS.DCLF.EF.BindAdoptedAndValues", true);
 		// The growable versions and the payload the frame read: kept from reuse until what it submitted retires.

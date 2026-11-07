@@ -30,6 +30,16 @@ namespace DCLF::SkinPalettes
 		updateSkinInstance(a_skin, &a_world);
 	}
 
+	/**
+	 * @brief Engine read (under the caller's lease): whether the skin's palette update would run again (Update). Its frame id is not
+	 * this frame's: a plugin set it back to pose the skin again (Improved Camera hides the first-person head and arms that way, after
+	 * the shadow maps), or nothing updated the skin this frame.
+	 */
+	inline bool UpdateDue(const RE::NiSkinInstance& a_skin)
+	{
+		return a_skin.frameID != Engine::Global<std::uint32_t>(Engine::Address::kFrameCounter);
+	}
+
 	// The skin's palettes after this frame's update; false when its size mismatches its block (the walk rewrites it: KeepSkin).
 	inline bool Of(const RE::BSGeometry& a_geometry, std::uint32_t a_rows, const float*& a_current, const float*& a_previous)
 	{

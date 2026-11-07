@@ -86,8 +86,14 @@ namespace DCLF::Direct
 	const ViewBatchSet* FrameBatches();
 
 	/**
-	 * @brief Render thread, at Present after the frame's last site: the frame's signal queued behind its callbacks (a callback of its
-	 * own, which records nothing), the external latch slot closed, the report's counters taken.
+	 * @brief Render thread, before the Present, after the frame's last site: the frame's signal queued behind its callbacks (a callback
+	 * of its own, which records nothing), so the present sends it to the device with the frame's work. Once a frame; EndFrame queues it
+	 * when this did not run.
+	 */
+	void QueueFrameSignal();
+	/**
+	 * @brief Render thread, after the Present: the frame's signal (QueueFrameSignal's, else queued here), the external latch slot
+	 * closed, the report's counters taken.
 	 */
 	void EndFrame();
 

@@ -250,6 +250,12 @@ void DrawcallLimitFix::ForceOff()
 	logger::warn("[DCLF] Forced off: {}; the game renders natively", unavailableReason);
 }
 
+void DrawcallLimitFix::BeforePresent()
+{
+	if (installed)
+		DCLF::FrameDriver::Get().BeforePresent();
+}
+
 void DrawcallLimitFix::Reset()
 {
 	// The test commands run before the installed check, so a CS_DCLF=0 baseline reaches the same place at
@@ -1021,6 +1027,7 @@ void DrawcallLimitFix::PostPostLoad()
 }
 void DrawcallLimitFix::SetupResources() {}
 void DrawcallLimitFix::Reset() {}
+void DrawcallLimitFix::BeforePresent() {}
 void DrawcallLimitFix::Prepass() {}
 void DrawcallLimitFix::EarlyPrepass() {}
 void DrawcallLimitFix::DrawSettings()

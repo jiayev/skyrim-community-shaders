@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Api/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include <span>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -93,6 +94,23 @@ namespace DCLF
 		bool Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
 			std::vector<ShadingFieldValue> a_fieldValues, std::shared_ptr<const FrameGlobals> a_globals);
 		/**
+		 * @brief Render thread, before Kick: the frame's late poses are likely (a late pose names a reference now). Kick leases their
+		 * placement and palette backings with the frame's, so their uploads wait only for what the frame producer's do: copies earlier
+		 * frames bound, sealed by the last present (SealedGpuPoint). A wait taken later in the frame could name the frame's own work,
+		 * which may reach the device only at the present EndFrame holds until the late signal is on the copy queue. Released with the
+		 * frame when KickLatePoses does not use them.
+		 */
+		void ReserveLatePoses();
+		/**
+		 * @brief Render thread, at the depth commit, before the depth epoch is submitted: the late poses' references (Api/LatePoses.h).
+		 * Moves the frame's draws from here (PlacementsIndex, PalettesIndex) to the backings ReserveLatePoses reserved (none: nothing),
+		 * and dispatches a second producer that fills them from the rows. It runs after the frame's producer, on the pool (the render thread
+		 * never waits for it), and first samples every skin of the references again (the palette update first, once a frame). The work
+		 * submitted before (the shadow epoch) keeps the frame's first backings, which go with the frame at EndFrame; the batches submitted
+		 * after this call wait for the job's signal. Nothing on a frame without a producer, or without a reference.
+		 */
+		void KickLatePoses(std::span<const void* const> a_references);
+		/**
 		 * @brief Render thread, before Kick: the claims whose CategoryRoot views' members the frame draws (null: none, those views'
 		 * epochs do not draw this frame: the first person's). Kick samples those members' rows and skin palettes itself, before Main::Draw
 		 * moves the first-person skeleton into its root's space (FUN_1414cb020); the producer never samples a root view's item.
@@ -129,6 +147,11 @@ namespace DCLF
 		static FirstPersonPaletteStats TakeFirstPersonPaletteStats();
 		/** @brief Render thread: a frame with no producer (DCLF not running): no batch waits for one. */
 		void Skip();
+		/**
+		 * @brief Render thread, before the Present: once the frame's producers are done, waits until the last one's signal is on the
+		 * copy queue (see the .cpp). EndFrame waits too, when this did not run.
+		 */
+		void WaitSignalSubmitted();
 		/** @brief Render thread, after the frame's last submission: binds the frame's backings to it (SubmittedRetirementPoint). */
 		void EndFrame();
 		/** @brief A GPU wait on a Vulkan timeline semaphore (VkSemaphore): none while semaphore is null. */
@@ -198,6 +221,9 @@ namespace DCLF
 			std::uint64_t reusedInFlight = 0;
 			// The placement plans applied onto the kept set, those that reset it, and their items (joined, changed and left).
 			std::uint64_t plans = 0, planResets = 0, planItems = 0;
+			// The late poses' producers (KickLatePoses), those that found the engine closed to reads, the skins they sampled again and
+			// those whose palette update was set back then (SkinPalettes::UpdateDue).
+			std::uint64_t latePoseJobs = 0, latePoseSkins = 0, latePoseDue = 0, latePoseClosed = 0, latePoseWaitMaxUs = 0;
 		};
 		/** @brief The report's take (Reports/DrawsFrameValues.cpp): the counters, reset. */
 		Counters TakeCounters();

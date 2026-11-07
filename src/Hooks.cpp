@@ -537,6 +537,11 @@ struct IDXGISwapChain_Present
 		streamline->SetPCLMarker(Streamline::PclMarker::TriggerFlash);
 		streamline->SetPCLMarker(Streamline::PclMarker::PresentStart);
 
+		// What DCLF puts in DXVK's stream for the frame (its CPU frame signal), before the present sends the stream on; its features'
+		// Reset (EndFrame) runs after the present.
+		if (globals::features::drawcallLimitFix.loaded)
+			globals::features::drawcallLimitFix.BeforePresent();
+
 		// The render thread's pacing point (RenderGraphRuntime::SignalFramePace): the frame's end in DXVK's stream, unless frame
 		// generation paces the present itself.
 		const bool pacedByCS = !globals::features::upscaling.IsFrameGenerationActive();
@@ -575,6 +580,9 @@ struct IDXGISwapChain_Present
 			streamline->CaptureDLSSGPresentState();
 		}
 
+		// What the graph submitted before the present is on its way to the device: the points a mid-frame producer may wait for.
+		if (presentSucceeded)
+			RenderGraphRuntime::Get().SealPresented();
 		{
 			ZoneScopedN("CS.Present.FramePace");
 			RenderGraphRuntime::Get().WaitFramePace();

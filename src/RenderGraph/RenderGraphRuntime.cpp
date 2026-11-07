@@ -334,6 +334,36 @@ struct RenderGraphRuntime::Impl
 	std::vector<VkSemaphoreSubmitInfo> computeWaits;  // scratch for the entry submission's waits
 
 	/**
+	 * Each unreached point a shared copy queue submission waits for, with whether the seal covers it: sealed (on its way to the
+	 * device), newer than the seal (submitted since the last present, maybe not yet on the device), or a timeline the seal does not
+	 * have (a timeline of the host's made since, or not the host's: the frame wait's, a client's).
+	 */
+	std::string DescribeUnsealed(std::span<const VkSemaphore> a_semaphores, std::span<const std::uint64_t> a_values)
+	{
+		static const auto counterValue = deviceProcAddr ? reinterpret_cast<PFN_vkGetSemaphoreCounterValue>(deviceProcAddr(adoptedDevice, "vkGetSemaphoreCounterValue")) : nullptr;
+		std::vector<std::pair<VkSemaphore, std::uint64_t>> sealed;
+		if (host)
+			for (const auto& [timeline, value] : host->SealedPoint().points) {
+				rhi::VulkanTimelineInfo info{};
+				if (timeline && *timeline && rhi::QueryNativeTimeline(timeline->Get(), rhi::RHI_IID_VK_TIMELINE, &info, sizeof(info)))
+					sealed.emplace_back(static_cast<VkSemaphore>(info.timeline), value);
+			}
+		std::string out;
+		for (std::size_t i = 0; i < a_semaphores.size(); ++i) {
+			std::uint64_t reached = 0;
+			if (counterValue)
+				counterValue(vkDevice, a_semaphores[i], &reached);
+			if (reached >= a_values[i])
+				continue;
+			const auto known = std::ranges::find(sealed, a_semaphores[i], &std::pair<VkSemaphore, std::uint64_t>::first);
+			const char* state = known == sealed.end() ? "not in the seal" : a_values[i] > known->second ? "newer than the seal: a cycle if the frame waits for this queue" : "sealed";
+			const char* name = a_semaphores[i] == streamPoint ? " streamPoint" : a_semaphores[i] == computeExit ? " computeExit" : a_semaphores[i] == copyExit ? " copyExit" : "";
+			out += fmt::format("{}{}{} wants {}, at {} ({})", out.empty() ? "" : "; ", static_cast<const void*>(a_semaphores[i]), name, a_values[i], reached, state);
+		}
+		return out;
+	}
+
+	/**
 	 * Waits on the CPU until every point has been reached (see copyQueue). Bounded: a device that stops making progress is left to
 	 * the submission that follows to report.
 	 */
@@ -352,8 +382,14 @@ struct RenderGraphRuntime::Impl
 		wait.semaphoreCount = a_count;
 		wait.pSemaphores = semaphores.data();
 		wait.pValues = values.data();
-		if (waitSemaphores(vkDevice, &wait, 10'000'000'000ull) != VK_SUCCESS)
-			logger::warn("[ORG] A shared copy queue submission went ahead after 10 s without its waits");
+		// Half a second first: a wait for a point newer than the seal (GraphHost::SealedPoint) may be for work that reaches the device
+		// only once the frame presents, while the render thread waits for what this queue holds behind it. The first few are named.
+		if (waitSemaphores(vkDevice, &wait, 500'000'000ull) == VK_SUCCESS)
+			return;
+		if (static std::atomic<std::uint32_t> warned = 0; warned.fetch_add(1, std::memory_order_relaxed) < 4)
+			logger::error("[ORG] A shared copy queue submission has waited 0.5 s for {}", DescribeUnsealed(semaphores, values));
+		if (waitSemaphores(vkDevice, &wait, 9'500'000'000ull) != VK_SUCCESS)
+			logger::warn("[ORG] A shared copy queue submission went ahead after 10 s without its waits: {}", DescribeUnsealed(semaphores, values));
 	}
 
 	/**
@@ -1973,6 +2009,12 @@ void RenderGraphRuntime::SignalFramePace(bool a_active)
 	state.framePaceSignalled = true;
 }
 
+void RenderGraphRuntime::SealPresented()
+{
+	if (impl && impl->host)
+		impl->host->SealSubmitted();
+}
+
 void RenderGraphRuntime::WaitFramePace()
 {
 	if (!impl || !std::exchange(impl->framePaceSignalled, false) || !IsActive())
@@ -2613,6 +2655,7 @@ winrt::com_ptr<ID3D11Buffer> RenderGraphRuntime::WrapBuffer(org::Resource&, cons
 void RenderGraphRuntime::ReportGpuTimings(std::uint32_t, bool) {}
 std::uint32_t RenderGraphRuntime::TakeSubmittedSegments() { return 0; }
 void RenderGraphRuntime::SignalFramePace(bool) {}
+void RenderGraphRuntime::SealPresented() {}
 void RenderGraphRuntime::WaitFramePace() {}
 org::services::PipelineRegistry* RenderGraphRuntime::PipelineRegistry() { return nullptr; }
 void RenderGraphRuntime::RequestShaderReload(std::string_view, bool) {}

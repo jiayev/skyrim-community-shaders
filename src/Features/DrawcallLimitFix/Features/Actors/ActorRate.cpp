@@ -33,7 +33,6 @@ namespace DCLF::Features::Actors
 	namespace
 	{
 		// AE 1.6.1170 and SE 1.5.97: the actors' animation rate (UpdateActorRate). The field offsets are the same on both.
-		constexpr Engine::Offset kFrameCounter{ { 411489 }, { 525008 } };  // gFrameCounter: Renderer::End (0x140e4482b) increments it
 		constexpr std::size_t kMiddleHighSkinProperty = 0x178;  // MiddleHighProcessData: the property Actor::ModifyAnimationUpdateData reads
 		constexpr std::size_t kPropertyStamp = 0x80;            // BSShaderProperty::lastAccumulatedFrameCount
 
@@ -65,7 +64,7 @@ namespace DCLF::Features::Actors
 				return;
 			auto& c = actorRate;
 			++c.entries;
-			const std::uint32_t counter = Engine::Global<std::uint32_t>(kFrameCounter);
+			const std::uint32_t counter = Engine::Global<std::uint32_t>(Engine::Address::kFrameCounter);
 			// The last scene frame's shadow views (the frame whose stamps the engine left): the sun's cascade culls, the local lights' views.
 			const std::uint32_t sceneFrame = Scene::FrameView::Get().GetFrame();
 			const auto& sun = Shadows::Sun::SunBoard();

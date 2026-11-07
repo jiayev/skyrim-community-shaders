@@ -948,6 +948,22 @@ snapshot is the only source of them (no rings, no duplicate copies).
     that frame on the GPU (`IUploadService::QueueStreamingWait`, the GPU point `BindFrameLeases` noted for the bound point): no
     thread waits, and the frame's draws already wait for its values (the frame-wait timeline), so fewer copies bound how far the CPU
     runs ahead instead of costing a copy of every row per frame in flight.
+-   **Sealed points.** A producer whose signal later work of the same frame waits for may only wait for work the last present sent
+    on to the device: `SealedGpuPoint()`, the graph host's `SealedPoint` (taken after each present, `RenderGraphRuntime::SealPresented`)
+    and the CPU frames signalled before it. `SubmittedGpuPoint()` taken mid-frame also names the frame's own work, which may sit in
+    DXVK's stream until the present: the CPU pipeline's site signals join DXVK's command list, and the GPU-driven epochs reach the
+    queue at DXVK's next flush. On a copy queue shared with the graph's copies the uploader holds such a wait on the CPU, the frame's
+    signal behind it, and `FrameValues::EndFrame` holds the present for that signal: a deadlock (a late producer that waited for
+    "everything submitted" at the depth commit hung so on both pipelines). On the CPU pipeline even a GPU wait cycles, since the depth
+    site's wait for the signal joins the same submission as the shadow site's work. So the frame's producers lease at `Kick`
+    (the late stage's backings too, `ReserveLatePoses`), when every bound point is from earlier frames. `ReusedCopyPoint` says once
+    when a wait is not sealed, and a shared-queue wait still pending after 0.5 s names each point against the seal.
+    What a frame puts in DXVK's stream must be queued before the present that sends it on: DCLF's `EndFrame` runs from
+    `State::Reset`, after the present, so the CPU pipeline's frame signal and the frame values' signal wait go in
+    `FrameDriver::BeforePresent` (the Present hook, before the frame pace). Queued after it, the frame signal rode the next frame's
+    command list, and that frame's producer, reusing a copy the frame bound, waited for its own frame's work: the first CPU frames
+    after a switch hung so. The uploader meets its waits on its own thread before it submits (`CopyQueueUploadService`), outside the
+    RHI's submission, whose device timeline lock every timeline query takes.
 -   **Shrinking.** One policy gives memory back for every growable scene buffer (`PooledBackings::Shrink`, `CS_DCLF_SHRINK`;
     ORGModuleServices `ElasticCapacity.h`): a capacity the scene asked at most a quarter of for 5 s (and 2 asks) goes to its growth
     policy's fresh size for that window's peak, so it is at least half used and grows back only past the peak (no thrash). It

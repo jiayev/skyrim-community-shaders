@@ -10,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Api/CullInputs.h"
 #include "Features/DrawcallLimitFix/Api/DepthPyramid.h"
 #include "Features/DrawcallLimitFix/Api/DrawFamilies.h"
+#include "Features/DrawcallLimitFix/Api/LatePoses.h"
 #include "Features/DrawcallLimitFix/Api/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Api/Epochs.h"
 #include "Features/DrawcallLimitFix/Api/FrameBindings.h"
@@ -236,6 +237,8 @@ namespace DCLF::Api
 		 * whileOn input.
 		 */
 		virtual void RegisterAncestorValue(const AncestorValueContribution& a_value) = 0;
+		/** @brief Fails the install for a contribution without a name or reference, or a name another late pose has. */
+		virtual void RegisterLatePose(const LatePoseContribution& a_pose) = 0;
 		/**
 		 * @brief Fails the install for a field another registration has (or Count), no name, membership or capture, or members None or
 		 * past the entry classes.

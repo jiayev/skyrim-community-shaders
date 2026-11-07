@@ -62,7 +62,12 @@ namespace DCLF
 		 * the events alone and the switch catch-ups they ask for are served (a_installed). True when DCLF runs this frame.
 		 */
 		bool BeginFrame(bool a_running, bool a_installed);
-		/** @brief Present (in menus too, once installed): the frame's ends, its report, a load screen noted, the engine references released. */
+		/**
+		 * @brief Before the Present (in menus too, once installed): what the frame puts in DXVK's stream before the present sends it on
+		 * (the CPU pipeline's frame signal), and the frame values' signal on the copy queue before DXVK presents.
+		 */
+		void BeforePresent();
+		/** @brief After the Present (in menus too, once installed): the frame's ends, its report, a load screen noted, the engine references released. */
 		void EndFrame(bool a_running);
 		/**
 		 * @brief The engine's shadow-light selection (NiCamera::CalculateAndDrawShadowCasterLights, Features/Shadows/Engine's hooks), while

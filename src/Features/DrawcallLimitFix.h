@@ -37,6 +37,8 @@ struct DrawcallLimitFix : Feature
 	virtual void SetupResources() override;
 	virtual bool AppliesBootToggleLive() const override { return true; }
 	virtual void Reset() override;
+	/** @brief The Present hook, before the present: FrameDriver::BeforePresent, once installed. */
+	void BeforePresent();
 	virtual void Prepass() override;
 	virtual void EarlyPrepass() override;
 	virtual void DrawSettings() override;
