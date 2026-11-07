@@ -65,6 +65,9 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     One loss with this signature was the index pool's unfilled grown `pool-firsts`, now fixed. **Next:** a soak of launches with
     `DXVK_AFTERMATH_SHADER_DEBUG_INFO=1` (the decoder then maps the shader; `extern/dxvk`'s adapter warns that the heavier
     diagnostics configuration itself produced load-time faults on this driver, so add the flags one at a time).
+    **Shelved:** not reproduced on 2026-11-06 in 11 launches with two loads each (`vsoak.env`: shader debug info, 5 launches;
+    `vsoak-errors.env`: with shader error reporting too, under which the faults came most often, 6 launches). Pick it up on a repeat,
+    with `vsoak-errors.env`.
 -   **Use-after-free in actor teardown on a save load.** It happened when a save was loaded after going through a door. A job
     thread in `Actor::Predestroy` -> `FUN_140720830` (middle-high process data, `+0x278`) -> `FUN_14021ca60`/`FUN_14021d140`
     destroyed a pool entry's object (keyed by a `BSLightingShaderProperty`) that was already freed. DCLF holds property and
@@ -109,6 +112,14 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     names the pending admission: the thread that prepared it, whether at a ticket's submission or for an immediate execution, and
     how long ago (`SynchronousAdmission::PendingOwners`, extern/OpenRenderGraph). **Next:** on a repeat, compare that thread with
     the log's: the ORG host thread, the render thread, or DXVK's CS thread.
+
+-   **NVIDIA's driver faults while a shadow view's pass begins.** Six identical crashes on 2026-11-01 between 21:07 and 23:08:
+    `nvoglv64.dll+0xE5A9FD` (`mov r9d, [rax+0x1F0]`), called from `DCLF::Draws::ShadowViewPass::Record`
+    (`ShadowEpochPasses.cpp:303` at the time, `commands.BeginPass(begins[i])`) under ORG's prepared-batch recording. The driver
+    read a bad attachment: probably a shadow map view that was stale or freed when the pass began. Two more driver crashes on
+    2026-11-05 at 05:04 (`nvoglv64.dll+0xF63D9`, a null read, 32 s after launch) have no stack. The shadow views' buffers and draw
+    data were reworked on 2026-11-03, and none of the 47 runs since 2026-11-04 crashed. **Next:** on a repeat, check that each
+    view's target is the one the frame's shadow maps hold (a rebuilt or resized shadow map between preparation and recording).
 
 ### Crashes probably unrelated to DCLF
 
