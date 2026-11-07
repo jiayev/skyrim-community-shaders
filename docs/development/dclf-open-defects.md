@@ -126,6 +126,14 @@ The fixes below are in the code. No recorded run has yet shown the check that co
 These crashes have no DCLF or Community Shaders frames on the stack and match known engine instability. They are recorded so
 that a repeat is recognised. They are not chased unless one recurs with a DCLF or CS frame on the stack.
 
+-   **A corrupt heap in Engine Fixes' tbbmalloc under a fast flight, with or without DCLF** (2026-11-06, `motionsoak.env`: `tcl`
+    out of Whiterun at 24 units a frame for about 15,000 frames). The faults are in tbbmalloc's large-object cache
+    (`getFromLLOCache`, `putToLLOCache`, `CacheBinFunctor`, `freeOwnObject`), or downstream of it on engine job threads: Havok under
+    `MagicCaster::UpdateImpl` (`SkyrimSE+0xADE85B`) and the Papyrus VM. The flight crashed 2 of 4 runs with DCLF on, 3 of 4 with
+    DCLF switched off from frame 1000 (`motionsoak-off.env`), 2 of 4 with texture streaming off (`CS_DCLF_TEX_STREAM=0`), and 3 of
+    4 without the Skyrim Engine Telemetry plugin. One fault came while texture streaming read a file through
+    `BSResourceNiBinaryStream`, but streaming off did not change the rate. This speed is past what the engine streams safely, so it
+    is no test of DCLF's crashes. Hunt those at walking or riding speed (a few units a frame), where these faults should be rare.
 -   **tbbmalloc read in an NPC's behaviour graph update** (uGridsToLoad 5, moving near Riverwood): `EXCEPTION_ACCESS_VIOLATION` in
     `rml::internal::MemoryPool::getFromLLOCache` (EngineFixes' tbbmalloc) under `BSSpeedSamplerModifier` / `hkbBehaviorGraph`
     "0_Master.hkb". This is a known engine bug.
