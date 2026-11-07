@@ -8,6 +8,10 @@ and report lines named here are described in [dclf-validation.md](./dclf-validat
 
 The fixes below are in the code. No recorded run has yet shown the check that confirms each one.
 
+-   **`TransformMoves` grew without limit while DCLF or its shadows were off.** Only the kept shadow build drained the queue, and a
+    full queue allocates for each push (animated texture transforms push every frame). The hooks now stop queueing once no build
+    has drained for 2 s, and the next drain re-watches every kept material (`Core/Shading/MaterialWrites.cpp`,
+    `WatchTransformMoves`). **Check:** a run with DCLF switched off from the menu, `TransformMoves().Spilled()` staying flat.
 -   **Newly loaded objects drawn opaque, then vanishing, then fading in.** `DCLFAlphaFade` fell back to the root row's `Initial` (the
     mirror's fade at listing) until FadeStateCS's state reached t120. The seed (the node at the frame's start) was used only by
     BuildDraws. The pairing of listings with seeds counted 144 generations listed at 1 but seeded at 0 (opaque, then gone, then fading
@@ -38,13 +42,6 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     `WRCastleRugBEndL:1`): Light Limit Fix's first room map is posted after those objects joined. With room -1 a portal-strict light
     is not gated for them, so it can light them through walls for those frames. **Next:** check whether the first map's post
     (`FrameView::PostAncestorMap`) can precede the first joins, or whether `RefreshAncestorValues` misses objects joined before it.
--   **Subsurface Scattering's pass does not run while DCLF draws the faces (suspected; seen in timings only).** In Dragonsreach
-    (2026-10-27, GpuEvents windows of one launch) `SubsurfaceScattering::Burley` took 0.03 ms a frame natively and did not appear
-    at all with DCLF on. The pass runs only when `validMaterials` is set. Its `BSLightingShader_SetupSkin` hook sets it from the
-    engine's setup of a face pass (kFace, kFaceGenRGBTint). The engine never sets up a face DCLF draws, and
-    `Integrations/SubsurfaceScattering` gives such faces only their IsBeastRace flag. So skin may lose its scattering, and DCLF's
-    timings leave out the pass's cost. **Check:** compare an NPC's face with DCLF on and off. **Next:** set `validMaterials` from the
-    integration while a DCLF-drawn face is in the frame's lists.
 
 ## Open crashes
 
@@ -102,9 +99,14 @@ The fixes below are in the code. No recorded run has yet shown the check that co
        engine once it draws".
 
     Other runs of the same route and build passed. Logs: `run18_cs.log` and `p1on5_cs.log`, both in the session
-    scratch folder. **Next:** set aside unless it blocks another run. If it does, find which synchronous admission is still open
-    when the scene revision records: the build point's admission, or one an on-demand pipeline build holds across the load. Then
-    check why the next admission is refused rather than queued.
+    scratch folder. Both came about a second after a rebuild into "interior cell, two-pass occlusion, CPU pipeline", at about
+    12 fps, 100-250 ms after `cs.dclf.z.bucket-counts ... grown ... as graph work`.
+
+    Not reproduced on 2026-11-06 (RTX 5080, about 120 fps): 17 interior/exterior changes (`tools/cs-ab/scenarios/cellflip.env`),
+    and 36 changes and rebuilds with `CS_DCLF_TABLE_START=small`, 223 growths as graph work (`rebuildstress.env`). The error now
+    names the pending admission: the thread that prepared it, whether at a ticket's submission or for an immediate execution, and
+    how long ago (`SynchronousAdmission::PendingOwners`, extern/OpenRenderGraph). **Next:** on a repeat, compare that thread with
+    the log's: the ORG host thread, the render thread, or DXVK's CS thread.
 
 ### Crashes probably unrelated to DCLF
 
@@ -236,12 +238,6 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
 -   **No readback check of the material row bytes.** BuildDraws parity checks the rows' addresses only. Nothing reads back a
     backing's material rows and compares them with the kept rows, which would catch a part that the four-part journal
     (`kMaterialRowParts`) failed to send. The extras have this check per backing; the rows do not.
--   **The builder stalls if the coordinator's pump fails for good.** A payload is published only after the scene pass of the frame
-    that took the last snapshot has ended (`IndirectDraws::NoteScenePassDone`). If the pump stops for good (a thrown pass that never
-    runs again), the builder never publishes again, every frame keeps the last installed snapshot, and nothing reports it.
--   **Material transform moves: nothing drains the queue without the kept shadow build.** `TransformMoves`
-    (`Core/Shading/MaterialWrites.cpp`, drained by `Extensions::DrainTransformMoves`) has one consumer, the kept shadow build's
-    `WatchTransformMoves`. In a configuration that never runs the kept build, the EventQueue spills when it fills.
 -   **Texture transforms reach epochs before the Z-prepass a frame late.** `cs.dclf.z.texture-transforms` runs first in the
     Z-prepass epoch. An epoch that reads the main material rows before it (the reflection, Skylighting's occlusion) draws with the
     previous frame's `TexcoordOffset`, effect falloff and base colour. No GPU readback checks the patched bytes. Comments in
@@ -449,12 +445,14 @@ The cache's per-light `LocalShadow` flag, its `FirstPerson` / `WorldEyePosition`
     sampled frames, so the hazard is not ruled out. **Next:** watch the inn in motion before calling it clear. The hazard's cause is also unproven. The workaround stays
     until one of these resolves it: Streamline without `VK_EXT_descriptor_heap`, the graph's last command buffer resetting the
     descriptor-heap state, a capture with a tool that supports descriptor heaps, or a standalone reproduction for NVIDIA.
--   **Streamline's depth subresource on D32S8 (AMD).** The RX580 backs the game's D24S8 depth with `D32_SFLOAT_S8_UINT` (DXVK's
-    fallback). `cs_ImageAspect` (`Features/Upscaling/Streamline.cpp`) gives Streamline a depth-only subresource for that image.
-    Streamline's FSR path then barriers it with the depth aspect alone (`VUID-VkImageMemoryBarrier-image-03320`) and views it as
-    `D32_SFLOAT` (`VUID-VkImageViewCreateInfo-image-12397`). FSR's `rw_luma_history` storage view mismatches its format too.
-    **Check:** a `cpuv` run on the RX580 (validation layer) with FSR on. **Next:** give barriers both aspects on depth-stencil
-    formats; keep the view's depth-only aspect.
+-   **AMD: FidelityFX writes `rw_luma_history` with an Rgba8 storage format over an R16G16B16A16 view.** Seen 2026-11-06 under
+    the validation layer (Radeon integrated GPU, FSR): `Undefined-Value-StorageImage-FormatMismatch-ImageView`. It is inside the
+    pinned `amd_fidelityfx_vk.dll`, so not ours to change. **Next:** check a newer FidelityFX runtime.
+-   **AMD: the main target sampled in COLOR_ATTACHMENT_OPTIMAL for a few frames at the first graph build.** On 2026-11-06 (Radeon
+    integrated GPU, driver 2.0.353, no duplicate limit), ten `VUID-vkCmdDraw-None-09600` on `kMAIN` all came in the window of the
+    first graph build after the save loaded, then none in five minutes, including an interior change and its rebuild. It is the
+    import's window: DXVK moves the main target into its attachment layout before `LockImage` pins it to GENERAL.
+    **Next:** pin the main targets when they are first described rather than when the graph imports them.
 -   **BasicRHI's `frontCCW` under Vulkan.** `frontCCW` has D3D's meaning on both backends. SARP and BasicRenderer set it true for
     glTF content. Their D3D12 behaviour is unchanged, but they have not been run under Vulkan since the mapping changed.
 
