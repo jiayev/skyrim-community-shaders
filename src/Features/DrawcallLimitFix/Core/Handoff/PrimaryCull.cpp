@@ -37,6 +37,7 @@
 #include <cstring>
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 namespace DCLF
 {
@@ -288,7 +289,7 @@ namespace DCLF
 				rejected = PlanNameOf(a_object);
 				return;
 			}
-			for (const auto& child : node->GetChildren())
+			for (const auto& child : Engine::Children(*node))
 				a_self(a_self, child.get(), false);
 		};
 		visit(visit, a_root, true);

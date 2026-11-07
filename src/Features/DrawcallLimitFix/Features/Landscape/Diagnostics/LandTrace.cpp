@@ -31,7 +31,7 @@ namespace DCLF::Features::Landscape
 				return "no node";
 			std::string text = fmt::format("node {}{}", fmt::ptr(a_node), Engine::IsHidden(a_node) ? " HIDDEN" : "");
 			const auto& children = a_node->GetChildren();
-			auto* geometry = children.empty() || !children[0] ? nullptr : children[0]->AsGeometry();
+			auto* geometry = !children.free_idx() || !children[0] ? nullptr : children[0]->AsGeometry();
 			if (!geometry)
 				return text + " no geometry";
 			const auto& runtime = geometry->GetGeometryRuntimeData();

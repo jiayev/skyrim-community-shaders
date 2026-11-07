@@ -12,6 +12,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
 // ShadowCapture.cpp's: the engine's rasterizer state id, and where and with which block the engine has just drawn a view.
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 namespace DCLF::Diagnostics
 {
@@ -185,7 +186,7 @@ namespace DCLF::Diagnostics
 				const float* sampled = placements[input.objectIndex].bound;
 				std::string children;
 				if (auto* asNode = const_cast<RE::NiAVObject*>(node)->AsNode())
-					for (const auto& child : asNode->GetChildren())
+					for (const auto& child : Engine::Children(*asNode))
 						if (child && children.size() < 600)
 							children += fmt::format(" '{}' {} ({:.1f} {:.1f} {:.1f}) r {:.1f}{};", child->name.c_str() ? child->name.c_str() : "", child->GetRTTI() ? child->GetRTTI()->name : "?",
 								child->worldBound.center.x, child->worldBound.center.y, child->worldBound.center.z, child->worldBound.radius,

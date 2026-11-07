@@ -108,7 +108,7 @@ namespace DCLF::Scene
 				if (a_item < a_job.pinNodes.size()) {
 					auto* node = a_job.pinNodes[a_item];
 					auto& keys = capture.children[node];
-					for (auto& child : node->GetChildren())
+					for (auto& child : Engine::Children(*node))
 						if (child) {
 							keys.push_back(child.get());
 							pinSubtree(child.get());
@@ -398,7 +398,7 @@ namespace DCLF::Scene
 			if (auto* tes = RE::TES::GetSingleton()) {
 				// BSMultiBoundNodes under ObjectLODRoot (TES::objRoot), in exteriors and (holding the rooms) interiors.
 				if (auto* objRoot = tes->objRoot) {
-					for (auto& child : objRoot->GetChildren()) {
+					for (auto& child : Engine::Children(*objRoot)) {
 						if (auto* multiBound = child ? netimmerse_cast<RE::BSMultiBoundNode*>(child.get()) : nullptr)
 							current.insert(multiBound);
 					}
@@ -586,7 +586,7 @@ namespace DCLF::Scene
 					continue;
 				if (auto* switchNode = node->AsSwitchNode(); switchNode && CatchUpSwitch(*switchNode))
 					++count;
-				for (auto& child : node->GetChildren())
+				for (auto& child : Engine::Children(*node))
 					if (child)
 						stack.push_back(child.get());
 			}

@@ -10,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Features/TreeLod/Diagnostics/TreeLodParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 namespace DCLF::Features::TreeLod
 {
@@ -29,7 +30,7 @@ namespace DCLF::Features::TreeLod
 					stats.first = std::move(a_text);
 			};
 			if (root) {
-				for (const auto& child : root->GetChildren()) {
+				for (const auto& child : Engine::Children(*root)) {
 					auto* shape = child ? child->AsGeometry() : nullptr;
 					if (!TreeInstances::IsEngineShape(shape))
 						continue;

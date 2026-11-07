@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <ankerl/unordered_dense.h>
 #include <atomic>
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 namespace DCLF::LatePoses
 {
@@ -122,7 +123,7 @@ namespace DCLF::LatePoses
 					if (const auto* bones = *reinterpret_cast<const std::byte* const*>(base + kTreeBones))
 						trees.push_back({ object, bones, *reinterpret_cast<const std::uint32_t*>(base + kTreeBoneCount), hidden, {} });
 				}
-				for (auto& child : node->GetChildren())
+				for (auto& child : Engine::Children(*node))
 					stack.emplace_back(child.get(), hidden);
 			}
 			bool anyTreeHidden = false;

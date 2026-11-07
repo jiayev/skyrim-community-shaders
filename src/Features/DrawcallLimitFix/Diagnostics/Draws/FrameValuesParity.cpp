@@ -4,6 +4,7 @@
 #include "Observers.h"
 #include "Features/DrawcallLimitFix/Core/Engine/SkinPalettes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 namespace DCLF::Diagnostics
 {
@@ -52,7 +53,7 @@ namespace DCLF::Diagnostics
 					return false;
 				if (const auto* rtti = node->GetRTTI(); rtti && std::string_view(rtti->GetName()) == "NiBillboardNode")
 					return true;
-				for (const auto& child : node->GetChildren())
+				for (const auto& child : Engine::Children(*node))
 					if (a_self(a_self, child.get(), a_depth + 1))
 						return true;
 				return false;
