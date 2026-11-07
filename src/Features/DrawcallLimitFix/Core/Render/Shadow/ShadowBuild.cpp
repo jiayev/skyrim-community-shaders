@@ -81,9 +81,17 @@ namespace DCLF::Draws
 		void WatchTransformMoves(ShadowKept& k, std::uint64_t a_build, MarkRow&& a_markRow)
 		{
 			std::vector<const RE::BSShaderMaterial*> moved;
-			Extensions::DrainTransformMoves(moved);
+			const bool lost = Extensions::DrainTransformMoves(moved);
 			if (k.transformWatchBuild.size() < k.slotMaterial.size())
 				k.transformWatchBuild.resize(k.slotMaterial.size(), 0);
+			// Moves were dropped while no build ran: every kept material is watched, so its row is written again from both buffers.
+			if (lost)
+				for (std::uint32_t slot = 1; slot < k.slotMaterial.size(); ++slot)
+					if (k.slotMaterial[slot]) {
+						if (!k.transformWatchBuild[slot])
+							k.transformWatch.push_back(slot);
+						k.transformWatchBuild[slot] = a_build;
+					}
 			for (const auto* material : moved)
 				if (const auto it = k.slotOf.find(material); it != k.slotOf.end()) {
 					if (!k.transformWatchBuild[it->second])
