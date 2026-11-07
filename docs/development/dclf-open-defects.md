@@ -192,7 +192,10 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
 
 ## Memory retention
 
--   **About 2.5 GB more dedicated VRAM after leaving an exterior, outside D3D11.** On the short retention tour (save, `coc Whiterun`,
+-   **VRAM retention after leaving an exterior: mostly fixed, about 0.9 GB outside DXVK left.** The 2.5 GB that DCLF held after
+    leaving an exterior was DXVK chunks that defragmentation could not move (every import locked). Pinless imports fixed it on
+    2026-10-29: dedicated VRAM at the end is now 10,997 MiB with DCLF against 11,308 MiB without (the table below). What is left
+    is listed under "Still open". The history: on the short retention tour (save, `coc Whiterun`,
     `coc RiverwoodSleepingGiantInn`, `pcb`, 45 s in the inn; `tour.sh` in the session scratch folder, runs p1onT3 and p1offT3 on
     2026-10-28), Task Manager's dedicated usage ends at 13,854 MiB with DCLF and 11,308 MiB without. With DCLF it does not drop
     after `pcb`. The DXVK allocation trace (`DXVK_ALLOC_TRACE=10`) finds no D3D11 difference:
