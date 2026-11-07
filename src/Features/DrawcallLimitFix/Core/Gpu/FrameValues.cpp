@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameValuePools.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
@@ -102,7 +103,7 @@ namespace DCLF
 		/** @brief a_geometry's depth-first index among a_node's geometries (null slots skipped); false if not found. */
 		bool OrdinalUnder(const RE::NiNode& a_node, const RE::BSGeometry& a_geometry, std::uint32_t& a_index)
 		{
-			for (const auto& child : a_node.GetChildren()) {
+			for (const auto& child : Engine::Children(a_node)) {
 				auto* object = child.get();
 				if (!object)
 					continue;
@@ -121,14 +122,27 @@ namespace DCLF
 		// node's world-bound centre depth (comparator 0x1414f55e0) and interleaved with the blended list. Only blended leaves join a
 		// group (FUN_1414b2330), so an opaque leaf's row stays 0. The bound is live unless kFixedBound (0x141503a60). Read inside the
 		// caller's engine-read lease.
-		/** @brief The nearest BSOrderedNode above a_object (exact type, FUN_1415039f0), or null. Read inside the caller's engine-read lease. */
-		const RE::NiNode* NearestOrderedNode(const RE::NiAVObject& a_object)
+		/**
+		 * @brief What a_object's parent chain holds: the nearest BSOrderedNode (exact type, FUN_1415039f0) and a_fadeNode if it is an
+		 * ancestor. A property's fade node is a plain pointer: a detached part keeps its old skeleton's, which may be gone. Only a
+		 * node on the live chain is read. Read inside the caller's engine-read lease.
+		 */
+		struct Ancestors
+		{
+			const RE::NiNode* ordered = nullptr;
+			const RE::NiNode* fadeNode = nullptr;
+		};
+		Ancestors AncestorsOf(const RE::NiAVObject& a_object, const void* a_fadeNode)
 		{
 			static const REL::Relocation<const RE::NiRTTI*> orderedRtti{ RE::BSOrderedNode::Ni_RTTI };
-			for (auto* node = a_object.parent; node; node = node->parent)
-				if (node->GetRTTI() == orderedRtti.get())
-					return node;
-			return nullptr;
+			Ancestors out;
+			for (auto* node = a_object.parent; node; node = node->parent) {
+				if (!out.ordered && node->GetRTTI() == orderedRtti.get())
+					out.ordered = node;
+				if (node == a_fadeNode)
+					out.fadeNode = node;
+			}
+			return out;
 		}
 
 		void StoreForwardSort(const RE::BSGeometry& a_geometry, float (&a_out)[4])
@@ -145,13 +159,14 @@ namespace DCLF
 			// which FUN_1414b3390 draws before the blended list; the engine's faded actors draw the head over the mouth and the hair
 			// and the clothes over the body, which is the reverse of the order under the node. Sorted by each part's own bound
 			// instead, a faded head drew as a dark mask over the hair and under the mouth.
+			const auto* property = data.shaderProperty.get();
+			const auto ancestors = AncestorsOf(a_geometry, property ? property->fadeNode : nullptr);
 			const RE::NiNode* fading = nullptr;
-			if (const auto* property = data.shaderProperty.get(); property && property->fadeNode &&
-				const_cast<RE::BSFadeNode*>(property->fadeNode)->GetRuntimeData().currentFade < 1.0f)
-				fading = property->fadeNode;
+			if (ancestors.fadeNode && const_cast<RE::BSFadeNode*>(property->fadeNode)->GetRuntimeData().currentFade < 1.0f)
+				fading = ancestors.fadeNode;
 			if (!blended && !fading)
 				return;
-			const RE::NiNode* ordered = NearestOrderedNode(a_geometry);
+			const RE::NiNode* ordered = ancestors.ordered;
 			if (!ordered)
 				ordered = fading;
 			std::uint32_t index = 0;
@@ -276,7 +291,7 @@ namespace DCLF
 					a_out.push_back(at);
 			// The nearest BSOrderedNode, whose live bound a blended leaf's forward sort reads (StoreForwardSort): the writers that move the
 			// bound without moving the leaf (a particle system's update under it) key the node.
-			if (const auto* ordered = NearestOrderedNode(a_object))
+			if (const auto* ordered = AncestorsOf(a_object, nullptr).ordered)
 				a_out.push_back(ordered);
 			std::sort(a_out.begin(), a_out.end());
 			a_out.erase(std::unique(a_out.begin(), a_out.end()), a_out.end());

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <ankerl/unordered_dense.h>
 #include <atomic>
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 namespace DCLF::LatePoses
 {
@@ -103,7 +104,7 @@ namespace DCLF::LatePoses
 					}
 				if (hidden)
 					hiddenOf.emplace(object, hidden);
-				for (auto& child : node->GetChildren())
+				for (auto& child : Engine::Children(*node))
 					stack.emplace_back(child.get(), hidden);
 			}
 			if (hiddenOf.empty())

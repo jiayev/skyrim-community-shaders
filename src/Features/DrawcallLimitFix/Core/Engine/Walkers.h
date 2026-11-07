@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -13,6 +14,17 @@ namespace DCLF::Engine
 {
 	/** @brief The deepest parent chain a walk follows (a chain longer than this is not the scene graph's). */
 	inline constexpr std::uint32_t kMaxParentDepth = 64;
+
+	/**
+	 * @brief a_node's child slots below its free index, null slots included, as the engine's loops run them. CommonLib's
+	 * begin/end span the capacity, whose tail slots the engine never promises to clear (dclf-architecture.md, "Child indices run
+	 * to _freeIdx"): walk children through this, never a range-for over GetChildren().
+	 */
+	inline std::span<const RE::NiPointer<RE::NiAVObject>> Children(const RE::NiNode& a_node)
+	{
+		const auto& children = a_node.GetChildren();
+		return { children.begin(), children.free_idx() };
+	}
 
 	/** @brief What a walk's visit makes of the object it visited: its children walked, left out, or the walk ended. */
 	enum class Walk : std::uint8_t
@@ -59,7 +71,7 @@ namespace DCLF::Engine
 			if (walk == Walk::Skip)
 				continue;
 			if (auto* node = object->AsNode())
-				for (auto& child : node->GetChildren())
+				for (auto& child : Children(*node))
 					if (child)
 						stack.emplace_back(child.get(), depth + 1);
 		}

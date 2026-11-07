@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/EntrySpaceTable.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 namespace DCLF
 {
@@ -1011,7 +1012,7 @@ namespace DCLF
 			const auto* loaded = interior ? interior->GetRuntimeData().loadedData : nullptr;
 			const RE::NiAVObject* interior3D = loaded ? loaded->cell3D.get() : nullptr;
 			std::uint32_t index = 0;
-			for (const auto& child : objectRoot->GetChildren()) {
+			for (const auto& child : Engine::Children(*objectRoot)) {
 				const bool container = interior ? child.get() != interior3D : index < 2;
 				++index;
 				auto* node = child ? child->AsNode() : nullptr;

@@ -161,7 +161,7 @@ namespace DCLF::Features::Shadows::Local::LightCulls
 					const auto state = Engine::ReadSwitch(*switchNode);
 					std::int32_t path = -1;
 					const auto& children = switchNode->GetChildren();
-					for (std::uint16_t c = 0; c < children.size(); ++c)
+					for (std::uint16_t c = 0; c < children.free_idx(); ++c)
 						path = children[c].get() == below ? static_cast<std::int32_t>(c) : path;
 					a_what += fmt::format(" [index {}, path child {}, selects it {}]", state.index, path, Engine::SwitchSelects(*switchNode, below));
 				}

@@ -6,6 +6,7 @@
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 namespace DCLF::Diagnostics
 {
@@ -113,7 +114,7 @@ namespace DCLF::Diagnostics
 				}
 				if (auto* node = object->AsNode()) {
 					const Ineligible below = Eligibility::CombineParentReasons(reason, Eligibility::ParentReason(node));
-					for (auto& child : node->GetChildren())
+					for (auto& child : Engine::Children(*node))
 						if (child)
 							stack.emplace_back(child.get(), below);
 				}
