@@ -14,7 +14,7 @@ namespace DCLF::Extensions
 	{
 		resolved.clear();
 		for (const auto& contribution : a_registered)
-			resolved.push_back({ std::string(contribution.name), contribution.reference });
+			resolved.push_back({ std::string(contribution.name), contribution.root });
 	}
 
 	std::span<const LatePoseEntry> LatePoses() { return resolved; }

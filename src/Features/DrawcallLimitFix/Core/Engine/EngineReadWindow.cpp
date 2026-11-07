@@ -64,51 +64,13 @@ namespace DCLF
 	EngineReadWindow::Lease::Lease()
 	{
 		// One word: the lease is counted and the window seen open (not suspended) in the same step, so Close and Suspend cannot miss it.
-		// A held pin keeps a pending suspension from starting (its drain waits for the pin's lease), so a lease then is safe too.
-		const std::uint32_t before = state.fetch_add(1, std::memory_order_acq_rel);
-		if ((before & (kOpen | kSuspended)) == kOpen || ((before & kOpen) && pins.load(std::memory_order_acquire))) {
+		if ((state.fetch_add(1, std::memory_order_acq_rel) & (kOpen | kSuspended)) == kOpen) {
 			held = true;
 			++heldHere;
 			return;
 		}
 		state.fetch_sub(1, std::memory_order_acq_rel);
 		refused.fetch_add(1, std::memory_order_relaxed);
-	}
-
-	EngineReadWindow::Lease::Lease(std::chrono::microseconds a_wait)
-	{
-		const auto deadline = std::chrono::steady_clock::now() + a_wait;
-		for (std::uint32_t spins = 0;; ++spins) {
-			const std::uint32_t before = state.fetch_add(1, std::memory_order_acq_rel);
-			if ((before & (kOpen | kSuspended)) == kOpen) {
-				held = true;
-				++heldHere;
-				return;
-			}
-			state.fetch_sub(1, std::memory_order_acq_rel);
-			// Closed (Present), or suspended past the wait: refused, as the plain lease is.
-			if (!(before & kOpen) || ((spins & 63) == 63 && std::chrono::steady_clock::now() >= deadline)) {
-				refused.fetch_add(1, std::memory_order_relaxed);
-				return;
-			}
-			if (spins < 64)
-				_mm_pause();
-			else
-				std::this_thread::yield();
-		}
-	}
-
-	EngineReadWindow::Pin::Pin(std::chrono::microseconds a_wait) :
-		lease(a_wait)
-	{
-		if (lease)
-			pins.fetch_add(1, std::memory_order_acq_rel);
-	}
-
-	EngineReadWindow::Pin::~Pin()
-	{
-		if (lease)
-			pins.fetch_sub(1, std::memory_order_acq_rel);
 	}
 
 	EngineReadWindow::Lease::~Lease()

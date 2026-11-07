@@ -895,6 +895,17 @@ scene tables hold none of them.
     claimed first-person rows and palettes (before `Main::Draw` moves the skeleton into its root's space,
     `FrameValues::SetRootViewClaims`), and the shading fields only it may read (Advanced Skin's wetness).
 -   **The ordered-node interleave key** (`BindlessPlacement::forwardSort`) is sampled here too ([Ordered nodes](#ordered-nodes)).
+-   **Late poses** (`Api/LatePoses.h`, `Core/LatePoses/LatePoseOverrides.h`). Improved Camera hides the first-person head (its
+    neck node), arms, bow and quiver after the shadow maps: it sets those nodes' local scale to 0.001, updates the world
+    transforms, and puts the scale back by the next frame's start. At the depth commit the render thread searches the contributed
+    roots for that sign: a node's world scale far below its parent's. At the next frame's start the search becomes a plain-data
+    plan: a scale about each hidden node's world position (its hidden world scale over its world scale then), and the skin bones
+    and rigid geometry under it. The frame's own producer applies it to the
+    rows it sampled and sends a second placement and palette backing, with the plan's rows spliced into the frame's runs (copies
+    of one batch must not overlap). The next build marks those rows changed, so the journal stays true for every backing. At the
+    depth commit, if every planned node is hidden now, `UseLatePoses` points the epochs from there at the second backings; the
+    shadow epoch keeps the first. No second producer, no extra signal and no wait. A hide shows one frame late; a hide that ends
+    does not. It stands in for an API that sets view masks on geometry.
 
 ### Texture transforms and frame variables
 
@@ -956,7 +967,7 @@ snapshot is the only source of them (no rings, no duplicate copies).
     signal behind it, and `FrameValues::EndFrame` holds the present for that signal: a deadlock (a late producer that waited for
     "everything submitted" at the depth commit hung so on both pipelines). On the CPU pipeline even a GPU wait cycles, since the depth
     site's wait for the signal joins the same submission as the shadow site's work. So the frame's producers lease at `Kick`
-    (the late stage's backings too, `ReserveLatePoses`), when every bound point is from earlier frames. `ReusedCopyPoint` says once
+    (the late poses' backings too, `SetLatePoses`), when every bound point is from earlier frames. `ReusedCopyPoint` says once
     when a wait is not sealed, and a shared-queue wait still pending after 0.5 s names each point against the seal.
     What a frame puts in DXVK's stream must be queued before the present that sends it on: DCLF's `EndFrame` runs from
     `State::Reset`, after the present, so the CPU pipeline's frame signal and the frame values' signal wait go in

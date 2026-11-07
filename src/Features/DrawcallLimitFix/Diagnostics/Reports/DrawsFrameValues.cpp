@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameData.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/LatePoses/LatePoseOverrides.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
 
 // The frame values' and the frame data's report lines.
@@ -23,10 +24,9 @@ namespace DCLF::Reports
 			c.frames, c.sampled / n, c.settled / n, c.seeded / n, c.rowsChanged / n, c.skins / n, c.paletteRowsChanged / n, c.shadingSampled / n, c.shadingChanged / n,
 			c.wetnessChanged / n, c.runs / n, c.bytes / n / 1024.0, c.sampleUs / n, c.uploadUs / n, c.maxTotalUs, c.refused, c.defects,
 			c.failures, c.reusedInFlight, PooledBackings::SceneCopies());
-		// The late poses' producers (Api/LatePoses.h): the skins posed again after the frame's sample.
-		if (c.latePoseJobs)
-			line += fmt::format("; {} late pose producers ({} with the engine closed, waits up to {:.1f} ms), {} skins sampled again ({} set back)",
-				c.latePoseJobs, c.latePoseClosed, c.latePoseWaitMaxUs / 1000.0, c.latePoseSkins, c.latePoseDue);
+		// The late poses (Core/LatePoses): the hidden nodes found, the plans and the rows they shrank.
+		if (const auto late = LatePoses::TakeReport(); !late.empty())
+			line += "; " + late;
 		// The placement plans (deltas) the producers applied onto their kept set.
 		if (c.plans)
 			line += fmt::format("; {} placement plans applied ({} resets, {:.1f} items a plan)", c.plans, c.planResets, static_cast<double>(c.planItems) / static_cast<double>(c.plans));

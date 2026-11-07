@@ -1,7 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -46,12 +45,6 @@ namespace DCLF
 		{
 		public:
 			Lease();
-			/**
-			 * @brief A lease that waits out a writer's suspension, up to a_wait: refused only once the window closed, or the
-			 * suspension outlasted a_wait. For a frame's own late work (FrameValues' late poses), which has no next window to leave
-			 * its items to. The writers (WindowWriters) wait for nothing a lease holder holds, so the wait cannot close a cycle.
-			 */
-			explicit Lease(std::chrono::microseconds a_wait);
 			~Lease();
 			Lease(Lease&& a_other) noexcept :
 				held(std::exchange(a_other.held, false)) {}
@@ -62,25 +55,6 @@ namespace DCLF
 
 		private:
 			bool held = false;
-		};
-
-		/**
-		 * @brief A frame's late work (FrameValues' late poses), which has no next window to leave its items to: a lease that waits out a
-		 * writer's suspension (Lease(a_wait)), held across the work. While a pin is held a writer cannot start (its Suspend drains the
-		 * leases, the pin's among them), so the work's own leases (a parallel loop's chunks, on other threads) are granted even once a
-		 * suspension is pending; they all end before the pin does.
-		 */
-		class Pin
-		{
-		public:
-			explicit Pin(std::chrono::microseconds a_wait);
-			~Pin();
-			Pin(const Pin&) = delete;
-			Pin& operator=(const Pin&) = delete;
-			explicit operator bool() const { return static_cast<bool>(lease); }
-
-		private:
-			Lease lease;
 		};
 
 		/** @brief A thread running DCLF's scene work (the lane, or a parallel loop's chunk of it): set by the scene work. */
@@ -122,7 +96,6 @@ namespace DCLF
 		static inline std::atomic<const char*> unleasedFirst{ nullptr };
 		static inline std::atomic<std::uint32_t> state{ 0 };
 		static inline std::atomic<std::uint64_t> refused{ 0 };
-		static inline std::atomic<std::uint32_t> pins{ 0 };  // Pins held: leases are granted during a pending suspension
 		// Render thread.
 		static inline std::uint64_t closes = 0, closesWaited = 0;
 		static inline double waitedUs = 0.0, waitedMaxUs = 0.0;

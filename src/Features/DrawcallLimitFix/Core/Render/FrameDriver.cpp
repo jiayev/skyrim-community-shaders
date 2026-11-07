@@ -18,7 +18,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
-#include "Features/DrawcallLimitFix/Core/Extensions/LatePoses.h"
+#include "Features/DrawcallLimitFix/Core/LatePoses/LatePoseOverrides.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PrimaryView.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
@@ -238,12 +238,9 @@ namespace DCLF
 			TracyCZoneEnd(bfFields);
 			// The CPU frames signalled before the last present join its seal: the producers' uploads may wait for those points only.
 			SealCpuFrames();
-			// The late poses' backings, leased with the frame's when a late pose names a reference now (it names it again at the depth commit).
-			for (const auto& pose : Extensions::LatePoses())
-				if (pose.reference()) {
-					FrameValues::Get().ReserveLatePoses();
-					break;
-				}
+			// The late poses' plan (Core/LatePoses): the last frame's hidden nodes, which the frame's producer applies to a second copy of
+			// its rows.
+			FrameValues::Get().SetLatePoses(LatePoses::PrepareFrame());
 			(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), std::move(fields), view.FrameGlobalsOfFrame());
 		}
 		{
@@ -263,16 +260,10 @@ namespace DCLF
 		// The Z-prepass and the views' work here (the reflection's faces and first person's depth, which the depth epoch hosts) are submitted
 		// under depth.committed.
 		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::DepthCommitted));
-		// The late poses (Api/LatePoses.h): skins a plugin posed again after the shadow maps, sampled again for the epochs from here on. Before
-		// the depth epoch is submitted, so it and the epochs after it wait for them on the GPU.
-		if (const auto poses = Extensions::LatePoses(); !poses.empty()) {
-			std::array<const void*, 8> references{};
-			std::size_t count = 0;
-			for (const auto& pose : poses)
-				if (const void* reference = pose.reference(); reference && count < references.size())
-					references[count++] = reference;
-			FrameValues::Get().KickLatePoses(std::span<const void* const>(references.data(), count));
-		}
+		// The late poses (Core/LatePoses): parts a plugin hid after the shadow maps. Before the depth epoch is submitted, so the epochs
+		// from here read the late copies the frame's producer filled, when the frame's plan holds now.
+		if (LatePoses::ConfirmFrame())
+			FrameValues::Get().UseLatePoses();
 		// The views' work at the depth commit (Features/Reflection's: the frame's reflection faces, every TESWaterReflections::Update of the
 		// frame having run, two a frame, a face each, drawn by DCLF before the water reads the cube; dclf-architecture.md, "Water
 		// reflections"; then Features/FirstPerson's: the frame's first-person depth, its camera set by Main::Draw before RenderDepth, drawn
@@ -307,6 +298,7 @@ namespace DCLF
 		// the present (State::Reset), where it would ride the next frame's command list.
 		Direct::QueueFrameSignal();
 		FrameValues::Get().WaitSignalSubmitted();
+		LatePoses::CheckAtPresent();
 	}
 
 	void FrameDriver::EndFrame(bool a_running)

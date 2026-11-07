@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
+#include "Features/DrawcallLimitFix/Core/LatePoses/LatePoseOverrides.h"
 #include <Tracy/TracyC.h>
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
@@ -382,16 +383,12 @@ namespace DCLF
 		// Render thread.
 		std::array<Pool, kBuiltInPools> pools;
 		FrameLeases frameLeases;  // the kicked frame's backings, bound at EndFrame
-		// A late stage (ReserveLatePoses, KickLatePoses): a second producer in the frame, for the epochs from its point on. Its backings
-		// are leased at Kick with the frame's, so its uploads wait only for what the frame producer's wait for: copies earlier frames
-		// bound, sealed by the last present (SealedGpuPoint). Nothing of this frame's own work, which may reach the device only at the
-		// present EndFrame keeps back until the stage's signal is on the copy queue.
+		// The late poses (SetLatePoses, UseLatePoses): a second placement and palette backing, leased at Kick with the frame's when the
+		// frame has a plan, filled by the frame's producer, read by the epochs from the depth commit on (Core/LatePoses).
 		struct LateStage
 		{
-			bool reserved = false;              // ReserveLatePoses: Kick leases the backings
-			FrameLeases frameLeases, jobLeases;  // the reserved backings: the frame's hold and the job's
-			org::GraphHost::GpuPoint writeAfter;  // the frame producer's
-			FrameLeases replaced;               // the frame's first backings, which the work before the stage read, bound at EndFrame
+			std::shared_ptr<const LatePoses::FramePlan> plan;  // SetLatePoses', taken by Kick
+			FrameLeases frameLeases, jobLeases;                // the frame's hold (bound at EndFrame) and the producer's
 		} late;
 		std::vector<org::services::BackingLease> noRegistered;  // BindFrameLeases' for the late stage's
 		BoundPoints boundPoints;  // BindFrameLeases' GPU points
@@ -595,10 +592,6 @@ namespace DCLF
 		std::atomic<std::uint64_t> movers{ 0 }, moversDue{ 0 }, roots{ 0 }, rootsDue{ 0 }, moveKeys{ 0 }, moveNodes{ 0 };
 		std::atomic<std::uint64_t> sampleUs{ 0 }, uploadUs{ 0 }, maxTotalUs{ 0 };
 		std::atomic<std::uint64_t> reusedInFlight{ 0 };  // render thread's (LeaseBackings), the report's take
-		// RunLate's: the producers, the skins sampled again, those whose palette update was due then (set back since the frame's
-		// sample, not yet run again), and the producers that found the engine closed to reads.
-		std::atomic<std::uint64_t> latePoseJobs{ 0 }, latePoseSkins{ 0 }, latePoseDue{ 0 }, latePoseClosed{ 0 };
-		std::atomic<std::uint64_t> latePoseWaitMaxUs{ 0 };  // the longest wait for the engine's read window (a writer's suspension)
 
 		/**
 		 * @brief A root view's member's rows and palettes (the first person's), sampled by the render thread at Kick, before Main::Draw
@@ -649,7 +642,17 @@ namespace DCLF
 			std::array<Api::PaletteRowsInput, Api::kPaletteRowsClasses> paletteInputs{};
 			// The CPU pipeline's view batches the frame draws with (SetViewBatches; null: none): their live column of the job's parity.
 			std::shared_ptr<const Direct::ViewBatchSet> viewBatches;
+			// The late poses' plan and backings (placements, palettes; none leased: no late copy of that part).
+			std::shared_ptr<const LatePoses::FramePlan> latePlan;
+			FrameLeases lateLeases;
 		};
+		// The late copies' rows (BuildLateRows), and the ranges they overrode in the last send, which the next build marks changed: the
+		// late backings hold other bytes there than the journal says. The producers'.
+		LatePoses::Rows lateRows;
+		std::vector<std::pair<std::uint32_t, std::uint32_t>> lateDirtyPlacements, lateDirtyPalettes;
+		std::vector<org::StreamingUploadRange> overrideRanges, splicedRanges;
+		void BuildLateRows(const Job& a_job);
+		void MarkLateDirty();
 		// Sample's stages.
 		struct Listed
 		{
@@ -766,10 +769,9 @@ namespace DCLF
 		void LeaseBackings(Job& a_job);
 		// The point a_job's uploads wait for when a backing it leased is a copy a frame in flight still binds (a_writeAfter: 0 for none).
 		void ReusedCopyPoint(std::uint64_t a_writeAfter, Job& a_job);
-		// Render thread: the late poses' backings with the frame (the replaced ones the frame read, the reserved ones it did not use).
+		// Render thread: the late poses' backings with the frame.
 		void ReleaseLatePoses()
 		{
-			BindFrameLeases(late.replaced, noRegistered, boundPoints);
 			late.jobLeases = {};
 			BindFrameLeases(late.frameLeases, noRegistered, boundPoints);
 		}
@@ -780,8 +782,6 @@ namespace DCLF
 		void KickRegistered(Job& a_job, const FrameGlobals* a_globals);
 		void SampleRootViews(Job& a_job, const SetSnapshot& a_claims);
 		void Run(const Job& a_job);
-		// A late poses' producer (KickLatePoses): the given references' skins posed again, sampled and sent; then the job's signal.
-		void RunLate(const Job& a_job, const std::vector<const void*>& a_references);
 		void Sample(const Job& a_job);
 		void ApplyPlans(const Job& a_job);
 		void TrackSpheres(const Job& a_job, const std::vector<BindlessPlacement>& a_out);
@@ -798,8 +798,12 @@ namespace DCLF
 		void Upload(const Job& a_job);
 		template <class T>
 		void Send(const Job& a_job, Part a_part, const KeptWholeArray<T>& a_rows);
+		// a_overrides (sorted, disjoint): ranges sent in place of the rows' there (the late copies').
 		void SendRows(const org::services::BackingLease& a_lease, Pool& a_pool, std::string_view a_name, const Job& a_job, std::size_t a_count,
-			std::uint64_t a_contentEpoch, const void* a_view, Api::FrameValuePoolProducer::EmitRowsFn a_emit);
+			std::uint64_t a_contentEpoch, const void* a_view, Api::FrameValuePoolProducer::EmitRowsFn a_emit,
+			std::span<const org::StreamingUploadRange> a_overrides = {});
+		template <class T>
+		void SendLate(const Job& a_job, Part a_part, const KeptWholeArray<T>& a_rows, std::span<const org::StreamingUploadRange> a_overrides);
 		/** @brief The producer's: a_rows' build opened at the job's floor for a_part (every change forgotten without one). */
 		template <class T>
 		static void BeginBuild(const Job& a_job, Part a_part, KeptWholeArray<T>& a_rows)
@@ -829,6 +833,8 @@ namespace DCLF
 			Sample(a_job);
 			MarkSampled(a_job.seq);
 			marked = true;
+			if (a_job.latePlan)
+				BuildLateRows(a_job);
 			const auto sampledAt = std::chrono::steady_clock::now();
 			sampleUs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(sampledAt - start).count());
 			// The copies reused from frames in flight: this producer's uploads wait for them on the GPU, not here.
@@ -849,116 +855,6 @@ namespace DCLF
 		const auto total = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
 		for (auto max = maxTotalUs.load(std::memory_order_relaxed); total > max && !maxTotalUs.compare_exchange_weak(max, total, std::memory_order_relaxed);) {}
 		++frames;
-		done.store(a_job.seq, std::memory_order_release);
-		done.notify_all();
-	}
-
-	void FrameValues::Impl::RunLate(const Job& a_job, const std::vector<const void*>& a_references)
-	{
-		ZoneScopedN("CS.DCLF.FrameValues.LatePoses");
-		// After the frame's producer: the kept set and the rows are the frame's from here.
-		for (auto finished = done.load(std::memory_order_acquire); finished + 1 < a_job.seq; finished = done.load(std::memory_order_acquire))
-			done.wait(finished, std::memory_order_acquire);
-		++latePoseJobs;
-		try {
-			// The new backings the epochs from the depth commit read: filled from the rows, whether or not a skin was posed again.
-			BeginBuild(a_job, kPlacements, rows);
-			BeginBuild(a_job, kPalettes, palettes);
-			// The frame producer's due marks are spent (the next producer's MarkDue would clear them): only the skins posed again are due.
-			for (const auto m : dueMovers)
-				moverDue[m] = 0;
-			for (const auto r : dueRoots)
-				rootDue[r] = 0;
-			dueMovers.clear();
-			dueRoots.clear();
-			// Every skin of the references, sampled again: Sample runs the palette update first, which runs once a frame (its frame id),
-			// so a skin set back since the frame's sample is posed again here, and one the engine posed again already is read as it left
-			// it. Whether the frame id was set back says nothing once the engine ran the update again (the CPU pipeline's native draws
-			// may have, by the depth commit). Only plain skins: a palette rows class's item (a particle system) takes its class's frame
-			// input, which this producer does not have.
-			// A writer's suspension (WindowWriters' animation updates, beside the render) is waited out, and the pin holds writers off
-			// until the sampling below is done: the frame has no later window for these skins. Bounded, so a suspension that outlasts
-			// the frame keeps the frame's first sample.
-			std::optional<EngineReadWindow::Pin> pin;
-			const auto pinStart = std::chrono::steady_clock::now();
-			pin.emplace(std::chrono::milliseconds(50));
-			const auto pinUs = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - pinStart).count());
-			for (auto max = latePoseWaitMaxUs.load(std::memory_order_relaxed); pinUs > max && !latePoseWaitMaxUs.compare_exchange_weak(max, pinUs, std::memory_order_relaxed);) {}
-			{
-				if (!*pin)
-					++latePoseClosed;
-				else
-					for (const void* reference : a_references)
-						if (const auto it = keyIndex.find(reference); it != keyIndex.end())
-							for (const auto m : it->second.movers) {
-								const auto& mover = keptMovers[m];
-								if (!mover.live || !mover.item.boneRows || mover.item.itemClass != Api::FrameValueItemClass::None || !mover.item.geometry)
-									continue;
-								const auto* skin = mover.item.geometry->GetGeometryRuntimeData().skinInstance.get();
-								if (!skin)
-									continue;
-								if (SkinPalettes::UpdateDue(*skin))
-									++latePoseDue;
-								MarkMover(m);
-							}
-			}
-			if (!dueMovers.empty()) {
-				latePoseSkins += dueMovers.size();
-				auto& out = rows.Mutable();
-				auto& paletteOut = palettes.Mutable();
-				// As Sample's: each slot and palette block once, then the roots of the slots sampled (a root writes its dependents' sun
-				// entry and fade node after their rows).
-				auto& items = sampleItems;
-				items.clear();
-				const std::size_t blocks = paletteOut.size() / 2;
-				if (listed.size() < out.size())
-					listed.resize(out.size(), 0);
-				if (blockListed.size() < blocks)
-					blockListed.resize(blocks, 0);
-				for (const auto m : dueMovers)
-					ListItem(keptMovers[m].item, false, true, out.size(), blocks, items);
-				MarkSampledRoots();
-				const SampleOut sampleOut{ out, paletteOut };
-				auto& changed = sampleChanged;
-				for (auto& chunk : changed)
-					chunk.Clear();
-				SampleBounds(items, sampleBounds);
-				changed.resize(sampleBounds.size() - 1);
-				std::atomic<std::uint64_t> refusedHere{ 0 };
-				SampleItems(a_job, items, sampleOut, changed, refusedHere);
-				std::vector<std::vector<std::uint32_t>> rootChanged(dueRoots.size());
-				std::vector<std::uint8_t> rootRefused(dueRoots.size(), 0);
-				SampleRoots(sampleOut, rootChanged, rootRefused, refusedHere);
-				std::uint64_t marked = 0, paletteMarked = 0;
-				MarkSampled(changed, rootChanged, rootRefused, marked, paletteMarked);
-				rowsChanged += marked;
-				paletteRowsChanged += paletteMarked;
-				if (const auto refusals = refusedHere.load())
-					refused += refusals;
-				for (const auto slot : listedSlots)
-					listed[slot] = 0;
-				for (const auto block : listedBlocks)
-					blockListed[block] = 0;
-				listedSlots.clear();
-				listedBlocks.clear();
-				// The CPU pipeline's spheres and culls keep the frame's sample: a pose that hides parts only shrinks the bound.
-			}
-			pin.reset();
-			// A reused copy a frame in flight still binds: after that frame, on the GPU (as the frame's producer's). Never this frame's work:
-			// the shadow epoch keeps the frame's first backings.
-			if (!a_job.writeAfter.points.empty() && !a_job.uploads->QueueStreamingWait(a_job.writeAfter.points))
-				throw std::runtime_error("the dedicated uploader cannot wait for the frame its copies were bound to");
-			Send(a_job, kPlacements, rows);
-			Send(a_job, kPalettes, palettes);
-		} catch (const std::exception& e) {
-			if (failures++ == 0)
-				logger::error("[DCLF] frame values {} (late poses) failed: {}; the frame draws its first sample", a_job.seq, e.what());
-		}
-		MarkSampled(a_job.seq);
-		// Always signal: the batches submitted after KickLatePoses wait for it.
-		signal = a_job.uploads ? a_job.uploads->QueueStreamingSignal(a_job.timeline, a_job.seq) : nullptr;
-		if (!signal)
-			stl::report_and_fail(fmt::format("Drawcall Limit Fix: frame values {} (late poses) could not signal the frame's wait; the GPU would wait for it forever", a_job.seq));
 		done.store(a_job.seq, std::memory_order_release);
 		done.notify_all();
 	}
@@ -1435,6 +1331,7 @@ namespace DCLF
 			paletteOut.resize(paletteRows, PaletteRow{});
 			palettes.MarkRange(first, paletteRows - first);
 		}
+		MarkLateDirty();
 		TracyCZoneEnd(sBegin);
 		// The movers and roots that moved (MarkDue).
 		MarkDue(a_job);
@@ -2347,7 +2244,7 @@ namespace DCLF
 	// journal's floor), into the leased backing (PooledBackingLease: no frame reads it before the one that leased it, which waits for
 	// this producer's signal); then the backing is at the journal's content epoch. a_view is the rows (a KeptWholeArray), a_emit its Emit.
 	void FrameValues::Impl::SendRows(const org::services::BackingLease& a_lease, Pool& a_pool, std::string_view a_name, const Job& a_job, std::size_t a_count,
-		std::uint64_t a_contentEpoch, const void* a_view, Api::FrameValuePoolProducer::EmitRowsFn a_emit)
+		std::uint64_t a_contentEpoch, const void* a_view, Api::FrameValuePoolProducer::EmitRowsFn a_emit, std::span<const org::StreamingUploadRange> a_overrides)
 	{
 		auto& backing = *a_lease;  // the lease holder fills it (contentEpoch is its)
 		if (a_count > backing.capacityClass)
@@ -2369,6 +2266,30 @@ namespace DCLF
 															} };
 			const Api::FrameValuePoolProducer::SendTarget target{ backing.address, backing.capacityClass, &a_lease };
 			a_emit(a_view, backing.contentEpoch.load(std::memory_order_acquire), target, sink);
+		}
+		// The overrides replace the rows' bytes where they lie (one copy per byte: the copies of one batch must not overlap).
+		if (!a_overrides.empty()) {
+			auto& spliced = splicedRanges;
+			spliced.clear();
+			for (const auto& range : ranges) {
+				std::size_t at = range.dstOffset;
+				const std::size_t end = range.dstOffset + range.size;
+				const auto piece = [&](std::size_t a_from, std::size_t a_to) {
+					if (a_from < a_to)
+						spliced.push_back({ static_cast<const std::byte*>(range.data) + (a_from - range.dstOffset), a_to - a_from, a_from });
+				};
+				auto it = std::ranges::upper_bound(a_overrides, at, std::less{}, [](const org::StreamingUploadRange& a_range) { return a_range.dstOffset + a_range.size; });
+				for (; it != a_overrides.end() && it->dstOffset < end; ++it) {
+					piece(at, std::min(end, it->dstOffset));
+					at = std::max(at, it->dstOffset + it->size);
+				}
+				piece(at, end);
+			}
+			spliced.insert(spliced.end(), a_overrides.begin(), a_overrides.end());
+			ranges.swap(spliced);
+			sentBytes = 0;
+			for (const auto& range : ranges)
+				sentBytes += range.size;
 		}
 		if (!ranges.empty()) {
 			ZoneScopedN("CS.DCLF.FrameValues.Send.Queue");
@@ -2394,6 +2315,44 @@ namespace DCLF
 			[](const void* a_view, std::uint64_t a_contentEpoch, const Api::FrameValuePoolProducer::SendTarget&, const Api::FrameValuePoolProducer::RowSink& a_sink) {
 				static_cast<const KeptWholeArray<T>*>(a_view)->Emit(a_contentEpoch, a_sink);
 			});
+	}
+
+	// The rows (as Send's) into the job's late backing, with a_overrides in place of theirs.
+	template <class T>
+	void FrameValues::Impl::SendLate(const Job& a_job, Part a_part, const KeptWholeArray<T>& a_rows, std::span<const org::StreamingUploadRange> a_overrides)
+	{
+		SendRows(a_job.lateLeases[a_part], pools[a_part], kPartNames[a_part], a_job, a_rows.Size(), a_rows.ContentEpoch(), &a_rows,
+			[](const void* a_view, std::uint64_t a_contentEpoch, const Api::FrameValuePoolProducer::SendTarget&, const Api::FrameValuePoolProducer::RowSink& a_sink) {
+				static_cast<const KeptWholeArray<T>*>(a_view)->Emit(a_contentEpoch, a_sink);
+			},
+			a_overrides);
+	}
+
+	void FrameValues::Impl::BuildLateRows(const Job& a_job)
+	{
+		ZoneScopedN("CS.DCLF.FrameValues.LatePoses");
+		// A plain kept mover's rows (not a first-person member, not a palette rows class's item).
+		const auto find = [&](const void* a_geometry, LatePoses::Location& a_at) {
+			const auto it = moverAt.find(a_geometry);
+			if (it == moverAt.end())
+				return false;
+			const auto& mover = keptMovers[it->second];
+			if (!mover.live || mover.item.firstPerson || mover.item.itemClass != Api::FrameValueItemClass::None)
+				return false;
+			a_at = { mover.item.slot, mover.item.layerSlot, mover.item.boneOffset, mover.item.boneRows };
+			return true;
+		};
+		LatePoses::BuildRows(*a_job.latePlan, find, rows.Get(), palettes.Get(), lateRows);
+	}
+
+	void FrameValues::Impl::MarkLateDirty()
+	{
+		for (const auto& [first, count] : lateDirtyPlacements)
+			rows.MarkRange(first, count);
+		for (const auto& [first, count] : lateDirtyPalettes)
+			palettes.MarkRange(first, count);
+		lateDirtyPlacements.clear();
+		lateDirtyPalettes.clear();
 	}
 
 	template <class Call>
@@ -2437,6 +2396,33 @@ namespace DCLF
 		{
 			ZoneScopedN("CS.DCLF.FrameValues.Send.palettes");
 			Send(a_job, kPalettes, palettes);
+		}
+		// The late copies (Core/LatePoses): the same runs, the plan's rows in place of theirs. The next build marks those rows changed
+		// (MarkLateDirty), so every backing holding them is sent the frame's rows again.
+		if (a_job.lateLeases[kPlacements]) {
+			ZoneScopedN("CS.DCLF.FrameValues.Send.latePlacements");
+			auto& overrides = overrideRanges;
+			overrides.clear();
+			for (std::size_t i = 0; i < lateRows.placements.size(); ++i) {
+				const std::uint32_t slot = lateRows.placementSlots[i];
+				overrides.push_back({ &lateRows.placements[i], sizeof(BindlessPlacement), std::size_t(slot) * sizeof(BindlessPlacement) });
+				lateDirtyPlacements.emplace_back(slot, 1u);
+			}
+			std::ranges::sort(overrides, {}, &org::StreamingUploadRange::dstOffset);
+			SendLate(a_job, kPlacements, rows, overrides);
+		}
+		if (a_job.lateLeases[kPalettes]) {
+			ZoneScopedN("CS.DCLF.FrameValues.Send.latePalettes");
+			auto& overrides = overrideRanges;
+			overrides.clear();
+			std::size_t at = 0;
+			for (const auto& [first, count] : lateRows.paletteRuns) {
+				overrides.push_back({ &lateRows.palettes[at], std::size_t(count) * sizeof(PaletteRow), std::size_t(first) * sizeof(PaletteRow) });
+				lateDirtyPalettes.emplace_back(first, count);
+				at += count;
+			}
+			std::ranges::sort(overrides, {}, &org::StreamingUploadRange::dstOffset);
+			SendLate(a_job, kPalettes, palettes, overrides);
 		}
 		{
 			ZoneScopedN("CS.DCLF.FrameValues.Send.shading");
@@ -2527,14 +2513,16 @@ namespace DCLF
 	{
 		const std::array<std::uint64_t, kBuiltInPools> needed{ plan ? plan->slots : 0u, plan ? 2ull * plan->boneCapacity : 0u, a_job.shadingSlots };
 		std::uint64_t writeAfter = 0;
-		// The late poses' backings first (ReserveLatePoses), so that the frame's floors cover their content. Their reuse waits are the
-		// producer's: a copy a frame in flight still binds is waited for before the frame's work. Mid-frame, everything submitted so far may
-		// include this frame's own work, which the CPU pipeline submits only at Present.
-		if (std::exchange(late.reserved, false))
-			for (const std::size_t part : { kPlacements, kPalettes }) {
-				std::optional<std::uint64_t> floor;
-				writeAfter = std::max(writeAfter, LeasePool(pools[part], kPartNames[part], kStrides[part], false, needed[part], late.frameLeases[part], late.jobLeases[part], floor));
-			}
+		// The late poses' backings first (Core/LatePoses), so that the frame's floors cover their content: the placements' for a plan with
+		// rigid geometry, the palettes' for one with skins.
+		if (const auto& latePlan = late.plan) {
+			const bool parts[kBuiltInPools]{ !latePlan->rigid.empty(), !latePlan->skins.empty(), false };
+			for (const std::size_t part : { kPlacements, kPalettes })
+				if (parts[part]) {
+					std::optional<std::uint64_t> floor;
+					writeAfter = std::max(writeAfter, LeasePool(pools[part], kPartNames[part], kStrides[part], false, needed[part], late.frameLeases[part], late.jobLeases[part], floor));
+				}
+		}
 		for (std::size_t part = 0; part < kBuiltInPools; ++part)
 			writeAfter = std::max(writeAfter, LeasePool(pools[part], kPartNames[part], kStrides[part], false, needed[part], frameLeases[part], a_job.leases[part], a_job.oldestContentEpochs[part]));
 		for (std::size_t i = 0; i < a_job.registered.size(); ++i) {
@@ -2688,6 +2676,7 @@ namespace DCLF
 			if (host)
 				host->SetFrameWaitValue(0);
 			// No backing is leased for the frame: its draws have no rows (no index names a backing the pool may release).
+			s.late.plan = nullptr;
 			frameIndex = paletteIndex = shadingIndex = 0;
 			std::fill(s.registeredIndex.begin(), s.registeredIndex.end(), 0u);
 			if (!s.unavailableLogged && s.seq) {
@@ -2740,7 +2729,8 @@ namespace DCLF
 		// most of the journal preferred; the floor (the oldest content in circulation, this lease's included) is what the
 		// producer's journal keeps.
 		s.LeaseBackings(job);
-		s.late.writeAfter = job.writeAfter;
+		job.latePlan = std::move(s.late.plan);
+		job.lateLeases = std::move(s.late.jobLeases);
 		TracyCZoneEnd(kLease);
 		TracyCZoneN(kRoot, "CS.DCLF.FV.K.PaletteKicksAndRootViews", true);
 		job.timeline = std::move(timeline);
@@ -2790,53 +2780,21 @@ namespace DCLF
 		return true;
 	}
 
-	void FrameValues::ReserveLatePoses()
+	void FrameValues::SetLatePoses(std::shared_ptr<const LatePoses::FramePlan> a_plan)
 	{
-		impl->late.reserved = true;
+		impl->late.plan = std::move(a_plan);
 	}
 
-	void FrameValues::KickLatePoses(std::span<const void* const> a_references)
+	void FrameValues::UseLatePoses()
 	{
 		auto& s = *impl;
-		if (a_references.empty() || !s.kicked || !s.plan)
+		if (!s.kicked)
 			return;
-		auto* host = RenderGraphRuntime::Get().Host();
-		auto timeline = RenderGraphRuntime::Get().FrameWaitTimeline();
-		auto uploads = host ? host->RetainUploads() : nullptr;
-		if (!host || !timeline || !uploads)
-			return;
-		// The backings reserved at Kick (ReserveLatePoses), once a frame: none, and the frame keeps its first sample.
-		if (!s.late.frameLeases[Impl::kPlacements] || !s.late.frameLeases[Impl::kPalettes])
-			return;
-		// New placement and palette backings for the epochs from here, filled by the job from the rows (with the skins posed again sampled
-		// again). The work before (the shadow epoch) keeps reading the frame's first ones, which are bound at EndFrame with the frame, so
-		// nothing is written into a backing the GPU may still read this frame. The render thread reads none of the producer's state: the
-		// job decides on the pool, after the frame's producer.
-		Impl::Job job;
-		job.seq = ++s.seq;
-		job.plan = s.plan.get();
-		job.planSerial = s.planSerial;
-		job.fieldResources = std::make_shared<Impl::ResourceOwners>();
-		for (const std::size_t part : { Impl::kPlacements, Impl::kPalettes }) {
-			s.late.replaced[part] = std::move(s.frameLeases[part]);
-			s.frameLeases[part] = std::move(s.late.frameLeases[part]);
-			job.leases[part] = std::move(s.late.jobLeases[part]);
-			job.oldestContentEpochs[part] = s.pools[part].pool->OldestContentEpoch();
-		}
-		job.writeAfter = s.late.writeAfter;
-		frameIndex = s.frameLeases[Impl::kPlacements]->srvIndex;
-		paletteIndex = s.frameLeases[Impl::kPalettes]->srvIndex;
-		job.timeline = std::move(timeline);
-		job.uploads = std::move(uploads);
-		// Batches submitted from here (the depth, colour and forward epochs) wait for its signal; the shadow epoch waited for the frame's.
-		host->SetFrameWaitValue(job.seq);
-		std::vector<const void*> references(a_references.begin(), a_references.end());
-		if (!SceneScheduler::Executor().DispatchFrameCritical(SceneScheduler::Scope(), "frame values late poses",
-				[&s, job = std::move(job), references = std::move(references)](const auto&) mutable {
-					s.RunLate(job, references);
-					job.leases = {};
-				}))
-			stl::report_and_fail("Drawcall Limit Fix: the frame values' late poses producer was refused by DCLF's executor");
+		// The batches recorded from here bind these (the frame's producer filled both copies; its signal covers them).
+		if (const auto& lease = s.late.frameLeases[Impl::kPlacements])
+			frameIndex = lease->srvIndex;
+		if (const auto& lease = s.late.frameLeases[Impl::kPalettes])
+			paletteIndex = lease->srvIndex;
 	}
 
 	void FrameValues::Skip()
@@ -2844,7 +2802,7 @@ namespace DCLF
 		impl->kicked = false;
 		BindFrameLeases(impl->frameLeases, impl->registeredFrameLeases, impl->boundPoints);
 		impl->ReleaseLatePoses();
-		impl->late.reserved = false;
+		impl->late.plan = nullptr;
 		impl->RetireFieldOwners();
 		if (auto* host = RenderGraphRuntime::Get().Host())
 			host->SetFrameWaitValue(0);
@@ -3001,11 +2959,6 @@ namespace DCLF
 		c.moveKeys = s.moveKeys.exchange(0);
 		c.moveNodes = s.moveNodes.exchange(0);
 		c.reusedInFlight = s.reusedInFlight.exchange(0);
-		c.latePoseJobs = s.latePoseJobs.exchange(0);
-		c.latePoseSkins = s.latePoseSkins.exchange(0);
-		c.latePoseDue = s.latePoseDue.exchange(0);
-		c.latePoseClosed = s.latePoseClosed.exchange(0);
-		c.latePoseWaitMaxUs = s.latePoseWaitMaxUs.exchange(0);
 		return c;
 	}
 

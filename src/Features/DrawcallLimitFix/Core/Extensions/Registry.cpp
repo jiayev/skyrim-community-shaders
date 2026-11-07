@@ -723,7 +723,7 @@ namespace DCLF::Extensions
 
 			void RegisterLatePose(const Api::LatePoseContribution& a_pose) override
 			{
-				if (a_pose.name.empty() || !a_pose.reference)
+				if (a_pose.name.empty() || !a_pose.root)
 					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete late pose", feature));
 				for (const auto& other : lists.latePoses)
 					if (other.name == a_pose.name)

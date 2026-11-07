@@ -14,7 +14,7 @@ namespace DCLF::Extensions
 	struct LatePoseEntry
 	{
 		std::string name;
-		decltype(Api::LatePoseContribution::reference) reference = nullptr;
+		decltype(Api::LatePoseContribution::root) root = nullptr;
 	};
 
 	/** @brief Main thread, the end of InstallFeatures: the entries from the registrations. Once. */
