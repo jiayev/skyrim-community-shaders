@@ -51,14 +51,18 @@ namespace DCLF::MaterialWrites
 		constexpr auto kTransformConsumerIdle = std::chrono::seconds(2);
 		std::atomic<std::int64_t> transformConsumerSeen{ 0 };  // steady_clock ticks of the last drain, 0 before the first
 		std::atomic<bool> transformMovesLost{ false };
+		std::atomic<std::uint64_t> transformMovesDropped{ 0 };
 		void PushTransformMove(const RE::BSShaderMaterial* a_material)
 		{
 			const auto seen = transformConsumerSeen.load(std::memory_order_relaxed);
 			const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
 			if (seen && now - seen < std::chrono::duration_cast<std::chrono::steady_clock::duration>(kTransformConsumerIdle).count())
 				TransformMoves().Push(a_material);
-			else if (!transformMovesLost.load(std::memory_order_relaxed))
-				transformMovesLost.store(true, std::memory_order_relaxed);
+			else {
+				transformMovesDropped.fetch_add(1, std::memory_order_relaxed);
+				if (!transformMovesLost.load(std::memory_order_relaxed))
+					transformMovesLost.store(true, std::memory_order_relaxed);
+			}
 		}
 
 		// ---- Hooks.
@@ -286,6 +290,12 @@ namespace DCLF::Extensions
 		const bool lost = transformMovesLost.exchange(false, std::memory_order_acq_rel);
 		TransformMoves().Drain([&](const RE::BSShaderMaterial* a_material) { a_out.push_back(a_material); });
 		return lost;
+	}
+
+	TransformMoveCounts TransformMoveStats()
+	{
+		using namespace MaterialWrites;
+		return { TransformMoves().Spilled(), transformMovesDropped.load(std::memory_order_relaxed) };
 	}
 }
 

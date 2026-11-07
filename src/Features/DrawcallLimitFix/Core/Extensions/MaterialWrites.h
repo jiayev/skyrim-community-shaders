@@ -6,6 +6,7 @@
 
 #include "Features/DrawcallLimitFix/Api/MaterialWrites.h"
 
+#include <cstdint>
 #include <vector>
 
 namespace DCLF::Extensions
@@ -31,4 +32,12 @@ namespace DCLF::Extensions
 	 * drawing shadows), and before the first drain. The caller then treats every material it keeps as moved.
 	 */
 	bool DrainTransformMoves(std::vector<const RE::BSShaderMaterial*>& a_out);
+
+	/** @brief The transform moves' counts since startup (any thread): moves the full queue allocated for, and moves dropped while no build drained. */
+	struct TransformMoveCounts
+	{
+		std::uint64_t spilled = 0;
+		std::uint64_t dropped = 0;
+	};
+	TransformMoveCounts TransformMoveStats();
 }

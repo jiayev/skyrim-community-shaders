@@ -8,10 +8,6 @@ and report lines named here are described in [dclf-validation.md](./dclf-validat
 
 The fixes below are in the code. No recorded run has yet shown the check that confirms each one.
 
--   **`TransformMoves` grew without limit while DCLF or its shadows were off.** Only the kept shadow build drained the queue, and a
-    full queue allocates for each push (animated texture transforms push every frame). The hooks now stop queueing once no build
-    has drained for 2 s, and the next drain re-watches every kept material (`Core/Shading/MaterialWrites.cpp`,
-    `WatchTransformMoves`). **Check:** a run with DCLF switched off from the menu, `TransformMoves().Spilled()` staying flat.
 -   **Newly loaded objects drawn opaque, then vanishing, then fading in.** `DCLFAlphaFade` fell back to the root row's `Initial` (the
     mirror's fade at listing) until FadeStateCS's state reached t120. The seed (the node at the frame's start) was used only by
     BuildDraws. The pairing of listings with seeds counted 144 generations listed at 1 but seeded at 0 (opaque, then gone, then fading
