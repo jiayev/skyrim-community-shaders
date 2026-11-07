@@ -263,7 +263,9 @@ namespace DCLF::SceneCapture
 			boneCount = a_o.boneCount;
 			partitions = a_o.partitions;
 		}
-		if (a_f & kDismember)
+		// The shown flags are the skin instance's: a new instance (kSkin) brings its own. RaceMenu relinks an overlay onto its base's
+		// new skin instance after an armor change; with the old flags it drew only the partitions the armor had left shown.
+		if (a_f & (kSkin | kDismember))
 			shown = a_o.shown;
 		if (a_f & kProperty)
 			property = a_o.property;

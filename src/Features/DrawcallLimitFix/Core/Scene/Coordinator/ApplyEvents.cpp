@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Shading/MaterialWrites.h"
 
 namespace DCLF::Scene
 {
@@ -131,6 +132,15 @@ namespace DCLF::Scene
 		auto& s = materialSnapshotStats;
 		// The parity's passes keep the deduplicated materials, which RewriteCapturedMaterials evaluates as every capture once was.
 		const bool parity = Diagnostics::Observe().scene && Diagnostics::ParityDue(passSerial, kMaterialDedupParityOffset);
+		// The Lighting materials captured: the material, its alpha, the capture's sequence.
+		struct AlphaWritten
+		{
+			const RE::BSShaderMaterial* material;
+			float alpha;
+			std::uint64_t sequence;
+		};
+		std::vector<AlphaWritten> alphaWritten;
+		constexpr std::size_t kMaterialAlpha = offsetof(RE::BSLightingShaderMaterialBase, materialAlpha);
 		MaterialPort::captures.Drain([&](std::unique_ptr<MaterialPort::HeldSnapshot>&& a_held) {
 			++s.captured;
 			const RE::BSShaderMaterial* material = a_held->reference;
@@ -140,6 +150,8 @@ namespace DCLF::Scene
 				HandBackHeld(std::move(a_held));
 				return;
 			}
+			if (a_held->snapshot.port == 0 && a_held->snapshot.size >= kMaterialAlpha + sizeof(float))
+				alphaWritten.push_back({ material, a_held->snapshot.At<float>(kMaterialAlpha), a_held->sequence });
 			// A capture equal to the held one (every attached leaf captures its shared material; a controller rewrites the same value)
 			// changes no record: the newer is kept, nothing is rewritten. One whose frame-owned bytes alone moved (the transform buffers, a
 			// port's declared frame variables: the Effect port's falloff and base colour) is counted as watched while a feature patches them
@@ -190,6 +202,25 @@ namespace DCLF::Scene
 			entry.listed = true;
 			materialsCaptured.push_back(material);
 		});
+		// A Lighting material's alpha written in place, with no engine setter: RaceMenu stores an overlay's alpha into its material, and
+		// the texture load that follows rewrites the material's values (ReceiveValuesFromRootMaterial), which captured it. Its properties
+		// cache the alpha (PropertyRecord::materialAlpha, their derivations' translucency) and sample it into their shading rows, and
+		// neither has an event of its own: the record takes the capture's alpha (unless captured after it), and the row is sampled again.
+		for (const auto& written : alphaWritten)
+			for (const void* key : mirror.PropertiesOfMaterial(written.material)) {
+				const auto* record = mirror.Property(key);
+				// Only a record captured before the material was (a newer one read the alpha itself).
+				if (!record || record->sequence > written.sequence ||
+					std::bit_cast<std::uint32_t>(record->materialAlpha) == std::bit_cast<std::uint32_t>(written.alpha))
+					continue;
+				SceneCapture::PropertyRecord update = *record;
+				update.materialAlpha = written.alpha;
+				SceneCapture::Update apply{ SceneCapture::PropertyRecord::kMaterialAlpha, std::move(update) };
+				apply.sequence = written.sequence;
+				mirror.Update(apply);
+				propertyChanged.push_back(key);
+				MaterialWrites::NoteShading(static_cast<const RE::BSShaderProperty*>(key));
+			}
 		// Answers to the joins' requests (a served capture was pushed before its answer): the join may ask again.
 		channels.materialRequestsAnswered.Drain([&](MaterialAnswer&& a_answer) {
 			materialRequested.erase(a_answer.material);
@@ -521,6 +552,22 @@ namespace DCLF::Scene
 			// The update's record is the mirror's to keep from here (moved; the event's fields, leaf, sequence and site stay).
 			const auto* hidden = a_event.update.hiddenSite != ~0u ? std::get_if<SceneCapture::NodeRecord>(&a_event.update.record) : nullptr;
 			const CoordinatorHidden::BatchHidden hiddenEvent = hidden ? CoordinatorHidden::BatchHidden{ hidden->key, a_event.update.hiddenSite, (hidden->flags & 1u) != 0, a_event.update.sequence } : CoordinatorHidden::BatchHidden{};
+			// A skin's update names no geometry (SceneEvents' PushSkinShown: the dismember partitions' shown flags). Every geometry on
+			// the skin takes it: RaceMenu's overlays share their base's skin instance, so armour equipped over a painted body hides the
+			// paint's partitions too. The others take a copy here; the event's own record goes to the first.
+			if (auto* skinUpdate = std::get_if<SceneCapture::GeometryRecord>(&a_event.update.record); skinUpdate && !skinUpdate->key && skinUpdate->skin) {
+				const auto sharers = a_mirror.GeometriesOfSkin(skinUpdate->skin);
+				for (std::size_t i = 1; i < sharers.size(); ++i) {
+					SceneCapture::Update copy = a_event.update;
+					std::get<SceneCapture::GeometryRecord>(copy.record).key = sharers[i];
+					const auto [sharerType, sharer] = a_mirror.UpdateTaking(copy);
+					Diagnostics::Notify(Diagnostics::MirrorUpdateApplied{ sharerType, sharer, a_event.update.fields });
+					if (sharer)
+						a_mirrorSkinGeometries.insert(sharer);
+				}
+				if (!sharers.empty())
+					skinUpdate->key = sharers.front();
+			}
 			const auto [type, key] = a_mirror.UpdateTaking(a_event.update);
 			Diagnostics::Notify(Diagnostics::MirrorUpdateApplied{ type, key, a_event.update.fields });
 			// A trait's input (a node's controllers or rigid body) or a skin's (its instance, its dismember partitions' shown flags):

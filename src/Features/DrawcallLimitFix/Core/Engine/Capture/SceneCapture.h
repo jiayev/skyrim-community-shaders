@@ -135,7 +135,7 @@ namespace DCLF::SceneCapture
 		{
 			kType = 1u << 0,
 			kRenderer = 1u << 1,    // renderer data, its buffers and vertex layout, the counts
-			kSkin = 1u << 2,        // instance, type, partition, data, bone count, partitions' buffers, layouts, counts, LOD bytes
+			kSkin = 1u << 2,        // instance, type, partition, data, bone count, partitions' buffers, layouts, counts, LOD bytes, shown flags
 			kDismember = 1u << 3,   // the dismember partitions' shown flags
 			kProperty = 1u << 4,
 			kAlpha = 1u << 5,
@@ -331,9 +331,6 @@ namespace DCLF::SceneCapture
 		const AlphaRecord* alpha = nullptr;
 		const NodeRecord* fadeNode = nullptr;      // its shader property's fade node's
 		const NodeRecord* layerFadeNode = nullptr; // its layer's fade node's
-		// The mirror's geometries on this geometry's skin partition, itself included (SceneMirror::Leaf; 0 for a leaf with no mirror
-		// behind it, LiveLeaf's).
-		std::uint32_t partitionSharers = 0;
 		explicit operator bool() const { return node && geometry; }
 		/** @brief a_property's fade node's record (a_property the leaf's property or layer). */
 		const NodeRecord* FadeNodeOf(const PropertyRecord* a_property) const { return a_property == property ? fadeNode : a_property == layer ? layerFadeNode : nullptr; }

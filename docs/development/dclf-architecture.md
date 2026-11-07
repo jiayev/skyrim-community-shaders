@@ -438,14 +438,20 @@ skins, transforms. RaceMenu (skee64) is the known writer that does not report ye
     DEFAULT copy of its CPU vertices instead (`MorphedPartitionCopy`, at the capture). RaceMenu writes every morph into a new partition,
     so a copy keyed by the partition never goes stale; a writer that maps a buffer in place stays native (`UnstableBuffer`).
 -   **Overlays** (body, hand, feet and face paint) copy their base's skin, so they share its partition, vertices and depth. They are
-    blended decals (RaceMenu forces the decal flag), which DCLF's decal groups draw after the base, yet DCLF's draw left the paint
-    unseen (dclf-open-defects.md, "RaceMenu overlays in the decal groups"). Until that is found, a shape with an alpha property on a
-    partition another record shares stays native (`Ineligible::SkinLayer`, `SceneMirror::partitionSharers`); the engine draws it after
-    DCLF's base and it shows.
+    blended decals (RaceMenu forces the decal flag), which DCLF's decal group 2 draws after the base. Two things kept them unseen:
+    -   *Shown flags.* A dismember skin's partitions draw only while shown (`SkinPartitions::Mask`), and the flags are the skin
+        instance's, but each geometry record holds a copy. An overlay captured while armour hid the body kept the armour's flags after
+        RaceMenu relinked it to the new body skin, so it drew only the neck. A `kSkin` update now brings the new instance's flags, and
+        a dismember update, which names only the skin, reaches every geometry on it (`SceneMirror::geometriesBySkin`,
+        `ApplyMirrorUpdate`).
+    -   *Material alpha.* RaceMenu stores an overlay's alpha into its material with no setter. The texture load that follows rewrites
+        the material's values, which captures it, but the property record caches the alpha (`PropertyRecord::materialAlpha`) and the
+        shading row samples it only when told. A Lighting material's capture now updates the records of the properties on it
+        (`SceneMirror::propertiesByMaterial`) and samples their shading again (`DrainMaterialCaptures`).
 -   **NiOverride values** (overlay and skin colours, alpha, glow, glossiness) are stores into the material or property with no engine
-    call after them. Texture changes are taken (skee then calls `FUN_1414ad420`, whose `ReceiveValuesFromRootMaterial` is hooked).
-    The values on a DCLF shape stay at their attach-time capture until RaceMenu reports them (`NotifyWritten(property,
-    SWF_FIELD_MATERIAL)`); the overlays are native, so their values are read live.
+    call after them. They are taken when a texture change follows (skee then calls `FUN_1414ad420`, whose
+    `ReceiveValuesFromRootMaterial` is hooked), as a preset load does. A value changed alone, such as a RaceMenu colour slider, stays
+    at its last capture until RaceMenu reports it (`NotifyWritten(property, SWF_FIELD_MATERIAL)`).
 
 ### Movers by event
 

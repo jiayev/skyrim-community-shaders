@@ -133,14 +133,6 @@ namespace DCLF::Eligibility
 				return Ineligible::NotTriShape;
 		}
 
-		// A transparent layer on another shape's skin partition: RaceMenu's overlays (body, hands, feet and face paint) copy their base's
-		// skin, so they have its vertices and its depth exactly. The engine draws a layer after its base, in scene order, and the layer
-		// shows; DCLF's draw of one (a blended decal, as RaceMenu's are) left it unseen for a reason not yet found (dclf-open-defects.md,
-		// "RaceMenu overlays in the decal groups"). Kept native, it draws after DCLF's base, as the engine's order has it. The base itself
-		// (no alpha property) stays DCLF's.
-		if (g.skin && a_leaf.partitionSharers > 1 && a_leaf.alpha)
-			return Ineligible::SkinLayer;
-
 		if (const Ineligible buffers = BufferVerdict(g); buffers != Ineligible::None)
 			return buffers;
 

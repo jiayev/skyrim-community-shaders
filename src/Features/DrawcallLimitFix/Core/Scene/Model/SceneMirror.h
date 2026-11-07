@@ -75,6 +75,10 @@ namespace DCLF
 		 * leaf, sequence and hidden site stay (the event's other readers read those).
 		 */
 		std::pair<std::uint8_t, const void*> UpdateTaking(SceneCapture::Update& a_update);
+		/** @brief The property records whose material is a_material (a copy: an update may change the set). */
+		std::vector<const void*> PropertiesOfMaterial(const void* a_material) const;
+		/** @brief The geometry records on a skin instance (a copy: an update may change the set). */
+		std::vector<const void*> GeometriesOfSkin(const void* a_skin) const;
 		/** @brief The apply's work since the last call (the coordinator's attach report). */
 		struct Work
 		{
@@ -159,10 +163,14 @@ namespace DCLF
 		ankerl::unordered_dense::map<const void*, SceneCapture::GeometryRecord> geometries;
 		ankerl::unordered_dense::map<const void*, Counted<SceneCapture::PropertyRecord>> properties;
 		ankerl::unordered_dense::map<const void*, Counted<SceneCapture::AlphaRecord>> alphas;
-		ankerl::unordered_dense::map<const void*, const void*> geometryBySkin;  // a skinned geometry record's skin instance -> its key
-		// A skin partition -> the geometry records on it (LeafView::partitionSharers). RaceMenu's overlays share their base's.
-		ankerl::unordered_dense::map<const void*, std::uint32_t> partitionSharers;
-		void SharePartition(const void* a_partition, int a_delta);
+		// A skin instance -> the geometry records on it. RaceMenu's overlays share their base's, so a skin's update (its dismember
+		// partitions' shown flags) is every one's.
+		ankerl::unordered_dense::map<const void*, std::vector<const void*>> geometriesBySkin;
+		void LinkSkin(const void* a_skin, const void* a_key);
+		void UnlinkSkin(const void* a_skin, const void* a_key);
+		// A material -> the property records naming it: a material's capture finds the properties that cache its alpha.
+		ankerl::unordered_dense::map<const void*, std::vector<const void*>> propertiesByMaterial;
+		void IndexMaterial(const void* a_property, const void* a_before, const void* a_after);
 		// The last two batches' updates, for the captures numbered before them (Apply): a log in push order (the oldest batch's leave
 		// from the front at BeginBatch), each entry chained to the one before it of its object and record type (Key). recentLast is a
 		// key's newest entry; indices count from the log's first entry ever (recentBase: the front's). recentNewest: the highest

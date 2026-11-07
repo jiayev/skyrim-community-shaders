@@ -46,7 +46,6 @@ namespace DCLF
 		MultiIndex,          // BSMultiIndexTriShape: its main pass is the engine's (the snow layer), its shadow a tri-shape's
 		EffectOpaque,        // CS_DCLF_EFFECTS: an effect without a blending alpha property
 		EffectVariant,       // CS_DCLF_EFFECTS: an effect permutation not ported
-		SkinLayer,           // a shape with an alpha property on another shape's skin partition (RaceMenu's overlays): see Eligibility::Static
 		Count
 	};
 
@@ -73,7 +72,6 @@ namespace DCLF
 		"multi-index",
 		"effect-opaque",
 		"effect-variant",
-		"skin-layer",
 	};
 
 	struct LightingDescriptors
