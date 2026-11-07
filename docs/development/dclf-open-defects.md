@@ -37,11 +37,17 @@ The fixes below are in the code. No recorded run has yet shown the check that co
 
 ## Visible lighting defects
 
--   **Statics have no room for the first report after a load (`light data parity MISMATCH`, `DCLF room -1`).** Every run's first
-    window (up to frame 300) has 80-920 draws of statics with DCLF room -1 against the engine's room (`WRIntCastleFreePillar01:4`,
-    `WRCastleRugBEndL:1`): Light Limit Fix's first room map is posted after those objects joined. With room -1 a portal-strict light
-    is not gated for them, so it can light them through walls for those frames. **Next:** check whether the first map's post
-    (`FrameView::PostAncestorMap`) can precede the first joins, or whether `RefreshAncestorValues` misses objects joined before it.
+-   **Statics have no room for a few frames after a load (`light data parity MISMATCH`, `DCLF room -1`).** The first report after
+    each load into Dragonsreach or Bleak Falls Barrow has 400-3,000 draws with DCLF room -1 against the engine's room; the next
+    report is clean. The keys are right (persistent parity's ancestor key check: 0 stale). The cause is the map's latency: DCLF
+    copies Light Limit Fix's room map at EarlyPrepass, before Light Limit Fix rebuilds it in Prepass, and the scene lane takes the
+    copy on its next pass, so a room that gains a light reaches DCLF's draws one to three frames late. With room -1 a portal-strict
+    light is not gated for those objects, so it can light them through walls for those frames. The same lag runs the other way
+    when a room loses its last light (once, DCLF room 35 against the engine's -1). Light Limit Fix now keeps a room's number while
+    a light reaches it (`LightLimitFix::UpdateLights`); it used to renumber every room whenever the lit set changed, which gated
+    DCLF's objects as another room until the next map arrived. Runs `rooms` and `roomswalk` (cs-ab). **Next:** removing the
+    remaining frames needs the room resolved on the GPU in the frame: each object's record holds a stable room slot, and a table
+    from slot to Light Limit Fix's number is written after its Prepass.
 
 ## Open crashes
 

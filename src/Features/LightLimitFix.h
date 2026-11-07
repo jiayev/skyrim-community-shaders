@@ -526,7 +526,11 @@ public:
 	/** @brief Post-geometry setup: uploads the strict light constant buffer to the GPU if changed. */
 	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
 
-	eastl::hash_map<RE::NiNode*, uint8_t> roomNodes;
+	/** @brief The room numbers LightData::roomFlags holds (four 32-bit words). */
+	static constexpr std::size_t kRoomNumbers = 128;
+	/** @brief A reached room's number before UpdateLights gives it one. */
+	static constexpr uint8_t kNoRoomNumber = 0xFF;
+	eastl::hash_map<RE::NiNode*, uint8_t> roomNodes;  // each room a light reaches, by its number (kept while a light reaches it)
 	eastl::hash_map<RE::NiNode*, uint8_t> nextRoomNodes;  // reused scratch; never invalidates the published mapping
 	std::uint64_t roomMapGeneration = 0;
 
