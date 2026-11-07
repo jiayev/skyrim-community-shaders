@@ -331,6 +331,9 @@ namespace DCLF::SceneCapture
 		const AlphaRecord* alpha = nullptr;
 		const NodeRecord* fadeNode = nullptr;      // its shader property's fade node's
 		const NodeRecord* layerFadeNode = nullptr; // its layer's fade node's
+		// The mirror's geometries on this geometry's skin partition, itself included (SceneMirror::Leaf; 0 for a leaf with no mirror
+		// behind it, LiveLeaf's).
+		std::uint32_t partitionSharers = 0;
 		explicit operator bool() const { return node && geometry; }
 		/** @brief a_property's fade node's record (a_property the leaf's property or layer). */
 		const NodeRecord* FadeNodeOf(const PropertyRecord* a_property) const { return a_property == property ? fadeNode : a_property == layer ? layerFadeNode : nullptr; }

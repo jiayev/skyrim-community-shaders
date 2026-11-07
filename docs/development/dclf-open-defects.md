@@ -430,6 +430,21 @@ found no leaf turned differently from the engine. It has not appeared since. **N
 person, empty-handed (first person, billboards, particles, effects), and read the bad draw's vertex inputs
 (`CS_DCLF_TARGET_PROBE` or a GPU capture).
 
+## RaceMenu overlays in the decal groups
+
+RaceMenu's body, hand, feet and face paint is a `BSTriShape` copied from its base (same skin instance or a clone of it, so the same
+partition, vertices and palette), with the decal flag and alpha flags `0x12ED` (blend source alpha / inverse source alpha, alpha test
+at 0): DCLF classes it a blended decal (group 2), drawn after its base. With a test texture set on `Body [Ovl0]` (`skee preset-load`
+with an override), the paint never showed when DCLF drew the overlay, and showed correctly when the engine did (`dclf:decals=0`, or
+`Ineligible::SkinLayer`, the shipping state). Ruled out: draw order against the base; the cull (its world bound matches the base's,
+`kAlwaysDraw` set, 0 decals culled); palette staleness (both sampled every frame, one skin instance); the fade (no fade root:
+unchanged; its property's fade node is a stale non-ancestor, which `CaptureLeaf` already declines to pin); the CPU and GPU pipelines
+alike; texture streaming (`CS_DCLF_TEX_STREAM=0`); and the material capture (the new texture's view is captured). Forcing it through
+decal group 1 with the nudge showed only stray texels, so its depth also loses to the base's nearly everywhere. **Next:** a GPU capture
+of the decal pass in The Bannered Mare with `Body [Ovl0]` textured: the overlay draw's depth against the body's Z-prepass depth, and
+its output alpha. The test assets: a preset with an override on `Face [Ovl0]` and `Body [Ovl0]` (key 9, a BGRA8 DDS with a solid
+disk), loaded by `player.skee preset-load` after `player.removeallitems`.
+
 ## Light Limit Fix's local shadow cache is off while DCLF is loaded
 
 Upstream's cache (`LightLimitFix::EnableLocalShadows`, default off) rotates which shadow-casting lights the engine renders each

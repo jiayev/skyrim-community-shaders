@@ -189,6 +189,7 @@ namespace DCLF
 				Use(it->second.property, it->second.layerProperty, it->second.alpha, -1);
 				if (it->second.skin && it->second.skin != g.skin)
 					geometryBySkin.erase(it->second.skin);
+				SharePartition(it->second.skinPartition, -1);
 			}
 			if (a_prepared)
 				it->second = std::move(a_prepared->geometries[i]);
@@ -197,6 +198,7 @@ namespace DCLF
 			it->second.sequence = a_records.sequence;
 			if (g.skin)
 				geometryBySkin[g.skin] = g.key;
+			SharePartition(it->second.skinPartition, 1);
 		}
 		// A property or alpha the capture took that no geometry counts (none can be: each comes with its geometry) is not kept. Only
 		// this capture's keys can be uncounted (every other record is a geometry's, and Use drops one at its last use): by key, not a
@@ -230,6 +232,7 @@ namespace DCLF
 				Use(it->second.property, it->second.layerProperty, it->second.alpha, -1);
 				if (it->second.skin)
 					geometryBySkin.erase(it->second.skin);
+				SharePartition(it->second.skinPartition, -1);
 				geometries.erase(it);
 			}
 			nodes.erase(geometry);
@@ -426,7 +429,24 @@ namespace DCLF
 					if (!key)
 						if (const auto it = geometryBySkin.find(a_record.skin); it != geometryBySkin.end())
 							key = it->second;
+					// A skin's update moves its partition's count and its instance's lookup (RaceMenu stores a new partition, or a cloned
+					// instance, straight into the shape: FrameValues' SkinPartitionMoved captures them).
+					const auto before = geometries.find(key);
+					const void* partitionBefore = before != geometries.end() ? before->second.skinPartition : nullptr;
+					const void* skinBefore = before != geometries.end() ? before->second.skin : nullptr;
 					assign(geometries, [](auto& a_value) -> GeometryRecord& { return a_value; });
+					if (const auto after = geometries.find(key); after != geometries.end() && !a_update.leaf) {
+						if (after->second.skinPartition != partitionBefore) {
+							SharePartition(partitionBefore, -1);
+							SharePartition(after->second.skinPartition, 1);
+						}
+						if (after->second.skin != skinBefore) {
+							if (const auto it = geometryBySkin.find(skinBefore); it != geometryBySkin.end() && it->second == key)
+								geometryBySkin.erase(it);
+							if (after->second.skin)
+								geometryBySkin[after->second.skin] = key;
+						}
+					}
 				} else if constexpr (std::is_same_v<T, PropertyRecord>) {
 					assign(properties, [](auto& a_value) -> PropertyRecord& { return a_value.record; });
 				} else {
@@ -457,6 +477,7 @@ namespace DCLF
 		recentNewest = 0;
 		geometries.clear();
 		geometryBySkin.clear();
+		partitionSharers.clear();
 		properties.clear();
 		alphas.clear();
 		Diagnostics::Notify(Diagnostics::MirrorCleared{});
@@ -499,6 +520,20 @@ namespace DCLF
 		view.alpha = view.geometry->alpha ? Alpha(view.geometry->alpha) : nullptr;
 		view.fadeNode = view.property && view.property->fadeNode ? Node(view.property->fadeNode) : nullptr;
 		view.layerFadeNode = view.layer && view.layer->fadeNode ? Node(view.layer->fadeNode) : nullptr;
+		if (view.geometry->skinPartition)
+			if (const auto it = partitionSharers.find(view.geometry->skinPartition); it != partitionSharers.end())
+				view.partitionSharers = it->second;
 		return view;
+	}
+
+	void SceneMirror::SharePartition(const void* a_partition, int a_delta)
+	{
+		if (!a_partition)
+			return;
+		if (a_delta > 0) {
+			++partitionSharers[a_partition];
+		} else if (const auto it = partitionSharers.find(a_partition); it != partitionSharers.end() && !--it->second) {
+			partitionSharers.erase(it);
+		}
 	}
 }

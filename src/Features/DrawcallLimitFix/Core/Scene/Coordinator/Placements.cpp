@@ -137,8 +137,11 @@ namespace DCLF::Scene
 			// A palette rows member's block holds its class's rows (a particle system's quads: Api::PaletteRowsContribution), not a skin's
 			// palette: its geometry type's item class for a skinless record (the mirror's record says which; the frame values' parity tests
 			// the same, Extensions::PlannedItemClass).
-			if (const auto* record = mirror.Geometry(a_geometry))
+			if (const auto* record = mirror.Geometry(a_geometry)) {
 				key.itemClass = Extensions::PlannedItemClass(true, record->type, record->skin != nullptr);
+				if (key.itemClass == Api::FrameValueItemClass::None)
+					key.skinPartition = record->skinPartition;
+			}
 		}
 		return key;
 	}
@@ -156,6 +159,7 @@ namespace DCLF::Scene
 		item.boneOffset = key.boneOffset;
 		item.boneRows = key.boneRows;
 		item.itemClass = key.itemClass;
+		item.skinPartition = key.skinPartition;
 		return item;
 	}
 

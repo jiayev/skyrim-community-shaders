@@ -160,6 +160,9 @@ namespace DCLF
 		ankerl::unordered_dense::map<const void*, Counted<SceneCapture::PropertyRecord>> properties;
 		ankerl::unordered_dense::map<const void*, Counted<SceneCapture::AlphaRecord>> alphas;
 		ankerl::unordered_dense::map<const void*, const void*> geometryBySkin;  // a skinned geometry record's skin instance -> its key
+		// A skin partition -> the geometry records on it (LeafView::partitionSharers). RaceMenu's overlays share their base's.
+		ankerl::unordered_dense::map<const void*, std::uint32_t> partitionSharers;
+		void SharePartition(const void* a_partition, int a_delta);
 		// The last two batches' updates, for the captures numbered before them (Apply): a log in push order (the oldest batch's leave
 		// from the front at BeginBatch), each entry chained to the one before it of its object and record type (Key). recentLast is a
 		// key's newest entry; indices count from the log's first entry ever (recentBase: the front's). recentNewest: the highest

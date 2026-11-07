@@ -108,6 +108,10 @@ namespace DCLF
 			// A skin's palette block (SceneTables::boneOffset, boneRows), 0 rows without one: the engine's palette update, then its
 			// rows (PaletteRowsOf).
 			std::uint32_t boneOffset = 0, boneRows = 0;
+			// The skin partition the mirror holds for a skin's block (never dereferenced). RaceMenu's body morphs store a new partition
+			// straight into the skin instance, with no writer DCLF hooks: the producer compares the engine's against this one and
+			// captures the geometry again when they differ (FrameValues' SkinPartitionMoved).
+			const void* skinPartition = nullptr;
 			// A first-person entry's (a CategoryRoot view's: ViewRootEntry). The engine moves the first-person skeleton's world translations to its
 			// root's space on the render thread (FUN_1414cb020 to FUN_1414cb270, and RenderDepth's block), within the read window: the
 			// producer never samples it, and the render thread takes a claimed one's row and palette at the frame's start, before
@@ -126,11 +130,12 @@ namespace DCLF
 			const void* sunEntry = nullptr;
 			bool firstPerson = false;
 			Api::FrameValueItemClass itemClass = Api::FrameValueItemClass::None;
+			const void* skinPartition = nullptr;  // a new one plans the item again, so the producer compares against it
 			bool operator==(const Key&) const = default;
 			static Key Of(const Item& a_item)
 			{
 				return { a_item.geometry.get(), a_item.slot, a_item.layerSlot, a_item.boneOffset, a_item.boneRows, a_item.listedRoot.get(), a_item.firstPerson,
-					a_item.itemClass };
+					a_item.itemClass, a_item.skinPartition };
 			}
 		};
 		struct Root

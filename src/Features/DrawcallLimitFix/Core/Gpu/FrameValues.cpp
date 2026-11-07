@@ -1862,10 +1862,64 @@ namespace DCLF
 		}
 	}
 
+	namespace
+	{
+		/**
+		 * @brief Captures a skin's geometry again when its skin instance holds another partition than the mirror's (a_planned).
+		 *
+		 * RaceMenu's body morphs (skee's NIOVTaskUpdateSkinPartition) deep-copy the partition, write the morphed vertices into new
+		 * vertex buffers and store the copy straight into NiSkinInstance::skinPartition, under the skin's critical section. No engine
+		 * writer runs, so no event names it, and DCLF kept drawing the old partition's buffers (which its records hold) until the actor's
+		 * 3D was attached again. Its overlay relink stores a cloned skin instance into the geometry the same way, which this sees as
+		 * another partition too. RaceMenu could report both (NotifyWritten(geometry, SWF_FIELD_SKIN): OnWritten); this check stays for the
+		 * versions that do not. Each new partition is captured once. Engine read, under the caller's lease; any producer thread.
+		 */
+		void SkinPartitionMoved(const RE::BSGeometry& a_geometry, const void* a_planned)
+		{
+			auto* skin = a_geometry.GetGeometryRuntimeData().skinInstance.get();
+			// A racy read for the common case: an aligned pointer, only compared.
+			if (!skin || !a_planned || skin->skinPartition.get() == a_planned)
+				return;
+			static std::mutex lock;
+			// Geometry to the partition last captured for it. An entry goes once the plan holds that partition, so this stays small.
+			static ankerl::unordered_dense::map<const void*, const void*> captured;
+			// Under the skin's critical section, as the store is: the capture reads the partition whole, and the old one cannot be
+			// released under it.
+			// NiSkinInstance+0x60 on SE and AE (CommonLib declares it for a flat build only); VR's layout is not known here.
+			auto* skinLock = REL::Module::IsVR() ? nullptr : &Engine::At<REX::W32::CRITICAL_SECTION>(skin, 0x60);
+			if (skinLock)
+				REX::W32::EnterCriticalSection(skinLock);
+			const void* now = skin->skinPartition.get();
+			bool capture = false;
+			{
+				std::scoped_lock guard(lock);
+				if (now == a_planned) {
+					captured.erase(&a_geometry);
+				} else {
+					auto [it, inserted] = captured.try_emplace(&a_geometry, now);
+					capture = inserted || it->second != now;
+					it->second = now;
+				}
+			}
+			if (capture) {
+				using G = SceneCapture::GeometryRecord;
+				Scene::PushGeometryUpdate(&a_geometry, G::kSkin | G::kRenderer);
+				// The first few in the log (a RaceMenu slider drag makes one per shape per step).
+				static std::atomic<std::uint32_t> logged{ 0 };
+				if (logged.fetch_add(1, std::memory_order_relaxed) < 8)
+					logger::info("[DCLF] skin partition of {} replaced outside the engine's writers ({:p} -> {:p}): captured again",
+						a_geometry.name.c_str(), a_planned, now);
+			}
+			if (skinLock)
+				REX::W32::LeaveCriticalSection(skinLock);
+		}
+	}
+
 	// A listed skin's palette block (true when any row changed).
 	bool FrameValues::Impl::SamplePalette(const Plan::Item& a_item, const SampleOut& a_out, Changed& a_mine)
 	{
 		const auto& item = a_item;
+		SkinPartitionMoved(*item.geometry, item.skinPartition);
 		auto& paletteOut = a_out.paletteOut;
 		// Run the engine's palette update, then copy rows that differ (the frame after its motion stops, the update copies the
 		// current palette to the previous: the change that keeps the skin due once more, so its motion vectors settle).
@@ -2641,6 +2695,7 @@ namespace DCLF
 			if (!a_item.boneRows)
 				return;
 			auto& geometry = *a_item.geometry;
+			SkinPartitionMoved(geometry, a_item.skinPartition);
 			const float* current = nullptr;
 			const float* previous = nullptr;
 			if (!DCLF::SkinPalettes::Sample(geometry, a_item.boneRows, current, previous))

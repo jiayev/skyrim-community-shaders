@@ -266,6 +266,12 @@ namespace DCLF::MaterialWrites
 		MaterialPort::PushCapture(a_material);
 	}
 
+	void NoteShading(const RE::BSShaderProperty* a_property)
+	{
+		if (a_property)
+			ShadingQueue().Push(a_property);
+	}
+
 	bool Drain(ankerl::unordered_dense::set<const RE::BSShaderMaterial*>& a_out)
 	{
 		// The queue loses nothing (it spills when full), so a drain is always complete.
