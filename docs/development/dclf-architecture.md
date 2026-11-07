@@ -429,7 +429,8 @@ became events (60 s motion): p99.9 frame 63.4 to 30.0 ms; scene work evaluates 2
 
 **Plugins' direct writes.** A plugin that stores into scene objects itself is reported through SWF's `NotifyWritten` (`OnWritten`,
 `SWF_EVENT_WRITTEN`; swf.h lists the object each `SWF_FIELD_*` names): materials and per-object values, shader flags, property swaps,
-skins, transforms. RaceMenu (skee64) is the known writer that does not report yet:
+skins, transforms. RaceMenu (skee64) is the known writer that does not report yet (what it would change:
+external-mod-requirements.md):
 -   **Body morphs** store a deep-copied skin partition, with new vertex buffers, into `NiSkinInstance::skinPartition`, and its overlay
     relink stores a cloned skin instance into the geometry. FrameValues compares each sampled skin's partition with the mirror's
     (`PlacementPlan::Item::skinPartition`, `SkinPartitionMoved`) and captures the geometry again: one pointer compare a skin it already

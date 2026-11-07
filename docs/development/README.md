@@ -11,6 +11,7 @@
 - **[DCLF layout](./dclf-layout.md)** - DCLF's code layout: the folders, the extension points, the view and schedule contracts, and the rules `tools/dclf-layout-check.py` enforces
 - **[DCLF validation](./dclf-validation.md)** - DCLF's switches, parity checks, diagnostics and probes, how to validate a change, crash triage, and the bugs parity found
 - **[DCLF open defects](./dclf-open-defects.md)** - Defects and failing parity checks under investigation, with their evidence
+- **[External mod requirements](./external-mod-requirements.md)** - Per mod, what it would change for DCLF to draw it without workarounds (RaceMenu first)
 - **[DCLF roadmap](./dclf-roadmap.md)** - The work left, by priority: engine work still on the render thread, the scene lane, GPU cost, coverage, integrations and tooling
 - **[Memory usage](./memory-usage.md)** - What occupies VRAM in the main menu, by owner and resource, for choosing ORG aliasing port targets
 - **[Skyrim engine notes](./skyrim-engine-notes.md)** - What the decompiled game binary does, where features depend on it
