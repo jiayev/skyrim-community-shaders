@@ -90,6 +90,9 @@ namespace
 		// The descriptor-buffer model's heap sets are variable-count bindings (a bound heap need only cover its own capacity).
 		{ nullptr, "descriptorBindingVariableDescriptorCount" },
 		{ nullptr, "vulkanMemoryModelDeviceScope" },
+		// FidelityFX's Vulkan backend barriers a depth-stencil image with the depth aspect alone. That is valid only with
+		// separateDepthStencilLayouts, and AMD backs the game's D24S8 depth with D32_SFLOAT_S8_UINT (VUID-VkImageMemoryBarrier-image-03320).
+		{ nullptr, "separateDepthStencilLayouts" },
 		{ VK_EXT_DEVICE_GENERATED_COMMANDS_EXTENSION_NAME, "deviceGeneratedCommands" },
 	};
 
