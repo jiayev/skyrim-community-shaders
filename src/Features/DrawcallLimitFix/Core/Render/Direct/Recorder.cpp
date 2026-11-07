@@ -399,9 +399,12 @@ namespace DCLF::Direct
 		auto& list = a_context.list;
 		list.SetDescriptorHeaps(bindings.resourceHeap, bindings.samplerHeap);
 		list.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
-		// A colour list binds the main layout at its first bucket with a colour pipeline (BindBucket).
+		// A colour list binds the main layout at its first bucket with a colour pipeline (BindBucket). The pushed pipelines are the main
+		// set's, built for the main pass's formats: the reflection's faces draw into the cube's (R16G16B16A16 against the main target's
+		// R11G11B10), so they keep their own view pipelines (VUID-vkCmdDrawIndexed-dynamicRenderingUnusedAttachments-08911).
 		a_context.pushedColour = !a_context.indirect && bindings.main && bindings.main->layout.valid() &&
-		                         ((a_context.pass == RecordPass::Colour && ExperimentOn(kExpPushedColour) && !bindings.main->colour.empty()) ||
+		                         ((a_context.pass == RecordPass::Colour && a_context.view != ViewType::Reflection && ExperimentOn(kExpPushedColour) &&
+		                              !bindings.main->colour.empty()) ||
 		                          (a_context.pass == RecordPass::Depth && ExperimentOn(kExpPushedDepth) && !bindings.offsetDepth && !bindings.main->depth.empty()));
 		BindListLayout(a_context, false);
 		a_context.runWordsPushed = false;
