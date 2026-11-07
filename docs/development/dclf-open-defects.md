@@ -168,7 +168,11 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     The build includes the shadow slot sizing change, which that path does not touch, but one occurrence cannot clear it. **Next:**
     if it recurs, keep the log and take a dump with procdump to see what the load is waiting on, and why the set commits so many
     times a frame with no scene. That run wrote 900 MB of log, so the line is now capped at 8 per 600 scene frames, and the next line
-    logged counts the ones skipped. `setStats.resyncs` still counts every resync.
+    logged counts the ones skipped. `setStats.resyncs` still counts every resync. The line itself is a load's: while a load screen
+    is up, each scene pass resets the slot tables (`BuildScenePhase`), which moves the tables' generation, so the next commit
+    resyncs. So the flood says only that passes kept running through a load that never ended. Not reproduced since: about 105
+    launches up to 2026-11-06 (70 of them that night) loaded normally. The test build notes now ask testers for a Task Manager dump
+    of a hung game.
 
 ## Frames with DCLF's objects missing under standing claims
 
