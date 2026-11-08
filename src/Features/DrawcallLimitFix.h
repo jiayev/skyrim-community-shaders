@@ -126,6 +126,13 @@ struct DrawcallLimitFix : Feature
 	 * under their roots are withheld (the occlusion phase). False when there are none: the caller sets the projection and camera alone.
 	 */
 	bool OcclusionEngineOnlyMask(RE::Precipitation* a_precip);
+	/**
+	 * @brief Whether the CS overlay draws the screen black this frame: the session's first DCLF frames, held until DCLF covers its views
+	 * (DrawcallLimitFix/Core/Render/StartupHold.h).
+	 */
+	bool StartupBlackout() const;
+	/** @brief After OcclusionNeedsEngine: the map is held by the startup hold, rendered without the engine's cull (SetupMask skipped). */
+	bool OcclusionHeld(OcclusionMap a_map) const;
 	void OcclusionReferenceRendered(OcclusionMap a_map);
 	/**
 	 * @brief The precipitation occlusion mask's render (Precipitation::SetupMask, then RenderMask), Skylighting's at its two points and

@@ -2568,6 +2568,20 @@ passes (render modes `0x10`/`0x11`, `GetRenderPasses_ShadowMapOrMask`) are not w
         point and two spot lights: the subset culls cost about what the whole culls did (point 42-47 against 45-54 ms per 600 calls,
         spot 37-45 against 36-46; empty: under 1), because nearly all of it is the engine registering the casters it must draw.
     -   No switch or toggle turns the main camera's exclusion, the sun's skip and exclusion or the portal-strict lights' culls off.
+    -   **Water reflections and occlusion maps** take the same subset. The colour view holds engine-only shapes under an object class's
+        category root (the LOD land root); a reflection that skips an LOD root adds back the colour roots under it. An occlusion map
+        DCLF draws runs the engine's `Precipitation::SetupMask` under the subset (`EngineOnlyCull::RunInline`: the list culls inline,
+        `Process1` limited), so engine-only occluders stay in the sky and precipitation maps.
+    -   **Views DCLF does not cover** are reported, not handed to the engine silently: every remaining whole engine cull is counted by
+        reason (`EngineOnlyCull::NoteWholeCull`; warned once each, and a `<- WHOLE ENGINE CULL` line in the primary cull's report). A light
+        whose views DCLF has not made yet casts no shadow until they exist, and point lights cull empty on frames without a current
+        exclusion (a cell change), so neither falls back.
+    -   **The startup hold** (`Core/Render/StartupHold.{h,cpp}`). After the session's first load, DCLF's sun cascades and occlusion maps
+        are not covered for a few dozen frames (its views come from frames that draw the world). The hold keeps the sun's whole skip
+        and renders those maps without the engine's cull (`OcclusionHeld`), while the CS overlay draws the screen black
+        (`DrawcallLimitFix::StartupBlackout`); it ends after two covered frames (measured: 27 frames) or at 600. Left: the main
+        camera's one frame before DCLF's first snapshot, which the engine draws whole.
+    -   Test runs: `CS_DCLF_TEST_REFUSE=<name>,...` refuses geometry by node name as an unstable buffer, so any class can be engine-only.
     -   Without the subset such a caster had no shadow at all: on test2, a RaceMenu-morphed body or BodySlide outfit (a dynamic vertex
         buffer, before `MorphedPartitionCopy`) drew natively in the main view and cast nothing. The first few are logged (`shadow
         caster '...' stays the engine's`); the sun's whole-skip line counts the frames that culled the roots, and the point lights'

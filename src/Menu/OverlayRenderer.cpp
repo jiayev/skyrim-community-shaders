@@ -29,6 +29,7 @@
 #include "Utils/UISurface.h"
 #include "Vram/DxvkMemory.h"
 
+#include "Features/DrawcallLimitFix.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 namespace
@@ -314,6 +315,9 @@ void OverlayRenderer::RenderOverlay(
 	RenderFirstTimeSetupOverlay();
 	HandleABTesting();
 	PatchOverlappingWindowBackgrounds();
+	// Drawcall Limit Fix's startup hold: the session's first frames black until it covers its views, over everything else.
+	if (globals::features::drawcallLimitFix.loaded && globals::features::drawcallLimitFix.StartupBlackout())
+		ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), io.DisplaySize, ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, 1.0f)));
 	FinalizeImGuiFrame();
 }
 
@@ -339,7 +343,8 @@ bool OverlayRenderer::ShouldSkipRendering()
 			 effectFailed ||
 			 globals::features::performanceOverlay.settings.ShowInOverlay ||
 			 globals::features::performanceOverlay.settings.ShowWeatherPicker ||
-			 renderDoc->IsAvailable());
+			 renderDoc->IsAvailable() ||
+			 (globals::features::drawcallLimitFix.loaded && globals::features::drawcallLimitFix.StartupBlackout()));
 }
 
 void OverlayRenderer::HandleFontReload(Menu& menu, float& cachedFontSize, float currentFontSize)

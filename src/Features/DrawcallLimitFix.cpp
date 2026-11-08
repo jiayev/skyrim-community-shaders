@@ -47,6 +47,7 @@
 #	include "DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #	include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #	include "Features/DrawcallLimitFix/Core/Handoff/EngineOnlyCull.h"
+#	include "Features/DrawcallLimitFix/Core/Render/StartupHold.h"
 #	include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
 #	include "DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #	include "DrawcallLimitFix/Core/Engine/Capture/SceneTracker.h"
@@ -392,6 +393,16 @@ bool DrawcallLimitFix::OcclusionReady(OcclusionMap a_map)
 	return DCLF::FrameDriver::Get().OcclusionReady(a_map, Running());
 }
 
+bool DrawcallLimitFix::OcclusionHeld(OcclusionMap a_map) const
+{
+	return installed && DCLF::FrameDriver::Get().OcclusionHeld(a_map);
+}
+
+bool DrawcallLimitFix::StartupBlackout() const
+{
+	return installed && Running() && DCLF::StartupHold::Active() && !DCLF::Scene::FrameView::IsLoadingScreenUp();
+}
+
 bool DrawcallLimitFix::OcclusionEngineOnlyMask(RE::Precipitation* a_precip)
 {
 	const auto& subset = DCLF::Scene::FrameView::Get().GetEngineCasters();
@@ -455,7 +466,9 @@ void DrawcallLimitFix::RenderPrecipitationMask(RE::Precipitation* a_precip, RE::
 	// shadow epoch, so the engine's cull and registration (SetupMask) are skipped and RenderMask only sets the camera and clears the mask.
 	// Otherwise, or on a frame DCLF did not draw it, the engine does.
 	const bool reference = a_dclf && OcclusionReferenceFrame(kPrecipitationOcclusion);
-	if (!a_dclf || reference) {
+	// Held by the startup hold: the engine's point renders it without its cull, as DCLF's own variant does.
+	const bool held = !a_dclf && OcclusionHeld(kPrecipitationOcclusion);
+	if ((!a_dclf && !held) || reference) {
 		a_precip->SetupMask();
 	} else if (!OcclusionEngineOnlyMask(a_precip)) {
 		// What SetupMask sets: the projection, and the accumulator's camera.
@@ -1052,6 +1065,8 @@ bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap) { return true; }
 void DrawcallLimitFix::OcclusionView(OcclusionMap) {}
 bool DrawcallLimitFix::OcclusionReferenceFrame(OcclusionMap) { return false; }
 bool DrawcallLimitFix::OcclusionEngineOnlyMask(RE::Precipitation*) { return false; }
+bool DrawcallLimitFix::StartupBlackout() const { return false; }
+bool DrawcallLimitFix::OcclusionHeld(OcclusionMap) const { return false; }
 void DrawcallLimitFix::OcclusionReferenceRendered(OcclusionMap) {}
 void DrawcallLimitFix::RenderPrecipitationMask(RE::Precipitation* a_precip, RE::BSGeometry* a_precipObject, bool)
 {

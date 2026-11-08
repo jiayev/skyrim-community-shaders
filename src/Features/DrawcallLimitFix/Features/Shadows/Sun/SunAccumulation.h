@@ -95,6 +95,7 @@ namespace DCLF::Features::Shadows::Sun
 			// lists too many, a parity frame).
 			std::uint32_t wholeFrames = 0;
 			std::uint32_t wholeDeclined = 0;
+			std::uint32_t wholeHeld = 0;  // whole frames armed though not covered: the startup hold's (Core/Render/StartupHold.h)
 			// Whole frames whose cull took the engine-only casters' roots (the targeted cull), and those roots, summed.
 			std::uint32_t wholeTargeted = 0;
 			std::uint64_t wholeTargetedRoots = 0;

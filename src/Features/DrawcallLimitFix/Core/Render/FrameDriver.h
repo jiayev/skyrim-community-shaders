@@ -94,6 +94,8 @@ namespace DCLF
 		 * engine's occlusion point, whether the engine renders it whole (the shadow epoch did not draw it).
 		 */
 		bool OcclusionReady(std::uint32_t a_map, bool a_running);
+		/** @brief After OcclusionNeedsEngine: the map is held (StartupHold.h): rendered without the engine's cull (SetupMask skipped). */
+		bool OcclusionHeld(std::uint32_t a_map) const;
 		bool OcclusionNeedsEngine(std::uint32_t a_map, bool a_running);
 		/** @brief Where the main pass's opaque batches start: the engine's pending state applied, then the main view's capture (Api::PrimaryViewContribution). */
 		void BeforeOpaquePass();
@@ -113,6 +115,7 @@ namespace DCLF
 		double shadowViewsMs = 0.0;       // the shadow views' points this frame, until BeforeShadowMaps counts them
 		OcclusionFrames occlusionFrames;  // native and engine only: the rest is read at the take
 		bool frameRan = false;            // a scene frame ran since the last Present
+		std::uint32_t occlusionHeld = 0;  // the maps OcclusionNeedsEngine held this frame (StartupHold.h)
 		std::uint32_t occlusionWanted = 0;  // the maps OcclusionReady took for the frame's shadow epoch, until AfterShadowMaps
 		std::uint32_t occlusionDrawn = 0;   // the maps the frame's shadow epoch drew (OcclusionNeedsEngine's answer)
 		std::uint32_t captureFrame = ~0u;   // the frame whose main-pass bindings have been captured (Api::PrimaryViewContribution::beforeOpaque)
