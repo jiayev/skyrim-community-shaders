@@ -257,14 +257,8 @@ namespace DCLF::Features::Shadows::Sun
 			++stats.wholeDeclined;
 			return false;
 		}
-		// A caster that stays the engine's (a skin DCLF refuses, a buffer it cannot import) has only the engine's cull to draw its shadow.
-		// The whole skip culls its root for it (FullFrustum); one with no root to cull by takes the engine's whole cull.
-		if (const auto& casters = Scene::FrameView::Get().GetEngineCasters(); casters && casters->untargeted) {
-			++stats.wholeDeclined;
-			++stats.wholeEngineCasters;
-			return false;
-		}
-		// The builder's exclusion is not needed: taken as ArmExclusion would, so the slot's hand-off stays the same.
+		// A caster that stays the engine's (a skin DCLF refuses, a buffer it cannot import) has only the engine's cull to draw its shadow:
+		// the whole skip culls the engine-only subset's roots for it (FullFrustum), never the scene. The builder's exclusion is not needed: taken as ArmExclusion would, so the slot's hand-off stays the same.
 		previousExclusion = Local::SunExclusionSlot::Get().Take();
 		frameState.exclusion.reset();
 		armedExclusion.reset();
@@ -596,8 +590,8 @@ namespace DCLF::Features::Shadows::Sun
 					void* const held = jobs;
 					const std::int64_t start = Now();
 					jobs = nullptr;
-					// The engine-only casters' roots, the one thing it culls (ArmWhole declined if any had none): their casters register as
-					// usual, and the members under them are withheld at their cascades' registrations (Register: claimed).
+					// The engine-only subset's roots (Scene/EngineCasters.h), the one thing it culls: their casters register as usual, and the
+					// members under them are withheld at their cascades' registrations (Register: claimed).
 					const auto& casters = Scene::FrameView::Get().GetEngineCasters();
 					if (casters && !casters->roots.empty()) {
 						for (const auto* root : casters->roots)

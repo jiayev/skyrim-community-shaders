@@ -96,8 +96,6 @@ namespace DCLF::Features::Shadows::Sun
 			// lists too many, a parity frame).
 			std::uint32_t wholeFrames = 0;
 			std::uint32_t wholeDeclined = 0;
-			// Of wholeDeclined: frames with a caster only the engine's cull draws and no root to cull it by (Scene/EngineCasters.h).
-			std::uint32_t wholeEngineCasters = 0;
 			// Whole frames whose cull took the engine-only casters' roots (the targeted cull), and those roots, summed.
 			std::uint32_t wholeTargeted = 0;
 			std::uint64_t wholeTargetedRoots = 0;

@@ -1,17 +1,20 @@
 #pragma once
 
-// The shadow casters only the engine's cull draws: tracked geometries with no record whose settled verdict keeps them out of DCLF's
-// shadow views (a skin the skinned path refuses, a buffer DCLF cannot import: Eligibility::EngineCasterReason). Fading and hidden parts
-// are not counted: they settle within a few frames and their rules already cover them.
+// The geometry only the engine draws in a view DCLF otherwise draws, as the one subset every such view's engine cull is limited to.
 //
-// The sun's whole skip (SunAccumulation::ArmWhole) and the point lights' empty culls (LocalLightCull's CullEmpty) skip the engine's cull,
-// which would leave such a caster with no shadow at all. The coordinator keeps them as each geometry is classified and untracked
-// (NoteEngineCaster) and publishes their roots with each publication (the frame reads them from the installed one): the actor's root
-// for an actor's part (its light entry), else its sun entry. The sun's whole skip culls only those roots, so the engine registers their
-// casters (the members under them are withheld as always); the point lights' empty culls decline while there are any.
+// Today it holds the shadow casters: tracked geometries with no record whose settled verdict keeps them out of DCLF's shadow views (a
+// skin the skinned path refuses, a buffer DCLF cannot import: Eligibility::EngineCasterReason). Fading and hidden parts are not counted:
+// they settle within a few frames and their rules already cover them.
+//
+// The coordinator keeps them as each geometry is classified and untracked (NoteEngineCaster) and publishes the subset with each
+// publication (PublishEngineCasters; the frame reads the installed one's, FrameView::GetEngineCasters). A view never culls the whole
+// scene for them: the sun's whole skip hands its full-frustum cull the roots (roots), and the light culls walk down to them alone
+// (Admit, through EngineOnlyCull's scope). The members under a root are withheld at registration as always.
 
 #include <cstdint>
 #include <vector>
+
+#include <ankerl/unordered_dense.h>
 
 namespace RE
 {
@@ -20,13 +23,31 @@ namespace RE
 
 namespace DCLF::Scene
 {
-	/** @brief One publication's engine-only casters: their roots, deduplicated. Immutable once published. */
-	struct EngineCasterRoots
+	/** @brief One publication's engine-only geometry, as the views' engine culls take it. Immutable once published. */
+	struct EngineOnlySubset
 	{
-		// Roots the coordinator owns at the publication (rootOwners): they live while it is installed (the retirement chain). Never
-		// dereferenced off the render thread's shadow culls.
+		// What a cull does with an object it reaches: cull it (a root: the engine's own cull of it and all below), descend (an ancestor of a
+		// root: the engine's own cull, so its portal, room and bound tests stay on the path), or skip it.
+		enum class Admit : std::uint8_t
+		{
+			Skip,
+			Descend,
+			Cull
+		};
+
+		// The roots: each caster's light entry (an actor's root) or sun entry while the coordinator owns it, else the geometry itself (a
+		// tracked geometry, held until the retirement chain frees it). Either lives while the publication does. Deduplicated.
 		std::vector<const RE::NiAVObject*> roots;
-		std::uint32_t geometries = 0;  // the casters under them
-		std::uint32_t untargeted = 0;  // casters with no owned root: the engine culls the whole scene for them
+		// Keys only, never dereferenced: the roots, and every node from each one's parent up to the scene root (the mirror's chain).
+		ankerl::unordered_dense::set<const void*> rootSet, ancestors;
+		std::uint32_t geometries = 0;     // the casters under the roots
+		std::uint32_t geometryRoots = 0;  // of the roots, geometries culled alone (no owned root above them)
+
+		Admit AdmitObject(const void* a_object) const
+		{
+			if (rootSet.contains(a_object))
+				return Admit::Cull;
+			return ancestors.contains(a_object) ? Admit::Descend : Admit::Skip;
+		}
 	};
 }

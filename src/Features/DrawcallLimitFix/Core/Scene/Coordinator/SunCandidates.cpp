@@ -185,28 +185,33 @@ namespace DCLF::Scene
 				a_geometry->name.c_str(), kIneligibleNames[static_cast<std::size_t>(a_reason)], ShadowRejectName(reject), engineCasterGeometries.size());
 	}
 
-	std::shared_ptr<const EngineCasterRoots> Coordinator::PublishEngineCasters()
+	std::shared_ptr<const EngineOnlySubset> Coordinator::PublishEngineCasters()
 	{
 		if (engineCasterGeometries.empty())
 			return nullptr;
-		// Made again for every publication: a root is only safe to name while it is owned now.
-		auto out = std::make_shared<EngineCasterRoots>();
+		// Made again for every publication: a root is only safe to name while it is owned now. Each caster's light entry (an actor's root)
+		// or sun entry when the coordinator owns it, else the geometry itself (tracked: its reference goes through the retirement chain
+		// too), so every caster has a root and no view falls back to a whole cull for one.
+		auto out = std::make_shared<EngineOnlySubset>();
 		for (const auto& [geometry, reason] : engineCasterGeometries) {
 			const auto entry = tracked.find(geometry);
-			const RE::NiAVObject* root = nullptr;
-			if (entry != tracked.end()) {
-				if (entry->second.lightRoot && rootOwners.contains(entry->second.lightRoot))
-					root = entry->second.lightRoot;
-				else if (entry->second.listedRoot && rootOwners.contains(entry->second.listedRoot))
-					root = entry->second.listedRoot;
-			}
+			if (entry == tracked.end())
+				continue;
+			const RE::NiAVObject* root = geometry;
+			if (entry->second.lightRoot && rootOwners.contains(entry->second.lightRoot))
+				root = entry->second.lightRoot;
+			else if (entry->second.listedRoot && rootOwners.contains(entry->second.listedRoot))
+				root = entry->second.listedRoot;
 			++out->geometries;
-			if (!root)
-				++out->untargeted;
-			else if (std::find(out->roots.begin(), out->roots.end(), root) == out->roots.end())
-				out->roots.push_back(root);
+			if (!out->rootSet.insert(root).second)
+				continue;
+			out->roots.push_back(root);
+			out->geometryRoots += root == geometry ? 1 : 0;
+			// Its ancestors by the mirror's chain, up to the scene root (or a chain another root already gave).
+			for (const void* parent = mirror.Parent(root); parent && out->ancestors.insert(parent).second; parent = mirror.Parent(parent)) {
+			}
 		}
-		return out;
+		return out->roots.empty() ? nullptr : out;
 	}
 
 	std::string Coordinator::DescribeSunCandidate(const void* a_geometry) const

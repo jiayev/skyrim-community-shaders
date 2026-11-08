@@ -1254,7 +1254,7 @@ namespace DCLF
 		 * @brief The engine-only casters' roots for a publication (null: none): each one's light entry (an actor's root) or sun entry, while
 		 * the coordinator owns it (rootOwners), so it lives while the publication does; a caster with neither counts as untargeted.
 		 */
-		std::shared_ptr<const EngineCasterRoots> PublishEngineCasters();
+		std::shared_ptr<const EngineOnlySubset> PublishEngineCasters();
 		/** @brief MergeWrite's geometry slots (a skin's partitions linked, or a LOD chain's ranges); Tables::kSlotFree: unstable, rebucketed. */
 		std::uint32_t ResolveWriteGeometry(RE::BSGeometry* a_geometry, const SceneCapture::GeometryRecord& a_record, const EvalResult& a_result, PartTimer& a_timer,
 			Ineligible& a_bucket);

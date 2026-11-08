@@ -76,7 +76,7 @@ namespace DCLF
 		std::shared_ptr<const EntrySpace> sunCandidates, lightCandidates;
 		std::uint64_t lightEntriesAppeared = 0;
 		// The shadow casters only the engine's cull draws, by root (Scene/EngineCasters.h); null: none.
-		std::shared_ptr<const Scene::EngineCasterRoots> engineCasters;
+		std::shared_ptr<const Scene::EngineOnlySubset> engineCasters;
 		// The category nodes as its pass left them (immutable, copied again only when the set changed, a cell attach or detach): what the
 		// point lights' culls ask of the frame (IsCategoryNode), never the coordinator's set. The light entries change with every
 		// tracked root, so they travel as changes on the publication log instead (PublicationDeltas::lightEntries).
