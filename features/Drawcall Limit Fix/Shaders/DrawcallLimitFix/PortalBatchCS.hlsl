@@ -25,7 +25,8 @@ cbuffer PortalBatchConstants : register(b0)
 	uint LatchOffset;
 	// The portal bench's auxiliary table for an experimental evaluator (PortalEvaluators.hlsli); 0 in production.
 	uint AuxIndex;
-	uint2 Padding;
+	uint TraceFrame;  // CS_DCLF_PORTAL_TRACE: the scene frame the pass prepared for (its low byte goes in the trace)
+	uint Padding;
 }
 
 ByteAddressBuffer Programs()
@@ -204,5 +205,10 @@ groupshared uint2 ScanValues[256];
 		return;
 	}
 	results[query.Destination] = uint2(query.Generation, asuint(QueryVerdict(query, query.Program)));
+#	ifdef DCLF_PORTAL_TRACE
+	// The trace (PortalPrograms.hlsli), by query: an inline batch's task buffer holds it (CS_DCLF_PORTAL_TRACE).
+	RWStructuredBuffer<uint4> trace = ResourceDescriptorHeap[TasksIndex];
+	trace[(id.x + id.y * (64u * 65535u))] = uint4(PortalTrace.x | (TraceFrame << 24), PortalTrace.yzw);
+#	endif
 #endif
 }

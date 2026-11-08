@@ -33,6 +33,8 @@ namespace DCLF::Features::Portals
 		rhi::CommandSignaturePtr signature;
 		// Inline (the default; CS_DCLF_PORTAL_EVALUATOR=batched: off): no count, scan or scatter; one Inline dispatch over the queries.
 		bool inlineEvaluation = false;
+		// CS_DCLF_PORTAL_TRACE (inline only): each query's decision trace into the task buffer, by query (PortalPrograms.hlsli).
+		bool trace = false;
 		std::uint64_t reportedPrograms = 0, reportedBuckets = 0;  // render-thread capacity diagnostics only
 	};
 	/** @brief Create the portable count/scan/scatter/task/evaluate pipeline; no partial pipeline is published. */

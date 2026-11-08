@@ -50,6 +50,9 @@ namespace DCLF::Features::Portals
 		// over the evaluation itself, on every captured and synthetic corpus (dclf-portal-query-batches.md, "Portal culling bench").
 		const auto& evaluator = RegisteredSwitchValue("CS_DCLF_PORTAL_EVALUATOR");
 		batch->inlineEvaluation = evaluator != "batched";
+		batch->trace = RegisteredSwitchValue("CS_DCLF_PORTAL_TRACE") == "1";
+		if (batch->trace && !batch->inlineEvaluation)
+			logger::warn("[DCLF] CS_DCLF_PORTAL_TRACE traces inline batches only; {} is batched", batch->name);
 		if (!evaluator.empty() && evaluator != "inline" && evaluator != "batched")
 			logger::warn("[DCLF] CS_DCLF_PORTAL_EVALUATOR '{}' is neither batched nor inline; {} is inline", evaluator, batch->name);
 		for (std::size_t i = 0; i < batch->programs.size(); ++i) {
@@ -59,6 +62,8 @@ namespace DCLF::Features::Portals
 				desc.defines.emplace_back(L"DCLF_PORTAL_CONTEXT_ATLAS", L"1");
 			if ((i == 7 || i == 8) && RegisteredSwitchValue("CS_DCLF_PORTAL_UNIFORM_SCAN") == "1")
 				desc.defines.emplace_back(L"DCLF_PORTAL_UNIFORM_SCAN", L"1");
+			if (i == 8 && batch->inlineEvaluation && batch->trace)
+				desc.defines.emplace_back(L"DCLF_PORTAL_TRACE", L"1");
 			batch->programs[i] = ComputeProgram::Load(a_setup.device, desc);
 			if (!batch->programs[i])
 				return nullptr;
