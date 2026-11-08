@@ -30,7 +30,12 @@ namespace DCLF::Scene
 		std::uint32_t candidateVersions = 0;
 		// The tracked geometries whose shadow only the engine's cull draws (NoteEngineCaster), by their verdict; their roots go out with
 		// each publication (PublishEngineCasters, EngineCasters.h).
-		ankerl::unordered_dense::map<RE::BSGeometry*, Ineligible> engineCasterGeometries;
+		struct EngineOnlyEntry
+		{
+			Ineligible reason = Ineligible::None;
+			std::uint8_t views = 0;  // EngineOnlySubset::ViewBit of each view it is in
+		};
+		ankerl::unordered_dense::map<RE::BSGeometry*, EngineOnlyEntry> engineCasterGeometries;
 		using LightEntryChange = DCLF::LightEntryChange;
 		std::vector<LightEntryChange> lightEntryChanges;               // since the last publication
 	};

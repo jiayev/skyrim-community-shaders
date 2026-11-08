@@ -639,7 +639,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			if (Engine::At<bool>(&a_light, kLightPortalStrict))
 				emptyStats.strictLights.fetch_add(1, std::memory_order_relaxed);
 			// A caster that stays the engine's has only the engine's cull to draw its shadow: the light's Accumulate culls the subset.
-			if (Scene::FrameView::Get().GetEngineCasters()) {
+			if (const auto& subset = Scene::FrameView::Get().GetEngineCasters(); subset && !subset->Of(Scene::EngineOnlySubset::kCaster).roots.empty()) {
 				emptyStats.subset.fetch_add(1, std::memory_order_relaxed);
 				return LightCull::Subset;
 			}
@@ -661,7 +661,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		void CullSubset(std::uint32_t a_ordinal, Accumulate&& a_accumulate)
 		{
 			{
-				EngineOnlyCull::Scope scope(Scene::FrameView::Get().GetEngineCasters().get());
+				EngineOnlyCull::Scope scope(Scene::FrameView::Get().GetEngineCasters().get(), Scene::EngineOnlySubset::kCaster);
 				a_accumulate();
 			}
 			emptyLights.fetch_or(1u << a_ordinal, std::memory_order_relaxed);

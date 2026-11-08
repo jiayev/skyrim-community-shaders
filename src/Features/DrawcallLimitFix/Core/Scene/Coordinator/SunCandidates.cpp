@@ -166,23 +166,34 @@ namespace DCLF::Scene
 
 	void Coordinator::NoteEngineCaster(RE::BSGeometry* a_geometry, Ineligible a_reason)
 	{
-		bool engine = Eligibility::EngineCasterReason(a_reason);
+		using Subset = EngineOnlySubset;
+		std::uint8_t views = 0;
 		ShadowReject reject = ShadowReject::None;
-		if (engine) {
+		if (Eligibility::EngineCasterReason(a_reason)) {
 			const auto leaf = mirror.Leaf(a_geometry);
 			reject = leaf ? ShadowCasterReject(leaf) : ShadowReject::None;
-			engine = leaf && (reject == ShadowReject::None || reject == ShadowReject::VolumetricOnly);
+			if (leaf && (reject == ShadowReject::None || reject == ShadowReject::VolumetricOnly))
+				views |= Subset::ViewBit(Subset::kCaster);
 		}
-		if (!engine) {
+		// The colour view: under an object class's category root (the LOD land root), the roots a colour view skips whole.
+		if (Eligibility::EngineColourReason(a_reason))
+			if (const auto entry = tracked.find(a_geometry); entry != tracked.end() && entry->second.categoryNode)
+				for (const auto categoryRoot : Extensions::RegisteredCategoryRoots())
+					if (categoryRoot && categoryRoot() == entry->second.categoryNode) {
+						views |= Subset::ViewBit(Subset::kColour);
+						break;
+					}
+		if (!views) {
 			engineCasterGeometries.erase(a_geometry);
 			return;
 		}
-		const auto [it, inserted] = engineCasterGeometries.insert_or_assign(a_geometry, a_reason);
-		// The first few in the log: the engine culls each one's root for the sun, and the point lights cull it all while it is tracked.
+		const auto [it, inserted] = engineCasterGeometries.insert_or_assign(a_geometry, EngineOnlyEntry{ a_reason, views });
+		// The first few in the log: the engine culls each one's root for the views it is in, never the whole scene.
 		static std::uint32_t logged = 0;
 		if (inserted && logged++ < 16)
-			logger::info("[DCLF] shadow caster '{}' stays the engine's ({}, caster rule {}): the engine culls its root for shadows ({} such)",
-				a_geometry->name.c_str(), kIneligibleNames[static_cast<std::size_t>(a_reason)], ShadowRejectName(reject), engineCasterGeometries.size());
+			logger::info("[DCLF] '{}' stays the engine's ({}, caster rule {}): the engine culls its root for {}{} ({} such)", a_geometry->name.c_str(),
+				kIneligibleNames[static_cast<std::size_t>(a_reason)], ShadowRejectName(reject), (views & Subset::ViewBit(Subset::kCaster)) ? "shadows" : "",
+				(views & Subset::ViewBit(Subset::kColour)) ? ((views & 1u) ? " and the LOD views" : "the LOD views") : "", engineCasterGeometries.size());
 	}
 
 	std::shared_ptr<const EngineOnlySubset> Coordinator::PublishEngineCasters()
@@ -193,7 +204,8 @@ namespace DCLF::Scene
 		// or sun entry when the coordinator owns it, else the geometry itself (tracked: its reference goes through the retirement chain
 		// too), so every caster has a root and no view falls back to a whole cull for one.
 		auto out = std::make_shared<EngineOnlySubset>();
-		for (const auto& [geometry, reason] : engineCasterGeometries) {
+		bool any = false;
+		for (const auto& [geometry, engineOnly] : engineCasterGeometries) {
 			const auto entry = tracked.find(geometry);
 			if (entry == tracked.end())
 				continue;
@@ -203,15 +215,22 @@ namespace DCLF::Scene
 			else if (entry->second.listedRoot && rootOwners.contains(entry->second.listedRoot))
 				root = entry->second.listedRoot;
 			++out->geometries;
-			if (!out->rootSet.insert(root).second)
-				continue;
-			out->roots.push_back(root);
-			out->geometryRoots += root == geometry ? 1 : 0;
-			// Its ancestors by the mirror's chain, up to the scene root (or a chain another root already gave).
-			for (const void* parent = mirror.Parent(root); parent && out->ancestors.insert(parent).second; parent = mirror.Parent(parent)) {
+			for (std::uint8_t v = 0; v < EngineOnlySubset::kViewCount; ++v) {
+				if (!(engineOnly.views & (1u << v)))
+					continue;
+				auto& view = out->views[v];
+				if (!view.rootSet.insert(root).second)
+					continue;
+				any = true;
+				view.roots.push_back(root);
+				view.category.push_back(entry->second.categoryNode);
+				out->geometryRoots += root == geometry ? 1 : 0;
+				// Its ancestors by the mirror's chain, up to the scene root (or a chain another root already gave).
+				for (const void* parent = mirror.Parent(root); parent && view.ancestors.insert(parent).second; parent = mirror.Parent(parent)) {
+				}
 			}
 		}
-		return out->roots.empty() ? nullptr : out;
+		return any ? out : nullptr;
 	}
 
 	std::string Coordinator::DescribeSunCandidate(const void* a_geometry) const

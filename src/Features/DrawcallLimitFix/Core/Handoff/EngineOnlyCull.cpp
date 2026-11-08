@@ -11,6 +11,7 @@ namespace DCLF::EngineOnlyCull
 	namespace
 	{
 		thread_local const Scene::EngineOnlySubset* armed = nullptr;
+		thread_local std::uint8_t armedView = 0;
 		std::atomic<std::uint64_t> culled{ 0 }, descended{ 0 }, skipped{ 0 };
 		bool installed = false;
 
@@ -20,7 +21,7 @@ namespace DCLF::EngineOnlyCull
 			const auto* subset = armed;
 			if (!subset || !a_object)
 				return false;
-			switch (subset->AdmitObject(a_object)) {
+			switch (subset->AdmitObject(static_cast<Scene::EngineOnlySubset::View>(armedView), a_object)) {
 			case Scene::EngineOnlySubset::Admit::Cull:
 				culled.fetch_add(1, std::memory_order_relaxed);
 				return false;
@@ -47,13 +48,18 @@ namespace DCLF::EngineOnlyCull
 		};
 	}
 
-	Scope::Scope(const Scene::EngineOnlySubset* a_subset) noexcept :
-		previous(armed)
+	Scope::Scope(const Scene::EngineOnlySubset* a_subset, std::uint8_t a_view) noexcept :
+		previous(armed), previousView(armedView)
 	{
 		armed = a_subset;
+		armedView = a_view;
 	}
 
-	Scope::~Scope() { armed = previous; }
+	Scope::~Scope()
+	{
+		armed = previous;
+		armedView = previousView;
+	}
 
 	void Install()
 	{

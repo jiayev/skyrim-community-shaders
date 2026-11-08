@@ -185,6 +185,16 @@ namespace DCLF::Eligibility
 	}
 
 	/**
+	 * @brief Whether a classified geometry with no record, refused for a_reason, is one the engine would draw in a colour view that DCLF
+	 * takes over by root (EngineCasters.h's colour view): any settled refusal but a hidden part's or an unselected switch child's (neither
+	 * drawn by the engine either). Fading, blended and non-Lighting shapes count: the engine draws them.
+	 */
+	inline bool EngineColourReason(Ineligible a_reason)
+	{
+		return a_reason != Ineligible::None && a_reason != Ineligible::Hidden && a_reason != Ineligible::Switch;
+	}
+
+	/**
 	 * @brief Whether a tracked geometry lets its light entry leave the point lights' culls. A table object: the exclusion
 	 * decides (BuildSunExclusion). Any other must give the light's registration no pass: what the sun's rule allows
 	 * (Sun: hidden, alpha-blended, fading, an unselected switch child), or no Lighting property. The light's bit

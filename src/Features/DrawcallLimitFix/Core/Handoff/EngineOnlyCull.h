@@ -17,17 +17,18 @@ namespace DCLF::Scene
 
 namespace DCLF::EngineOnlyCull
 {
-	/** @brief Arms a_subset for the culls this thread runs while it lives (null: nothing armed). Scopes nest. */
+	/** @brief Arms a_subset's a_view roots for the culls this thread runs while it lives (null: nothing armed). Scopes nest. */
 	class Scope
 	{
 	public:
-		explicit Scope(const Scene::EngineOnlySubset* a_subset) noexcept;
+		Scope(const Scene::EngineOnlySubset* a_subset, std::uint8_t a_view) noexcept;
 		~Scope();
 		Scope(const Scope&) = delete;
 		Scope& operator=(const Scope&) = delete;
 
 	private:
 		const Scene::EngineOnlySubset* previous = nullptr;
+		std::uint8_t previousView = 0;
 	};
 
 	/** @brief The Process1 hooks (once; PostPostLoad, main thread). */

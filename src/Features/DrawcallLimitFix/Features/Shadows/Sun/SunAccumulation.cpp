@@ -580,8 +580,8 @@ namespace DCLF::Features::Shadows::Sun
 					jobs = nullptr;
 					// The engine-only subset's roots (Scene/EngineCasters.h), the one thing it culls: their casters register as usual, and the
 					// members under them are withheld at their cascades' registrations (Register: claimed).
-					const auto& casters = Scene::FrameView::Get().GetEngineCasters();
-					if (casters && !casters->roots.empty()) {
+					const auto& subset = Scene::FrameView::Get().GetEngineCasters();
+					if (const auto* casters = subset ? &subset->Of(Scene::EngineOnlySubset::kCaster) : nullptr; casters && !casters->roots.empty()) {
 						for (const auto* root : casters->roots)
 							targetedExtraNodes.push_back(RE::NiPointer<RE::NiAVObject>(const_cast<RE::NiAVObject*>(root)));
 						++self.stats.wholeTargeted;

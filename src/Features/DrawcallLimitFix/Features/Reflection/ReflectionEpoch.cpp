@@ -135,10 +135,10 @@ namespace DCLF::Features::Reflection
 		const std::string residueKinds = ResidueKinds();
 		auto& parity = FaceCameraCounts();
 		text += fmt::format("[DCLF] reflection faces (T4: DCLF's cameras, the engine's tree LOD root skipped; T6b6: its LOD land and objects roots while gated): {} updates, {} without the "
-							"tree root, {} without the LOD roots; parity: {} faces, {} blocks "
+							"tree root, {} without the LOD roots ({} engine-only roots added under them); parity: {} faces, {} blocks "
 							"and {} slices differ (registers {:#x}, largest {:.3g}){}{}; residue: {} tree LOD passes{}, {} under the LOD land and objects roots (kept on every "
 							"30th update){}{}\n",
-			roots.updates, roots.treeSkipped, roots.lodSkipped, parity.faces, parity.blocks, parity.slices, parity.registers, parity.largest,
+			roots.updates, roots.treeSkipped, roots.lodSkipped, roots.engineOnlyRoots, parity.faces, parity.blocks, parity.slices, parity.registers, parity.largest,
 			parity.blocks || parity.slices ? " <- FACE CAMERA" : (parity.faces ? " <- OK" : ""), parity.first.empty() ? "" : " (first: " + parity.first + ")",
 			residue.treePasses, residue.treePasses ? " <- REFLECTION RESIDUE" : "", residue.lodPasses, residue.first.empty() ? "" : " (first: " + residue.first + ")", residueKinds);
 		parity = {};
