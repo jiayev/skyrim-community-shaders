@@ -148,7 +148,7 @@ namespace DCLF
 			filterDirtyAll = true;
 		}
 		const auto toggles = ActiveToggles();
-		if (!Policy::WithholdFromEngine() || !toggles.excludePrimaryEntries) {
+		if (!Policy::WithholdFromEngine()) {
 			++listStats.notToggled;
 			return false;
 		}

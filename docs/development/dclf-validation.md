@@ -76,9 +76,6 @@ only `0` turns it off. Parity, diagnostic and test switches are off unless set.
 | `CS_DCLF_LOD_TREES` | on (unless 1) | `0`: tree LOD stays native. |
 | `CS_DCLF_LOD_GATES` | on (unless 0) | `0`: the engine's LOD swaps are ungated. By default a swap keeps the outgoing level shown, and the incoming hidden, until DCLF's claims cover the incoming. |
 | `CS_DCLF_SHADOWS` | on (unless 1) | `0`: DCLF does not draw the shadow views. |
-| `CS_DCLF_SUN_SKIP` | on (unless 1) | `0`: the engine keeps culling and registering the sun's casters. |
-| `CS_DCLF_SUN_EXCLUDE` | on (unless 1) | `0`: DCLF's objects stay in the sun's culls. |
-| `CS_DCLF_PRIMARY_EXCLUDE` | on (unless 1) | `0`: DCLF's objects stay in the main camera's cull. |
 | `CS_DCLF_TREE_LIST_ALL` | **off** | `1`: the tree manager's list loop gets DCLF's verdict for every `BSTreeNode` DCLF lists; off: for the stood-in trees alone. |
 | `CS_DCLF_SKYLIGHT` | on (unless 1) | `0`: Skylighting's occlusion map stays native. |
 | `CS_DCLF_PRECIPITATION` | on (unless 1) | `0`: the precipitation occlusion mask stays native. |

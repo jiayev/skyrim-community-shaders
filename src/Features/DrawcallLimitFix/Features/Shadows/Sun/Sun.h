@@ -20,10 +20,8 @@
 //
 // Core keeps the shadow engine's scene side: the shadow epoch's commit and its capability and captures, the views list and the camera math
 // (Core/Render/Shadow/ShadowCameras.h), the views' tallies the shadow epochs' checks fill (Diagnostics::ShadowViewTally), the caster
-// phases, view bits and modes, and the shadows' and primary exclusion's toggles. The source owns no phase or view bit; its switches and
-// toggles are the accumulation's (CS_DCLF_SUN_SKIP, "skip sun accumulation") and the entry exclusion's (CS_DCLF_SUN_EXCLUDE, "exclude sun entries"),
-// listed where Core's were, after the shadows'; Core's "exclude primary entries" needs the second by name, so without this feature it
-// never takes effect. Included by the feature's sources only.
+// phases, view bits and modes, and the shadows' toggle. The source owns no phase or view bit, and no switch or toggle: the
+// accumulation's skip and the entry exclusion are always on while DCLF draws the shadows. Included by the feature's sources only.
 
 #include "Features/DrawcallLimitFix/Api/Feature.h"
 

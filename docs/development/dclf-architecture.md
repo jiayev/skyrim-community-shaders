@@ -1417,7 +1417,7 @@ culls are below ([The sun's cascades without DCLF's objects](#the-suns-cascades-
 
 ### The main camera's stand-in
 
-`PrimaryCull` (`Core/Handoff/PrimaryCull.{h,cpp}`; toggle "exclude primary entries", `CS_DCLF_PRIMARY_EXCLUDE`) takes DCLF's objects
+`PrimaryCull` (`Core/Handoff/PrimaryCull.{h,cpp}`; always on, no switch or toggle) takes DCLF's objects
 out of the main camera's cull. The engine's list jobs still run, and the render thread still waits at their `JobList::Finish`
 (`CS.DCLF.ListJobsWait`); DCLF stands in inside them.
 -   It hooks the list processes' `Process1` (vtable slot `0x16`, `0x140e28390`), filtered by process, on the job's thread. Entry 0
@@ -2530,10 +2530,10 @@ passes (render modes `0x10`/`0x11`, `GetRenderPasses_ShadowMapOrMask`) are not w
 
 #### The sun's cascades without DCLF's objects
 
--   **No sun registration for members** (`Features/Shadows/Sun/SunAccumulation.{h,cpp}`; `CS_DCLF_SUN_SKIP`). It hooks `Accumulate`
+-   **No sun registration for members** (`Features/Shadows/Sun/SunAccumulation.{h,cpp}`; always on). It hooks `Accumulate`
     (vtable slot 9) and `FUN_140e28af0`'s two calls of the registration. For a member, the registration runs only its early-outs and
     its mask write (`WriteMaskOnly`), and no pass is built only to be withheld.
--   **The entry exclusion** (`CS_DCLF_SUN_EXCLUDE`, needs the skip). Entries all of whose geometries DCLF draws, or whose geometries
+-   **The entry exclusion** (always on). Entries all of whose geometries DCLF draws, or whose geometries
     build no shadow pass anyway, are sun candidates (`Coordinator::UpdateSunCandidates`, `SunEntryAllows`; judged again only for
     entries a change touched). The exclusion is built with the shadow payload (`BuildSunExclusion`; `ExclusionBuild`,
     `Features/Shadows/Local/`; the contribution's types in `SunExclusion.h`, which Core's payload holds opaquely) and linked forward
@@ -2601,7 +2601,7 @@ the layout grows (`ReserveMainLatch`). A frame where the sun did not accumulate 
 -   **Empty culls:** a light is not culled at all when the exclusion is live, the frame is not a parity frame, the light is within the
     mask's 32, every view of it is covered with its casters in the set, and no tracked caster is the engine's alone (`EngineCasters.h`). A portal-strict light takes them too: its casters,
     DCLF's receivers and the engine's receivers' bits pass its strict gates (`dclf-portal-query-batches.md`, "Strict point-light
-    gates"; `CS_DCLF_STRICT_LIGHT_CULLS=0` keeps it native). The bookkeeping is done as `BSShadowParabolicLight::Accumulate` does it
+    gates"). The bookkeeping is done as `BSShadowParabolicLight::Accumulate` does it
     (the light index `+0x160`, the bit `+0x164`, the count).
 -   **Spot lights' empty culls** (`SpotAccumulate`, on `BSShadowFrustumLight::Accumulate`, vtable slot 9, AE `0x14151aa60`). The
     engine's sets descriptor 0's light index and bit, then `FUN_1414f0920` culls the scene's whole object root through descriptor 0's

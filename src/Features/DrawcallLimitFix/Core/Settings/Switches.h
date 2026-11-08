@@ -41,7 +41,6 @@ namespace DCLF
 		ProjectedUv,
 		PlainSnowSparkle,
 		Shadows,
-		PrimaryExclude,
 		OrgEpochs,
 		OrgAsyncEpochs,
 		OrgClosed,

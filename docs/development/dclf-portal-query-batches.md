@@ -172,7 +172,7 @@ pass (none: the sphere alone, which every consumer already tests).
     accumulate and capture their views with that call's atlas entries. The selection keeps every light any call of the frame kept
     (`Frame::frameLights`), and the atlas holds all their contexts with stable entries.
 -   **Native accumulation removed:** portal-strict point lights take the empty culls (no engine cull or registration) like every
-    other covered light; `CS_DCLF_STRICT_LIGHT_CULLS=0` keeps them native. A strict light in a cell without a portal graph has no
+    other covered light. A strict light in a cell without a portal graph has no
     context and nothing to gate (`PortalViews::kLightNoGraph`, reported apart from a light without a context).
 
 **Coverage diagnostics** (`CS_DCLF_STRICT_LIGHT_PARITY=1`, the parity frames culling natively): for every geometry in a traced

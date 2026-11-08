@@ -45,8 +45,7 @@ namespace DCLF::Features::Shadows::Local
 		void Preflight();
 		/** @brief Whether the skip went in (the Point source's culls: Api::ShadowSourceHooks::CullsInstalled). */
 		bool Installed();
-		/** @brief Install, CS_DCLF_STRICT_LIGHT_CULLS (unset or 1): the portal-strict point lights take the empty culls too. */
-		void SetStrictCulls(bool a_on);
+		/** @brief Install: the portal-strict point lights take the empty culls too. */
 		/**
 		 * @brief Render thread, the Point source's frameStart (FrameDriver at the scene frame's start): this frame's exclusion, from the
 		 * one the shadow epoch published after it drew the paraboloid views (a_pending: ParabolicExclusionSlot::Pending; null: none).
@@ -113,7 +112,7 @@ namespace DCLF::Features::Shadows::Local
 		 * light whose sphere (its first view's camera position and its radius, as FUN_141519d20 sets them) its bound is in, and for a
 		 * portal-strict light whose strict gates it passes (Portals/StrictGates.h: the rooms and shared nodes its walk reached, the room
 		 * frustum; the light's views and DCLF's receivers apply the same gates on the GPU). The parity frames, a light past the mask's 32 and
-		 * frames without the exclusion are culled as before (portal-strict lights too with CS_DCLF_STRICT_LIGHT_CULLS=0); the parity frames
+		 * frames without the exclusion are culled as before; the parity frames
 		 * compare the predicted spheres with the culls' and the sphere bits, gates included, with the engine's.
 		 */
 		/**

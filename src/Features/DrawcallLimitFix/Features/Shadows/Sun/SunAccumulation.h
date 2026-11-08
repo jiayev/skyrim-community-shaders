@@ -21,12 +21,12 @@ namespace DCLF::Features::Shadows::Sun
 	 * @brief The engine's work for the sun's cascades, removed where DCLF already draws the result (skyrim-engine-notes.md, "The
 	 * sun's accumulation"). AE and SE. Render thread, plus the registration thunks on job threads.
 	 *
-	 * Registration-free accumulation (toggle "skip sun accumulation", CS_DCLF_SUN_SKIP): BSShadowDirectionalLight::Accumulate culls each
+	 * Registration-free accumulation (always on while DCLF draws the shadows): BSShadowDirectionalLight::Accumulate culls each
 	 * cascade and hands each geometry to the accumulator's registration (FUN_1414b2140, from FUN_140e28af0), which builds shadow
 	 * passes and ORs the cascade's bit into activeLightMask (the main pass reads it). For a member the thunks replicate the early-outs
 	 * and mask write and skip the passes; anything else calls the original.
 	 *
-	 * Entry exclusion (toggle "exclude sun entries", CS_DCLF_SUN_EXCLUDE; dclf-architecture.md, "The sun's cascades without DCLF's objects"):
+	 * Entry exclusion (always on; dclf-architecture.md, "The sun's cascades without DCLF's objects"):
 	 * the cascade culls walk only the full-frustum processes' objectArray, so after the full-frustum cull every entry DCLF draws
 	 * entirely is removed from it. DCLF writes the sun's mask bits at the main registration instead: the cascades the bound meets,
 	 * against the planes the engine's cascade cull used.
@@ -53,7 +53,6 @@ namespace DCLF::Features::Shadows::Sun
 		static void Preflight();
 		bool Installed() const { return installed; }
 		/** @brief Main thread, at the feature's install (before DCLF's threads start): its toggles, the registration skip's and the entry exclusion's. */
-		static void SetToggles(Api::ToggleId a_skip, Api::ToggleId a_exclude);
 
 
 		/** @brief Whether this frame's full-frustum cull applied the entry exclusion (or the whole skip). */
@@ -80,7 +79,7 @@ namespace DCLF::Features::Shadows::Sun
 			std::uint64_t offThread = 0;      // sun registrations outside Accumulate (passed to the engine)
 			std::int64_t fullFrustumTicks = 0, fullFrustumMax = 0;
 			std::int64_t accumulateTicks = 0, accumulateMax = 0;
-			// The entry exclusion (CS_DCLF_SUN_EXCLUDE).
+			// The entry exclusion.
 			std::uint32_t exclusionFrames = 0;        // full-frustum culls that applied one
 			std::uint32_t exclusionStale = 0;         // ... built for other candidates
 			std::uint32_t exclusionMissing = 0;       // ... with none published

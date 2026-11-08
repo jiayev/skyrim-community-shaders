@@ -166,7 +166,6 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 
 		// ---- The empty culls (LocalLightCull.h): a light whose every paraboloid view DCLF draws is not culled at all.
 		constexpr std::size_t kLightPortalStrict = 0x47;    // BSLight::portalStrict: its cull tests the portals' compound frustum
-		bool strictCulls = true;                            // CS_DCLF_STRICT_LIGHT_CULLS: portal-strict lights take the empty culls too
 		std::atomic<bool> frameCullsEmpty{ false };         // the selection's: the exclusion live and not a parity frame
 		std::atomic<bool> frameSpotsEmpty{ false };         // the selection's: the spot views' casters withheld and not a parity frame
 		std::atomic<bool> frameParity{ false };             // the selection's: a parity frame (every light culled natively)
@@ -636,14 +635,9 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			}
 			// Portal-strict: its cull's rooms, shared nodes and room frusta are DCLF's strict gates (Portals/StrictGates.h), on its views'
 			// casters (BuildDrawsLatch::strictContext), DCLF's receivers (GpuShadowVolume::portalContext) and the engine's receivers' bits
-			// (StrictAdmits). With CS_DCLF_STRICT_LIGHT_CULLS=0 culled as before.
-			if (Engine::At<bool>(&a_light, kLightPortalStrict)) {
-				if (!strictCulls) {
-					(spot ? emptyStats.spotsStrict : emptyStats.portalStrict).fetch_add(1, std::memory_order_relaxed);
-					return LightCull::Engine;
-				}
+			// (StrictAdmits), always: no switch hands a portal-strict light back to the engine's whole cull.
+			if (Engine::At<bool>(&a_light, kLightPortalStrict))
 				emptyStats.strictLights.fetch_add(1, std::memory_order_relaxed);
-			}
 			// A caster that stays the engine's has only the engine's cull to draw its shadow: the light's Accumulate culls the subset.
 			if (Scene::FrameView::Get().GetEngineCasters()) {
 				emptyStats.subset.fetch_add(1, std::memory_order_relaxed);
@@ -868,7 +862,6 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 
 	bool Installed() { return installed; }
 
-	void SetStrictCulls(bool a_on) { strictCulls = a_on; }
 
 	void SelectFrame(std::uint32_t a_frame, std::shared_ptr<SunExclusion> a_pending)
 	{

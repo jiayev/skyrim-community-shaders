@@ -372,12 +372,6 @@ namespace DCLF
 		}
 		Diagnostics::Notify(Diagnostics::CutSlotsReset{ count });
 		// The stand-in needs a current snapshot; otherwise the engine culls every entry (less the leaf exclusion).
-		if (!ActiveToggles().excludePrimaryEntries) {
-			if (!ownedRoots.empty() || !standInRoots.empty())
-				ClearRootOwnership();
-			frameLive.store(true, std::memory_order_release);
-			return;
-		}
 		// The sun's exclusion is not a precondition: listed roots' fade is DCLF's alone, and a whole entry the sun's cull reaches
 		// without it has its casters' passes withheld (the Sun source's accumulation, PassCapture).
 		if (!candidates) {

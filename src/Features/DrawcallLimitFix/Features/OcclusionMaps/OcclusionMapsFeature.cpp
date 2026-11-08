@@ -91,10 +91,10 @@ namespace DCLF::Features::OcclusionMaps
 			// registered, so their bits in the packed word are where Core's were. They need the shadows (the maps draw on the shadow commit).
 			const auto sky = a_context.RegisterToggle({ .name = "sky occlusion", .label = "Draw Skylighting's occlusion map",
 				.tooltip = "With Skylighting loaded, DCLF draws its sky occlusion height map from its own tables on the GPU, and the engine no longer culls or registers the scene for it.",
-				.seed = skySwitch, .entersClassification = true, .after = "exclude primary entries", .needs = { "shadows" } });
+				.seed = skySwitch, .entersClassification = true, .after = "shadows", .needs = { "shadows" } });
 			const auto precipitation = a_context.RegisterToggle({ .name = "precipitation occlusion", .label = "Draw the precipitation occlusion mask",
 				.tooltip = "DCLF draws the precipitation occlusion mask (where rain and snow stop) from its own tables on the GPU, and the engine no longer culls or registers the scene for it.",
-				.seed = precipitationSwitch, .entersClassification = true, .after = "exclude primary entries", .needs = { "shadows" } });
+				.seed = precipitationSwitch, .entersClassification = true, .after = "shadows", .needs = { "shadows" } });
 			// The maps (Core's shadow engine: the shadow epoch, the set decisions and the reports read them as data; the classification
 			// calls their rules per walked entry).
 			RegisterMaps(a_context, sky, precipitation);

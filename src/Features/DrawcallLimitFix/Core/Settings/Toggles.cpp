@@ -29,11 +29,6 @@ namespace DCLF
 			// "object LOD" and "terrain LOD" and Features/TreeLod's "tree LOD"; then Features/Skins' "skin partitions" after the tree LOD's,
 			// and Features/Actors' "actors" after it.)
 			{ &S::shadows, Switch::Shadows, kOn, "shadows", "Shadow views", "Draw the shadow views", nullptr, false, {} },
-			// (Features/Shadows/Sun's "skip sun accumulation", then its "exclude sun entries", follow the shadows' here.)
-			// It needs the sun's entry exclusion by name (SeedRegistered resolves it): without Features/Shadows/Sun it never takes effect.
-			{ &S::excludePrimaryEntries, Switch::PrimaryExclude, kOn, "exclude primary entries", {}, "Take DCLF's objects out of the engine's main camera cull",
-				"The main camera's cull and registration skip every reference DCLF draws entirely; DCLF builds their main passes itself and runs their fade updates.", false,
-				{}, false, {}, {}, {}, { "exclude sun entries" } },
 			// (Features/OcclusionMaps' "sky occlusion" and "precipitation occlusion" follow here: the first feature toggles registered, their
 			// bits right after these; then Features/Reflection's "reflections" and Features/FirstPerson's "first person".)
 		};
