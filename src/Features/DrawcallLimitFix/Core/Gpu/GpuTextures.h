@@ -63,7 +63,7 @@ namespace DCLF
 			std::uint64_t cleanupPending = 0;
 			std::array<std::uint32_t, static_cast<std::size_t>(Reject::Count)> rejected{};
 			std::uint32_t samplers = 0;
-			std::uint32_t unsupportedLayouts = 0;  // images DXVK does not keep in GENERAL
+			std::uint32_t unsupportedLayouts = 0;  // images in a layout BasicRHI cannot import
 			std::uint64_t importedAsync = 0;   // imports the import thread made
 			std::uint32_t requestsPending = 0;    // Request: not answered yet
 			std::uint64_t requestsAnswered = 0;  // Request: answered

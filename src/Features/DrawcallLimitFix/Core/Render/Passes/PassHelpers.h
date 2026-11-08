@@ -45,8 +45,8 @@ namespace DCLF::Draws
 	constexpr std::uint8_t kObjectStateDecal = 0xF1;
 	constexpr std::uint8_t kObjectStateAbsent = 0xFF;
 
-	// A DXVK image the graph uses in place: imported without ownership, with simultaneous access (DXVK
-	// keeps the images it hands out in GENERAL and uses them between the graph's commands).
+	// A DXVK image the graph uses in place, imported without ownership in the layout DXVK rests it in, which is its home state
+	// (RenderGraph::ImportDxvkTexture). Fills the description's dimensions and array shape from the image.
 	std::shared_ptr<org::ExternalTextureResource> ImportImage(rhi::Device a_device, const DxvkOrgInteropImageInfo& a_image, org::TextureDescription a_desc,
 		const char* a_name);
 

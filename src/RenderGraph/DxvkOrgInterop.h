@@ -81,6 +81,17 @@ struct DxvkOrgInteropBufferInfo
 	VkBufferUsageFlags usage;
 };
 
+// What the client handles itself (dxvkSetInteropOptions). Set before the first import; it applies to every import after it.
+// DXVK_ORG_INTEROP_RESTING_LAYOUTS: the client imports every image in the layout DxvkOrgInteropImageInfo::layout reports (DXVK's
+// own resting layout for it), uses it exclusively unless that layout is GENERAL, and leaves it in that layout again before
+// DXVK's next command. DXVK then never moves an imported image to GENERAL. Without it, DXVK pins every imported image there,
+// which on AMD's Windows driver turns its colour and depth compression off for DXVK's passes and the client's.
+enum DxvkOrgInteropOptionBits : uint32_t
+{
+	DXVK_ORG_INTEROP_RESTING_LAYOUTS = 1u << 0,
+};
+typedef HRESULT(__stdcall* PFN_dxvkSetInteropOptions)(ID3D11Device* pDevice, uint32_t options);
+
 struct DxvkOrgInteropImageInfo
 {
 	VkImage image;

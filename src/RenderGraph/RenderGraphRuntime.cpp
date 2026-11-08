@@ -1535,6 +1535,17 @@ bool RenderGraphRuntime::Initialize()
 	if (!d3dDevice || FAILED(d3dDevice->QueryInterface(__uuidof(IDXGIVkInteropDevice), state->interop.put_void())))
 		return disable("IDXGIVkInteropDevice is unavailable");
 
+	// Resting layouts (RenderGraph/DxvkImageImport.h): imported images stay in DXVK's own layouts instead of GENERAL, which keeps
+	// their compression on AMD's Windows driver. The graph gives each one back in that layout through external home states, so
+	// both must be on. CS_ORG_RESTING_LAYOUTS=0 keeps DXVK pinning them in GENERAL.
+	if (!EnvEquals("CS_ORG_RESTING_LAYOUTS", "0") && !EnvEquals("CS_ORG_EXTERNAL_HOME", "0")) {
+		const auto setOptions = ResolveExport<PFN_dxvkSetInteropOptions>(d3d11, "dxvkSetInteropOptions");
+		const bool resting = setOptions && SUCCEEDED(setOptions(d3dDevice, DXVK_ORG_INTEROP_RESTING_LAYOUTS));
+		logger::info("[ORG] imported images {}", resting ? "rest in DXVK's layouts" : "rest in GENERAL (this DXVK build has no dxvkSetInteropOptions)");
+	} else {
+		logger::info("[ORG] imported images rest in GENERAL (CS_ORG_RESTING_LAYOUTS=0 or CS_ORG_EXTERNAL_HOME=0)");
+	}
+
 	DxvkOrgInteropDeviceInfo info{};
 	info.version = DXVK_ORG_INTEROP_VERSION;
 	if (FAILED(getInfo(d3dDevice, &info)))

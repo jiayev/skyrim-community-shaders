@@ -3,6 +3,8 @@
 
 // volk must precede every Vulkan header in this translation unit.
 #include <rhi_interop_vulkan.h>
+
+#include "RenderGraph/DxvkImageImport.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
@@ -567,37 +569,23 @@ namespace DCLF
 				srv.buffer.firstElement += buffer.offset / 4;
 			} else {
 				const auto& image = info.image;
-				// DXVK keeps images it hands out (marked stable) in GENERAL and uses them between the graph's
-				// commands: imported with simultaneous access, they are read in GENERAL and never transitioned.
-				if (image.layout != VK_IMAGE_LAYOUT_GENERAL) {
+				// Imported in the layout DXVK rests it in (RenderGraph::ImportDxvkImage); the graph never moves these, and the
+				// view's descriptor names that layout: GENERAL, or the read-only layout of a sampled colour or depth image.
+				if (!RenderGraph::HomeLayoutOf(image.layout)) {
 					if (a_counters.unsupportedLayouts.fetch_add(1, std::memory_order_relaxed) == 0)
-						logger::warn("[DCLF] A game texture is in Vulkan layout {}, not GENERAL; such textures stay native", static_cast<int>(image.layout));
+						logger::warn("[DCLF] A game texture is in Vulkan layout {}, which BasicRHI cannot import; such textures stay native",
+							static_cast<int>(image.layout));
 					return Reject::Import;
 				}
 
-				rhi::vulkan::ImportedImageDesc import{};
-				import.image = image.image;
-				import.createInfo.flags = image.flags;
-				import.createInfo.imageType = image.type;
-				import.createInfo.format = image.format;
-				import.createInfo.extent = image.extent;
-				import.createInfo.mipLevels = image.mipLevels;
-				import.createInfo.arrayLayers = image.arrayLayers;
-				import.createInfo.samples = image.samples;
-				import.createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-				import.createInfo.usage = image.usage;
-				import.createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-				import.createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-				import.currentLayout = image.layout;
-				import.simultaneousAccess = true;
 				// Aftermath resource tracking reports Vulkan object names at a fault. Distinguish
 				// imports by the stable DXVK image and the game SRV that produced this view.
 				const auto importName = std::format("DCLF texture image {:#x} SRV {:#x}",
 					reinterpret_cast<std::uintptr_t>(image.image), reinterpret_cast<std::uintptr_t>(view));
-				import.debugName = importName.c_str();
 				{
 					DCLF_ZONE("CS.DCLF.Texture.Import.WrapImage");
-					if (rhi::vulkan::import_image(a_context.device, import, a_entry.image) != rhi::Result::Ok || !a_entry.image)
+					a_entry.image = RenderGraph::ImportDxvkImage(a_context.device, image, importName.c_str());
+					if (!a_entry.image)
 						return Reject::Import;
 				}
 

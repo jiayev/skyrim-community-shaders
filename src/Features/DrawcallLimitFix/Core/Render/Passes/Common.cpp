@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/RemoteControl/NvPerf.h"
+#include "RenderGraph/DxvkImageImport.h"
 
 namespace DCLF::Draws
 {
@@ -18,35 +19,12 @@ namespace DCLF::Draws
 	std::shared_ptr<org::ExternalTextureResource> ImportImage(rhi::Device a_device, const DxvkOrgInteropImageInfo& a_image, org::TextureDescription a_desc,
 		const char* a_name)
 	{
-		rhi::vulkan::ImportedImageDesc import{};
-		import.image = a_image.image;
-		import.createInfo.flags = a_image.flags;
-		import.createInfo.imageType = a_image.type;
-		import.createInfo.format = a_image.format;
-		import.createInfo.extent = a_image.extent;
-		import.createInfo.mipLevels = a_image.mipLevels;
-		import.createInfo.arrayLayers = a_image.arrayLayers;
-		import.createInfo.samples = a_image.samples;
-		import.createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-		import.createInfo.usage = a_image.usage;
-		import.createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		import.createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		import.currentLayout = a_image.layout;
-		import.simultaneousAccess = true;
-		import.debugName = a_name;
-		rhi::ResourcePtr resource;
-		if (a_image.layout != VK_IMAGE_LAYOUT_GENERAL || rhi::vulkan::import_image(a_device, import, resource) != rhi::Result::Ok)
-			return nullptr;
 		a_desc.imageDimensions.clear();
 		a_desc.imageDimensions.push_back({ a_image.extent.width, a_image.extent.height, 0, 0 });
 		// ORG builds a DSV per slice for arrays, so a shadow view attaches its own slice.
 		a_desc.isArray = a_image.arrayLayers > 1;
 		a_desc.arraySize = a_desc.isArray ? a_image.arrayLayers : 1;
-		a_desc.initialLayout = rhi::ResourceLayout::Common;
-		auto result = org::ExternalTextureResource::CreateShared(std::move(resource), a_desc, true);
-		if (result)
-			result->SetName(a_name);
-		return result;
+		return RenderGraph::ImportDxvkTexture(a_device, a_image, std::move(a_desc), a_name);
 	}
 
 	void RegisterSceneBuffers(org::RenderGraph& a_graph, const SceneBuffers& a_scene)
