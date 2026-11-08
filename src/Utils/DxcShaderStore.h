@@ -32,7 +32,8 @@ namespace Util
 
 	/**
 	 * @brief Whether a shader builds with DXC: "<path>:<target>:<descriptor in hex>" matches CS_SHADER_DXC, a regular expression, and the
-	 * loaded DXVK takes SPIR-V. Off under native D3D11, whose runtime has no such export.
+	 * loaded DXVK takes SPIR-V. Without CS_SHADER_DXC the pattern selects the image-space blurs. Off under native D3D11, whose runtime has no
+	 * such export.
 	 */
 	bool UseDxc(const std::filesystem::path& a_root, std::string_view a_target, uint32_t a_descriptor);
 
