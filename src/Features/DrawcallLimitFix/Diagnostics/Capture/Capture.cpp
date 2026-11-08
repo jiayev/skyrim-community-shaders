@@ -4,6 +4,7 @@
 #include "CaptureInternal.h"
 
 #include "Features/DrawcallLimitFix.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SkinPartitionWatch.h"
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
@@ -123,6 +124,9 @@ namespace DCLF::Capture
 				for (auto& line : Integrations::AdvancedSkin::GrowthLines())
 					growth.push_back(std::move(line));
 				section("render-thread growth", growth);
+				const auto skins = SkinPartitionWatch::GetCounts();
+				section("skin partition watch (RaceMenu's morph copies)",
+					{ fmt::format("copies since start {}, watched now {}", skins.copies, skins.watched) });
 			} else
 				text += "\nDCLF is not installed: no frame state.\n";
 			WriteText(a_session, dir / "snapshot.txt", text, fmt::format("{}/snapshot.txt", a_label));

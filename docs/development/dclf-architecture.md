@@ -434,7 +434,9 @@ external-mod-requirements.md):
 -   **Body morphs** store a deep-copied skin partition, with new vertex buffers, into `NiSkinInstance::skinPartition`, and its overlay
     relink stores a cloned skin instance into the geometry. FrameValues compares each sampled skin's partition with the mirror's
     (`PlacementPlan::Item::skinPartition`, `SkinPartitionMoved`) and captures the geometry again: one pointer compare a skin it already
-    reads. Without it DCLF drew the old partition until the actor's 3D was attached again. The new partition's buffers are DYNAMIC
+    reads. Without it DCLF drew the old partition until the actor's 3D was attached again. FrameValues samples only skins that
+    move, so a detour on `NiObject::CreateDeepCopy` (`SkinPartitionWatch`) names each skin partition being copied, and for 5 s
+    after, every kept item holding it is due (`MarkDue`), moving or not: a still actor's morph is seen too. The new partition's buffers are DYNAMIC
     (skee's `bBodyMorphRebind`), which DXVK cannot import; a partition RaceMenu morphed (its shape carries "SHAPEDATA") draws from a
     DEFAULT copy of its CPU vertices instead (`MorphedPartitionCopy`, at the capture). RaceMenu writes every morph into a new partition,
     so a copy keyed by the partition never goes stale; a writer that maps a buffer in place stays native (`UnstableBuffer`).

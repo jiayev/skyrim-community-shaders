@@ -40,6 +40,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SkinPartitionWatch.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -567,6 +568,8 @@ namespace DCLF
 		std::vector<RE::NiPointer<RE::NiAVObject>> owedNodes;  // node events a refused lease left unnamed
 		std::vector<std::uint8_t> moverDue, rootDue;           // per plan item, set by dueMovers / dueRoots (cleared alone)
 		std::vector<std::uint32_t> dueMovers, dueRoots;
+		std::vector<const void*> watchedList;                          // SkinPartitionWatch::Collect's, reused
+		ankerl::unordered_dense::set<const void*> watchedPartitions;  // the same, to look up
 		// The moved-only parity (Policy::SampleEveryMover), since its last line.
 		struct MovedParity
 		{
@@ -1315,6 +1318,20 @@ namespace DCLF
 			root.keyed = true;
 			return true;
 		});
+		// A skin partition RaceMenu is replacing (SkinPartitionWatch.h): every kept item holding it is due for a few seconds, moving or
+		// not, so its palette sample (SkinPartitionMoved) sees the new partition when it is stored.
+		if (SkinPartitionWatch::Any()) {
+			SkinPartitionWatch::Collect(watchedList);
+			watchedPartitions.clear();
+			watchedPartitions.insert(watchedList.begin(), watchedList.end());
+			const auto watches = [&](const Plan::Item& a_item) { return a_item.skinPartition && watchedPartitions.contains(a_item.skinPartition); };
+			for (std::uint32_t m = 0; m < keptMovers.size(); ++m)
+				if (keptMovers[m].live && watches(keptMovers[m].item))
+					MarkMover(m);
+			for (std::uint32_t r = 0; r < keptRoots.size(); ++r)
+				if (keptRoots[r].live && std::ranges::any_of(keptRoots[r].dependents, watches))
+					MarkRoot(r);
+		}
 		// A palette rows class's items (particle quads face the camera): every frame.
 		for (const auto m : everyFrameMovers)
 			MarkMover(m);

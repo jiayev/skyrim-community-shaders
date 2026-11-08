@@ -2,6 +2,7 @@
 // movers (SceneWriter.h), each pushing the mirror's update and the scene pass's event on the writer's thread (SceneEvents.h).
 
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SkinPartitionWatch.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
@@ -644,6 +645,8 @@ namespace DCLF::Scene
 		logger::info("[DCLF] scene events subscribed to SceneWriterFramework ({} engine calls: fades, property flags, materials and material alpha, LOD fades, emittance, Havok node transforms, controllers)",
 			std::size(kCalls));
 		InstallMoveEvents();
+		// RaceMenu's skin partition swaps, which no writer reports: their copies (SkinPartitionWatch.h).
+		SkinPartitionWatch::Install();
 		// Actor::SetAlpha and the actors' reserved move writers are Features/Actors' (its early hooks, after the reflection's).
 		// The hidden stores are Features/HiddenNodes' (its early hooks, right after these). Object LOD's segment writers are Features/Lod's
 		// engine channel's source (its early hooks, before tree LOD's and the hidden nodes').
