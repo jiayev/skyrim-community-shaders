@@ -164,6 +164,15 @@ struct DrawcallLimitFix : Feature
 	/** @brief Every render graph submission up to a_submissions completed on the GPU (GraphHost's retired callback): DCLF's retirement clock. */
 	static void OnGraphSubmissionsRetired(std::uint64_t a_submissions);
 
+	/** @brief What the diagnostic capture records of the feature's state (Diagnostics/Capture). */
+	struct CaptureInfo
+	{
+		bool installed = false, switchedOn = false, running = false, faulted = false, pumpLagging = false;
+		std::string unavailableReason;
+	};
+	/** @brief Render thread: the feature's state, for the diagnostic capture. */
+	CaptureInfo GetCaptureInfo() const { return { installed, switchedOn, Running(), faulted, pumpLagging, unavailableReason }; }
+
 private:
 	struct Hooks
 	{

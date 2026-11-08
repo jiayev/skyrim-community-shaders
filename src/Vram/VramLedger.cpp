@@ -558,7 +558,7 @@ namespace Vram
 		return fmt::format("VRAM attribution: {}; largest owners (device-local): {}", breakdown, largest);
 	}
 
-	std::filesystem::path WriteJson(const std::filesystem::path& a_directory)
+	std::filesystem::path WriteJson(const std::filesystem::path& a_directory, std::string_view a_fileName)
 	{
 		const auto snapshot = Current(0.0);
 		nlohmann::json json;
@@ -576,7 +576,7 @@ namespace Vram
 				{ "heap", row.heapIndex }, { "idle", row.idleFrames } });
 
 		const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-		auto path = a_directory / fmt::format("CommunityShaders-VRAM-{}.json", stamp);
+		auto path = a_directory / (a_fileName.empty() ? fmt::format("CommunityShaders-VRAM-{}.json", stamp) : std::string(a_fileName));
 		std::ofstream file(path, std::ios::binary);
 		if (!file)
 			return {};

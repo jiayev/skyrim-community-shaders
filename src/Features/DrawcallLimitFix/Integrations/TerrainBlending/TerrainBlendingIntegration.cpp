@@ -2,6 +2,7 @@
 // its mask (t55) and its near blocks' depth twin. The render thread's callbacks read the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/TerrainBlending/TerrainBlending.h"
+#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
 
 #include "ShaderCache.h"
 
@@ -87,6 +88,6 @@ namespace DCLF::Integrations::TerrainBlending
 
 	Api::Feature Integration()
 	{
-		return { "terrain blending", &Install };
+		return { .name = "terrain blending", .install = &Install, .status = [] { return FeatureStatus(globals::features::terrainBlending); } };
 	}
 }

@@ -4,6 +4,7 @@
 // take, and the frame's own pass).
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Capture/Capture.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
@@ -230,6 +231,8 @@ namespace DCLF::Scene
 			ToggleSnapshotScope toggles(&passSnapshot.toggles);
 			RunSceneWork(!a_inline);
 			RunActorProbeIfAsked();
+			// The diagnostic capture's scene sections (the fade census, the growth census), on this lane, which owns their state.
+			DCLF::Capture::RunSceneLaneWork();
 		} catch (const std::exception& e) {
 			// Never out of the drain (the pump would close for good): the pass's flags put back, the next wake runs another.
 			if (pumpStats.failed++ < 4)

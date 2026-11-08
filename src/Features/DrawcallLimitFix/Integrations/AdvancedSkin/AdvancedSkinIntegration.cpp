@@ -2,6 +2,7 @@
 // value at the frame's start, fanned out). Render thread. Its material textures are SkinTextures.cpp's.
 
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/AdvancedSkin.h"
+#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/OwnerValues.h"
 
@@ -20,6 +21,9 @@ namespace DCLF::Integrations::AdvancedSkin
 			static OwnerValues owners;
 			return owners;
 		}
+
+		// The last capture's counts (render thread), for the diagnostic capture.
+		OwnerValues::Stats lastStats;
 
 		void Membership(const Api::ShadingFieldMembership& a_membership)
 		{
@@ -49,6 +53,7 @@ namespace DCLF::Integrations::AdvancedSkin
 				const float4 value = wetness && mesh ? skin.GetWetness(mesh) : float4{};
 				return OwnerValues::Value{ value.x, value.y, value.z, value.w };
 			}, [&](std::uint32_t o, const auto& row) { a_capture.Put(o, row); });
+			lastStats = wetnessStats;
 			TracyPlot("CS.DCLF.Wetness.Actors", static_cast<std::int64_t>(wetnessStats.actors));
 			TracyPlot("CS.DCLF.Wetness.ChangedActors", static_cast<std::int64_t>(wetnessStats.changed));
 			TracyPlot("CS.DCLF.Wetness.VisitedMeshes", static_cast<std::int64_t>(wetnessStats.visited));
@@ -66,6 +71,14 @@ namespace DCLF::Integrations::AdvancedSkin
 
 	Api::Feature Integration()
 	{
-		return { "advanced skin", &Install };
+		return { .name = "advanced skin", .install = &Install, .status = [] { return FeatureStatus(globals::features::skin) + fmt::format(", {} skin texture sets", globals::features::skin.skinExtraTextures.size()); } };
+	}
+
+	std::vector<std::string> GrowthLines()
+	{
+		const auto& owners = Owners();
+		return { fmt::format("advanced skin wetness groups {}", owners.GroupCount()), fmt::format("advanced skin wetness slots {}", owners.SlotCount()),
+			fmt::format("advanced skin wetness last capture actors {}, changed {}, visited {}, members {}", lastStats.actors, lastStats.changed, lastStats.visited,
+				lastStats.members) };
 	}
 }

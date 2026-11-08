@@ -70,6 +70,9 @@ namespace DCLF::Features::Fades
 		KeptWholeArray<FadeRootStatic> fadeSeeds;
 		std::vector<SeedCopy> owedSeeds;
 
+		// The two lists' sizes as their owners last left them, for the diagnostic capture (PeekSeedCounts).
+		std::atomic<std::size_t> unsentSeedCount{ 0 }, owedSeedCount{ 0 };
+
 		// Render thread, every Kick: the node as the frame's start has it, before this frame's culls update it (FadeStateCS's first
 		// update is this frame's): its bytes copied here, the row made from the copy by the producer (StaticOf, with the frame's globals:
 		// its LOD scale).
@@ -90,6 +93,7 @@ namespace DCLF::Features::Fades
 				copy.generation = seed.generation;
 				seedRows = std::max(seedRows, seed.row + 1);
 			}
+			unsentSeedCount.store(unsentSeeds.size(), std::memory_order_relaxed);
 		}
 
 		// Render thread, at Kick: every copy taken since the last kick, for the frame's producer.
@@ -99,6 +103,7 @@ namespace DCLF::Features::Fades
 			if (!unsentSeeds.empty()) {
 				auto input = std::make_shared<SeedInput>();
 				input->values = std::exchange(unsentSeeds, {});
+				unsentSeedCount.store(0, std::memory_order_relaxed);
 				input->rows = seedRows;
 				return { std::move(input), seedRows };
 			}
@@ -154,6 +159,7 @@ namespace DCLF::Features::Fades
 				for (const auto& copy : input->values)
 					seed(copy);
 			a_producer.NoteSeeded(seeded);
+			owedSeedCount.store(owedSeeds.size(), std::memory_order_relaxed);
 			// The carried copies' references to the render thread (the input's go with the input).
 			for (auto& copy : carried)
 				ReleaseLater(copy.node);
@@ -184,5 +190,10 @@ namespace DCLF::Features::Fades
 	const std::vector<FadeRootStatic>* SeedsIfDone(bool a_wait)
 	{
 		return FrameValues::Get().ProducerDone(a_wait) ? &fadeSeeds.Get() : nullptr;
+	}
+
+	SeedCounts PeekSeedCounts()
+	{
+		return { unsentSeedCount.load(std::memory_order_relaxed), owedSeedCount.load(std::memory_order_relaxed) };
 	}
 }

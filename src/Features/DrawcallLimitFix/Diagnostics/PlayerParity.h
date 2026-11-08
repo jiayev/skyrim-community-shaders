@@ -8,6 +8,7 @@
 // checks that change what DCLF draws or when (persistent, set, walk, build, capture parity) stay developer switches.
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -67,8 +68,11 @@ namespace DCLF::Diagnostics::PlayerParity
 	/** @brief The menu: the offenders cleared at the coordinator's next check. */
 	void Clear();
 
-	/** @brief Main or render thread: the report (build, game, plugins, offenders) written beside the log; its path, or why not. */
-	std::string WriteReport();
+	/**
+	 * @brief Main or render thread: the report (build, game, plugins, offenders) written to a_path, or beside the log when a_path is
+	 * empty. Returns its path, or why it was not written.
+	 */
+	std::string WriteReport(const std::filesystem::path& a_path = {});
 
 	/** @brief The menu's section (DrawcallLimitFix::DrawSettings). */
 	void DrawPanel();

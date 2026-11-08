@@ -59,4 +59,12 @@ namespace DCLF::Integrations
 		};
 		return kIntegrations;
 	}
+
+	std::vector<std::string> StatusLines()
+	{
+		std::vector<std::string> lines;
+		for (const auto& integration : List())
+			lines.push_back(fmt::format("{}: {}", integration.name, integration.status ? integration.status() : std::string("installed")));
+		return lines;
+	}
 }

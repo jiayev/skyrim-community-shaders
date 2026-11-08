@@ -31,6 +31,11 @@ namespace DCLF::Features::Fades
 	 * translucent until it is listed again.
 	 */
 	void RecheckFadeAmount(RE::NiAVObject* a_node);
+	/**
+	 * @brief FadeEvents.cpp, the scene lane (RefreshFadeAmount): whether a_node's fadeAmount event came from RecheckFadeAmount. True
+	 * once per recheck. One relaxed load while no recheck is pending. Only the diagnostic capture's census reads the answer.
+	 */
+	bool TakeRecheck(const void* a_node);
 	// Diagnostics/: the report lines, the parity and the port check.
 	void RegisterDiagnostics(Api::InstallContext& a_context);
 

@@ -13,6 +13,7 @@
 #include "NativeMenu/NativeMenu.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Utils/LogTee.h"
 
 #define DLLEXPORT __declspec(dllexport)
 
@@ -229,6 +230,9 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	logger::info("Loaded {} {} (build {})", Plugin::NAME, Plugin::VERSION.string(), Plugin::BUILD_DESCRIBE);
 	ApplyDevEnvironmentFile();
 	SKSE::Init(a_skse);
+	// SKSE::Init replaced the log with CommonLib's; its sinks go behind the fan-out sink, so a diagnostic capture can copy the lines
+	// it logs (Utils/LogTee.h).
+	Util::LogTee::Install();
 	logger::info("Community Shaders {} | branch: {} | describe: {} | hash: {}{}",
 		Util::GetFormattedVersion(Plugin::VERSION),
 		Plugin::BUILD_BRANCH.empty() ? "(detached)" : Plugin::BUILD_BRANCH,

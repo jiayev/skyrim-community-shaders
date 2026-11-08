@@ -2,11 +2,13 @@
 // GetPixelTechnique and SetupGeometry hooks). The capture and derive callbacks are pure.
 
 #include "Features/DrawcallLimitFix/Integrations/TruePBR/TruePBRIntegration.h"
+#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 
 #include <cstdint>
 
 #include "ShaderCache.h"
+#include "TruePBR.h"
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 
 namespace DCLF::Integrations::TruePBR
@@ -78,6 +80,6 @@ namespace DCLF::Integrations::TruePBR
 
 	Api::Feature Integration()
 	{
-		return { "true pbr", &Install };
+		return { .name = "true pbr", .install = &Install, .status = [] { return FeatureStatus(globals::features::truePBR); } };
 	}
 }

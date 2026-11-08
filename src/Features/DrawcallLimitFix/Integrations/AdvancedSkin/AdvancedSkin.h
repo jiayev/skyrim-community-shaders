@@ -13,6 +13,8 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace DCLF::Integrations::AdvancedSkin
 {
@@ -29,4 +31,10 @@ namespace DCLF::Integrations::AdvancedSkin
 
 	// AdvancedSkinIntegration.cpp: the integration's entry (Integrations/IntegrationList.cpp).
 	Api::Feature Integration();
+
+	/**
+	 * @brief Render thread (the diagnostic capture): the wetness index's sizes and the last capture's counts, one "<name> <value>" line
+	 * each. AdvancedSkinIntegration.cpp.
+	 */
+	std::vector<std::string> GrowthLines();
 }

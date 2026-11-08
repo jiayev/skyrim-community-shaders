@@ -79,6 +79,12 @@ namespace DCLF::Api
 		ShadowViews,
 		// The frame report's statistics (Reports::Stats), last, after the scene publications' line: on a report frame with CS_DCLF_STATS.
 		Statistics,
+		// The diagnostic capture's census (Coordinator::FadeCensus: the scene lane, at a pass's end, only when a capture asks). Text: one
+		// JSON document per registration, or a coordinator component's. Not part of the periodic report.
+		CaptureCensus,
+		// The diagnostic capture's growth census (Coordinator::SceneGrowthLines: the scene lane, when a capture asks). Text lines, each
+		// "<name> <value>", or a coordinator component's. Not part of the periodic report.
+		CaptureGrowth,
 	};
 
 	/** @brief Whether a_point composes its lines into the report's text (ReportLines::text), not logs them (ReportLines::lines). */
@@ -86,7 +92,8 @@ namespace DCLF::Api
 	{
 		return a_point == ReportPoint::AsyncWorkWriteBack || a_point == ReportPoint::AsyncWorkViews || a_point == ReportPoint::AccumulatedWrites || a_point == ReportPoint::AsyncWorkForward || a_point == ReportPoint::AsyncWork ||
 		       a_point == ReportPoint::AsyncWorkFamilies || a_point == ReportPoint::SceneFrame || a_point == ReportPoint::SceneCoordinatorSegments ||
-		       a_point == ReportPoint::SceneCoordinatorMaterials || a_point == ReportPoint::SceneCoordinatorDelta;
+		       a_point == ReportPoint::SceneCoordinatorMaterials || a_point == ReportPoint::SceneCoordinatorDelta || a_point == ReportPoint::CaptureCensus ||
+		       a_point == ReportPoint::CaptureGrowth;
 	}
 
 	/** @brief Whether a_point is the coordinator's, where a coordinator component's lines go (ReportLines::componentText). */
@@ -94,7 +101,7 @@ namespace DCLF::Api
 	{
 		return a_point == ReportPoint::SceneCoordinatorGates || a_point == ReportPoint::SceneCoordinatorSet || a_point == ReportPoint::SceneCoordinatorSegments ||
 		       a_point == ReportPoint::SceneCoordinatorMaterials || a_point == ReportPoint::SceneCoordinatorDelta ||
-		       a_point == ReportPoint::SceneCoordinatorLastPass;
+		       a_point == ReportPoint::SceneCoordinatorLastPass || a_point == ReportPoint::CaptureCensus || a_point == ReportPoint::CaptureGrowth;
 	}
 
 	/**

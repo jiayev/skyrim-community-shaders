@@ -3,6 +3,8 @@
 // tree LOD switches, the primary cull's admitted roots); their registration (RegisterScene).
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadeWriters.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadesInternal.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -16,6 +18,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/SoleHolds.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <type_traits>
@@ -69,7 +72,26 @@ namespace DCLF::Scene
 			ankerl::unordered_dense::map<const void*, bool> owned;
 			// Owned while listed (a published version that names it keeps it, through the retirement chain).
 			std::vector<RE::NiPointer<RE::NiAVObject>> owners;
+			// The diagnostic capture's: per root slot, which code last changed its row (FadeRootWriter) and the frame it did.
+			std::vector<std::uint8_t> lastWriter;
+			std::vector<std::uint32_t> lastWriteFrame;
+			// The fadeAmount events since the session started: all, those whose node is not a listed root, those the mirror had no
+			// record for (the row keeps its old value: a stuck partial fade's suspect), those that changed nothing or the row, and the
+			// seeds' rechecks among them (and those that changed the row: a listing taken mid-ramp).
+			std::uint64_t amountEvents = 0, amountNotListed = 0, amountNoMirror = 0, amountUnchanged = 0, amountChanged = 0;
+			std::uint64_t rechecks = 0, recheckChanged = 0, reseeds = 0;
 		};
+
+		/** @brief Root a_root's row was changed by a_writer: the census's tag (one store, and a resize only when the table grew). */
+		void NoteRootWrite(FadeRootState& a_state, std::uint32_t a_root, FadeRootWriter a_writer)
+		{
+			if (a_state.lastWriter.size() <= a_root) {
+				a_state.lastWriter.resize(std::size_t(a_root) + 1, 0);
+				a_state.lastWriteFrame.resize(std::size_t(a_root) + 1, 0);
+			}
+			a_state.lastWriter[a_root] = static_cast<std::uint8_t>(a_writer);
+			a_state.lastWriteFrame[a_root] = Coordinator::Get().GetFrame();
+		}
 
 		// The coordinator's state, made once (MakeComponent) and held for the session: the report's stood-in count reads it.
 		FadeRootState* liveState = nullptr;
@@ -213,6 +235,7 @@ namespace DCLF::Scene
 			state.owners[r] = std::move(a_owner);
 			RequestFadeSeed(a_context, roots, r, row);
 			roots.fadeRoots[r] = row;
+			NoteRootWrite(state, r, FadeRootWriter::Listed);
 			if (const auto* record = a_context.Mirror().Node(a_node); record && record->treeLodSwitch)
 				roots.fadeRootSwitch.insert_or_assign(record->treeLodSwitch, r);
 			family.Mark(r);
@@ -309,27 +332,44 @@ namespace DCLF::Scene
 			row.bits |= kept;
 			RequestFadeSeed(a_context, roots, it->second, row);
 			family.Mark(it->second);
+			auto& state = a_context.State<FadeRootState>();
+			++state.reseeds;
+			NoteRootWrite(state, it->second, FadeRootWriter::Reseed);
 		}
 
 		/** @brief A fadeAmount event (Actor::SetAlpha): a listed root's fadeAmount retaken from its node, its state row kept. */
 		void RefreshFadeAmount(const Api::CoordinatorComponentContext& a_context, const void* a_node)
 		{
 			auto [family, roots] = LiveRootsOf(a_context);
+			auto& state = a_context.State<FadeRootState>();
+			// Taken first, so a recheck whose node is not listed is not kept.
+			const bool recheck = Features::Fades::TakeRecheck(a_node);
+			++state.amountEvents;
+			state.rechecks += recheck ? 1u : 0u;
 			// The key alone until it names a listed root, which the listing holds.
 			const auto it = roots.fadeRootIndex.find(a_node);
-			if (it == roots.fadeRootIndex.end())
+			if (it == roots.fadeRootIndex.end()) {
+				++state.amountNotListed;
 				return;
+			}
 			auto& row = roots.fadeRoots[it->second];
 			// The mirror's (Actor::SetAlpha's update carries it, applied before this batch's structural events).
 			const auto* record = a_context.Mirror().Node(a_node);
-			if (!record)
+			if (!record) {
+				++state.amountNoMirror;
 				return;
+			}
 			const float amount = record->fadeAmount;
-			if (std::memcmp(&amount, &row.fadeAmount, sizeof(amount)) == 0)
+			if (std::memcmp(&amount, &row.fadeAmount, sizeof(amount)) == 0) {
+				++state.amountUnchanged;
 				return;
+			}
 			// An input, not state: the GPU's state row is kept, and FadeStateCS steps its amountFade toward it as the engine does.
 			row.fadeAmount = amount;
 			family.Mark(it->second);
+			++state.amountChanged;
+			state.recheckChanged += recheck ? 1u : 0u;
+			NoteRootWrite(state, it->second, recheck ? FadeRootWriter::Recheck : FadeRootWriter::EngineEvent);
 		}
 
 		/** @brief The fade channels' keys (ApplyEvents' BeforeStructural channels, registered snaps first): snaps reseed, amounts refresh. */
@@ -480,6 +520,210 @@ namespace DCLF::Scene
 			return 0;
 		return static_cast<std::size_t>(std::count_if(liveState->owned.begin(), liveState->owned.end(), [](const auto& a_root) { return a_root.second; }));
 	}
+
+	std::string_view FadeRootWriterName(FadeRootWriter a_writer)
+	{
+		switch (a_writer) {
+		case FadeRootWriter::Listed:
+			return "listed";
+		case FadeRootWriter::EngineEvent:
+			return "engine event";
+		case FadeRootWriter::Recheck:
+			return "recheck";
+		case FadeRootWriter::Reseed:
+			return "reseed";
+		case FadeRootWriter::WriteBack:
+			return "write-back";
+		default:
+			return "none";
+		}
+	}
+
+	namespace
+	{
+		/** @brief What the census reads of a root's reference. Plain data, so the read can sit behind an SEH guard. */
+		struct ReferenceIdentity
+		{
+			std::uint32_t formId = 0;
+			const char* name = nullptr;  // the base form's name (static form data)
+			bool actor = false;
+			bool has3D = false;  // the reference's 3D is this node
+			bool read = false;   // false: the node is detached (no reference read) or the read faulted
+		};
+
+		/**
+		 * @brief The node's reference (its user data), read only while the node is attached: a detached node may outlive its reference,
+		 * since the fade roots own their nodes. A fault is caught and leaves read false (diagnostics only; nothing is written).
+		 */
+		ReferenceIdentity ReadReferenceIdentity(const RE::NiAVObject* a_node)
+		{
+			ReferenceIdentity identity;
+			__try {
+				if (a_node->parent) {
+					if (const auto* reference = a_node->GetUserData()) {
+						identity.formId = reference->GetFormID();
+						if (const auto* base = reference->GetBaseObject())
+							identity.name = base->GetName();
+						identity.actor = reference->IsActor();
+						identity.has3D = reference->Get3D() == a_node;
+						identity.read = true;
+					}
+				}
+			} __except (EXCEPTION_EXECUTE_HANDLER) {
+				identity.read = false;
+				identity.name = nullptr;
+			}
+			return identity;
+		}
+
+		std::string_view PlanName(std::uint32_t a_bits)
+		{
+			switch (a_bits & kFadeRootPlanMask) {
+			case kFadeRootFade:
+				return "fade";
+			case kFadeRootLeaf:
+				return "leaf";
+			case kFadeRootTree:
+				return "tree";
+			default:
+				return "other";
+			}
+		}
+
+		json BitNames(std::uint32_t a_bits)
+		{
+			json names = json::array();
+			constexpr std::pair<std::uint32_t, const char*> kBits[] = { { kFadeRootOwned, "Owned" }, { kFadeRootStoodIn, "StoodIn" }, { kFadeRootWritten, "Written" },
+				{ kFadeRootSeedOdd, "SeedOdd" }, { kFadeRootTreeLod, "TreeLod" }, { kFadeRootAlwaysDraw, "AlwaysDraw" } };
+			for (const auto& [bit, name] : kBits)
+				if (a_bits & bit)
+					names.push_back(name);
+			return names;
+		}
+
+		json FloatOrNull(bool a_has, float a_value)
+		{
+			return a_has && std::isfinite(a_value) ? json(a_value) : json(nullptr);
+		}
+	}
+
+	void FadeRootsCensus(const Api::CoordinatorComponentContext& a_context, std::string& a_text)
+	{
+		constexpr std::size_t kMaxRoots = 2000;
+		const auto& state = a_context.State<FadeRootState>();
+		const auto list = Extensions::RootListOf(a_context.tables);
+		const auto& mirror = a_context.Mirror();
+		const auto writeBack = Features::Fades::PeekWriteBackCensus(true);
+		RE::NiPoint3 player{};
+		bool havePlayer = false;
+		if (auto* character = RE::PlayerCharacter::GetSingleton()) {
+			player = character->GetPosition();
+			havePlayer = true;
+		}
+		// The roots that fade or whose copies disagree: actors first, then by distance.
+		struct Candidate
+		{
+			std::uint32_t root = 0;
+			float distance = 0.0f;
+			ReferenceIdentity identity;
+		};
+		std::vector<Candidate> candidates;
+		std::size_t listed = 0;
+		for (std::uint32_t r = 0; r < list.rows.size() && r < list.nodes.size(); ++r) {
+			const auto* node = static_cast<const RE::NiAVObject*>(list.nodes[r]);
+			if (!node)
+				continue;
+			++listed;
+			const auto& row = list.rows[r];
+			// The nodes are owned while listed (FadeRootState::owners), so reading them is safe; the values may be mid-write.
+			const float nodeAmount = Engine::At<float>(node, 0x100);
+			const float current = Engine::At<float>(node, 0x130);
+			const auto* record = mirror.Node(node);
+			const bool differs = row.fadeAmount != nodeAmount || (record && record->fadeAmount != nodeAmount);
+			if (!(nodeAmount < 1.0f || current < 1.0f || differs))
+				continue;
+			const float distance = havePlayer ? node->world.translate.GetDistance(player) : -1.0f;
+			candidates.push_back({ r, distance, ReadReferenceIdentity(node) });
+		}
+		std::ranges::sort(candidates, [](const Candidate& a, const Candidate& b) {
+			if (a.identity.actor != b.identity.actor)
+				return a.identity.actor;
+			return a.distance < b.distance;
+		});
+		json roots = json::array();
+		for (std::size_t i = 0; i < candidates.size() && i < kMaxRoots; ++i) {
+			const auto& candidate = candidates[i];
+			const std::uint32_t r = candidate.root;
+			const auto* node = static_cast<const RE::NiAVObject*>(list.nodes[r]);
+			const auto& row = list.rows[r];
+			const auto* record = mirror.Node(node);
+			const auto sceneWriter = r < state.lastWriter.size() ? static_cast<FadeRootWriter>(state.lastWriter[r]) : FadeRootWriter::None;
+			const std::uint32_t sceneFrame = r < state.lastWriteFrame.size() ? state.lastWriteFrame[r] : 0u;
+			const std::uint32_t appliedFrame = r < writeBack.appliedFrame.size() ? writeBack.appliedFrame[r] : 0u;
+			// The write-back's judged store is the last writer when it is newer than the scene lane's row write.
+			const bool writeBackLast = appliedFrame && appliedFrame >= sceneFrame;
+			const auto& identity = candidate.identity;
+			json entry = json::object();
+			entry["root"] = r;
+			entry["formId"] = identity.read ? fmt::format("{:08X}", identity.formId) : std::string();
+			entry["name"] = identity.read && identity.name ? std::string(identity.name) : std::string();
+			entry["actor"] = identity.actor;
+			entry["attached"] = node->parent != nullptr;
+			entry["has3D"] = identity.has3D;
+			entry["distance"] = candidate.distance;
+			entry["node"] = { { "fadeAmount", FloatOrNull(true, Engine::At<float>(node, 0x100)) }, { "currentFade", FloatOrNull(true, Engine::At<float>(node, 0x130)) },
+				{ "amountFade", FloatOrNull(true, Engine::At<float>(node, 0x140)) } };
+			entry["mirrorFadeAmount"] = FloatOrNull(record != nullptr, record ? record->fadeAmount : 0.0f);
+			entry["row"] = { { "fadeAmount", FloatOrNull(true, row.fadeAmount) }, { "seedCurrentFade", FloatOrNull(true, row.initial.currentFade) },
+				{ "generation", row.generation }, { "object", row.object }, { "plan", PlanName(row.bits) }, { "bits", BitNames(row.bits) } };
+			entry["lastWriter"] = writeBackLast ? FadeRootWriterName(FadeRootWriter::WriteBack) : FadeRootWriterName(sceneWriter);
+			entry["sceneWriter"] = FadeRootWriterName(sceneWriter);
+			entry["sceneWriteFrame"] = sceneFrame;
+			entry["appliedFrame"] = appliedFrame;
+			roots.push_back(std::move(entry));
+		}
+		const auto writers = Features::Fades::PeekFadeWriterCounts();
+		const auto seeds = Features::Fades::PeekSeedCounts();
+		json totals = json::object();
+		totals["rootsListed"] = listed;
+		totals["rootsFading"] = candidates.size();
+		totals["truncated"] = candidates.size() > kMaxRoots ? candidates.size() - kMaxRoots : 0;
+		totals["stoodIn"] = FadeRootsStoodIn();
+		totals["amountEvents"] = { { "all", state.amountEvents }, { "notListed", state.amountNotListed }, { "refreshNoMirror", state.amountNoMirror },
+			{ "unchanged", state.amountUnchanged }, { "changed", state.amountChanged }, { "rechecks", state.rechecks }, { "recheckChanged", state.recheckChanged } };
+		totals["reseeds"] = state.reseeds;
+		totals["writers"] = { { "gateSkipped", writers.gateSkipped }, { "onVisibleSkipped", writers.onVisibleSkipped }, { "roots", writers.roots }, { "sinceLastReport", true } };
+		totals["seeds"] = { { "unsent", seeds.unsent }, { "owed", seeds.owed } };
+		if (writeBack.present)
+			totals["writeBack"] = { { "applied", writeBack.applied }, { "stale", writeBack.stale }, { "busy", writeBack.busy }, { "notWritten", writeBack.notWritten },
+				{ "dropped", writeBack.dropped }, { "harvested", writeBack.harvested }, { "harvestedWithEvents", writeBack.harvestedWithEvents }, { "events", writeBack.events },
+				{ "overflowed", writeBack.overflowed }, { "missed", writeBack.missed }, { "setsAdded", writeBack.setsAdded }, { "pendingBatches", writeBack.pendingBatches },
+				{ "readyStores", writeBack.readyStores }, { "sinceLastReport", true } };
+		else
+			totals["writeBack"] = nullptr;
+		json census = json::object();
+		census["roots"] = std::move(roots);
+		census["totals"] = std::move(totals);
+		a_text += census.dump();
+	}
+
+	void FadeRootsGrowth(const Api::CoordinatorComponentContext& a_context, std::string& a_text)
+	{
+		const auto& state = a_context.State<FadeRootState>();
+		const auto list = Extensions::RootListOf(a_context.tables);
+		std::size_t owners = 0;
+		for (const auto& owner : state.owners)
+			owners += owner ? 1u : 0u;
+		std::size_t memberLists = 0;
+		for (const auto& members : state.members.lists)
+			memberLists += members.empty() ? 0u : 1u;
+		a_text += fmt::format("fade roots rows {}\n", list.rows.size());
+		a_text += fmt::format("fade roots listed {}\n", list.index ? list.index->size() : 0u);
+		a_text += fmt::format("fade roots owned {}\n", state.owned.size());
+		a_text += fmt::format("fade roots owners {} (slots {})\n", owners, state.owners.size());
+		a_text += fmt::format("fade roots member lists {} (capacity {})\n", memberLists, state.members.lists.size());
+		a_text += fmt::format("fade roots writer tags {}\n", state.lastWriter.size());
+	}
 }
 
 namespace DCLF::Features::Fades
@@ -505,5 +749,10 @@ namespace DCLF::Features::Fades
 		Scene::fadeRootComponent = a_context.RegisterCoordinatorComponent(Scene::FadeRootComponent());
 		a_context.RegisterReportLines({ .name = "fade root owners", .point = Api::ReportPoint::SceneCoordinatorLastPass, .component = Scene::fadeRootComponent,
 			.componentText = &Scene::OwnerLines });
+		// The diagnostic capture's census and growth lines (Coordinator::FadeCensus, Coordinator::SceneGrowthLines).
+		a_context.RegisterReportLines({ .name = "fade roots", .point = Api::ReportPoint::CaptureCensus, .component = Scene::fadeRootComponent,
+			.componentText = &Scene::FadeRootsCensus });
+		a_context.RegisterReportLines({ .name = "fade roots", .point = Api::ReportPoint::CaptureGrowth, .component = Scene::fadeRootComponent,
+			.componentText = &Scene::FadeRootsGrowth });
 	}
 }

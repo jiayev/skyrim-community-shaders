@@ -47,12 +47,24 @@ scene each frame with what DCLF holds, and lists every object that changed with 
 object's reference and its plugin. It does not change what is drawn. It costs a little CPU, so leave it off unless you are
 testing.
 
-"Write report" saves `CommunityShaders-DCLF-Compat-<date>-<time>.txt` next to the log. The report has the build, your game
-version, every offender with its reference and plugin, your load order and your SKSE plugins.
+A diagnostic capture (below) includes the monitor's report when the monitor is on. The report has every offender with its
+reference and plugin.
+
+## The diagnostic capture
+
+When something looks wrong (slow frames, characters you can see through, objects in the wrong place), press "Create diagnostic
+capture" on DCLF's menu page while the problem is visible, then close the menu. Two seconds later DCLF records what it is doing
+for the time the slider sets (10 s by default), then writes `DCLF-Capture-<date>-<time>.zip` next to the log. Explorer opens
+with the file selected, and the file is on the clipboard, so you can paste it into a message.
+
+The zip holds DCLF's state at the start and the end, what it did during the recording, a screenshot, your logs, your
+Community Shaders settings, your load order and your SKSE plugins. Paths under your user folder are written as
+`%USERPROFILE%`.
 
 ## What to send
 
-Send these files from `Documents\My Games\Skyrim Special Edition\SKSE\`:
+For anything you can see while the game runs, a diagnostic capture is the one file to send. Otherwise, send these files from
+`Documents\My Games\Skyrim Special Edition\SKSE\`:
 
 - `CommunityShaders.log` from the session with the problem. Send it before you start the game again, because the next start
   replaces it.

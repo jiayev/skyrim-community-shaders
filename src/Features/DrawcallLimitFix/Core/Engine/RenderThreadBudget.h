@@ -81,8 +81,21 @@ namespace DCLF
 			std::chrono::steady_clock::time_point start;
 		};
 
+		/** @brief One frame's render-thread time: its total and its buckets, in microseconds. */
+		struct FrameTime
+		{
+			double totalUs = 0.0;
+			std::array<double, static_cast<std::size_t>(Bucket::Count)> bucketUs{};
+		};
+
 		/** @brief The frame's end (Present, after its hook): the frame's total joins the report's maximum. */
 		void EndFrame();
+
+		/** @brief Render thread: the last frame EndFrame closed. Reads only; the report is not reset. */
+		const FrameTime& LastFrame() const { return lastFrame; }
+
+		/** @brief A bucket's name, as the report line prints it. */
+		static const char* BucketName(Bucket a_bucket);
 
 		/** @brief The report line since the last one, or empty when no frame ended. */
 		std::string Report();
@@ -102,6 +115,8 @@ namespace DCLF
 		std::array<double, static_cast<std::size_t>(Site::Count)> siteUs{};
 		std::array<std::uint32_t, static_cast<std::size_t>(Site::Count)> siteCalls{};
 		double frameUs = 0.0;
+		std::array<double, static_cast<std::size_t>(Bucket::Count)> frameBucketUs{};  // this frame's buckets
+		FrameTime lastFrame;
 		double frameMaxUs = 0.0;
 		double totalUs = 0.0;
 		std::uint32_t frames = 0;

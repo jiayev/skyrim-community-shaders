@@ -70,4 +70,25 @@ namespace DCLF::Scene
 
 	/** @brief The coordinator's report (SceneCoordinatorLastPass): the owners, how many only they keep alive, and the roots listed. */
 	void OwnerLines(const Api::CoordinatorComponentContext& a_context, std::string& a_text);
+
+	/**
+	 * @brief Which code last changed a root's row on the scene lane, for the diagnostic capture's fade census. WriteBack is never stored
+	 * here: the census names it when the write-back's last judged store is newer than the scene lane's write.
+	 */
+	enum class FadeRootWriter : std::uint8_t
+	{
+		None,
+		Listed,       // the row made from the mirror when the root was listed
+		EngineEvent,  // a fadeAmount event (Actor::SetAlpha) changed the row's fadeAmount
+		Recheck,      // the seeds' recheck of a newly seeded actor root changed it (RecheckFadeAmount)
+		Reseed,       // a placement snap rebuilt the row from the mirror
+		WriteBack,    // the fade write-back judged a store for the node (census only)
+	};
+	/** @brief The writer's name, for the census. */
+	std::string_view FadeRootWriterName(FadeRootWriter a_writer);
+
+	/** @brief The diagnostic capture's census of the fade roots component (FadeRoots.cpp). */
+	void FadeRootsCensus(const Api::CoordinatorComponentContext& a_context, std::string& a_text);
+	/** @brief The diagnostic capture's growth lines of the fade roots component (FadeRoots.cpp). */
+	void FadeRootsGrowth(const Api::CoordinatorComponentContext& a_context, std::string& a_text);
 }

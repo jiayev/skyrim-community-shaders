@@ -38,6 +38,8 @@ namespace DCLF::Features::Fades
 		std::size_t roots = 0;  // the roots in the writer set
 	};
 	FadeWriterCounts TakeFadeWriterCounts();
+	/** @brief The same counts since the last TakeFadeWriterCounts, not reset (the diagnostic capture's). Any thread. */
+	FadeWriterCounts PeekFadeWriterCounts();
 
 	/**
 	 * @brief One animation-job fade update, its root resolved on the job thread through the writer tables (the SceneTables

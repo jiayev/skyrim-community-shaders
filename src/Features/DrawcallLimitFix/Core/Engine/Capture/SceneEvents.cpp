@@ -9,7 +9,6 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Core/Shading/MaterialWrites.h"
-#include "Features/DrawcallLimitFix/Diagnostics/FadeProbe.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
 
@@ -39,8 +38,6 @@ namespace DCLF::Scene
 			}
 			const float before = FloatOf(a_scratch[0]);
 			const auto door = static_cast<std::uint8_t>(a_scratch[1]);
-			if (SceneWriter::CallOf(a_event).hook == SWF_HOOK_FADE_UPDATE)
-				Diagnostics::FadeProbe::NoteFade(before, CurrentFade(fade), fade->GetRuntimeData().unk154);  // TEMP
 			if (CurrentFade(fade) != before || fade->GetRuntimeData().unk154 != door)
 				PushNodeUpdate(fade, SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeDoor);
 		}

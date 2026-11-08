@@ -25,6 +25,7 @@ namespace DCLF::Diagnostics
 		std::unique_ptr<basic_telemetry::Session> session;
 		std::optional<basic_telemetry::Frame> frame;
 		std::string phase;
+		std::filesystem::path phaseDirectory;
 
 		std::uint64_t Percentile(std::vector<std::uint64_t> a_samples, double a_p)
 		{
@@ -89,7 +90,7 @@ namespace DCLF::Diagnostics
 			frame.reset();
 			const auto snapshot = session->Snapshot();
 			session.reset();
-			const auto dir = logger::log_directory().value_or(std::filesystem::path{}) / "dclf-telemetry";
+			const auto dir = !phaseDirectory.empty() ? phaseDirectory : logger::log_directory().value_or(std::filesystem::path{}) / "dclf-telemetry";
 			std::error_code error;
 			std::filesystem::create_directories(dir, error);
 			WriteFrames(snapshot, dir);
@@ -97,12 +98,13 @@ namespace DCLF::Diagnostics
 		}
 	}
 
-	void TelemetryPhase(std::string_view a_label)
+	void TelemetryPhase(std::string_view a_label, const std::filesystem::path& a_directory)
 	{
 		EndPhase();
 		if (a_label == "off")
 			return;
 		phase = a_label;
+		phaseDirectory = a_directory;
 		basic_telemetry::SessionConfig config;
 		config.mode = basic_telemetry::CaptureMode::Summary;
 		config.measureThreadCpuTime = true;

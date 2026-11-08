@@ -272,6 +272,18 @@ namespace DCLF
 		 * its geometry (records, fade state against the binding's hint, forward or deferred descriptors, verdicts), naming what looks wrong.
 		 */
 		void RequestActorProbe(std::string a_label);
+		/**
+		 * @brief Scene lane only (the diagnostic capture, at a pass's end): the fade census as JSON, from the registrations at
+		 * Api::ReportPoint::CaptureCensus (Features/Fades' "fade roots": roots and totals), with the scene frame. Any other
+		 * registration's document goes under "other". Without the fade roots' registration: {"skipped": reason, "frame": n}.
+		 * FadeCensus.cpp.
+		 */
+		json FadeCensus();
+		/**
+		 * @brief Scene lane only: the sizes of the coordinator's growable containers, one "<name> <value>" line each, then the
+		 * registrations' at Api::ReportPoint::CaptureGrowth. FadeCensus.cpp.
+		 */
+		std::vector<std::string> SceneGrowthLines();
 
 		// Scene members (dclf-architecture.md, "Eligibility and classification"): a member's accumulated half is patched once from its membership pass and kept across
 		// frames until a rewrite breaks its binding, a release or a failed patch.

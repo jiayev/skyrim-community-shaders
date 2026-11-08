@@ -295,6 +295,17 @@ namespace DCLF::Features::Fades
 		return c;
 	}
 
+	FadeWriterCounts PeekFadeWriterCounts()
+	{
+		FadeWriterCounts c;
+		c.onVisibleSkipped = onVisibleFadeSkipped.load(std::memory_order_relaxed);
+		c.gateSkipped = gateFadeSkipped.load(std::memory_order_relaxed);
+		if (const auto* tables = fadeWriterTables.load(std::memory_order_acquire))
+			if (const auto* roots = RootsOf(tables))
+				c.roots = roots->fadeRootIndex.size();
+		return c;
+	}
+
 	// DrainAnimatedFades without the wait: the producer's, which holds the hand-off.
 	std::size_t DrainAnimatedFadesNow();
 

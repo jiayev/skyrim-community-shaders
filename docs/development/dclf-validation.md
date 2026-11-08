@@ -384,8 +384,8 @@ off, each of their events costs its one flag test.
 Each missed difference, leak or eviction is an offender. A node or geometry offender is keyed by its owning reference: the
 probe tags every record with the form ID of the nearest ancestor with user data. A property or alpha offender is keyed by the
 shared object, since one write shows on every instance of the mesh, and lists the references it was found under. Each new
-offender logs one `<- OFFENDER` line. The menu lists them, and "Write report" (or `dclf:compat-report`) writes
-`CommunityShaders-DCLF-Compat-<time>.txt` beside the log. The report holds the build, the game version, the offenders with
+offender logs one `<- OFFENDER` line. The menu lists them. The [diagnostic capture](#the-diagnostic-capture) writes the report
+as `compat.txt` while the monitor is on, and `dclf:compat-report` writes `CommunityShaders-DCLF-Compat-<time>.txt` beside the log. The report holds the build, the game version, the offenders with
 reference, base object and plugin, the load order and the SKSE DLLs. Turning the monitor on starts a fresh list.
 `dclf:foreign-write=<n>` makes offenders to check it with.
 
@@ -557,6 +557,56 @@ the measurement and what would remove each; this list says how each shows in the
 | Hint-10 passes DCLF does not model. | Capture parity's "native-only passes". |
 
 ## Diagnostics and probes
+
+### The diagnostic capture
+
+The player's report of a problem (`Diagnostics/Capture/`). The menu's "Create diagnostic capture" arms it, and it starts two seconds
+after the menu closes, so the menu is in neither the screenshot nor the timings. `dclf:capture[=<seconds>]` starts it at the next
+Present. It records for the slider's time (10 s by default), then a worker writes `DCLF-Capture-<time>.zip` beside the log with
+Windows' `tar.exe`. If the zip fails, the folder is kept. It runs with DCLF off, not installed or unavailable too. The parts that
+need DCLF's scene work say "skipped" in the manifest.
+
+How it reuses the reports:
+
+- The log tee (`Utils/LogTee.h`) copies every line logged during the capture into `capture.log`.
+- At the start and the end the capture calls `Reports::Flush`, which ends the report window on every clock (`Due`, `Crossing`,
+  `Window`). So `capture.log` begins with the window before the capture (the time leading up to the click). Then comes one
+  window that covers exactly the capture.
+- While it records, `Reports::FullStatistics()` is true, so that window holds the full `CS_DCLF_STATS` report. Counters that are
+  only kept under `CS_DCLF_STATS` (the frame data writes, the MainBuild part timings, the shadow cull counters) stay empty.
+- The actor probe runs at the start and the end (`capture-start`, `capture-end` in `capture.log`).
+- The capture's telemetry phase replaces a running `dclf:telemetry` one.
+
+The bundle:
+
+| File | What it answers |
+|---|---|
+| `manifest.json` | The window's frames and times, and each section's state: ok, skipped or failed and why. |
+| `environment.json` | Build, game runtime, GPU, DXVK or native, DCLF installed / on / faulted / unavailable and why, every switch set, observers left on (a `warning` when any is: they slow the normal path), requested and active toggles, the graph's pipeline and cell kind, uptime and CPU time. |
+| `features.json` | Every CS feature (loaded, version, disabled) and each DCLF integration's status line. |
+| `settings.json` | The whole CS settings (`State::SaveToJson`). |
+| `loadorder.txt`, `location.json` | The plugins in order; the player's cell, worldspace and position (read on the main thread). |
+| `modules.txt` | Every loaded DLL with its file version. |
+| `start/`, `end/` | `snapshot.txt` (the menu's "This frame" lines, the scene executor's queues and `ParallelFor` waits, the integrations, the render-thread growth census), `fades.json` (the fade census), `scene-growth.txt` (the scene lane's growth census) and the VRAM attribution JSON. |
+| `frames.csv` | One row per Present: Present-to-Present ms, DCLF's render-thread µs in the last finished frame, the wait for a scene snapshot, frames since the last scene pass, epochs not ready, the executor's queues by domain, loading, running, CPU pipeline, interior. |
+| `telemetry/` | The BasicTelemetry phase `capture` (frames, scopes, stalls of 2 ms or more). |
+| `capture.log` | Every line logged during the capture, with the two flushed report windows and the actor probes. |
+| `compat.txt` | The compatibility monitor's report, when it is on. |
+| `screenshot.*` | The first frame of the window. |
+| `logs/` | `CommunityShaders.log` (its first 1 MB and last 32 MB), the DXVK logs and device fault dump, `CommunityShaders-DCLF.ini`, `CommunityShaders.env`. |
+
+The text files have the user's profile path replaced with `%USERPROFILE%`.
+
+Reading a capture:
+
+- **Slow frames.** In `frames.csv`, compare `present_ms` with `dclf_render_thread_us` and `adopt_wait_us`. A long Present with
+  little DCLF time is not DCLF's render thread. A growing `scene_lag_frames` or queues that stay full mean the scene work falls
+  behind. In `environment.json`, check `graph.cpuPipeline`, any `observers` and `warning`. Then compare the two growth censuses for
+  containers that grew during the window. `telemetry/capture.stalls.csv` names the scopes that were off the CPU.
+- **See-through actors.** `end/fades.json` lists every root whose fade is below 1, or whose node, mirror and row disagree. Each
+  row has the actor's form ID and name, the three values, the root's bits and generation, the frame of DCLF's last store, and
+  `lastWriter` (the path that last wrote its fade). `totals.refreshNoMirror` counts the fade refreshes dropped because the mirror
+  had no record. The actor probe in `capture.log` adds how each actor's geometry is bound.
 
 ### The periodic report
 
@@ -811,6 +861,7 @@ withheld and drawn by nobody. Before reading parity or timing, check in each run
         done) and `signal:<name>` (a remote client's `dclf:signal=<name>`).
     -   `dclf:define=<NAME>[=<value>],...` adds defines to every DCLF stage compiled from then on (empty: none). With
         `dclf:reload-shaders=<file>` and `dclf:wait=reload` after it, a shader A/B is an `#if` in the source compared in one launch.
+    -   `dclf:capture[=<seconds>]` takes a [diagnostic capture](#the-diagnostic-capture) at the next Present (no Explorer window, nothing on the clipboard).
     -   `dclf:telemetry=<label>` starts a BasicTelemetry session for a phase, and `dclf:telemetry=off` ends the last. Each writes per-Present frame times, scope totals and off-CPU stalls to `<log directory>/dclf-telemetry`, and a frame time summary to the log.
     -   `dclf:mark=<label>` marks a phase's boundary in the log; `dclf:gpu-window=<label>` makes the GPU event timers
         (`CS_GPU_EVENT_TIMERS`, with an interval too large to reach) log the frames from there to the next window as one block,

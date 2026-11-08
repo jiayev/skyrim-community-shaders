@@ -905,6 +905,7 @@ namespace DCLF
 
 	std::shared_ptr<const void> IndirectDraws::AdoptCurrentSnapshot(bool a_wait)
 	{
+		lastAdoptWaitUs = 0;
 		const std::uint64_t postedBefore = impl ? impl->snapshotsPosted.load(std::memory_order_acquire) : 0;
 		auto publication = AdoptSnapshot();
 		auto* host = RenderGraphRuntime::Get().Host();
@@ -1000,6 +1001,7 @@ namespace DCLF
 		}
 		s.frameWaiting.store(false, std::memory_order_release);
 		const double ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+		lastAdoptWaitUs = static_cast<std::uint32_t>((std::min)(ms * 1000.0, 4.0e9));
 		++s.snapshotWaits;
 		s.snapshotWaitMs += ms;
 		s.snapshotWaitMaxMs = std::max(s.snapshotWaitMaxMs, ms);

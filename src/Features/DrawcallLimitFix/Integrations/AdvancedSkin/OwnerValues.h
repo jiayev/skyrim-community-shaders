@@ -28,6 +28,9 @@ namespace DCLF::Integrations::AdvancedSkin
 		/** @brief Whether the slot is an actor's (in a group). */
 		bool Grouped(std::uint32_t slot) const { return slot < slots.size() && slots[slot].group; }
 		void Clear() { groups.clear(); groupIndex.clear(); slots.clear(); }
+		/** @brief The diagnostic capture's sizes: the groups (actors), and the slots indexed. */
+		std::size_t GroupCount() const { return groups.size(); }
+		std::size_t SlotCount() const { return slots.size(); }
 		void Set(std::uint32_t slot, std::uint64_t group, std::uint64_t identity, bool resetValue = false)
 		{
 			if (slots.size() <= slot) slots.resize(std::size_t(slot) + 1);

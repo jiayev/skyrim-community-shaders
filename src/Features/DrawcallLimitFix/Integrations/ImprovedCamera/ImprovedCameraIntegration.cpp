@@ -33,6 +33,15 @@ namespace DCLF::Integrations::ImprovedCamera
 			return player->Get3D(false);
 		}
 
+		// Any thread: whether the plugin is loaded and the late pose is looked for.
+		std::string Status()
+		{
+			const auto& value = SwitchValue(latePoseSwitch);
+			const bool on = value != "0" && (value == "1" || PluginLoaded());
+			return fmt::format("plugin {}, late pose {}{}", PluginLoaded() ? "loaded" : "not loaded", on ? "on" : "off",
+				value.empty() ? "" : fmt::format(" (CS_DCLF_LATE_POSE={})", value));
+		}
+
 		void Install(Api::InstallContext& a_context)
 		{
 			latePoseSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_LATE_POSE", .kind = Api::SwitchKind::Test, .reduced = Api::SwitchReduced::Never,
@@ -43,6 +52,6 @@ namespace DCLF::Integrations::ImprovedCamera
 
 	Api::Feature Integration()
 	{
-		return { "improved camera", &Install };
+		return { .name = "improved camera", .install = &Install, .status = &Status };
 	}
 }

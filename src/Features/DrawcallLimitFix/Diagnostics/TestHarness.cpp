@@ -13,13 +13,14 @@
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Capture/Capture.h"
 #include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/TelemetryProfile.h"
 #include "Features/PostProcessing.h"
 #include "Features/RemoteControl/NvPerf.h"
 #include "Features/ScreenshotFeature.h"
-#include "GpuEventTimers.h"
 #include "Features/Upscaling.h"
+#include "GpuEventTimers.h"
 #include "Globals.h"
 
 #include <Tracy/Tracy.hpp>
@@ -454,6 +455,12 @@ namespace DCLF
 						MemProbe::Mark(command.size() > 10 ? std::string_view(command).substr(10) : std::string_view{}, a_frame);
 						return;
 					}
+					// "dclf:capture[=<seconds>]": the menu's diagnostic capture, started at the next Present (Diagnostics/Capture/Capture.h). Its
+					// telemetry phase replaces a running dclf:telemetry one.
+					if (command == "dclf:capture" || command.rfind("dclf:capture=", 0) == 0) {
+						Capture::Request(command.size() > 13 ? std::strtof(command.c_str() + 13, nullptr) : 10.0f, true);
+						return;
+					}
 					// "dclf:telemetry=<label>": a BasicTelemetry session for this phase, in place of the running one, whose files it writes. "=off": none.
 					if (command.rfind("dclf:telemetry=", 0) == 0) {
 						Diagnostics::TelemetryPhase(std::string_view(command).substr(15));
@@ -467,13 +474,6 @@ namespace DCLF
 						globals::features::screenshotFeature.RequestCapture(dir / (command.substr(10) + ".png"));
 						return;
 					}
-					// "dclf:vram-json": VRAM attribution's snapshot (the menu's Memory dump) written to the log directory.
-					if (command == "dclf:vram-json") {
-						const auto path = Vram::WriteJson(logger::log_directory().value_or(std::filesystem::path{}));
-						logger::info("[DCLF] VRAM attribution written to {}", path.string());
-						return;
-					}
-					if (RunTextureStreamingCommand(command))
 					// "dclf:fg=off|fsr|dlss": frame generation switched as the Upscaling menu's method stepper does (Upscaling::RequestFrameGenTest).
 					if (command.rfind("dclf:fg=", 0) == 0) {
 						const auto method = command.substr(8);
@@ -483,6 +483,13 @@ namespace DCLF
 							logger::warn("[DCLF] dclf:fg: '{}' is not off, fsr or dlss", method);
 						return;
 					}
+					// "dclf:vram-json": VRAM attribution's snapshot (the menu's Memory dump) written to the log directory.
+					if (command == "dclf:vram-json") {
+						const auto path = Vram::WriteJson(logger::log_directory().value_or(std::filesystem::path{}));
+						logger::info("[DCLF] VRAM attribution written to {}", path.string());
+						return;
+					}
+					if (RunTextureStreamingCommand(command))
 						return;
 					// "dclf:pp=<sub-feature type>=0|1": a Post Processing effect's menu toggle (GetType(), e.g. "Depth of Field"), so a run
 					// can check that disabling an effect frees its textures and enabling it creates them again.

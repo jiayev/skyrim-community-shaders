@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 /**
@@ -101,6 +102,9 @@ namespace Vram
 	/** @brief One line (no newline): device-local totals, the largest a_owners owners, and the residuals. */
 	std::string ReportLine(std::size_t a_owners);
 
-	/** @brief Writes the snapshot as JSON (rows, heaps, reconciliation) under a_directory; returns the file, empty on failure. */
-	std::filesystem::path WriteJson(const std::filesystem::path& a_directory);
+	/**
+	 * @brief Writes the snapshot as JSON (rows, heaps, reconciliation) under a_directory, named a_fileName, or a stamped
+	 * CommunityShaders-VRAM-<ms>.json when a_fileName is empty. Returns the file, empty on failure.
+	 */
+	std::filesystem::path WriteJson(const std::filesystem::path& a_directory, std::string_view a_fileName = {});
 }

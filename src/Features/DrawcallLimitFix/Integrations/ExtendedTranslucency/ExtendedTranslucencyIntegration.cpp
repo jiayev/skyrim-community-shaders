@@ -2,6 +2,7 @@
 // permutation's ExtraFeatureDescriptor from them). Both gates read the feature live, as does SkinnedOnly (the join pool).
 
 #include "Features/DrawcallLimitFix/Integrations/ExtendedTranslucency/ExtendedTranslucency.h"
+#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 
 #include "Features/ExtendedTranslucency.h"
@@ -57,6 +58,6 @@ namespace DCLF::Integrations::ExtendedTranslucency
 
 	Api::Feature Integration()
 	{
-		return { "extended translucency", &Install };
+		return { .name = "extended translucency", .install = &Install, .status = [] { return FeatureStatus(globals::features::extendedTranslucency); } };
 	}
 }

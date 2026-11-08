@@ -34,6 +34,7 @@
 #include "Features/DrawcallLimitFix/Api/VertexStreams.h"
 #include "Features/DrawcallLimitFix/Api/Views.h"
 
+#include <string>
 #include <string_view>
 
 namespace DCLF::Api
@@ -333,5 +334,7 @@ namespace DCLF::Api
 		void (*earlyHooks)() = nullptr;
 		void (*sourceHooks)(ShadowSourceHooks& a_hooks) = nullptr;
 		void (*preflight)() = nullptr;
+		/** @brief Optional, any thread: one short line on whether the feature is in use now (the diagnostic capture lists it). */
+		std::string (*status)() = nullptr;
 	};
 }

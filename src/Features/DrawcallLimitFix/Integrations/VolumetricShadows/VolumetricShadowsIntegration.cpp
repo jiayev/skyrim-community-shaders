@@ -1,6 +1,7 @@
 // Volumetric Shadows: its shared shadow map (t18), a frame texture. The render thread's callback reads the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/VolumetricShadows/VolumetricShadows.h"
+#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
 
 #include "Features/VolumetricShadows.h"
 
@@ -27,6 +28,6 @@ namespace DCLF::Integrations::VolumetricShadows
 
 	Api::Feature Integration()
 	{
-		return { "volumetric shadows", &Install };
+		return { .name = "volumetric shadows", .install = &Install, .status = [] { return FeatureStatus(globals::features::volumetricShadows); } };
 	}
 }

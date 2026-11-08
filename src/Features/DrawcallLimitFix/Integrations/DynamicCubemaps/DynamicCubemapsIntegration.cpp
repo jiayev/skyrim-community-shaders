@@ -1,6 +1,7 @@
 // Dynamic Cubemaps: its reflections and environment cubemaps (t30, t31), frame textures. The render thread's callback reads the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/DynamicCubemaps/DynamicCubemaps.h"
+#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
 
 #include "Features/DynamicCubemaps.h"
 
@@ -35,6 +36,6 @@ namespace DCLF::Integrations::DynamicCubemaps
 
 	Api::Feature Integration()
 	{
-		return { "dynamic cubemaps", &Install };
+		return { .name = "dynamic cubemaps", .install = &Install, .status = [] { return FeatureStatus(globals::features::dynamicCubemaps); } };
 	}
 }

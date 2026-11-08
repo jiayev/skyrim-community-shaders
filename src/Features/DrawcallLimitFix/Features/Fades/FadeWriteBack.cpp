@@ -16,6 +16,7 @@
 
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace DCLF::Features::Fades
@@ -31,6 +32,11 @@ namespace DCLF::Features::Fades
 			if (lostLines.fetch_add(1, std::memory_order_relaxed) < 200)
 				logger::info("{}", std::format(a_format, std::forward<A>(a_args)...));
 		}
+		// The diagnostic capture's view of the write-back the last kick ran. The kick sets it, the write-back's destructor clears it, and
+		// the task holds the lock while it judges, so a census reads the per-root frames whole and never a write-back being destroyed.
+		std::mutex censusMutex;
+		std::atomic<FadeWriteBack*> censusWriteBack{ nullptr };
+
 		/** @brief Fades' scene resources in the scene's tables IndirectDraws keeps (null: none made yet, or no fade program). */
 		FadeScene* CurrentScene()
 		{
@@ -51,6 +57,7 @@ namespace DCLF::Features::Fades
 		std::unique_ptr<FadeWriteBack::Stores> stores{ writeBack.ready.exchange(nullptr, std::memory_order_acq_rel) };
 		if (!stores)
 			return;
+		writeBack.readyStores.store(0, std::memory_order_relaxed);
 		// DCLF is not running (the engine culls every root this frame), or their publication was released all the same (stores made
 		// without its node: a defect; the next stores come from the installed one).
 		if (!a_live || !EngineReleases::Alive(stores->publication)) {
@@ -116,6 +123,11 @@ namespace DCLF::Features::Fades
 		if (!fades || !fades->fadeWriteBack)
 			return;
 		auto& writeBack = *fades->fadeWriteBack;
+		// The census reads this write-back from now on (a lock only when the scene's write-back changed).
+		if (censusWriteBack.load(std::memory_order_relaxed) != &writeBack) {
+			std::lock_guard lock(censusMutex);
+			censusWriteBack.store(&writeBack, std::memory_order_relaxed);
+		}
 		// One task at a time; a running one (or the next) takes the new batches.
 		if (bool idle = false; !writeBack.running.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
 			writeBack.busy.fetch_add(1, std::memory_order_relaxed);
@@ -134,12 +146,15 @@ namespace DCLF::Features::Fades
 			std::vector<FadeWriteBack::Batch*> batches;
 			for (auto* batch = state.batches.exchange(nullptr, std::memory_order_acquire); batch; batch = batch->next)
 				batches.push_back(batch);
+			state.pendingBatches.fetch_sub(batches.size(), std::memory_order_relaxed);
 			std::reverse(batches.begin(), batches.end());
 			std::stable_sort(batches.begin(), batches.end(), [](const auto* a_a, const auto* a_b) { return a_a->frame < a_b->frame; });
 			auto stores = std::make_unique<FadeWriteBack::Stores>();
 			stores->tables = tables;
 			stores->publication = publication;
 			stores->retirement = retirement;
+			// Held while appliedFrame is read and grown: the census copies it whole (uncontended outside a capture).
+			std::unique_lock censusLock(censusMutex);
 			for (auto* batch : batches) {
 				for (const auto& event : batch->events) {
 					if (!tables)
@@ -163,6 +178,7 @@ namespace DCLF::Features::Fades
 				}
 				delete batch;
 			}
+			censusLock.unlock();
 			// Stores an earlier task found that no Main::Update entry has made yet go first.
 			if (std::unique_ptr<FadeWriteBack::Stores> earlier{ state.ready.exchange(nullptr, std::memory_order_acq_rel) }) {
 				earlier->stores.insert(earlier->stores.end(), stores->stores.begin(), stores->stores.end());
@@ -171,8 +187,10 @@ namespace DCLF::Features::Fades
 				earlier->publication = std::min(earlier->publication, stores->publication);
 				stores = std::move(earlier);
 			}
-			if (!stores->stores.empty())
+			if (!stores->stores.empty()) {
+				state.readyStores.store(stores->stores.size(), std::memory_order_relaxed);
 				state.ready.store(stores.release(), std::memory_order_release);
+			}
 			state.running.store(false, std::memory_order_release);
 			state.running.notify_all();
 		};
@@ -191,8 +209,44 @@ namespace DCLF::Features::Fades
 			running.wait(true, std::memory_order_acquire);
 		// Teardown, toggle or load: what it found is dropped (the roots may no longer stand in).
 		std::unique_ptr<FadeWriteBack::Stores> dropped{ fades->fadeWriteBack->ready.exchange(nullptr, std::memory_order_acq_rel) };
+		fades->fadeWriteBack->readyStores.store(0, std::memory_order_relaxed);
 		if (dropped)
 			for (const auto& store : dropped->stores)
 				LogLost("[DCLF] fade write-back: store dropped (write-back wait): node {} fade {:.3f}", store.node, store.fade);
+	}
+
+	void ForgetWriteBackCensus(const FadeWriteBack* a_writeBack)
+	{
+		std::lock_guard lock(censusMutex);
+		if (censusWriteBack.load(std::memory_order_relaxed) == a_writeBack)
+			censusWriteBack.store(nullptr, std::memory_order_relaxed);
+	}
+
+	WriteBackCensus PeekWriteBackCensus(bool a_frames)
+	{
+		WriteBackCensus census;
+		std::lock_guard lock(censusMutex);
+		const auto* writeBack = censusWriteBack.load(std::memory_order_relaxed);
+		if (!writeBack)
+			return census;
+		const auto& w = *writeBack;
+		census.present = true;
+		census.applied = w.applied.load(std::memory_order_relaxed);
+		census.stale = w.stale.load(std::memory_order_relaxed);
+		census.busy = w.busy.load(std::memory_order_relaxed);
+		census.notWritten = w.notWritten.load(std::memory_order_relaxed);
+		census.dropped = w.dropped.load(std::memory_order_relaxed);
+		census.harvested = w.harvested.load(std::memory_order_relaxed);
+		census.harvestedWithEvents = w.harvestedWithEvents.load(std::memory_order_relaxed);
+		census.events = w.events.load(std::memory_order_relaxed);
+		census.overflowed = w.overflowed.load(std::memory_order_relaxed);
+		census.missed = w.missed.load(std::memory_order_relaxed);
+		census.setsAdded = w.setsAdded.load(std::memory_order_relaxed);
+		census.pendingBatches = w.pendingBatches.load(std::memory_order_relaxed);
+		census.readyStores = w.readyStores.load(std::memory_order_relaxed);
+		census.appliedFrameSize = w.appliedFrame.size();
+		if (a_frames)
+			census.appliedFrame = w.appliedFrame;
+		return census;
 	}
 }

@@ -428,7 +428,7 @@ namespace DCLF::Reports
 				reg = {};
 				rp = {};
 			}
-			if (!Diagnostics::Observe().stats) {
+			if (!FullStatistics()) {
 				s.ResetTimes();
 				return;
 			}
