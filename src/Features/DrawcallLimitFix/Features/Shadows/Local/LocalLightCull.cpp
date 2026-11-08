@@ -176,6 +176,8 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 			std::atomic<std::uint64_t> lights{ 0 }, notCovered{ 0 }, portalStrict{ 0 }, given{ 0 }, withBits{ 0 }, unstamped{ 0 };
 			// Covered lights culled for the engine-only subset alone (Scene/EngineCasters.h), not empty.
 			std::atomic<std::uint64_t> subset{ 0 };
+			// Lights culled empty a frame early: their views not made yet (a newly selected light), so no shadow until they are.
+			std::atomic<std::uint64_t> late{ 0 };
 			// The spot lights' of these: culled empty, with a view not DCLF's, portal-strict kept native.
 			std::atomic<std::uint64_t> spots{ 0 }, spotsNotCovered{ 0 }, spotsStrict{ 0 };
 			std::atomic<std::uint64_t> spheresChecked{ 0 }, spheresDiffer{ 0 };
@@ -629,17 +631,23 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 				covered = covered && view.kind == kind && view.covered && PassCapture::Get().CastersForBatch(view.batch);
 			}
 			auto* accumulator = descriptors.empty() ? nullptr : descriptors[0].shaderAccumulator.get();
-			if (!covered || views < descriptors.size() || !accumulator || !frameLights[a_ordinal].predicted) {
+			// No accumulator or no predicted planes: nothing to give its bits by, the engine's cull as it is.
+			if (!accumulator || !frameLights[a_ordinal].predicted) {
 				(spot ? emptyStats.spotsNotCovered : emptyStats.notCovered).fetch_add(1, std::memory_order_relaxed);
 				return LightCull::Engine;
 			}
+			// A light whose views DCLF has not made yet (newly selected: usually the next frame's) is not handed to the engine's whole cull:
+			// it casts no shadow until they exist, as a caster not yet a member casts none until it joins. Culled empty below.
+			const bool late = !covered || views < descriptors.size();
+			if (late)
+				emptyStats.late.fetch_add(1, std::memory_order_relaxed);
 			// Portal-strict: its cull's rooms, shared nodes and room frusta are DCLF's strict gates (Portals/StrictGates.h), on its views'
 			// casters (BuildDrawsLatch::strictContext), DCLF's receivers (GpuShadowVolume::portalContext) and the engine's receivers' bits
 			// (StrictAdmits), always: no switch hands a portal-strict light back to the engine's whole cull.
 			if (Engine::At<bool>(&a_light, kLightPortalStrict))
 				emptyStats.strictLights.fetch_add(1, std::memory_order_relaxed);
 			// A caster that stays the engine's has only the engine's cull to draw its shadow: the light's Accumulate culls the subset.
-			if (const auto& subset = Scene::FrameView::Get().GetEngineCasters(); subset && !subset->Of(Scene::EngineOnlySubset::kCaster).roots.empty()) {
+			if (const auto& subset = Scene::FrameView::Get().GetEngineCasters(); !late && subset && !subset->Of(Scene::EngineOnlySubset::kCaster).roots.empty()) {
 				emptyStats.subset.fetch_add(1, std::memory_order_relaxed);
 				return LightCull::Subset;
 			}
@@ -922,8 +930,10 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		}
 		const bool whole = next && !Policy::FilterLightCulls(a_frame);
 		cullsWhole.store(whole, std::memory_order_relaxed);
-		// The empty culls with the exclusion live (the mode's casters withheld, its candidates current) and not on a parity frame.
-		frameCullsEmpty.store(next && !whole, std::memory_order_relaxed);
+		// The empty culls whenever the mode's casters are withheld and the frame is no parity frame, exclusion or not: an empty cull's bits
+		// are the lights' spheres (NoteMainRegistration), and the exclusion is only what a light the engine culls skips. A frame without one
+		// (a cell change, stale candidates) is not handed to the engine's whole culls.
+		frameCullsEmpty.store(Policy::FilterLightCulls(a_frame) && PassCapture::Get().CastersWithheld(kSetCasterPoint), std::memory_order_relaxed);
 		// The spot lights' need no exclusion (their casters are the plain and clamped set's): every frame those are withheld, but a parity one.
 		frameSpotsEmpty.store(Policy::FilterLightCulls(a_frame) && PassCapture::Get().CastersWithheld(kSetCaster), std::memory_order_relaxed);
 		frameParity.store(!Policy::FilterLightCulls(a_frame), std::memory_order_relaxed);
@@ -1048,6 +1058,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		c.emptyLights = e.lights.exchange(0), c.emptyNotCovered = e.notCovered.exchange(0), c.emptyPortalStrict = e.portalStrict.exchange(0);
 		c.emptyGiven = e.given.exchange(0), c.emptyWithBits = e.withBits.exchange(0), c.emptyUnstamped = e.unstamped.exchange(0);
 		c.emptySubset = e.subset.exchange(0);
+		c.emptyLate = e.late.exchange(0);
 		c.emptySpots = e.spots.exchange(0), c.spotsNotCovered = e.spotsNotCovered.exchange(0), c.spotsStrict = e.spotsStrict.exchange(0);
 		c.spotCalls = spotCalls.exchange(0), c.spotTicks = spotTicks.exchange(0);
 		c.spheresChecked = e.spheresChecked.exchange(0), c.spheresDiffer = e.spheresDiffer.exchange(0);

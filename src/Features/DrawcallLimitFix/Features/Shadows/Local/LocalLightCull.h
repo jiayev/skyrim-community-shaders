@@ -73,6 +73,7 @@ namespace DCLF::Features::Shadows::Local
 			// their bits (with one), without a slot in the frame's set; parity spheres checked against the cull's, and differing.
 			std::uint64_t emptyLights = 0, emptyNotCovered = 0, emptyPortalStrict = 0, emptyGiven = 0, emptyWithBits = 0, emptyUnstamped = 0;
 			std::uint64_t emptySubset = 0;  // covered lights culled for the engine-only subset alone (Scene/EngineCasters.h)
+			std::uint64_t emptyLate = 0;    // lights culled empty before DCLF made their views (no shadow that frame)
 			std::uint64_t spheresChecked = 0, spheresDiffer = 0;
 			// The spot lights' Accumulate (timed); culled empty, and not: a view not DCLF's, portal-strict kept native.
 			std::uint64_t spotCalls = 0, emptySpots = 0, spotsNotCovered = 0, spotsStrict = 0;

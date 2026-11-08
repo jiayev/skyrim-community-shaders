@@ -4,6 +4,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
 #include <array>
 #include <atomic>
@@ -104,7 +105,8 @@ namespace DCLF::EngineOnlyCull
 			return;
 		wholeCulls[i].fetch_add(1, std::memory_order_relaxed);
 		if (!wholeWarned[i].exchange(true, std::memory_order_relaxed))
-			logger::warn("[DCLF] the engine culled a view whole ({}): DCLF does not cover it yet (counted in the primary cull's report lines)", kWholeCullNames[i]);
+			logger::warn("[DCLF] the engine culled a view whole ({}) at scene frame {}, loading screen {}: DCLF does not cover it yet (counted in the primary cull's report lines)",
+				kWholeCullNames[i], Scene::FrameView::Get().GetFrame(), Scene::FrameView::IsLoadingScreenUp() ? "up" : "down");
 	}
 
 	std::string WholeCullLine()
