@@ -451,6 +451,28 @@ loaded, and the menu explains why:
 The cache's per-light `LocalShadow` flag, its `FirstPerson` / `WorldEyePosition` StrictLightData words and its
 `LocalShadowData` buffer are untested under DCLF. DCLF's own StrictLightData supplies only `RoomIndex` and `ShadowBitMask`.
 
+## Shadow lights past the light mask's 32 are culled whole by the engine
+
+A frame's shadow-casting point and spot lights are numbered as their `Accumulate` runs (`LocalLightCull`'s `TakeOrdinal`). DCLF
+tracks a light's bits in a 32-bit mask, so a light past the 32nd gets no ordinal: no empty cull, no engine-only subset, and the
+engine culls the whole scene for it (`EngineOnlyCull::WholeCull::PointPastMask` / `SpotPastMask`, counted in the primary cull's
+report as `<- WHOLE ENGINE CULL`). It is the last light case without coverage. None was counted in the 2026-11-08 runs (Riverwood,
+Dragonsreach, Whiterun); the point lights' line counts them as "past the mask's 32", which only showed before DCLF ran.
+**Next:** a scene with more than 32 shadow lights in one frame (heavily lit interiors, light mods); then either widen the mask
+(the bits' consumers: `NoteMainRegistration`, `SphereBits`, the accumulators' light bit) or give such a light DCLF's views and
+an empty cull without a bit of its own.
+
+## Engine-only shadow casters cost the light culls about as much as a whole cull
+
+Measured 2026-11-08 in Dragonsreach (Dev-Fast, two point and two spot lights), with every actor's skins left to the engine
+(`dclf:skin partitions=0`). Point lights' `Accumulate` was 42-47 ms per 600 calls with the engine-only subset, 45-54 with the
+whole engine cull, under 1 with empty culls; spot lights 37-45, 36-46 and under 1. The subset walk itself is cheap; nearly all
+of it is the engine registering the engine-only casters into each light. In normal play no caster was engine-only in those
+scenes, so the cost only appears where something is: a skin over DCLF's limits, a buffer DXVK cannot import, or another lasting
+refusal (`Eligibility::EngineCasterReason`). **Next:** find which shapes are engine-only in users' load orders (the log's first
+16 `'...' stays the engine's (<reason>, ...)` lines, and `skin shape left to the engine` for skins), and fix the reason DCLF
+refuses each, so they join instead of being registered by the engine every frame.
+
 ## Outside DCLF
 
 -   **SE 1.5.97: legacy FullScreenBlur adapters are not installed.** Every SE 1.5.97 run logs "Legacy FullScreenBlur stage-count
