@@ -501,6 +501,9 @@ struct RenderGraphRuntime::Impl
 	std::unique_ptr<org::contributor::ContributorHost> contributors;
 	rhi::PipelineLayoutPtr contributorLayout;  // the pipeline service's layout: bindless, 16 root constants
 	std::shared_ptr<rhi::TimelinePtr> frameWaitTimeline;  // FrameWaitTimeline
+	// Any timeline of the device, kept for NativeTimelinePoint: a timeline handle resolves through a Timeline's device and table.
+	// The frame-wait timeline cannot serve: it exists only with an upload queue, which a device with no transfer family lacks.
+	rhi::TimelinePtr nativeTimelines;
 	std::atomic<bool> faulted = false;
 
 	// The thread that drives the D3D11 immediate context (the one running epochs).
@@ -1649,6 +1652,8 @@ bool RenderGraphRuntime::Initialize()
 		!state->copyQueue ? std::string("shared with graphics") : state->copyQueue == state->uploadQueue ? std::string("shared with upload") : fmt::format("{}:{}", info.copyQueueFamily, info.copyQueueIndex));
 	if (rhi::vulkan::AdoptVulkanDevice(adopt, *state->device) != rhi::Result::Ok || !*state->device)
 		return disable("BasicRHI could not adopt DXVK's Vulkan device");
+	if ((*state->device)->CreateTimeline(state->nativeTimelines, 0, "CS native timeline lookup") != rhi::Result::Ok || !state->nativeTimelines)
+		return disable("BasicRHI could not create a timeline on DXVK's Vulkan device");
 
 	try {
 		org::GraphHost::Desc desc{};
@@ -1901,6 +1906,7 @@ void RenderGraphRuntime::Shutdown()
 	} catch (const std::exception& e) {
 		logger::error("[ORG] Runtime shutdown failed: {}", e.what());
 	}
+	state->nativeTimelines.Reset();
 	// Non-owning: BasicRHI never destroys the adopted VkDevice.
 	state->device.reset();
 	disabledReason = "shut down";
@@ -2562,11 +2568,11 @@ bool RenderGraphRuntime::EmitExternalCommands(void (*a_record)(void* a_user, VkC
 
 RenderGraphRuntime::ExternalCommandsWait RenderGraphRuntime::NativeTimelinePoint(const rhi::TimelinePoint& a_point)
 {
-	const auto timeline = Get().FrameWaitTimeline();
+	const auto& runtime = Get();
 	rhi::Timeline object(a_point.t);
-	if (timeline && *timeline) {
-		object.impl = timeline->Get().impl;
-		object.vt = timeline->Get().vt;
+	if (runtime.IsActive() && runtime.impl->nativeTimelines) {
+		object.impl = runtime.impl->nativeTimelines.Get().impl;
+		object.vt = runtime.impl->nativeTimelines.Get().vt;
 	}
 	rhi::VulkanTimelineInfo info{};
 	if (!object || !rhi::QueryNativeTimeline(object, rhi::RHI_IID_VK_TIMELINE, &info, sizeof(info)))
