@@ -23,6 +23,14 @@ namespace DCLF::Features::Fades
 	void PreflightWriters();
 	// FadeEvents.cpp: the feature's early hook (FadeSnap).
 	void InstallEarlyHooks();
+	/**
+	 * @brief FadeEvents.cpp, render thread (the seeds' frame start): a newly seeded actor root's fadeAmount taken again, as a SetAlpha
+	 * event is (the mirror's value from the node now, then RefreshFadeAmount on the listed row). Actor::UpdateAlpha ramps an actor's
+	 * fadeAmount over the frames after a cell load; a listing may take the mirror's value from a capture made mid-ramp, and the ramp's
+	 * events drained before the listing name no root. Without this the row keeps the partial value, and DCLF draws the actor
+	 * translucent until it is listed again.
+	 */
+	void RecheckFadeAmount(RE::NiAVObject* a_node);
 	// Diagnostics/: the report lines, the parity and the port check.
 	void RegisterDiagnostics(Api::InstallContext& a_context);
 

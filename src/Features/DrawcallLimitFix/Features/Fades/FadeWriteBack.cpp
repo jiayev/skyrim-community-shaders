@@ -22,6 +22,15 @@ namespace DCLF::Features::Fades
 {
 	namespace
 	{
+		// Each lost store or event named (the first 200): the GPU counts a milestone reported once it is in the list, so a lost one is never
+		// sent again and its node keeps the fade it had (a stuck partial fade until the root is listed again).
+		std::atomic<int> lostLines{ 0 };
+		template <class... A>
+		void LogLost(std::format_string<A...> a_format, A&&... a_args)
+		{
+			if (lostLines.fetch_add(1, std::memory_order_relaxed) < 200)
+				logger::info("{}", std::format(a_format, std::forward<A>(a_args)...));
+		}
 		/** @brief Fades' scene resources in the scene's tables IndirectDraws keeps (null: none made yet, or no fade program). */
 		FadeScene* CurrentScene()
 		{
@@ -45,6 +54,8 @@ namespace DCLF::Features::Fades
 		// DCLF is not running (the engine culls every root this frame), or their publication was released all the same (stores made
 		// without its node: a defect; the next stores come from the installed one).
 		if (!a_live || !EngineReleases::Alive(stores->publication)) {
+			for (const auto& store : stores->stores)
+				LogLost("[DCLF] fade write-back: store dropped ({}): node {} fade {:.3f}", a_live ? "publication released" : "not live", store.node, store.fade);
 			writeBack.dropped.fetch_add(stores->stores.size(), std::memory_order_relaxed);
 			return;
 		}
@@ -53,6 +64,7 @@ namespace DCLF::Features::Fades
 		std::uint64_t applied = 0, notWritten = 0;
 		for (const auto& store : stores->stores) {
 			if (!a_written(store.node)) {
+				LogLost("[DCLF] fade write-back: store dropped (not written by DCLF): node {} fade {:.3f}", store.node, store.fade);
 				++notWritten;
 				continue;
 			}
@@ -137,6 +149,10 @@ namespace DCLF::Features::Fades
 					// Only a root still DCLF's to write (same generation, kFadeRootWritten), and never an event older than the last taken.
 					if (event.root >= list.rows.size() || list.rows[event.root].generation != event.generation ||
 						!(list.rows[event.root].bits & kFadeRootWritten) || !list.nodes[event.root] || batch->frame < state.appliedFrame[event.root]) {
+						LogLost("[DCLF] fade write-back: event stale: root {} gen {} (list {} rows, row gen {}, written {}, node {}), frame {} applied {}, fade {:.3f}", event.root,
+							event.generation, list.rows.size(), event.root < list.rows.size() ? list.rows[event.root].generation : 0u,
+							event.root < list.rows.size() && (list.rows[event.root].bits & kFadeRootWritten) != 0, event.root < list.rows.size() ? list.nodes[event.root] : nullptr,
+							batch->frame, state.appliedFrame[event.root], event.currentFade);
 						state.stale.fetch_add(1, std::memory_order_relaxed);
 						continue;
 					}
@@ -174,6 +190,9 @@ namespace DCLF::Features::Fades
 		while (running.load(std::memory_order_acquire))
 			running.wait(true, std::memory_order_acquire);
 		// Teardown, toggle or load: what it found is dropped (the roots may no longer stand in).
-		delete fades->fadeWriteBack->ready.exchange(nullptr, std::memory_order_acq_rel);
+		std::unique_ptr<FadeWriteBack::Stores> dropped{ fades->fadeWriteBack->ready.exchange(nullptr, std::memory_order_acq_rel) };
+		if (dropped)
+			for (const auto& store : dropped->stores)
+				LogLost("[DCLF] fade write-back: store dropped (write-back wait): node {} fade {:.3f}", store.node, store.fade);
 	}
 }

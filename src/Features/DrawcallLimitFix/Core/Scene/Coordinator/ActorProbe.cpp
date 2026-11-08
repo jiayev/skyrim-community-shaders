@@ -4,6 +4,7 @@
 
 #include "Internal.h"
 
+#include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Diagnostics/ShadowMaskProbe.h"
 
 #include <map>
@@ -51,13 +52,29 @@ namespace DCLF::Scene
 		std::vector<std::pair<std::uint32_t, std::string>> shadowProbe;
 		std::map<std::uint32_t, ActorSummary> actors;
 		std::uint32_t wrongTotal = 0;
+		// The root row's fadeAmount (what FadeStateCS steps amountFade toward) against the node's and the mirror's.
+		const auto rootList = Extensions::RootListOf(tables);
 		for (auto& [geometry, entry] : tracked) {
 			const bool face = entry.entryClass == Api::EntryClass::FaceShape;
 			if (!face && entry.owner.ownerClass != Api::EntryClass::ActorOwned)
 				continue;
 			const std::uint32_t formId = entry.ownerReference ? entry.ownerReference->GetFormID() : 0u;
 			auto& actor = actors[formId];
-			++actor.entries;
+			if (++actor.entries == 1 && entry.ownerReference) {
+				if (auto* root = entry.ownerReference->Get3D(); root && rootList.index) {
+					const float nodeAmount = Engine::At<float>(root, 0x100);
+					const auto* rec = mirror.Node(root);
+					const auto it = rootList.index->find(root);
+					const bool listed = it != rootList.index->end() && it->second < rootList.rows.size();
+					const float rowAmount = listed ? rootList.rows[it->second].fadeAmount : -1.0f;
+					if ((listed && rowAmount != nodeAmount) || (rec && rec->fadeAmount != nodeAmount) || nodeAmount != 1.0f) {
+						++wrongTotal;
+						actor.wrong.push_back(std::format("fadeAmount differs: node {:.3f} (+0x140 {:.3f}, +0x130 {:.3f}), mirror {}, root row {} (listed {}, gen {})", nodeAmount,
+							Engine::At<float>(root, 0x140), Engine::At<float>(root, 0x130), rec ? std::format("{:.3f}", rec->fadeAmount) : std::string("none"),
+							listed ? std::format("{:.3f}", rowAmount) : std::string("-"), listed, listed ? rootList.rows[it->second].generation : 0u));
+					}
+				}
+			}
 			actor.faces += face ? 1u : 0u;
 			// The live bound (FrameValues samples it into the placement row: the cull's and the shadow lights' test) against the
 			// geometry's own transform and model bound and its actor's position (engine reads, diagnostics only).

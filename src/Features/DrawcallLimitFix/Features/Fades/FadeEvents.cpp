@@ -66,6 +66,12 @@ namespace DCLF::Features::Fades
 		}
 	}
 
+	void RecheckFadeAmount(RE::NiAVObject* a_node)
+	{
+		if (a_node && a_node->AsFadeNode())
+			PushFadeAmount(a_node);
+	}
+
 	void RegisterEngine(Api::InstallContext& a_context, Api::EngineChannelId& a_snaps, Api::EngineChannelId& a_amounts)
 	{
 		// Drained and applied where Core's were: snaps, then amounts, before the property events (the other BeforeStructural channels

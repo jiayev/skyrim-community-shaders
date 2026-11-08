@@ -3,6 +3,7 @@
 // FrameValues' producer; FadeStateCS and the builds read them as the cull binding RootSeeds.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadesInternal.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
@@ -78,6 +79,9 @@ namespace DCLF::Features::Fades
 			for (auto& seed : seeds) {
 				if (!seed.node)
 					continue;
+				// An actor's root: its fadeAmount taken again now that it is listed (RecheckFadeAmount).
+				if (const auto* reference = seed.node->GetUserData(); reference && reference->IsActor())
+					RecheckFadeAmount(seed.node.get());
 				auto& copy = unsentSeeds.emplace_back();
 				std::memcpy(copy.bytes.data(), seed.node.get(), FadeState::NodeBytes(FadeState::PlanOf(*seed.node)));
 				copy.node = std::move(seed.node);
