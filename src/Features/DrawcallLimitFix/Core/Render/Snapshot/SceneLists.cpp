@@ -3,6 +3,7 @@
 // since) and the volatile lanes (rebuilt every set), their persistent sequences in an append-only store.
 
 #include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatchesInternal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
@@ -288,7 +289,7 @@ namespace DCLF::Draws::detail
 
 	void SceneLists::State::Compact(const ViewBatchInputs& a_in, const Direct::SnapshotSpheres* a_spheres, ListBuilder& a_builder, SequenceSink& a_sink)
 	{
-		ZoneScopedN("CS.DCLF.SceneLists.Compact");
+		DCLF_ZONE("CS.DCLF.SceneLists.Compact");
 		const auto start = Clock::now();
 		base = std::make_shared<BaseLists>();
 		args = std::make_shared<Direct::ArgsChunks>();
@@ -430,7 +431,7 @@ namespace DCLF::Draws::detail
 
 	bool SceneLists::State::Update(const ViewBatchInputs& a_in, const Direct::SnapshotSpheres* a_spheres, ListBuilder& a_builder, SequenceSink& a_sink)
 	{
-		ZoneScopedN("CS.DCLF.SceneLists.Update");
+		DCLF_ZONE("CS.DCLF.SceneLists.Update");
 		const auto& view = RegionOf(a_in);
 		const std::size_t oldCount = region.Count(), newCount = view.Count();
 		// The region's changed entries: an index whose bytes changed (an entry written, or one moved into a removal's hole) had the old
@@ -533,7 +534,7 @@ namespace DCLF::Draws::detail
 	std::shared_ptr<Direct::ViewBatchSet> SceneLists::State::Assemble(const ViewBatchInputs& a_in, const Direct::SnapshotSpheres* a_spheres, ListBuilder& a_builder,
 		SequenceSink& a_volatileSink)
 	{
-		ZoneScopedN("CS.DCLF.SceneLists.Assemble");
+		DCLF_ZONE("CS.DCLF.SceneLists.Assemble");
 		const auto& b = *base;
 		auto set = std::make_shared<Direct::ViewBatchSet>();
 		set->lanes = b.lanes;
@@ -639,7 +640,7 @@ namespace DCLF::Draws::detail
 	std::shared_ptr<Direct::ViewBatchSet> SceneLists::Make(const ViewBatchInputs& a_in, const std::shared_ptr<const Direct::SnapshotSpheres>& a_spheres, std::uint64_t a_write,
 		SequencesUpload& a_upload)
 	{
-		ZoneScopedN("CS.DCLF.SceneLists");
+		DCLF_ZONE("CS.DCLF.SceneLists");
 		if (!a_in.tables || !a_in.payload || (!a_in.main && !a_in.shadow))
 			return nullptr;
 		const auto start = Clock::now();
@@ -858,7 +859,7 @@ namespace DCLF::Draws::detail
 	std::size_t CompareSets(const SceneLists& a_lists, const Direct::ViewBatchSet& a_incremental, const Direct::ViewBatchSet& a_full,
 		const std::vector<DrawSequence>& a_fullSequences, const ViewBatchInputs& a_in)
 	{
-		ZoneScopedN("CS.DCLF.SceneLists.Check");
+		DCLF_ZONE("CS.DCLF.SceneLists.Check");
 		static std::atomic<std::uint32_t> logged{ 0 };
 		std::vector<LaneKey> mine, theirs;
 		std::size_t differ = 0;

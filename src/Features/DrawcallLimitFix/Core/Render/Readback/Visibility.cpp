@@ -4,6 +4,7 @@
 // The <- ACCUMULATED observer against the engine's bit runs only under CS_DCLF_ACCUMULATED_PARITY.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/EntrySpaceTable.h"
@@ -848,7 +849,7 @@ namespace DCLF
 		 */
 		Readback::Writes* PrepareWrites(Readback& a_readback, VisibilityDecode& a_decode, const Readback::Batch& a_newest, bool a_reset)
 		{
-			ZoneScopedN("CS.DCLF.VisibilityPrepare");
+			DCLF_ZONE("CS.DCLF.VisibilityPrepare");
 			const auto start = std::chrono::steady_clock::now();
 			const auto& tables = *a_newest.tables;
 			const std::uint32_t cut = a_readback.cutFrame.load(std::memory_order_acquire);
@@ -1188,7 +1189,7 @@ namespace DCLF
 			auto samples = std::make_shared<std::vector<std::unique_ptr<Diagnostics::Accumulated::Sample>>>(Diagnostics::Accumulated::TakeSamples(batches.back()->frame));
 			readback.samplesUnmatched.fetch_add(Diagnostics::Accumulated::DropSamples(oldestPending), std::memory_order_relaxed);
 			auto decode = [readback = a_readback, batches = std::move(batches), holder = std::move(samples)] {
-				ZoneScopedN("CS.DCLF.VisibilityDecode");
+				DCLF_ZONE("CS.DCLF.VisibilityDecode");
 				const auto& samples = *holder;
 				auto& state = DecodeOf(*readback);
 				const auto start = std::chrono::steady_clock::now();

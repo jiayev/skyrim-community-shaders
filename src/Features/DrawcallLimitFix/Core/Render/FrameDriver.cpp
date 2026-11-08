@@ -1,6 +1,7 @@
 // FrameDriver: the render thread's DCLF work at each engine point of the frame (see the header).
 
 #include "Features/DrawcallLimitFix/Core/Render/FrameDriver.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Deferred.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -100,7 +101,7 @@ namespace DCLF
 		ScopedPerfEvent event("CS DCLF: scene tables");
 		// The frame number, the frame's globals captured and the frame inputs posted (an engine capture: the budget's scene captures).
 		{
-			ZoneScopedN("CS.DCLF.BF.ViewBeginFrame");
+			DCLF_ZONE("CS.DCLF.BF.ViewBeginFrame");
 			RenderThreadBudget::Part captures(RenderThreadBudget::Bucket::SceneCaptures);
 			view.BeginFrame();
 		}
@@ -130,7 +131,7 @@ namespace DCLF
 			TracyCZoneEnd(bfAdoptSnapshot);
 			view.HandOverAtFrameStart(std::move(adopted));
 			{
-				ZoneScopedN("CS.DCLF.BF.SyncFrameTables");
+				DCLF_ZONE("CS.DCLF.BF.SyncFrameTables");
 				view.SyncFrameTables();
 			}
 		}
@@ -149,7 +150,7 @@ namespace DCLF
 		draws.PostLookupInputs();
 		TracyCZoneEnd(bfViewsStart);
 		{
-			ZoneScopedN("CS.DCLF.BF.Claims");
+			DCLF_ZONE("CS.DCLF.BF.Claims");
 			// The claims are installed on every covered frame. Before the first (NotDrawingYet: tables, resources and the first revision
 			// being made) a frame has none, and the engine draws everything; after it, DCLF never hands drawing back: the frame waited for
 			// a snapshot it can draw from (AdoptCurrentSnapshot), so one it does not cover is a defect, reported with the coverage state
@@ -179,17 +180,17 @@ namespace DCLF
 		FrameValues::Get().SetRootViewClaims(rootViewsCovered ? view.FrameClaims() : nullptr);
 		// What the next builds ahead take from the frame.
 		{
-			ZoneScopedN("CS.DCLF.BF.PostAheadContext");
+			DCLF_ZONE("CS.DCLF.BF.PostAheadContext");
 			draws.PostAheadContext();
 		}
 		// The root states' task (Features/Fades' write-back of the stood-in roots) and the visibility readbacks: tasks on DCLF's executor,
 		// never joined.
 		{
-			ZoneScopedN("CS.DCLF.BF.RootStatesKick");
+			DCLF_ZONE("CS.DCLF.BF.RootStatesKick");
 			Extensions::RootStatesKick();
 		}
 		{
-			ZoneScopedN("CS.DCLF.BF.KickVisibilityReadback");
+			DCLF_ZONE("CS.DCLF.BF.KickVisibilityReadback");
 			draws.KickVisibilityReadback();
 		}
 		TracyCZoneEnd(bfKicks);
@@ -204,25 +205,25 @@ namespace DCLF
 		// The shadow sources' frame start, in source order (Features/Shadows/Local's point-light culls: this frame's paraboloid exclusion).
 		TracyCZoneN(bfFamilies, "CS.DCLF.BF.SourcesAndFamilies", true);
 		{
-			ZoneScopedN("CS.DCLF.BF.ShadowSourcesFrameStart");
+			DCLF_ZONE("CS.DCLF.BF.ShadowSourcesFrameStart");
 			Extensions::ShadowSourcesFrameStart(view.GetFrame());
 		}
 		{
-			ZoneScopedN("CS.DCLF.BF.RefreshMainRenderers");
+			DCLF_ZONE("CS.DCLF.BF.RefreshMainRenderers");
 			PassCapture::Get().RefreshMainRenderers();
 		}
 		// The draw families' for the frame (Features/TreeLod's), before the main camera's cull registers its passes; the views' work after
 		// it (Features/Reflection's: the water reflection's forward pipelines).
 		{
-			ZoneScopedN("CS.DCLF.BF.DecideDrawFamilies");
+			DCLF_ZONE("CS.DCLF.BF.DecideDrawFamilies");
 			draws.DecideDrawFamilies(view.GetFrame());
 		}
 		{
-			ZoneScopedN("CS.DCLF.BF.ViewWorkAfterTreeLod");
+			DCLF_ZONE("CS.DCLF.BF.ViewWorkAfterTreeLod");
 			RunViewWork(Api::ViewPoint::FrameStartAfterTreeLod);
 		}
 		{
-			ZoneScopedN("CS.DCLF.BF.PublishListFilter");
+			DCLF_ZONE("CS.DCLF.BF.PublishListFilter");
 			PrimaryCull::Get().PublishListFilter();
 		}
 		TracyCZoneEnd(bfFamilies);
@@ -232,7 +233,7 @@ namespace DCLF
 		// built and GPU ready before it was posted), named for the frame's epochs (MakeFramePayload).
 		// The capture reads the shading changes the take empties.
 		{
-			ZoneScopedN("CS.DCLF.BF.FrameValuesKick");
+			DCLF_ZONE("CS.DCLF.BF.FrameValuesKick");
 			TracyCZoneN(bfFields, "CS.DCLF.BF.CaptureShadingFields", true);
 			auto fields = Extensions::CaptureShadingFields(view);
 			TracyCZoneEnd(bfFields);
@@ -244,7 +245,7 @@ namespace DCLF
 			(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), std::move(fields), view.FrameGlobalsOfFrame());
 		}
 		{
-			ZoneScopedN("CS.DCLF.BF.MakeFramePayload");
+			DCLF_ZONE("CS.DCLF.BF.MakeFramePayload");
 			(void)draws.MakeFramePayload();
 		}
 		// Under the parities the scene pass runs here, inline, so the render thread's observers keep their placement; the normal path

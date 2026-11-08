@@ -4,6 +4,7 @@
 // and the build ahead's shadow payload with its exclusions; on the render thread, its revision inputs and its part of the ahead context.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowExclusionBuild.h"
 
 namespace DCLF
@@ -325,7 +326,7 @@ namespace DCLF
 		const auto& tables = a_build.tables;
 		auto& a = aheadShadow;
 		{
-			ZoneScopedN("CS.DCLF.BuildShadowPayload");
+			DCLF_ZONE("CS.DCLF.BuildShadowPayload");
 			// The shared half, unless RunAhead ran it for this build (BuildPayloadShared); then the region half, into the main build's
 			// region as it left it.
 			if (!a.split.pending || a.publication != &a_build.out || a.frame != a_build.frame)
@@ -340,7 +341,7 @@ namespace DCLF
 		// The publication holds the views; the payload, which the epochs may hold past it, does not.
 		payload->streams.reset();
 		if (PassCapture::ShadowWithholdingEnabled()) {
-			ZoneScopedN("CS.DCLF.BuildShadow.Exclusions");
+			DCLF_ZONE("CS.DCLF.BuildShadow.Exclusions");
 			const auto exclusionsStart = std::chrono::steady_clock::now();
 			// The sun's and the paraboloid lights' exclusions read the payload and each its own cache (the contribution's): two pool tasks.
 			const bool sun = in.modeUsed[kSunShadowMode], parabolic = in.modeUsed[kParabolicShadowMode];
@@ -352,7 +353,7 @@ namespace DCLF
 			};
 			if (sun && parabolic && !Policy::SerialFanout()) {
 				SceneScheduler::Executor().ParallelFor("CS.DCLF.BuildShadow.Exclusions", 2, 1, [&](std::size_t a_begin, std::size_t a_end) {
-					ZoneScopedN("CS.DCLF.BuildShadow.ExclusionsShards");
+					DCLF_ZONE("CS.DCLF.BuildShadow.ExclusionsShards");
 					for (std::size_t x = a_begin; x < a_end; ++x)
 						exclusion(x);
 				});

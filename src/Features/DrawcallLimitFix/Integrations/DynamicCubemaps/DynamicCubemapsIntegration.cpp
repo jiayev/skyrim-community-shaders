@@ -1,7 +1,7 @@
 // Dynamic Cubemaps: its reflections and environment cubemaps (t30, t31), frame textures. The render thread's callback reads the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/DynamicCubemaps/DynamicCubemaps.h"
-#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 
 #include "Features/DynamicCubemaps.h"
 

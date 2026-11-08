@@ -2,7 +2,7 @@
 // its mask (t55) and its near blocks' depth twin. The render thread's callbacks read the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/TerrainBlending/TerrainBlending.h"
-#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 
 #include "ShaderCache.h"
 

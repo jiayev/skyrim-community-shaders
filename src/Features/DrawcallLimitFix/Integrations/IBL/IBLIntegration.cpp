@@ -2,7 +2,7 @@
 // read the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/IBL/IBL.h"
-#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 
 #include "State.h"
 

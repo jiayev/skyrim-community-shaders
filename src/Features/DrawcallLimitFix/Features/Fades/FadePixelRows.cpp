@@ -6,6 +6,7 @@
 // pixel stages' t116 (a frame binding, kPixelObjectsRegister).
 
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
 
@@ -146,7 +147,7 @@ namespace DCLF::Features::Fades
 		// draws read any.
 		Api::FrameValueInput PixelRowsKick(const Api::FrameValuePoolKick& a_kick)
 		{
-			ZoneScopedN("CS.DCLF.FV.Kick.PixelRows");
+			DCLF_ZONE("CS.DCLF.FV.Kick.PixelRows");
 			kickedRows = static_cast<std::uint32_t>(a_kick.objectSlots);
 			return { nullptr, a_kick.objectSlots };
 		}

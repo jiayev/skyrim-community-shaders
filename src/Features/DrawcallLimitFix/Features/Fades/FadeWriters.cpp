@@ -3,6 +3,7 @@
 // and installs; and the root test's fade-out distance.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"  // the write-back's WriteFadeStores
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeWriters.h"
 #include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
@@ -313,7 +314,7 @@ namespace DCLF::Features::Fades
 	{
 		if (!animatedDrainHanded.load(std::memory_order_acquire))
 			return;
-		ZoneScopedN("CS.DCLF.Fade.WaitAnimatedDrain");
+		DCLF_ZONE("CS.DCLF.Fade.WaitAnimatedDrain");
 		while (animatedDrainHanded.load(std::memory_order_acquire))
 			animatedDrainHanded.wait(true, std::memory_order_acquire);
 	}

@@ -2,6 +2,7 @@
 // (CS_DCLF_STATS), called by the frame's producer (TextureTransformsPool.cpp).
 
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransformsPool.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 #include <cstring>
@@ -27,7 +28,7 @@ namespace DCLF::Features::TextureTransforms
 	void CheckPoolParity(const Api::FrameValuePoolProducer& a_producer, const TextureTransformList* a_list, std::size_t a_count, std::size_t a_buffer,
 		const std::vector<TextureTransformRow>& a_out, const std::vector<const RE::BSShaderMaterial*>& a_materials)
 	{
-		ZoneScopedN("CS.DCLF.FrameValues.TextureTransformsParity");
+		DCLF_ZONE("CS.DCLF.FrameValues.TextureTransformsParity");
 		auto& p = parity;
 		++p.checks;
 		for (std::size_t i = 0; i < a_count; ++i) {

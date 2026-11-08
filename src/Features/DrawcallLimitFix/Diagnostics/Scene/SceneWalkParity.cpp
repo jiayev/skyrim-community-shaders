@@ -2,6 +2,7 @@
 // which leaves the coordinator as it found it), object by object, and the kept verdicts and traits against a classification from scratch.
 
 #include "SceneObservers.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Internal.h"
@@ -209,7 +210,7 @@ namespace DCLF::Diagnostics
 			auto& store = Scene::Coordinator::Get();
 			if (!ParityDue(V::passSerial(store)))
 				return;
-			ZoneScopedN("CS.DCLF.Scene.WalkParity");
+			DCLF_ZONE("CS.DCLF.Scene.WalkParity");
 			auto& stats = V::stats(store);
 			ScenePartScope scope(stats.scenePartMs[static_cast<std::size_t>(ScenePart::WalkReference)],
 				stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::WalkReference)]);

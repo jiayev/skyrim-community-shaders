@@ -1,6 +1,7 @@
 // The scene payload's parts' versions (PayloadPools, D5): per part a backing pool and a chain of versions built from each other on DCLF's
 // state graph, the snapshot's payload naming them, and the frame's payload read from the installed one (PayloadVersions.h).
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
 
 #include <ORGModuleServices/ElasticCapacity.h>
@@ -358,7 +359,7 @@ namespace DCLF::Draws
 		std::shared_ptr<const PayloadSource> MakeSource(std::shared_ptr<const void> a_keep, const StreamViews& a_views, const MainPayload* a_main,
 			const ShadowPayload* a_shadow)
 		{
-			ZoneScopedN("CS.DCLF.Payload.Source");
+			DCLF_ZONE("CS.DCLF.Payload.Source");
 			if (!a_main && !a_shadow)
 				return nullptr;
 			auto out = std::make_shared<PayloadSource>();

@@ -4,6 +4,7 @@
 // (FitsScene) are the coordinator's.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatches.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/VertexStreams.h"
@@ -27,7 +28,7 @@ namespace DCLF
 		TracyCZoneN(make, "CS.DCLF.Ahead.Make", true);
 		const bool fit = impl->MakeAheadContext(post->context, failed);
 		TracyCZoneEnd(make);
-		ZoneScopedN("CS.DCLF.Ahead.Post");
+		DCLF_ZONE("CS.DCLF.Ahead.Post");
 		impl->PostAhead(std::move(post), fit);
 	}
 
@@ -49,13 +50,13 @@ namespace DCLF
 			// The frame slots the epochs last supplied; the colour build replays the Z-prepass's vertex inputs.
 			if (!masks.known || (j == kAsyncColour && !prepassInputs))
 				continue;
-			ZoneScopedN("CS.DCLF.Ahead.MainInputs");
+			DCLF_ZONE("CS.DCLF.Ahead.MainInputs");
 			c.inputs[j] = PrepareMainInputs(j == kAsyncZPrepass, *resources, masks.vsMask, masks.psMask);
 			c.build[j] = true;
 		}
 		c.target = resources;
 		// The participants' parts (Revision/Participant.h: the shadow engine's payload inputs, for the last epoch's views).
-		ZoneScopedN("CS.DCLF.Ahead.Participants");
+		DCLF_ZONE("CS.DCLF.Ahead.Participants");
 		for (auto* participant : participants)
 			participant->PrepareAhead(c);
 		c.valid = c.build[kAsyncZPrepass] || c.build[kAsyncColour] || c.shadow;
@@ -95,7 +96,7 @@ namespace DCLF
 	{
 		// Immutable once posted, latest wins; the coordinator takes it at its passes' start (TakeAheadContext).
 		if (a_fit) {
-			ZoneScopedN("CS.DCLF.Ahead.PostFit");
+			DCLF_ZONE("CS.DCLF.Ahead.PostFit");
 			PostFit();
 		}
 		auto& post = a_post;
@@ -352,7 +353,7 @@ namespace DCLF
 		const AheadContext& a_context, const Lookups& a_lookups, std::uint32_t a_generation, std::uint32_t a_frame,
 		std::shared_ptr<const EntrySpace> a_sunCandidates, std::shared_ptr<const EntrySpace> a_lightCandidates)
 	{
-		ZoneScopedN("CS.DCLF.BuildAhead");
+		DCLF_ZONE("CS.DCLF.BuildAhead");
 		auto out = std::make_shared<DrawPublication>();
 		out->tables = a_tables;
 		// The journals keep their changes back to the oldest journal position a backing of the part's pool holds
@@ -425,7 +426,7 @@ namespace DCLF
 		const bool smallChange = unread(objectStore.cursor, a_tables->changeLog) + unread(geometryStore.cursor, a_tables->geometryLog) <= kInlineStageChanges;
 		if (buildMain && !smallChange && !Policy::SerialFanout()) {
 			SceneScheduler::Executor().ParallelFor("CS.DCLF.BuildAhead.Stages", 2, 1, [&](std::size_t a_begin, std::size_t a_end) {
-				ZoneScopedN("CS.DCLF.BuildAhead.StagesShards");
+				DCLF_ZONE("CS.DCLF.BuildAhead.StagesShards");
 				for (std::size_t s = a_begin; s < a_end; ++s)
 					stage(s);
 			});
@@ -519,7 +520,7 @@ namespace DCLF
 
 	void IndirectDraws::Impl::SnapshotPass()
 	{
-		ZoneScopedN("CS.DCLF.SnapshotBuilder");
+		DCLF_ZONE("CS.DCLF.SnapshotBuilder");
 		// What the frame replaced: dropped here, never on the render thread.
 		retiredSnapshots.Drop();
 		// The frame's report asked for the builder's lines.
@@ -801,7 +802,7 @@ namespace DCLF
 		auto& s = *impl;
 		const auto adoptedPublication = [&s]() -> std::shared_ptr<const void> { return s.adoptedSnapshot ? s.adoptedSnapshot->publication : nullptr; };
 		auto taken = s.snapshotSlot.Take();
-		ZoneScopedN("CS.DCLF.Snapshot.Adopt");
+		DCLF_ZONE("CS.DCLF.Snapshot.Adopt");
 		ZoneValue(taken ? 1 : 0);
 		if (!taken) {
 			// The producer's lag alone: nothing newer was built since the last adoption.
@@ -841,7 +842,7 @@ namespace DCLF
 		s.adoptedSet = versions.get();
 		s.installedDraws = snapshot->draws;
 		if (s.installedPayload != snapshot->payload) {
-			ZoneScopedN("CS.DCLF.Snapshot.InstallPayload");
+			DCLF_ZONE("CS.DCLF.Snapshot.InstallPayload");
 			// The replaced versions are kept from reuse until what was submitted so far retires (a frame whose EndFrame did not come
 			// read them).
 			PayloadPools::BindInstalled(SubmittedRetirementPoint());
@@ -865,7 +866,7 @@ namespace DCLF
 		}
 		// The replaced one back to the builder last, once nothing of the frame's holds it alone: its release is the builder's.
 		{
-			ZoneScopedN("CS.DCLF.Snapshot.RetireReplaced");
+			DCLF_ZONE("CS.DCLF.Snapshot.RetireReplaced");
 			if (auto replaced = std::exchange(s.adoptedSnapshot, snapshot))
 				s.retiredSnapshots.Push(std::move(replaced));
 		}
@@ -911,7 +912,7 @@ namespace DCLF
 		auto* host = RenderGraphRuntime::Get().Host();
 		if (!a_wait || !impl || failed || !host || impl->AdoptedCurrent())
 			return publication;
-		ZoneScopedN("CS.DCLF.WaitCurrentSnapshot");
+		DCLF_ZONE("CS.DCLF.WaitCurrentSnapshot");
 		auto& s = *impl;
 		using Clock = std::chrono::steady_clock;
 		// Generous: a snapshot made again for a build (its recordings, its draws for new main resources and their payload) takes

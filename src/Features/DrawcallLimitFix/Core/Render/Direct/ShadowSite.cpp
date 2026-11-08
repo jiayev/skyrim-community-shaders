@@ -6,6 +6,7 @@
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/ShadowSite.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
@@ -179,7 +180,7 @@ namespace DCLF::Direct
 
 	void ShadowCommitted(const ShadowCommitInputs& a_inputs)
 	{
-		ZoneScopedN("CS.DCLF.Cpu.ShadowCommitted");
+		DCLF_ZONE("CS.DCLF.Cpu.ShadowCommitted");
 		auto& s = S();
 		auto* slot = s.current;
 		if (!slot || !slot->ownsEpochs || !slot->set || !a_inputs.shape || !a_inputs.resources || !a_inputs.adopted)
@@ -270,7 +271,7 @@ namespace DCLF::Direct
 			pass.occlusion = occlusion;
 			state->passes.push_back(pass);
 		}
-		ZoneNamedN(sCull, "CS.DCLF.Cpu.Shadow.OnCullFrame", true);
+		DCLF_ZONE_NAMED(sCull, "CS.DCLF.Cpu.Shadow.OnCullFrame", true);
 		OnCullFrame(*slot, [slot, run = &run](const std::shared_ptr<const CullFrame>& a_frame) {
 			run->cullFrame = a_frame;
 			DispatchSiteCulls(*slot, [slot, run, a_frame] {

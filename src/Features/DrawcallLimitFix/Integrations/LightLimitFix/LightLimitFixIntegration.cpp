@@ -2,7 +2,7 @@
 // StrictLightData (PS b3), a per-draw buffer. The render thread's callbacks read the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/LightLimitFix/LightLimitFix.h"
-#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/AncestorValues.h"
 
 #include "Features/LightLimitFix.h"

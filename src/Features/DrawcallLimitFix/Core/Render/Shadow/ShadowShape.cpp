@@ -2,6 +2,7 @@
 // fixed blocks and latched layout, and the map rows' buckets.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
 
 namespace DCLF
@@ -355,7 +356,7 @@ namespace DCLF
 			rows.resize(std::size_t(a_state) + 1);
 		auto& row = rows[a_state];
 		if (!row) {
-			ZoneScopedN("CS.DCLF.ShadowInputs.RowBuckets");
+			DCLF_ZONE("CS.DCLF.ShadowInputs.RowBuckets");
 			row = BucketsOfRow(a_lookups.ShadowMapRow(a_mode, a_state), a_indirect);
 		}
 		return *row;

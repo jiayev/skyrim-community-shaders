@@ -3,6 +3,7 @@
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Features/Forward/Forward.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
@@ -98,7 +99,7 @@ namespace DCLF::Features::Forward
 
 	bool SubmitForwardEpoch()
 	{
-		ZoneScopedN("CS.DCLF.ExecuteForward");
+		DCLF_ZONE("CS.DCLF.ExecuteForward");
 		ToggleSet toggles = ActiveToggles();
 		const std::uint32_t epoch = ForwardEpoch();
 		if (!Extensions::ObjectClassOn(toggles, Api::ObjectClass::Forward) || epoch == Draws::kNoEpoch)

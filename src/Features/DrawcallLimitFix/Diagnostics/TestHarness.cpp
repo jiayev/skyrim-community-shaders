@@ -1,6 +1,7 @@
 // The test harness: the CS_DCLF_TEST_* switches' scripted commands, toggles, turns, moves and exit, run every Present on the render
 // (main) thread, DCLF installed or not.
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "TestHarness.h"
 
 #include "Vram/MemProbe.h"
@@ -262,7 +263,7 @@ namespace DCLF
 					if (Vram::SpillLab::Command(command))
 						return;
 					// The command in a capture too: a timing run's phases are found in its Tracy capture by these zones.
-					ZoneScopedN("CS.DCLF.TestCommand");
+					DCLF_ZONE("CS.DCLF.TestCommand");
 					ZoneText(command.data(), command.size());
 					// "dclf:<toggle name>=<0|1>": a live toggle (Toggles.h, ToggleInfo::name), as the menu sets it, so one run can
 					// compare a class drawn by DCLF and by the engine from the same camera.

@@ -3,6 +3,7 @@
 // submission; and the view's report lines. Render thread (the report: wherever the draws' async work is composed).
 
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionView.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Features/Reflection/ReflectionFaces.h"
 
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
@@ -49,7 +50,7 @@ namespace DCLF::Features::Reflection
 
 	void Execute(const Api::ViewPointContext&)
 	{
-		ZoneScopedN("CS.DCLF.ExecuteReflection");
+		DCLF_ZONE("CS.DCLF.ExecuteReflection");
 		auto& draws = IndirectDraws::Get();
 		if (!draws.ViewState(kView))
 			return;

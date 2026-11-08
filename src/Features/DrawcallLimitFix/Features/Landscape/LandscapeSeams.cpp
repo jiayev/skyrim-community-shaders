@@ -1,5 +1,6 @@
 // Landscape seam resources are per quad, captured into the object shading row without splitting terrain batches.
 #include "EngineFixes/LandscapeSeamsFix.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Features/Landscape/Landscape.h"
@@ -117,7 +118,7 @@ namespace DCLF::Features::Landscape
 
 		void CaptureSeams(Api::ShadingFieldCapture& a_capture)
 		{
-			ZoneScopedN("CS.DCLF.Landscape.Seams");
+			DCLF_ZONE("CS.DCLF.Landscape.Seams");
 			ZoneValue(candidates.size());
 			auto& textures = GpuTextures::Get();
 			// Both read before any quad: a change after them is seen at the next capture.

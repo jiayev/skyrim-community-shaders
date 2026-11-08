@@ -2,7 +2,7 @@
 // GetPixelTechnique and SetupGeometry hooks). The capture and derive callbacks are pure.
 
 #include "Features/DrawcallLimitFix/Integrations/TruePBR/TruePBRIntegration.h"
-#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 
 #include <cstdint>

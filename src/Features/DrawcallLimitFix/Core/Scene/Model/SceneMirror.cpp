@@ -2,6 +2,7 @@
 // and hook updates. Scene-work thread (the coordinator's event application).
 
 #include "Features/DrawcallLimitFix/Core/Scene/Model/SceneMirror.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include <Tracy/Tracy.hpp>
 #include <algorithm>
@@ -106,7 +107,7 @@ namespace DCLF
 			return;
 		}
 		++work.replaysWalked;
-		ZoneScopedN("CS.DCLF.Scene.Mirror.Replay");
+		DCLF_ZONE("CS.DCLF.Scene.Mirror.Replay");
 		// The updates numbered after this capture's start: their writes may be newer than what it read.
 		replaying = true;
 		for (const auto& n : a_records.nodes)
@@ -145,7 +146,7 @@ namespace DCLF
 
 	void SceneMirror::ApplyCapture(const Records& a_records, Prepared* a_prepared)
 	{
-		ZoneScopedN("CS.DCLF.Scene.Mirror.Capture");
+		DCLF_ZONE("CS.DCLF.Scene.Mirror.Capture");
 		++applied;
 		// A record a newer capture took stays (two loader threads capture subtrees naming one shared property or ancestor; the
 		// older capture can be pushed last). A prepared record is stamped already, and moved in.

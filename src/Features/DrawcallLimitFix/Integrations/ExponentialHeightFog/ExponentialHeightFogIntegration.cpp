@@ -1,7 +1,7 @@
 // Exponential Height Fog: its integrated light scattering volume (t19), a frame texture. The render thread's callback reads the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/ExponentialHeightFog/ExponentialHeightFog.h"
-#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 
 #include "Features/ExponentialHeightFog.h"
 

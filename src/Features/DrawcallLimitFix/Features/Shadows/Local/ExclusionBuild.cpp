@@ -2,6 +2,7 @@
 // by mode. Snapshot builder, on DCLF's pool.
 
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/ExclusionBuild.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Handoff/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
@@ -391,7 +392,7 @@ namespace DCLF::Features::Shadows::Local
 		 */
 		void NoteMovedInputs(SunExclusionBuild& b)
 		{
-			ZoneScopedN("CS.DCLF.BuildSunExclusion.Inputs");
+			DCLF_ZONE("CS.DCLF.BuildSunExclusion.Inputs");
 			auto& x = b.x;
 			const auto& build = b.build;
 			if (b.membership && build.movesValid && build.keptBuild && b.c.keptBuild + 1 == build.keptBuild && b.modeBits == x.modeBits)
@@ -511,7 +512,7 @@ namespace DCLF::Features::Shadows::Local
 
 	std::shared_ptr<SunExclusion> BuildSunExclusion(const Api::ShadowExclusionBuild& a_build, SunExclusionCache* a_cache)
 	{
-		ZoneScopedN("CS.DCLF.BuildSunExclusion");
+		DCLF_ZONE("CS.DCLF.BuildSunExclusion");
 		const auto& candidatesRef = a_build.candidates;
 		const auto& tables = a_build.tables;
 		if (!candidatesRef || !candidatesRef->Count())

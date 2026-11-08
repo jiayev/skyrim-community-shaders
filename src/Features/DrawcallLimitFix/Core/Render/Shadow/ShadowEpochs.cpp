@@ -3,6 +3,7 @@
 // Features/Shadows/Engine's handler calls it (ExecuteShadowFrame: Api/ShadowEpochs.h), in its epoch's segment (its traits).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/ShadowSite.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ExecutionOwners.h"
@@ -286,7 +287,7 @@ namespace DCLF
 				const auto& latchLayout = target.latchLayout;
 				// The index pool the shadow views and the occlusion maps draw from.
 				{
-					ZoneScopedN("CS.DCLF.ShadowInputs.IndexPool");
+					DCLF_ZONE("CS.DCLF.ShadowInputs.IndexPool");
 					UpdateIndexPool(adopted, *resources.pool, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetTablesGeneration(), latchBlock, latchSlot,
 						latchLayout.PoolOffset(), a_commit.uploads);
 				}
@@ -306,7 +307,7 @@ namespace DCLF
 				// The sun views' contribution cull's threshold (live: a latch value, read once a commit).
 				const float minTexels = shadowMinTexels.load(std::memory_order_relaxed);
 				for (const auto& view : a_commit.pending) {
-					ZoneScopedN("CS.DCLF.ShadowInputs.View");
+					DCLF_ZONE("CS.DCLF.ShadowInputs.View");
 					const std::uint32_t slot = view.slot;
 					const std::uint32_t index = slot - kFirstShadowViewSlot;
 					slotDrawn[index] = true;
@@ -608,7 +609,7 @@ namespace DCLF
 
 	std::uint32_t IndirectDraws::ExecuteShadowFrame(std::uint32_t a_maps)
 	{
-		ZoneScopedN("CS.DCLF.ExecuteShadowFrame");
+		DCLF_ZONE("CS.DCLF.ExecuteShadowFrame");
 		auto& engine = *impl->shadowEngine;
 		auto& pending = engine.pendingViews;
 		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
@@ -680,7 +681,7 @@ namespace DCLF
 			return mapsNotDrawn(0);
 		// The CPU pipeline's graph runs the commit here and the shadow site draws (Direct::ExecuteEpoch; the commit opens the site).
 		const bool ok = Direct::ExecuteEpoch(EpochTraitsOf(epoch).segment, [&] {
-			ZoneScopedN("CS.DCLF.ShadowInputs");
+			DCLF_ZONE("CS.DCLF.ShadowInputs");
 			const auto bodyStart = std::chrono::steady_clock::now();
 			TracyCZoneN(shadowPrepareZone, "CS.DCLF.ShadowInputs.Prepare", true);
 			const auto prepareStart = std::chrono::steady_clock::now();
@@ -840,7 +841,7 @@ namespace DCLF
 	ShadowInputs ShadowEngine::PrepareShadowInputs(const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
 		const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates) const
 	{
-		ZoneScopedN("CS.DCLF.PrepareShadowInputs");
+		DCLF_ZONE("CS.DCLF.PrepareShadowInputs");
 		ShadowInputs in;
 		in.frameNumber = Scene::FrameView::Get().GetFrame();
 		in.modeUsed = a_modeUsed;

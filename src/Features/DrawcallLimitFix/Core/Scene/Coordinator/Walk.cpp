@@ -2,6 +2,7 @@
 // (evaluate, then merge in order), the object records and their geometry slots, and the per-frame traits.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
@@ -902,7 +903,7 @@ namespace DCLF::Scene
 		// worker started it). A buffer this misses still resolves, alone.
 		if (!frameResolveBuffers)
 			return;
-		ZoneScopedN("CS.DCLF.Scene.PrefetchBuffers");
+		DCLF_ZONE("CS.DCLF.Scene.PrefetchBuffers");
 		std::vector<ID3D11Buffer*> buffers;
 		auto add = [&](const void* a_shape, ID3D11Buffer* a_vertices, ID3D11Buffer* a_indices) {
 			if (!a_shape)
@@ -1891,7 +1892,7 @@ namespace DCLF::Scene
 		// Ordered streaming merge: chunks are claimed by pool helpers and this thread; chunk k merges as soon as it is ready, this
 		// thread evaluating unclaimed chunks or waiting meanwhile. Safe because a merge writes only state no evaluation reads (its own
 		// entries' Tracked, tables, slots, lists). A late helper finds every chunk claimed and touches only the shared Shards.
-		ZoneScopedN("CS.DCLF.Scene.EvaluateStream");
+		DCLF_ZONE("CS.DCLF.Scene.EvaluateStream");
 		struct Shards
 		{
 			explicit Shards(std::size_t a_chunks) :

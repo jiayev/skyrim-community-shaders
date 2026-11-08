@@ -2,6 +2,7 @@
 // written into their EntrySpaceTable, and a snapshot published for the shadow builds when an entry moved.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
@@ -23,7 +24,7 @@ namespace DCLF::Scene
 		{
 			a_out.resize(a_count);
 			auto run = [&](std::size_t a_begin, std::size_t a_end) {
-				ZoneScopedN("CS.DCLF.Scene.SunCandidates.Verdicts");
+				DCLF_ZONE("CS.DCLF.Scene.SunCandidates.Verdicts");
 				const auto scope = a_scope();
 				for (std::size_t i = a_begin; i < a_end; ++i)
 					a_out[i] = a_verdict(i);

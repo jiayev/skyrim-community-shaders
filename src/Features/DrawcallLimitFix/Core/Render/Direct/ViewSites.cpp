@@ -14,6 +14,7 @@
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
@@ -510,7 +511,7 @@ namespace DCLF::Direct
 
 	void HostedViewCommitted(const HostedViewCommit& a_commit)
 	{
-		ZoneScopedN("CS.DCLF.Cpu.HostedViewCommitted");
+		DCLF_ZONE("CS.DCLF.Cpu.HostedViewCommitted");
 		auto* slot = S().current;
 		if (!slot || !slot->set || !a_commit.shape || !a_commit.resources || a_commit.faces.empty())
 			return;

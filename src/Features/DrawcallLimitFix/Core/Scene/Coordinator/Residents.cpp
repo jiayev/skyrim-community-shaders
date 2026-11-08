@@ -2,6 +2,7 @@
 // slots' listings (the components list theirs at the same points: Components.cpp; the fade roots': Features/Fades/FadeRoots.cpp).
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
@@ -93,7 +94,7 @@ namespace DCLF::Scene
 
 	void Coordinator::KeepResidentsAlive()
 	{
-		ZoneScopedN("CS.DCLF.Accumulate.KeepResidents");
+		DCLF_ZONE("CS.DCLF.Accumulate.KeepResidents");
 		auto& counted = residentCounted;
 		if (counted.size() < tables.objects.size())
 			counted.resize(tables.objects.size());
@@ -136,7 +137,7 @@ namespace DCLF::Scene
 		};
 		if (residentMaintenanceDirty) {
 			// Every residency ended, or the tables were reset: everything counted again.
-			ZoneScopedN("CS.DCLF.Accumulate.RebuildResidentMaintenance");
+			DCLF_ZONE("CS.DCLF.Accumulate.RebuildResidentMaintenance");
 			counted.assign(tables.objects.size(), ResidentCounted{});
 			pipelineMembers.Clear();
 			materialMembers.assign(tables.materials.size(), 0);

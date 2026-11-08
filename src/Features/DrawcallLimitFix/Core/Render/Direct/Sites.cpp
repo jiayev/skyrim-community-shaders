@@ -3,6 +3,7 @@
 
 // Main/Resources.h first: volk must precede every Vulkan header of the translation unit.
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
@@ -71,7 +72,7 @@ namespace DCLF::Direct::detail
 		auto pool = std::make_shared<ListPool>(std::move(a_pool));
 		(void)SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "dclf cpu list pool reset",
 			[pool](const auto&) {
-				ZoneScopedN("CS.DCLF.Cpu.ListPoolReset");
+				DCLF_ZONE("CS.DCLF.Cpu.ListPoolReset");
 				pool->Reset();
 				ResetPools().push(std::move(*pool));
 			});
@@ -195,7 +196,7 @@ namespace DCLF::Direct::detail
 
 	SiteView& NewView(FrameSlot& a_slot, SiteRun& a_run, ViewType a_type, const CullView& a_view, bool a_depthPass)
 	{
-		ZoneScopedN("CS.DCLF.Cpu.NewView");
+		DCLF_ZONE("CS.DCLF.Cpu.NewView");
 		auto& view = a_slot.views.emplace_back();
 		view.type = a_type;
 		view.view = a_view;
@@ -235,7 +236,7 @@ namespace DCLF::Direct::detail
 	{
 		if (a_slot.poolFirstsTaken || !a_pool || !a_slot.set)
 			return;
-		ZoneScopedN("CS.DCLF.Cpu.TakePoolFirsts");
+		DCLF_ZONE("CS.DCLF.Cpu.TakePoolFirsts");
 		ZoneValue(a_pool->slotFirst.size());
 		PoolFirstsOf(*a_slot.set, *a_pool, a_slot.poolFirsts, a_slot.counters.staleGeometry);
 		a_slot.poolFirstsTaken = true;
@@ -324,7 +325,7 @@ namespace DCLF::Direct::detail
 
 	void CullJob(FrameSlot& a_slot, SiteRun& a_run, SiteView& a_view, const CullFrame& a_frame, std::size_t a_first, std::size_t a_end)
 	{
-		ZoneScopedN("CS.DCLF.Cpu.Cull");
+		DCLF_ZONE("CS.DCLF.Cpu.Cull");
 		const auto viewName = CpuViewName(static_cast<std::size_t>(a_view.type));
 		ZoneText(viewName.data(), viewName.size());
 		const auto start = Clock::now();
@@ -449,7 +450,7 @@ namespace DCLF::Direct::detail
 		/** @brief A pool job: a_view's recording made (every batch culled with the snapshot's spheres, recorded in list order). */
 		void RecordSnapshot(FrameSlot& a_slot, SiteRun& a_run, SiteView& a_view, const CullFrame& a_frame)
 		{
-			ZoneScopedN("CS.DCLF.Cpu.SnapshotView");
+			DCLF_ZONE("CS.DCLF.Cpu.SnapshotView");
 			const auto viewName = CpuViewName(static_cast<std::size_t>(a_view.type));
 			ZoneText(viewName.data(), viewName.size());
 			const auto start = Clock::now();
@@ -508,7 +509,7 @@ namespace DCLF::Direct::detail
 		}
 		if (FrameMode().cadence[static_cast<std::size_t>(a_view.type)] != Cadence::PerSnapshot || !a_slot.set || !a_view.inheritance.width)
 			return;
-		ZoneScopedN("CS.DCLF.Cpu.PrepareSnapshotView");
+		DCLF_ZONE("CS.DCLF.Cpu.PrepareSnapshotView");
 		auto& s = S();
 		const auto& bindings = a_view.bindings ? *a_view.bindings : a_run.bindings;
 		const std::uint64_t identity = IdentityOf(a_view, bindings);
@@ -552,7 +553,7 @@ namespace DCLF::Direct::detail
 	{
 		if (a_view.fromSnapshot)
 			return;
-		ZoneScopedN("CS.DCLF.Cpu.DispatchCulls");
+		DCLF_ZONE("CS.DCLF.Cpu.DispatchCulls");
 		if (a_view.snapshot) {
 			a_slot.outstanding.fetch_add(1, std::memory_order_acq_rel);
 			if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "dclf cpu snapshot view",
@@ -613,7 +614,7 @@ namespace DCLF::Direct::detail
 				if (!std::exchange(waited, true))
 					Add(a_run.slot->waits, 1u);
 				// One zone per stretch the queue stays empty (Tracy: the CS thread waiting on the workers).
-				ZoneScopedN("CS.DCLF.Cpu.AwaitBatch");
+				DCLF_ZONE("CS.DCLF.Cpu.AwaitBatch");
 				do
 					std::this_thread::yield();
 				while (!DrainView(a_view));
@@ -962,7 +963,7 @@ namespace DCLF::Direct::detail
 		// The site and its record mode (RecordMode's order).
 		static constexpr std::string_view kSiteNames[kSites][2] = { { "shadow serial", "shadow parallel" }, { "depth serial", "depth parallel" },
 			{ "colour serial", "colour parallel" }, { "forward serial", "forward parallel" }, { "first person serial", "first person parallel" } };
-		ZoneScopedN("CS.DCLF.Cpu.Site");
+		DCLF_ZONE("CS.DCLF.Cpu.Site");
 		const auto siteName = kSiteNames[site][run.record == RecordMode::Parallel ? 1 : 0];
 		ZoneText(siteName.data(), siteName.size());
 		// One call per segment of the execution, in order (Emit; one when it has none): the draws are counted from the first, the views
@@ -1019,7 +1020,7 @@ namespace DCLF::Direct::detail
 	 */
 	bool Emit(SiteRun& a_run)
 	{
-		ZoneScopedN("CS.DCLF.Cpu.Emit");
+		DCLF_ZONE("CS.DCLF.Cpu.Emit");
 		auto& s = S();
 		auto* host = RenderGraphRuntime::Get().Host();
 		const auto wait = FrameValues::Get().FrameWaitPoint();
@@ -1098,7 +1099,7 @@ namespace DCLF::Direct::detail
 			auto frame = std::make_shared<std::unique_ptr<ReleasedFrame>>(std::move(a_frame));
 			(void)SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu,
 				"dclf cpu frame release", [frame](const auto&) {
-					ZoneScopedN("CS.DCLF.Cpu.ReleaseFrame");
+					DCLF_ZONE("CS.DCLF.Cpu.ReleaseFrame");
 					frame->reset();
 				});
 		}
@@ -1107,12 +1108,12 @@ namespace DCLF::Direct::detail
 	/** @brief Render thread: a slot's last frame's state released (its signal completed), its counters into the window. */
 	void Release(FrameSlot& a_slot)
 	{
-		ZoneScopedN("CS.DCLF.Cpu.Release");
+		DCLF_ZONE("CS.DCLF.Cpu.Release");
 		// Nothing of its frame still runs on the pool (frames ago: in practice never waited for), and a continuation not started yet
 		// will do nothing.
 		a_slot.generation.fetch_add(1, std::memory_order_seq_cst);
 		if (a_slot.outstanding.load(std::memory_order_seq_cst)) {
-			ZoneScopedN("CS.DCLF.Cpu.ReleaseWait");
+			DCLF_ZONE("CS.DCLF.Cpu.ReleaseWait");
 			while (a_slot.outstanding.load(std::memory_order_seq_cst))
 				std::this_thread::yield();
 		}
@@ -1183,7 +1184,7 @@ namespace DCLF::Direct::detail
 	{
 		auto& s = S();
 		if (a_slot.signal && s.timeline && *s.timeline && (*s.timeline)->GetCompletedValue() < a_slot.signal) {
-			ZoneScopedN("CS.DCLF.Cpu.SlotWait");
+			DCLF_ZONE("CS.DCLF.Cpu.SlotWait");
 			const auto start = Clock::now();
 			(void)(*s.timeline)->HostWait(a_slot.signal);
 			++s.window.slotWaits;
@@ -1427,7 +1428,7 @@ namespace DCLF::Direct
 
 	void FrameStart(std::shared_ptr<const ViewBatchSet> a_set)
 	{
-		ZoneScopedN("CS.DCLF.Cpu.FrameStart");
+		DCLF_ZONE("CS.DCLF.Cpu.FrameStart");
 		auto& s = S();
 		static ThreadBusy busy;
 		double renderUs = 0.0, csUs = 0.0, wallUs = 0.0;
@@ -1524,7 +1525,7 @@ namespace DCLF::Direct
 		const std::uint64_t made = host ? host->SubmissionsMade() : 0;
 		if (s.submitted >= s.signalled && s.hostSubmitted >= made)
 			return;
-		ZoneScopedN("CS.DCLF.SubmitQueued");
+		DCLF_ZONE("CS.DCLF.SubmitQueued");
 		globals::d3d::context->Flush();
 		s.submitted = s.signalled;
 		s.hostSubmitted = made;
@@ -1560,7 +1561,7 @@ namespace DCLF::Direct
 
 	void EndFrame()
 	{
-		ZoneScopedN("CS.DCLF.Cpu.EndFrame");
+		DCLF_ZONE("CS.DCLF.Cpu.EndFrame");
 		auto& s = S();
 		QueueFrameSignal();
 		s.signalQueuedFor = nullptr;
@@ -1630,7 +1631,7 @@ namespace DCLF::Direct
 
 	void DepthCommitted(const MainCommitInputs& a_inputs)
 	{
-		ZoneScopedN("CS.DCLF.Cpu.DepthCommitted");
+		DCLF_ZONE("CS.DCLF.Cpu.DepthCommitted");
 		auto& s = S();
 		auto* slot = s.current;
 		if (!slot || !slot->set || !a_inputs.shape || !a_inputs.resources || !a_inputs.latch)
@@ -1681,7 +1682,7 @@ namespace DCLF::Direct
 
 	void ColourCommitted(const MainCommitInputs& a_inputs)
 	{
-		ZoneScopedN("CS.DCLF.Cpu.ColourCommitted");
+		DCLF_ZONE("CS.DCLF.Cpu.ColourCommitted");
 		auto& s = S();
 		auto* slot = s.current;
 		if (!slot || !slot->set || !a_inputs.shape || !a_inputs.resources || !a_inputs.latch)
@@ -1756,7 +1757,7 @@ namespace DCLF::Direct
 		// producer is done this late in the frame; a frame whose is not waits for it here (counted).
 		const auto* rows = FrameValues::Get().RowsIfDone();
 		if (!rows) {
-			ZoneScopedN("CS.DCLF.Cpu.RowsWait");
+			DCLF_ZONE("CS.DCLF.Cpu.RowsWait");
 			++s.window.rowWaits;
 			rows = FrameValues::Get().RowsIfDone(true);
 		}

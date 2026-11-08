@@ -2,7 +2,7 @@
 // capturing thread, the flag on the join pool.
 
 #include "Features/DrawcallLimitFix/Integrations/SubsurfaceScattering/SubsurfaceScattering.h"
-#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"

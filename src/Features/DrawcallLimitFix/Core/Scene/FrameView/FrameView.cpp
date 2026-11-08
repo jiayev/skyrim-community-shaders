@@ -3,6 +3,7 @@
 // shading fields') gathered for their adoption, and load screens noted. Render thread.
 
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
@@ -64,7 +65,7 @@ namespace DCLF::Scene
 
 	void FrameView::HandOverAtFrameStart(std::shared_ptr<const void> a_adopted)
 	{
-		ZoneScopedN("CS.DCLF.Scene.HandOverAtFrameStart");
+		DCLF_ZONE("CS.DCLF.Scene.HandOverAtFrameStart");
 		// Nothing of the coordinator's is read here. The notes the scene work held for PrimaryCull are delivered first.
 		DeliverPrimaryNotes();
 		// The publication of the snapshot the frame adopted (IndirectDraws::AdoptSnapshot), installed when newer than the installed

@@ -2,6 +2,7 @@
 // the resident region, the object loop). Pure; run by the snapshot builder on DCLF's pool, one build at a time.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
@@ -403,7 +404,7 @@ namespace DCLF::Draws
 
 	void MainBuild::Run()
 	{
-		ZoneScopedN("CS.DCLF.BuildMainPayload");
+		DCLF_ZONE("CS.DCLF.BuildMainPayload");
 		Reset();
 		FrameRegisters();
 		PackPipelines();
@@ -969,19 +970,19 @@ namespace DCLF::Draws
 		TracyCZoneN(residentRegionZone, "CS.DCLF.BuildMain.ResidentRegion", true);
 		if (region) {
 			{
-				ZoneScopedN("CS.DCLF.BuildMain.Region.Entries");
+				DCLF_ZONE("CS.DCLF.BuildMain.Region.Entries");
 				UpdateRegionEntries();
 			}
 			{
-				ZoneScopedN("CS.DCLF.BuildMain.Region.Pairs");
+				DCLF_ZONE("CS.DCLF.BuildMain.Region.Pairs");
 				UpdateRegionPairs();
 			}
 			{
-				ZoneScopedN("CS.DCLF.BuildMain.Region.Route");
+				DCLF_ZONE("CS.DCLF.BuildMain.Region.Route");
 				RouteTouched();
 			}
 			{
-				ZoneScopedN("CS.DCLF.BuildMain.Region.Publish");
+				DCLF_ZONE("CS.DCLF.BuildMain.Region.Publish");
 				PublishRegion();
 			}
 		}
@@ -1343,7 +1344,7 @@ namespace DCLF::Draws
 		std::vector<DrawInput> entries(count);
 		auto& executor = SceneScheduler::Executor();
 		executor.ParallelFor("CS.DCLF.BuildMain.Region.Resync", count, kResyncGrain, [&](std::size_t a_begin, std::size_t a_end) {
-			ZoneScopedN("CS.DCLF.BuildMain.Region.ResyncShards");
+			DCLF_ZONE("CS.DCLF.BuildMain.Region.ResyncShards");
 			for (std::size_t n = a_begin; n < a_end; ++n) {
 				const auto o = static_cast<std::uint32_t>(n);
 				if (!RegionEligible(o))
@@ -1383,7 +1384,7 @@ namespace DCLF::Draws
 		PrepareKeptWrites(r.inputs, 0, held);
 		auto& list = r.inputs.Mutable();
 		executor.ParallelFor("CS.DCLF.BuildMain.Region.Scatter", count, kResyncGrain, [&](std::size_t a_begin, std::size_t a_end) {
-			ZoneScopedN("CS.DCLF.BuildMain.Region.ScatterShards");
+			DCLF_ZONE("CS.DCLF.BuildMain.Region.ScatterShards");
 			for (std::size_t n = a_begin; n < a_end; ++n)
 				if (eligible[n])
 					list[r.indexOf[n]] = entries[n];
@@ -1595,7 +1596,7 @@ namespace DCLF::Draws
 			for (auto& work : works)
 				work.deferred = true;
 			SceneScheduler::Executor().ParallelFor("CS.DCLF.BuildMain.Pairs.Resolve", chunks, 1, [&](std::size_t a_begin, std::size_t a_end) {
-				ZoneScopedN("CS.DCLF.BuildMain.Pairs.ResolveShards");
+				DCLF_ZONE("CS.DCLF.BuildMain.Pairs.ResolveShards");
 				for (std::size_t c = a_begin; c < a_end; ++c)
 					ResolvePairsChunk(a_check, bounds[c], bounds[c + 1], a_everyPair, works[c]);
 			});
@@ -1660,7 +1661,7 @@ namespace DCLF::Draws
 
 	void MainBuild::RewriteChangedEntries(const std::vector<std::uint32_t>& a_changedPipelines, const std::vector<std::uint64_t>& a_changedPairs)
 	{
-		ZoneScopedN("CS.DCLF.BuildMain.Pairs.Inputs");
+		DCLF_ZONE("CS.DCLF.BuildMain.Pairs.Inputs");
 		auto& r = *region;
 		auto& stats = rows.pairStats;
 		// The entries of the changed pairs and of the pipelines whose set moved, through their objects (Pair::objects).
@@ -2056,7 +2057,7 @@ namespace DCLF::Draws
 	{
 		// The rows this build wrote (every one after a resync): each animated one holds its row of the frame's copy, any other none. A row
 		// that keeps its index was written with it (WriteMaterialRow); one taken or let go here is written again, its header part alone.
-		ZoneScopedN("CS.DCLF.BuildMain.AnimatedRows");
+		DCLF_ZONE("CS.DCLF.BuildMain.AnimatedRows");
 		auto& animated = rows.animated;
 		const auto assign = [&](std::uint32_t m) {
 			if (m >= rows.materials.size() || m >= rows.material.Size())
@@ -2088,7 +2089,7 @@ namespace DCLF::Draws
 
 	void MainBuild::Finish(std::shared_ptr<const StreamViews> a_streams)
 	{
-		ZoneScopedN("CS.DCLF.BuildMain.Finish");
+		DCLF_ZONE("CS.DCLF.BuildMain.Finish");
 		streams = std::move(a_streams);
 		TakeGeometryDraws(streams.get(), tables, in.tablesGeneration, frameNumber, body.geometryDraws);
 		body.streams = streams;

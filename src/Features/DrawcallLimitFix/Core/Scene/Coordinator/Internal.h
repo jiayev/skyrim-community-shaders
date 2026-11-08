@@ -4,6 +4,7 @@
 // the shard and timing scopes. Coordinator thread (the scene lane) and the pass's pool workers.
 
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
@@ -391,7 +392,7 @@ namespace DCLF
 
 	// One scene sub-zone (ScenePart) for the rest of the enclosing block: a Tracy zone and the part's sum. One per block.
 #define DCLF_SCENE_PART(a_part, a_zone) \
-	ZoneScopedN(a_zone);                \
+	DCLF_ZONE(a_zone);                \
 	ScenePartScope scenePartScope(stats.scenePartMs[static_cast<std::size_t>(ScenePart::a_part)], \
 		stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::a_part)])
 

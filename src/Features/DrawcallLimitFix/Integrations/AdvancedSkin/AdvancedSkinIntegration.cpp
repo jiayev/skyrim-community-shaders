@@ -2,7 +2,8 @@
 // value at the frame's start, fanned out). Render thread. Its material textures are SkinTextures.cpp's.
 
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/AdvancedSkin.h"
-#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/OwnerValues.h"
 
@@ -42,7 +43,7 @@ namespace DCLF::Integrations::AdvancedSkin
 			// frame (the first call; later ones, including its own SetupGeometry hook for the draws the engine still makes this frame,
 			// return the same value), so calling it here for every actor in the tables advances every actor's fade once a frame,
 			// whether or not the engine draws it. Its cache is not thread-safe: the render thread's, at the frame's start.
-			ZoneScopedN("CS.DCLF.Capture.Wetness");
+			DCLF_ZONE("CS.DCLF.Capture.Wetness");
 			auto& skin = globals::features::skin;
 			const bool wetness = skin.loaded && skin.settings.EnableSkin;
 			// The actors' membership is the render thread's own index (the log's changes, Membership), their geometries the newest

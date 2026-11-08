@@ -1,6 +1,7 @@
 // Coordinator::UpdateMaterialBindings and its helpers (MaterialBindings.h), scene lane.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 namespace DCLF::Scene
 {
@@ -16,7 +17,7 @@ namespace DCLF::Scene
 
 	void Coordinator::UpdateMaterialBindings()
 	{
-		ZoneScopedN("CS.DCLF.Scene.MaterialBindings");
+		DCLF_ZONE("CS.DCLF.Scene.MaterialBindings");
 		auto& mb = materialBindings;
 		if (lookups.materials.size() < tables.materials.size())
 			lookups.materials.resize(tables.materials.size());
@@ -347,7 +348,7 @@ namespace DCLF::Scene
 
 	void Coordinator::VersionMaterialBindings()
 	{
-		ZoneScopedN("CS.DCLF.Scene.VersionMaterialBindings");
+		DCLF_ZONE("CS.DCLF.Scene.VersionMaterialBindings");
 		// The scene lane, before a commit or a publication (ResolveLookups): the entries written since the last time (resolved, re-keyed,
 		// retired) each take a new version and a log entry.
 		auto& mb = materialBindings;

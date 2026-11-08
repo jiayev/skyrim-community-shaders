@@ -1,7 +1,7 @@
 // Cloud Shadows: its cloud occlusion cubemap (t25), a frame texture. The render thread's callback reads the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/CloudShadows/CloudShadows.h"
-#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 
 #include "State.h"
 

@@ -3,6 +3,7 @@
 // FrameValues' producer; FadeStateCS and the builds read them as the cull binding RootSeeds.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadesInternal.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
@@ -99,7 +100,7 @@ namespace DCLF::Features::Fades
 		// Render thread, at Kick: every copy taken since the last kick, for the frame's producer.
 		Api::FrameValueInput FadeSeedsKick(const Api::FrameValuePoolKick&)
 		{
-			ZoneScopedN("CS.DCLF.FV.Kick.FadeSeeds");
+			DCLF_ZONE("CS.DCLF.FV.Kick.FadeSeeds");
 			if (!unsentSeeds.empty()) {
 				auto input = std::make_shared<SeedInput>();
 				input->values = std::exchange(unsentSeeds, {});
@@ -117,7 +118,7 @@ namespace DCLF::Features::Fades
 
 		void FadeSeedsSample(Api::FrameValuePoolProducer& a_producer)
 		{
-			ZoneScopedN("CS.DCLF.FrameValues.FadeSeeds");
+			DCLF_ZONE("CS.DCLF.FrameValues.FadeSeeds");
 			a_producer.BeginBuild(fadeSeeds);
 			auto& out = fadeSeeds.Mutable();
 			const auto* input = a_producer.Input<SeedInput>();

@@ -1,7 +1,7 @@
 // Water Effects: its caustics texture (t65), a frame texture. The render thread's callback reads the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/WaterEffects/WaterEffects.h"
-#include "Features/DrawcallLimitFix/Integrations/IntegrationStatus.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 
 #include "Features/WaterEffects.h"
 

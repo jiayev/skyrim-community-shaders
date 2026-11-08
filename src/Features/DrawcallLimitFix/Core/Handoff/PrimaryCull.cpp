@@ -1,6 +1,7 @@
 // PrimaryCull: the list jobs' stand-in (Process1, AppendVirtual; job threads), the render thread's frame around them, the cut's
 // plans and admission, and the synthetic membership passes (any thread).
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
@@ -650,7 +651,7 @@ namespace DCLF
 		// batch goes back whole to the render thread, which drops its snapshot.
 		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "CS.DCLF.CutPlans",
 				[this, batch = batch.release()](const auto&) {
-					ZoneScopedN("CS.DCLF.CutPlans");
+					DCLF_ZONE("CS.DCLF.CutPlans");
 					for (auto& planned : batch->entries) {
 						const EngineReadWindow::Lease lease;
 						if (!lease || !EngineReleases::Alive(batch->candidates->publication))
@@ -935,7 +936,7 @@ namespace DCLF
 	{
 		if (!installed)
 			return;
-		ZoneScopedN("CS.DCLF.AccumulatedWrites");
+		DCLF_ZONE("CS.DCLF.AccumulatedWrites");
 		// Roots no longer stood in are left to the engine's cull this frame.
 		IndirectDraws::Get().WriteAccumulated(a_running, [this](const void* a_root) { return standInRoots.contains(a_root); });
 		// The stand-in observers (the tree manager's loop, later in this Main::Update, takes the stood-in trees' visibility from those
@@ -1091,7 +1092,7 @@ namespace DCLF
 
 	void PrimaryCull::AfterFullFrustum()
 	{
-		ZoneScopedN("CS.DCLF.AfterFullFrustum");
+		DCLF_ZONE("CS.DCLF.AfterFullFrustum");
 		frameLive.store(false, std::memory_order_relaxed);
 		gpuSunFrame = false;
 		// The Sun source ends its frame's state (Features/Shadows/Sun) and says whether its exclusion applied.
@@ -1250,7 +1251,7 @@ namespace DCLF
 				std::uint64_t result;
 				{
 					// The render thread's wait for the main camera's list jobs.
-					ZoneScopedN("CS.DCLF.ListJobsWait");
+					DCLF_ZONE("CS.DCLF.ListJobsWait");
 					result = func(a_1, a_2, a_3, a_4);
 				}
 				PrimaryCull::Get().AfterListJobs();

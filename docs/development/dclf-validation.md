@@ -589,7 +589,7 @@ The bundle:
 | `modules.txt` | Every loaded DLL with its file version. |
 | `start/`, `end/` | `snapshot.txt` (the menu's "This frame" lines, the scene executor's queues and `ParallelFor` waits, the integrations, the render-thread growth census), `fades.json` (the fade census), `scene-growth.txt` (the scene lane's growth census) and the VRAM attribution JSON. |
 | `frames.csv` | One row per Present: Present-to-Present ms, DCLF's render-thread µs in the last finished frame, the wait for a scene snapshot, frames since the last scene pass, epochs not ready, the executor's queues by domain, loading, running, CPU pipeline, interior. |
-| `telemetry/` | The BasicTelemetry phase `capture` (frames, scopes, stalls of 2 ms or more). |
+| `telemetry/` | The BasicTelemetry phase `capture`: frames, scopes (the render graph's and DCLF's own zones), stalls of 2 ms or more, and `capture.threads.csv`, each DCLF zone's count, total and longest time on each thread, by name. `top_level_ns` adds up to a thread's DCLF time; the log line `DCLF zone time by thread` lists the busiest threads. |
 | `capture.log` | Every line logged during the capture, with the two flushed report windows and the actor probes. |
 | `compat.txt` | The compatibility monitor's report, when it is on. |
 | `screenshot.*` | The first frame of the window. |
@@ -599,7 +599,7 @@ The text files have the user's profile path replaced with `%USERPROFILE%`.
 
 Reading a capture:
 
-- **Slow frames.** In `frames.csv`, compare `present_ms` with `dclf_render_thread_us` and `adopt_wait_us`. A long Present with
+- **Slow frames.** `telemetry/capture.threads.csv` says which thread spends DCLF's time and in which zone. In `frames.csv`, compare `present_ms` with `dclf_render_thread_us` and `adopt_wait_us`. A long Present with
   little DCLF time is not DCLF's render thread. A growing `scene_lag_frames` or queues that stay full mean the scene work falls
   behind. In `environment.json`, check `graph.cpuPipeline`, any `observers` and `warning`. Then compare the two growth censuses for
   containers that grew during the window. `telemetry/capture.stalls.csv` names the scopes that were off the CPU.
@@ -862,7 +862,7 @@ withheld and drawn by nobody. Before reading parity or timing, check in each run
     -   `dclf:define=<NAME>[=<value>],...` adds defines to every DCLF stage compiled from then on (empty: none). With
         `dclf:reload-shaders=<file>` and `dclf:wait=reload` after it, a shader A/B is an `#if` in the source compared in one launch.
     -   `dclf:capture[=<seconds>]` takes a [diagnostic capture](#the-diagnostic-capture) at the next Present (no Explorer window, nothing on the clipboard).
-    -   `dclf:telemetry=<label>` starts a BasicTelemetry session for a phase, and `dclf:telemetry=off` ends the last. Each writes per-Present frame times, scope totals and off-CPU stalls to `<log directory>/dclf-telemetry`, and a frame time summary to the log.
+    -   `dclf:telemetry=<label>` starts a BasicTelemetry session for a phase, and `dclf:telemetry=off` ends the last. Each writes per-Present frame times, scope totals, off-CPU stalls and DCLF's zones by thread to `<log directory>/dclf-telemetry`, and a frame time summary and each thread's DCLF zone time to the log. DCLF's zones are `DCLF_ZONE` / `DCLF_ZONE_NAMED` (`Diagnostics/Zones.h`), which open a Tracy zone and, during a phase only, a BasicTelemetry scope and a per-thread tally, so they record in builds without Tracy too. Use them in place of `ZoneScopedN` / `ZoneNamedN` under the tree.
     -   `dclf:mark=<label>` marks a phase's boundary in the log; `dclf:gpu-window=<label>` makes the GPU event timers
         (`CS_GPU_EVENT_TIMERS`, with an interval too large to reach) log the frames from there to the next window as one block,
         frames in flight included ("[GpuEvents] window '<label>'"; `-` is not logged).

@@ -3,6 +3,7 @@
 // verdicts (ClassifyFrame, HiddenForWalk, billboards, first person).
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/AncestorValues.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
@@ -909,7 +910,7 @@ namespace DCLF::Scene
 		std::vector<MirrorReadStats> counters(chunks);
 		std::vector<MirrorReadStats> geometryCounters;
 		{
-			ZoneScopedN("CS.DCLF.Scene.SubtreesFanout");
+			DCLF_ZONE("CS.DCLF.Scene.SubtreesFanout");
 			const auto start = std::chrono::steady_clock::now();
 			walk(a_out, counters, parallel);
 			auto& index = subtreeGeometryIndex;
@@ -927,7 +928,7 @@ namespace DCLF::Scene
 			a.geometriesPooled += pool ? geometries : 0;
 			geometryCounters.resize((geometries + kGeometryGrain - 1) / kGeometryGrain);
 			auto body = [&](std::size_t a_begin, std::size_t a_end) {
-				ZoneScopedN("CS.DCLF.Scene.SubtreeGeometriesShards");
+				DCLF_ZONE("CS.DCLF.Scene.SubtreeGeometriesShards");
 				ShardScope scope(*this, pool, &geometryCounters[a_begin / kGeometryGrain]);
 				for (std::size_t i = a_begin; i < a_end; ++i) {
 					auto& prep = a_out[index[i].first];
@@ -972,7 +973,7 @@ namespace DCLF::Scene
 		[[maybe_unused]] const std::size_t portalRoots = alwaysRenderRoots.size();
 		PrepareSubtrees(a_roots, mode, subtreePreps);
 		{
-			ZoneScopedN("CS.DCLF.Scene.SubtreesMerge");
+			DCLF_ZONE("CS.DCLF.Scene.SubtreesMerge");
 			const auto start = std::chrono::steady_clock::now();
 			for (auto& prep : subtreePreps)
 				MergeSubtree(prep);

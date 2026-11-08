@@ -3,6 +3,7 @@
 
 // volk must precede every Vulkan header in this translation unit.
 #include <rhi_interop_vulkan.h>
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -532,7 +533,7 @@ namespace DCLF
 				}
 			} tracking;
 			{
-				ZoneScopedN("CS.DCLF.Texture.Import.DescribeResource");
+				DCLF_ZONE("CS.DCLF.Texture.Import.DescribeResource");
 				auto& runtime = RenderGraphRuntime::Get();
 				// DXVK accepts image views, but buffer imports must name the underlying resource.
 				IUnknown* object = structured ? static_cast<IUnknown*>(bufferResource.get()) : view;
@@ -595,7 +596,7 @@ namespace DCLF
 					reinterpret_cast<std::uintptr_t>(image.image), reinterpret_cast<std::uintptr_t>(view));
 				import.debugName = importName.c_str();
 				{
-					ZoneScopedN("CS.DCLF.Texture.Import.WrapImage");
+					DCLF_ZONE("CS.DCLF.Texture.Import.WrapImage");
 					if (rhi::vulkan::import_image(a_context.device, import, a_entry.image) != rhi::Result::Ok || !a_entry.image)
 						return Reject::Import;
 				}
@@ -608,7 +609,7 @@ namespace DCLF
 			backing->tracked = std::exchange(tracking.object, nullptr);
 			a_entry.backing = backing;
 			{
-				ZoneScopedN("CS.DCLF.Texture.Import.CreateView");
+				DCLF_ZONE("CS.DCLF.Texture.Import.CreateView");
 				a_entry.binding = a_context.service->CreateOwnedShaderResourceView(a_context.deviceOwner, backing->image.Get(), backing, srv);
 			}
 			if (!a_entry.binding)
@@ -652,7 +653,7 @@ namespace DCLF
 		// but the one this thread is importing (ResolveBinding registers only what it has imported).
 		static void Answer(Importer& a_importer, Work& a_work, const Published& a_published)
 		{
-			ZoneScopedN("CS.DCLF.Texture.Answer");
+			DCLF_ZONE("CS.DCLF.Texture.Answer");
 			auto* key = a_work.view.get();
 			if (!key) {
 				Answered(a_importer, *a_work.replies, nullptr, a_work.cookie, a_published.fixed->null);
@@ -764,7 +765,7 @@ namespace DCLF
 
 	GpuTextures::Binding GpuTextures::ResolveBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag)
 	{
-		ZoneScopedN("CS.DCLF.Texture.ResolveBinding");
+		DCLF_ZONE("CS.DCLF.Texture.ResolveBinding");
 		if (!a_view)
 			return NullBinding();
 		// These holders keep their first import and do not follow a swap: the full window, and they ask again until it is there.
@@ -772,7 +773,7 @@ namespace DCLF
 			return { kInvalid, {} };
 		auto registry = impl->registry;
 		if (registry) {
-			ZoneScopedN("CS.DCLF.Texture.RegistryLookup");
+			DCLF_ZONE("CS.DCLF.Texture.RegistryLookup");
 			Binding binding;
 			std::scoped_lock lock(registry->mutex);
 			if (impl->Find(*registry, a_view, binding) != Impl::Found::Unknown)
@@ -785,7 +786,7 @@ namespace DCLF
 		if (!Impl::MakeContext(context))
 			return { kInvalid, {} };
 		{
-			ZoneScopedN("CS.DCLF.Texture.Import");
+			DCLF_ZONE("CS.DCLF.Texture.Import");
 			impl->cleanup = context.cleanup;
 			if (!registry)
 				impl->registry = registry = context.cleanup->Make<Impl::Registry>();
@@ -798,7 +799,7 @@ namespace DCLF
 			{
 				// Registered settled, never pending: a pending entry is one whose import is queued for the import thread, which a
 				// Request that finds it waits on (Impl::Answer). The import thread may have imported the view meanwhile: both are valid.
-				ZoneScopedN("CS.DCLF.Texture.Import.Register");
+				DCLF_ZONE("CS.DCLF.Texture.Import.Register");
 				std::scoped_lock lock(registry->mutex);
 				entry->serial = ++registry->nextSerial;
 				auto& slot = registry->entries[a_view];
@@ -996,7 +997,7 @@ namespace DCLF
 		const auto registry = impl->registry;
 		if (!registry)
 			return;  // nothing imported: the old storages go with the caller's
-		ZoneScopedN("CS.DCLF.Texture.NoteRelocations");
+		DCLF_ZONE("CS.DCLF.Texture.NoteRelocations");
 		// Kept this long for an import tracked before its move and registered after it (an import takes milliseconds).
 		constexpr auto kUnclaimedFor = std::chrono::seconds(2);
 		const auto now = std::chrono::steady_clock::now();

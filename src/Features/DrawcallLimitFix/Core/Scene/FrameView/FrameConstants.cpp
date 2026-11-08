@@ -2,6 +2,7 @@
 // bindless-read value changes), the frame lighting and fog, the character light's view and the projected textures. Render thread.
 
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "State.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
@@ -18,7 +19,7 @@ namespace DCLF::Scene
 	void FrameView::RefreshFrameConstants()
 	{
 		const Tables& view = View();
-		ZoneNamedN(frameConstantsZone, "CS.DCLF.FrameConstants", true);
+		DCLF_ZONE_NAMED(frameConstantsZone, "CS.DCLF.FrameConstants", true);
 		// The material records' frame components are the scene work's (RefreshMaterialSignatures); the frame keeps the
 		// character light's view, from its sample.
 		RefreshCharacterLightView();

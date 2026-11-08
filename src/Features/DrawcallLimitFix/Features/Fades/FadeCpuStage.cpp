@@ -12,6 +12,7 @@
 // not FadeStateCS's view-projection planes: the two agree but for rounding at the planes.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeWriters.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalPrograms.h"
@@ -231,7 +232,7 @@ namespace DCLF::Features::Fades
 		{
 			if (!a_input.animatedDrain.pending)
 				return;
-			ZoneScopedN("CS.DCLF.FadeCpuStage.TakeAnimated");
+			DCLF_ZONE("CS.DCLF.FadeCpuStage.TakeAnimated");
 			AnimatedFadeInputs anim{};
 			TakeAnimatedBatchOnWorker(a_input.animatedRoots, anim);
 			a_input.animatedDrain.pending = false;
@@ -261,7 +262,7 @@ namespace DCLF::Features::Fades
 
 		Api::FrameValueInput CpuStatesKick(const Api::FrameValuePoolKick&)
 		{
-			ZoneScopedN("CS.DCLF.FV.Kick.FadeCpuStates");
+			DCLF_ZONE("CS.DCLF.FV.Kick.FadeCpuStates");
 			TracyCZoneN(fadeArm, "CS.DCLF.FV.Kick.Fade.Arm", true);
 			auto arm = Direct::TakeCpuFrameArm();
 			const auto& view = Scene::FrameView::Get();
@@ -297,11 +298,11 @@ namespace DCLF::Features::Fades
 			const auto list = Extensions::RootListOf(*tables);
 			TakeAnimated(*input);
 			{
-				ZoneScopedN("CS.DCLF.FV.Kick.Fade.RootPrograms");
+				DCLF_ZONE("CS.DCLF.FV.Kick.Fade.RootPrograms");
 				input->rootPrograms = RootPrograms(*tables);
 			}
 			if (const auto* cull = Extensions::MainCullInput(); cull && cull->contribution.programWords) {
-				ZoneScopedN("CS.DCLF.FV.Kick.Fade.ProgramWords");
+				DCLF_ZONE("CS.DCLF.FV.Kick.Fade.ProgramWords");
 				const auto words = cull->contribution.programWords();
 				ZoneValue(words.size());
 				input->programs.assign(words.begin(), words.end());
@@ -540,7 +541,7 @@ namespace DCLF::Features::Fades
 					Direct::DropCullFrame();
 				return;
 			}
-			ZoneScopedN("CS.DCLF.FadeCpuStage");
+			DCLF_ZONE("CS.DCLF.FadeCpuStage");
 			TakeAnimatedOnWorker(*input);
 			TracyCZoneN(fPrep, "CS.DCLF.FadeCpuStage.Prepare", true);
 			const bool observer = input->observer;
@@ -570,7 +571,7 @@ namespace DCLF::Features::Fades
 				storage->programs.clear();
 			} else {
 				{
-					ZoneScopedN("CS.DCLF.FadeCpuStage.CopyRows");
+					DCLF_ZONE("CS.DCLF.FadeCpuStage.CopyRows");
 					ZoneValue(rows.size());
 					CopyRows(rows, *storage);
 				}
@@ -606,7 +607,7 @@ namespace DCLF::Features::Fades
 					StepRoot(context, slotAt(r));
 			});
 			TracyCZoneEnd(fSteps);
-			ZoneNamedN(fTail, "CS.DCLF.FadeCpuStage.Publish", true);
+			DCLF_ZONE_NAMED(fTail, "CS.DCLF.FadeCpuStage.Publish", true);
 			if (!observer) {
 				std::vector<FadeEvent> events;
 				for (std::size_t c = 0; c < chunks; ++c) {

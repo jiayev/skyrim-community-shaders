@@ -4,6 +4,7 @@
 // or more. The log gets the phase's frame time summary from BasicTelemetry's sampler.
 
 #include "TelemetryProfile.h"
+#include "Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
@@ -83,10 +84,36 @@ namespace DCLF::Diagnostics
 				logger::warn("[DCLF] telemetry {}: dropped {} stall events and {} contended scope samples", phase, a_snapshot.droppedEvents, a_snapshot.droppedContendedScopeSamples);
 		}
 
+		/** @brief DCLF's zones by thread (Zones.h): <label>.threads.csv, and each thread's DCLF time in the log. */
+		void WriteThreads(const std::filesystem::path& a_dir)
+		{
+			auto rows = Zones::TakeThreadRows();
+			std::ranges::sort(rows, [](const auto& a, const auto& b) { return a.threadId != b.threadId ? a.threadId < b.threadId : a.totalNs > b.totalNs; });
+			std::ofstream out(a_dir / (phase + ".threads.csv"));
+			out << "thread_id,thread,scope,count,total_ns,max_ns,top_level_ns\n";
+			std::unordered_map<std::uint32_t, std::pair<std::string, std::uint64_t>> threads;
+			for (const auto& row : rows) {
+				out << row.threadId << ",\"" << row.thread << "\",\"" << row.scope << "\"," << row.count << ',' << row.totalNs << ',' << row.maxNs << ','
+					<< row.topLevelNs << '\n';
+				auto& thread = threads[row.threadId];
+				thread.first = row.thread;
+				thread.second += row.topLevelNs;
+			}
+			std::vector<std::pair<std::uint32_t, std::pair<std::string, std::uint64_t>>> busiest(threads.begin(), threads.end());
+			std::ranges::sort(busiest, [](const auto& a, const auto& b) { return a.second.second > b.second.second; });
+			std::string line;
+			for (std::size_t i = 0; i < busiest.size() && i < 12; ++i)
+				line += fmt::format("{}{} {} {:.1f} ms", i ? ", " : "", busiest[i].first, busiest[i].second.first.empty() ? "?" : busiest[i].second.first,
+					busiest[i].second.second / 1e6);
+			if (!line.empty())
+				logger::info("[DCLF] telemetry {}: DCLF zone time by thread: {}", phase, line);
+		}
+
 		void EndPhase()
 		{
 			if (!session)
 				return;
+			Zones::recording.store(false, std::memory_order_relaxed);
 			frame.reset();
 			const auto snapshot = session->Snapshot();
 			session.reset();
@@ -95,6 +122,7 @@ namespace DCLF::Diagnostics
 			std::filesystem::create_directories(dir, error);
 			WriteFrames(snapshot, dir);
 			WriteScopes(snapshot, dir);
+			WriteThreads(dir);
 		}
 	}
 
@@ -111,6 +139,8 @@ namespace DCLF::Diagnostics
 		config.retainStallEvents = true;
 		config.stallEventThresholdNs = 2'000'000;
 		session = std::make_unique<basic_telemetry::Session>(std::move(config));
+		Zones::ResetThreadRows();
+		Zones::recording.store(true, std::memory_order_relaxed);
 	}
 
 	void TelemetryFrame()

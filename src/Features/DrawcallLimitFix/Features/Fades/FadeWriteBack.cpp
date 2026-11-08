@@ -3,6 +3,7 @@
 // entry (WriteFadeStores).
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneTracker.h"
@@ -66,7 +67,7 @@ namespace DCLF::Features::Fades
 			writeBack.dropped.fetch_add(stores->stores.size(), std::memory_order_relaxed);
 			return;
 		}
-		ZoneScopedN("CS.DCLF.FadeWriteBack.Stores");
+		DCLF_ZONE("CS.DCLF.FadeWriteBack.Stores");
 		const auto start = std::chrono::steady_clock::now();
 		std::uint64_t applied = 0, notWritten = 0;
 		for (const auto& store : stores->stores) {
@@ -138,7 +139,7 @@ namespace DCLF::Features::Fades
 		const std::uint64_t publication = Scene::FrameView::Get().InstalledSequence();
 		auto retirement = Scene::FrameView::Get().InstalledRetirement();
 		auto find = [fades = std::move(fades), tables, publication, retirement = std::move(retirement)] {
-			ZoneScopedN("CS.DCLF.FadeWriteBack");
+			DCLF_ZONE("CS.DCLF.FadeWriteBack");
 			auto& state = *fades->fadeWriteBack;
 			// The roots as those tables list them (the root states' view).
 			const auto list = tables ? Extensions::RootListOf(*tables) : Api::RootListView{};

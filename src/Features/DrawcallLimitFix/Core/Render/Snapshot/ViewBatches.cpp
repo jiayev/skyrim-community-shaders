@@ -3,6 +3,7 @@
 // in a pooled version of their own.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatches.h"
 #include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatchesInternal.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
@@ -51,7 +52,7 @@ namespace DCLF::Draws
 
 	std::shared_ptr<Direct::ViewBatchSet> MakeViewBatches(const ViewBatchInputs& a_in, const Direct::SnapshotSpheres* a_spheres, std::vector<DrawSequence>& a_sequences)
 	{
-		ZoneScopedN("CS.DCLF.ViewBatches");
+		DCLF_ZONE("CS.DCLF.ViewBatches");
 		if (!a_in.tables || !a_in.payload || (!a_in.main && !a_in.shadow))
 			return nullptr;
 		auto set = std::make_shared<Direct::ViewBatchSet>();
@@ -81,7 +82,7 @@ namespace DCLF::Draws
 		SequenceSink sink{ a_sequences, set->sequenceArgs, geometries };
 		ListBuilder lists(a_in, rows, sink, scratch);
 		{
-			ZoneScopedN("CS.DCLF.ViewBatches.Lists");
+			DCLF_ZONE("CS.DCLF.ViewBatches.Lists");
 			ForEachInput(a_in, [&](const DrawInput& a_input) { lists.Add(a_input); });
 		}
 		set->sequenceCount = static_cast<std::uint32_t>(a_sequences.size());
@@ -91,7 +92,7 @@ namespace DCLF::Draws
 		const std::uint32_t laneCount = set->lanes;
 		std::size_t batches = 0;
 		{
-			ZoneScopedN("CS.DCLF.ViewBatches.Sort");
+			DCLF_ZONE("CS.DCLF.ViewBatches.Sort");
 			for (std::size_t v = 0; v < Direct::kViewTypes; ++v) {
 				SortList(scratch.lanes[v], set->buckets[v], bucketOf);
 				batches += (scratch.lanes[v].size() + laneCount - 1) / laneCount;
@@ -99,11 +100,11 @@ namespace DCLF::Draws
 		}
 		const std::size_t batchBytes = std::size_t(laneCount) * kLaneBytes;
 		{
-			ZoneScopedN("CS.DCLF.ViewBatches.Storage");
+			DCLF_ZONE("CS.DCLF.ViewBatches.Storage");
 			// Not zeroed: every column of a batch's lanes is written below (both live columns too), and nothing past its count is read.
 			set->storage = StoragePool::Get().Take(batches * batchBytes);
 		}
-		ZoneNamedN(fillZone, "CS.DCLF.ViewBatches.Fill", true);
+		DCLF_ZONE_NAMED(fillZone, "CS.DCLF.ViewBatches.Fill", true);
 		// Off (A/B): the producer fills each parity's static lanes at its first frame with the set (FrameValues' StoreLiveSpheres).
 		const bool prefill = Direct::ExperimentOn(Direct::kExpPrefillLive);
 		const std::size_t objects = a_in.tables->objects.size();

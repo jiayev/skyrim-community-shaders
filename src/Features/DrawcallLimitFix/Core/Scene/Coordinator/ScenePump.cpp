@@ -4,6 +4,7 @@
 // take, and the frame's own pass).
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Capture/Capture.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
@@ -199,7 +200,7 @@ namespace DCLF::Scene
 
 	void Coordinator::ScenePass(bool a_inline)
 	{
-		ZoneScopedN("CS.DCLF.ScenePass");
+		DCLF_ZONE("CS.DCLF.ScenePass");
 		if (throwNextPass.exchange(false, std::memory_order_acq_rel)) [[unlikely]]
 			throw 0;  // not a std::exception: past the pass's handler, into the pump's (SerializedTaskPump::RunOwned), which stops it
 		// A wake from here on is the next pass's: the sources taken before anything is (WakeScenePassBits' fence pairs with this one).
@@ -274,11 +275,11 @@ namespace DCLF::Scene
 		TracyPlot("CS.DCLF.ScenePassMs", ms);
 		{
 			// The pass of sceneFrame's inputs is done, its publication (if any) posted: the snapshot builder may publish for the frame now.
-			ZoneScopedN("CS.DCLF.Scene.NoteScenePassDone");
+			DCLF_ZONE("CS.DCLF.Scene.NoteScenePassDone");
 			IndirectDraws::Get().NoteScenePassDone(sceneFrame);
 		}
 		// The coordinator's report lines, when its frame crossed into a new window.
-		ZoneNamedN(passReportsZone, "CS.DCLF.Scene.PassReports", true);
+		DCLF_ZONE_NAMED(passReportsZone, "CS.DCLF.Scene.PassReports", true);
 		Reports::ScenePassEnd(*this, sceneFrame);
 		ReportMoverGate();
 		ReportPublicationPacing();

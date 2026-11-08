@@ -4,6 +4,7 @@
 // CS_DCLF_FRAME_TRACE every colour commit also logs its slot's last counts (FrameTrace.cpp).
 
 #include "DrawsState.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "DrawsView.h"
 #include "Events.h"
@@ -38,7 +39,7 @@ namespace DCLF::Diagnostics
 
 			void Run()
 			{
-				ZoneScopedN("CS.DCLF.CullCounters.CpuSide");
+				DCLF_ZONE("CS.DCLF.CullCounters.CpuSide");
 				const RE::NiPoint3 eye{ terrainNear[0], terrainNear[1], terrainNear[2] };
 				const auto test = [&](const Draws::DrawInput& a_input) {
 					// The sun test: the colour segment's inputs of the one main list (its view bits, as BuildDrawsCS tests them first).

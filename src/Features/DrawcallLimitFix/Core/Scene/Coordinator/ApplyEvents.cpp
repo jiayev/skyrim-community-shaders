@@ -3,6 +3,7 @@
 // goes back through the retirement chain. Also the load screen's discard and the detach safety net.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
@@ -46,7 +47,7 @@ namespace DCLF::Scene
 
 	std::shared_ptr<Coordinator::EventBatch> Coordinator::CollectEvents()
 	{
-		ZoneScopedN("CS.DCLF.Scene.CollectEvents");
+		DCLF_ZONE("CS.DCLF.Scene.CollectEvents");
 		// The queues' one consumer. Each is drained to where it stands now, so later pushes are the next pass's and a pass always ends.
 		// The render thread's posts were taken before, so every event older than its capture is in this batch or an earlier one.
 		auto& tracker = SceneTracker::Get();
@@ -275,7 +276,7 @@ namespace DCLF::Scene
 	{
 		// Material captures first: an attach names materials whose captures were pushed before it.
 		{
-			ZoneScopedN("CS.DCLF.Scene.MaterialCaptures");
+			DCLF_ZONE("CS.DCLF.Scene.MaterialCaptures");
 			DrainMaterialCaptures();
 		}
 		auto batch = std::move(a_batch);
@@ -391,7 +392,7 @@ namespace DCLF::Scene
 			if (event->type == SceneTracker::EventType::Attached) {
 				++stats.attachedEvents;
 				if (!categoryNodes.empty()) {
-					ZoneScopedN("CS.DCLF.Scene.SubtreesMerge");
+					DCLF_ZONE("CS.DCLF.Scene.SubtreesMerge");
 					const auto mergeStart = std::chrono::steady_clock::now();
 					if (subtreeMode == 0)
 						AddSubtree(event->node.get());
@@ -425,7 +426,7 @@ namespace DCLF::Scene
 
 	void Coordinator::ApplyDetaches(const std::vector<RE::BSGeometry*>& a_detached)
 	{
-		ZoneScopedN("CS.DCLF.Scene.Detaches");
+		DCLF_ZONE("CS.DCLF.Scene.Detaches");
 		auto& a = attachStats;
 		const auto detachStart = std::chrono::steady_clock::now();
 		a.detachedGeometries += a_detached.size();
@@ -445,7 +446,7 @@ namespace DCLF::Scene
 
 	void Coordinator::HoldLeafProperties(const BatchIndex& a_index)
 	{
-		ZoneScopedN("CS.DCLF.Scene.LeafHolds");
+		DCLF_ZONE("CS.DCLF.Scene.LeafHolds");
 		const auto leafStart = std::chrono::steady_clock::now();
 		for (const auto* records : a_index.leaves) {
 			attachStats.leafKeys += records->geometries.size();
@@ -481,11 +482,11 @@ namespace DCLF::Scene
 		const std::uint32_t frame = SceneCapture::Frame();
 		const std::size_t jobs = captures.size() * SceneMirror::kTypes;
 		auto body = [&](std::size_t a_begin, std::size_t a_end) {
-			ZoneScopedN("CS.DCLF.Scene.Mirror.PrepareShards");
+			DCLF_ZONE("CS.DCLF.Scene.Mirror.PrepareShards");
 			for (std::size_t j = a_begin; j < a_end; ++j)
 				SceneMirror::Prepare(*captures[j / SceneMirror::kTypes], static_cast<std::uint32_t>(j % SceneMirror::kTypes), frame, mirrorPreps[j / SceneMirror::kTypes]);
 		};
-		ZoneScopedN("CS.DCLF.Scene.Mirror.Prepare");
+		DCLF_ZONE("CS.DCLF.Scene.Mirror.Prepare");
 		const auto start = std::chrono::steady_clock::now();
 		// The serial modes prepare here too: the parity runs apply what the normal path does (moved, not copied).
 		if (FanoutMode(records, kMirrorFanoutRecords) == 2) {
@@ -587,14 +588,14 @@ namespace DCLF::Scene
 
 	void Coordinator::ApplyMirrorEvents(const EventBatch& a_batch, BatchIndex& a_index)
 	{
-		ZoneScopedN("CS.DCLF.Scene.Mirror");
+		DCLF_ZONE("CS.DCLF.Scene.Mirror");
 		mirror.SetChecking(Policy::CheckMirrorApply());
 		mirror.BeginBatch();
 		std::vector<const SceneCapture::Records*> captures;
 		std::size_t records = 0;
 		PinMirrorBatch(a_batch, captures, records);
 		PrepareMirrorCaptures(captures, records);
-		ZoneNamedN(mirrorApplyZone, "CS.DCLF.Scene.Mirror.Apply", true);
+		DCLF_ZONE_NAMED(mirrorApplyZone, "CS.DCLF.Scene.Mirror.Apply", true);
 		const auto applyStart = std::chrono::steady_clock::now();
 		std::size_t nextPrep = 0;
 		// The apply's time by event kind (AttachStats::mirrorKindMs), taken where the kind changes: runs of one kind cost one clock read.
@@ -661,7 +662,7 @@ namespace DCLF::Scene
 
 	void Coordinator::PinMirrorBatch(const EventBatch& a_batch, std::vector<const SceneCapture::Records*>& a_captures, std::size_t& a_records)
 	{
-		ZoneScopedN("CS.DCLF.Scene.Mirror.Pins");
+		DCLF_ZONE("CS.DCLF.Scene.Mirror.Pins");
 		// One walk for the pins and the captures to prepare; the pins from the events that carry any. The batch's pins by key: the
 		// only source of references while it applies.
 		std::vector<const std::vector<RE::NiPointer<RE::NiRefObject>>*> pinned;

@@ -3,6 +3,7 @@
 // (Api::ShadowExclusionContribution: Features/Shadows/Local's ExclusionBuild), which the shadow participant's payload calls.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 
@@ -583,7 +584,7 @@ namespace DCLF::Draws
 	void BuildKeptShadowShared(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out, ShadowKept& k,
 		const ShadowMaterialRow& a_plain, bool a_sharedRegion, ShadowBuildSplit& a_split)
 	{
-		ZoneScopedN("CS.DCLF.BuildShadow.KeptShared");
+		DCLF_ZONE("CS.DCLF.BuildShadow.KeptShared");
 		const std::uint32_t objects = static_cast<std::uint32_t>(a_tables.objects.size());
 		++k.builds;
 		const std::uint64_t build = ++k.build;
@@ -637,7 +638,7 @@ namespace DCLF::Draws
 	void BuildKeptShadowRegion(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out, ShadowKept& k,
 		ResidentRegion* a_scene, ShadowBuildSplit& a_split)
 	{
-		ZoneScopedN("CS.DCLF.BuildShadow.Kept");
+		DCLF_ZONE("CS.DCLF.BuildShadow.Kept");
 		const std::uint32_t objects = static_cast<std::uint32_t>(a_tables.objects.size());
 		KeptShadowBuild b{ a_in, a_tables, a_lookups, a_out, k, a_scene, objects, a_split.build };
 		b.transformBuffer = a_split.transformBuffer;
@@ -761,7 +762,7 @@ namespace DCLF::Draws
 		 */
 		void CountModeDraws(ShadowPayload& a_out, ShadowKept::ModeCounts* a_counts = nullptr, const void* a_source = nullptr, std::uint64_t* a_counted = nullptr)
 		{
-			ZoneScopedN("CS.DCLF.BuildShadow.CountModeDraws");
+			DCLF_ZONE("CS.DCLF.BuildShadow.CountModeDraws");
 			// One pass for every used mode (each input's mask names its modes): a reduce, each chunk counting into its own totals, summed
 			// in chunk order.
 			std::uint32_t used = 0, usedBits = 0;
@@ -818,7 +819,7 @@ namespace DCLF::Draws
 			} else if (count >= kCountFanoutMin && !Policy::SerialFanout()) {
 				chunks.resize((count + kCountGrain - 1) / kCountGrain);
 				SceneScheduler::Executor().ParallelFor("CS.DCLF.BuildShadow.CountModeDraws", count, kCountGrain, [&](std::size_t a_begin, std::size_t a_end) {
-					ZoneScopedN("CS.DCLF.BuildShadow.CountModeDrawsShards");
+					DCLF_ZONE("CS.DCLF.BuildShadow.CountModeDrawsShards");
 					countRange(a_begin, a_end, chunks[a_begin / kCountGrain]);
 				});
 			} else {
@@ -1036,7 +1037,7 @@ namespace DCLF::Draws
 	void BuildShadowPayloadShared(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out,
 		std::shared_ptr<const StreamViews> a_streams, ShadowKept* a_kept, bool a_sharedRegion, ShadowBuildSplit& a_split)
 	{
-		ZoneScopedN("CS.DCLF.BuildShadowPayload.Shared");
+		DCLF_ZONE("CS.DCLF.BuildShadowPayload.Shared");
 		const std::uint32_t nullIndex = WriteSharedBlocks(a_in, a_tables, a_lookups, a_out, a_streams);
 		// Row 0: every caster without alpha testing (no texture offset, the null texture).
 		ShadowMaterialRow plain;
@@ -1051,7 +1052,7 @@ namespace DCLF::Draws
 	void BuildShadowPayloadRegion(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out, ShadowKept* a_kept,
 		ResidentRegion* a_scene, ShadowBuildSplit& a_split)
 	{
-		ZoneScopedN("CS.DCLF.BuildShadowPayload.Region");
+		DCLF_ZONE("CS.DCLF.BuildShadowPayload.Region");
 		a_split.pending = false;
 		if (a_kept) {
 			BuildKeptShadowRegion(a_in, a_tables, a_lookups, a_out, *a_kept, a_scene, a_split);
@@ -1066,7 +1067,7 @@ namespace DCLF::Draws
 	void BuildShadowPayload(const ShadowInputs& a_in, const SceneTables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out,
 		std::shared_ptr<const StreamViews> a_streams, ShadowKept* a_kept, ResidentRegion* a_scene)
 	{
-		ZoneScopedN("CS.DCLF.BuildShadowPayload");
+		DCLF_ZONE("CS.DCLF.BuildShadowPayload");
 		ShadowBuildSplit split;
 		BuildShadowPayloadShared(a_in, a_tables, a_lookups, a_out, std::move(a_streams), a_kept, a_scene != nullptr, split);
 		BuildShadowPayloadRegion(a_in, a_tables, a_lookups, a_out, a_kept, a_scene, split);

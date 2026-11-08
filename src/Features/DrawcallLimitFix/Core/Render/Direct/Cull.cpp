@@ -4,6 +4,7 @@
 // Keep the decisions the shader's: a change to one is a change to both.
 
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Render/Readback/Readbacks.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/CullSimd.h"
@@ -984,7 +985,7 @@ namespace DCLF::Direct
 			}
 		}
 		std::uint32_t kept = 0;
-		ZoneScopedN("CS.DCLF.Cpu.CullLanes");
+		DCLF_ZONE("CS.DCLF.Cpu.CullLanes");
 		const auto laneLap = [&](CullProfile::Section a_section) {
 			if (laneLaps)
 				lap(a_section);
@@ -1151,7 +1152,7 @@ namespace DCLF::Direct
 
 		void DiffVisibility(const CullFrame& a_frame)
 		{
-			ZoneScopedN("CS.DCLF.Cpu.DiffVisibility");
+			DCLF_ZONE("CS.DCLF.Cpu.DiffVisibility");
 			auto& diff = visibilityDiff;
 			if (bool idle = false; !diff.running.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
 				if (a_frame.visibilityReset)

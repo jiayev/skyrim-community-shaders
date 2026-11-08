@@ -4,6 +4,7 @@
 // (the report: wherever the draws' async work is composed).
 
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPersonView.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
@@ -74,7 +75,7 @@ namespace DCLF::Features::FirstPerson
 
 	void ExecuteDepth(const Api::ViewPointContext&)
 	{
-		ZoneScopedN("CS.DCLF.ExecuteFirstPersonDepth");
+		DCLF_ZONE("CS.DCLF.ExecuteFirstPersonDepth");
 		auto& draws = IndirectDraws::Get();
 		if (!draws.ViewState(kView))
 			return;
@@ -123,7 +124,7 @@ namespace DCLF::Features::FirstPerson
 
 	void ExecuteColour()
 	{
-		ZoneScopedN("CS.DCLF.ExecuteFirstPersonColour");
+		DCLF_ZONE("CS.DCLF.ExecuteFirstPersonColour");
 		auto& draws = IndirectDraws::Get();
 		if (!draws.ViewState(kView))
 			return;

@@ -3,6 +3,7 @@
 // report takes the counts.
 
 #include "DrawsState.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Events.h"
 #include "Observers.h"
 
@@ -12,7 +13,7 @@ namespace DCLF::Diagnostics
 	{
 		if (!ParityDue(a_built.frame))
 			return;
-		ZoneScopedN("CS.DCLF.ViewMaskParity");
+		DCLF_ZONE("CS.DCLF.ViewMaskParity");
 		const auto& a_draws = a_built.draws;
 		const auto& a_tables = a_built.tables;
 		auto& p = DrawsState::Get().viewMasks;

@@ -1,6 +1,7 @@
 // LocalLightCull: the point lights' shadow culls without DCLF's entries (LocalLightCull.h describes it): the frame's exclusion and
 // category filter (render thread), the Process1 skip and NiNode::OnVisible filter inside the lights' culls, and the lights' bits.
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LocalLightCull.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
@@ -357,7 +358,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		 */
 		void BuildFilter(FilterBuild& a_build)
 		{
-			ZoneScopedN("CS.DCLF.LightCullFilter");
+			DCLF_ZONE("CS.DCLF.LightCullFilter");
 			LARGE_INTEGER start{}, end{};
 			QueryPerformanceCounter(&start);
 			const auto& exclusion = *a_build.exclusion;
