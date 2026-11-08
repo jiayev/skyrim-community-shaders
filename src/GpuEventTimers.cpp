@@ -792,7 +792,7 @@ RWTexture2D<float> Out : register(u0);
 		};
 		struct Totals
 		{
-			double vs = 0, ps = 0, prims = 0, clipped = 0, ia = 0;
+			double vs = 0, ps = 0, prims = 0, clipped = 0, ia = 0, cs = 0;
 			std::uint64_t calls = 0;
 		};
 		constexpr std::uint32_t kStatsFrames = 8;
@@ -906,14 +906,15 @@ RWTexture2D<float> Out : register(u0);
 					t.prims += static_cast<double>(data[q].CPrimitives);
 					t.clipped += static_cast<double>(data[q].CInvocations);
 					t.ia += static_cast<double>(data[q].IAPrimitives);
+					t.cs += static_cast<double>(data[q].CSInvocations);
 					++t.calls;
 				}
 				frame.pending = false;
 				frame.used = 0;
 				if (++s.collected >= s.interval) {
 					for (const auto& [name, t] : s.totals)
-						logger::info("[GpuStats] {}: {:.1f} calls, VS {:.0f}, IA prims {:.0f}, clip in {:.0f}, raster prims {:.0f}, PS {:.0f} (per frame, {} frames)", name,
-							double(t.calls) / s.collected, t.vs / s.collected, t.ia / s.collected, t.clipped / s.collected, t.prims / s.collected, t.ps / s.collected,
+						logger::info("[GpuStats] {}: {:.1f} calls, VS {:.0f}, IA prims {:.0f}, clip in {:.0f}, raster prims {:.0f}, PS {:.0f}, CS {:.0f} (per frame, {} frames)", name,
+							double(t.calls) / s.collected, t.vs / s.collected, t.ia / s.collected, t.clipped / s.collected, t.prims / s.collected, t.ps / s.collected, t.cs / s.collected,
 							s.collected);
 					s.totals.clear();
 					s.collected = 0;
