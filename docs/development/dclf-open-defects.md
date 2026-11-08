@@ -45,6 +45,20 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     remaining frames needs the room resolved on the GPU in the frame: each object's record holds a stable room slot, and a table
     from slot to Light Limit Fix's number is written after its Prepass.
 
+## AMD: the HZB reads back empty, so occlusion is off there by default
+
+-   **Symptom.** On an RX 6600 (AMD driver 2.0.353, GPU-driven), occlusion culled nearly everything in view: `HZB: N footprints
+    sampled, N came back all-near (~0)`, tree LOD 100% occluded, phase 2 bringing back nothing; trees, plants and actors missing.
+    Frustum-only culling draws the same view as CPU-driven. So `CS_DCLF_CULL` defaults to `frustum` on AMD (`DefaultCullMode`,
+    `Core/Settings/Toggles.cpp`); `dclf:cull=occlusion` or `CS_DCLF_CULL=occlusion` still turns it on.
+-   **What was ruled out (2026-11-08, temporary shader probes).** The HZB dispatch is one SPD dispatch of the expected shape
+    (1024x1024 HZB, 32x32 groups, 11 mips). Its last group runs (its counter reset executes), and mips 0-6 hold 1.0 at the texels
+    probed when the source is forced to the far plane; the HZB view is valid (1024x1024, 11 levels). Neither SPD's LDS path
+    (`SPD_NO_WAVE_OPERATIONS`) nor zeroing the group counter with every depth commit changed the result. `HzbTest` clamps every tap
+    into the level, so the zeros are in the image at the tapped texels, while texels probed directly elsewhere were right.
+-   **Next.** Read whole mips back (a probe that copies a level into a buffer the CPU reads) to see which texels are zero, and
+    compare the HZB's barriers between its per-mip UAV writes and the SRV read on AMD (GENERAL against SHADER_READ_ONLY per mip).
+
 ## Open crashes
 
 -   **A freed child detached during cell streaming.** It happens intermittently, 70-100 s into motion runs (`CS_DCLF_TEST_MOVE`,
