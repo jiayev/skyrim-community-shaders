@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
 
+#include <array>
 #include <atomic>
 
 namespace DCLF::EngineOnlyCull
@@ -85,6 +86,34 @@ namespace DCLF::EngineOnlyCull
 			a_cull();
 		}
 		jobs = held;
+	}
+
+	namespace
+	{
+		constexpr std::array<const char*, static_cast<std::size_t>(WholeCull::Count)> kWholeCullNames{ "sun cascade not covered",
+			"sun cascade not covered, no exclusion", "point light not covered", "point light past the mask's 32", "spot light not covered",
+			"spot light past the mask's 32", "main camera without a snapshot", "occlusion map not taken" };
+		std::array<std::atomic<std::uint64_t>, static_cast<std::size_t>(WholeCull::Count)> wholeCulls{};
+		std::array<std::atomic<bool>, static_cast<std::size_t>(WholeCull::Count)> wholeWarned{};
+	}
+
+	void NoteWholeCull(WholeCull a_reason)
+	{
+		const auto i = static_cast<std::size_t>(a_reason);
+		if (i >= wholeCulls.size())
+			return;
+		wholeCulls[i].fetch_add(1, std::memory_order_relaxed);
+		if (!wholeWarned[i].exchange(true, std::memory_order_relaxed))
+			logger::warn("[DCLF] the engine culled a view whole ({}): DCLF does not cover it yet (counted in the primary cull's report lines)", kWholeCullNames[i]);
+	}
+
+	std::string WholeCullLine()
+	{
+		std::string reasons;
+		for (std::size_t i = 0; i < wholeCulls.size(); ++i)
+			if (const auto n = wholeCulls[i].exchange(0, std::memory_order_relaxed))
+				reasons += fmt::format("{}{} {}", reasons.empty() ? "" : ", ", n, kWholeCullNames[i]);
+		return reasons.empty() ? std::string{} : "[DCLF] whole engine culls (views DCLF does not cover yet): " + reasons + " <- WHOLE ENGINE CULL";
 	}
 
 	Stats TakeStats()

@@ -654,6 +654,18 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		}
 
 		/**
+		 * @brief A light the engine culls whole while DCLF draws the shadows (EngineOnlyCull::NoteWholeCull): past the mask's 32 (no ordinal),
+		 * or a view not DCLF's. Not while DCLF is off, with the shadows not DCLF's, or on the parity frames (cullsWhole).
+		 */
+		void NoteWholeLight(std::uint32_t a_ordinal, bool a_spot)
+		{
+			if (!installed || !ShellState::Running() || !PassCapture::ShadowWithholdingEnabled() || cullsWhole.load(std::memory_order_relaxed))
+				return;
+			using W = EngineOnlyCull::WholeCull;
+			EngineOnlyCull::NoteWholeCull(a_ordinal == kNoLight ? (a_spot ? W::SpotPastMask : W::PointPastMask) : (a_spot ? W::SpotNotCovered : W::PointNotCovered));
+		}
+
+		/**
 		 * @brief A Subset light's Accumulate: the engine's own, its cull limited to the frame's engine-only subset (EngineOnlyCull), then
 		 * the light's bits DCLF's to give for the rest, as an empty one's.
 		 */
@@ -716,6 +728,8 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 				}
 				const auto mode = ordinal != kNoLight && !a_arg3 && frameCullsEmpty.load(std::memory_order_relaxed) ? CullEmpty(light, ordinal, a_count) :
 				                                                                                                          LightCull::Engine;
+				if (mode == LightCull::Engine && !a_arg3)
+					NoteWholeLight(ordinal, false);
 				if (mode != LightCull::Empty) {
 					const Filter* filter = nullptr;
 					if (filterInstalled) {
@@ -778,6 +792,8 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 				}
 				const auto mode = ordinal != kNoLight && !a_arg3 && frameSpotsEmpty.load(std::memory_order_relaxed) ? CullEmpty(light, ordinal, a_count) :
 				                                                                                                         LightCull::Engine;
+				if (mode == LightCull::Engine && !a_arg3)
+					NoteWholeLight(ordinal, true);
 				if (mode == LightCull::Subset)
 					CullSubset(ordinal, [&] { func(a_light, a_count, a_arg2, a_arg3); });
 				else if (mode == LightCull::Engine)

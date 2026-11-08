@@ -1,6 +1,7 @@
 // PrimaryCull: the list jobs' stand-in (Process1, AppendVirtual; job threads), the render thread's frame around them, the cut's
 // plans and admission, and the synthetic membership passes (any thread).
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/EngineOnlyCull.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
@@ -375,6 +376,7 @@ namespace DCLF
 		// The sun's exclusion is not a precondition: listed roots' fade is DCLF's alone, and a whole entry the sun's cull reaches
 		// without it has its casters' passes withheld (the Sun source's accumulation, PassCapture).
 		if (!candidates) {
+			EngineOnlyCull::NoteWholeCull(EngineOnlyCull::WholeCull::PrimaryNoSnapshot);
 			++(candidates ? cutStats.skippedPreconditions : cutStats.skippedStale);
 			liveStale = true;
 			// The engine culls the stood-in roots and writes their kAccumulated this frame; the next decode writes them all.

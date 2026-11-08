@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/PrimaryCullView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/EngineOnlyCull.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
@@ -123,6 +124,9 @@ namespace DCLF::Reports
 		// The counters stand until a window with frames reports them.
 		if (!View::CutFrames())
 			return;
+		// The views the engine culled whole while DCLF draws them (Core/Handoff/EngineOnlyCull.h): each one a view DCLF does not cover yet.
+		if (const auto whole = EngineOnlyCull::WholeCullLine(); !whole.empty())
+			logger::warn("{}", whole);
 		const auto s = cull.TakeCutCounters();
 		const auto d = Diagnostics::CutObservers::Take();
 		const double toMs = MsPerTick();

@@ -3,6 +3,7 @@
 // entries.
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/EngineOnlyCull.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LocalLightCull.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -599,6 +600,11 @@ namespace DCLF::Features::Shadows::Sun
 					return;
 				}
 				self.ArmExclusion(a_light);
+				// A sun DCLF draws, culled whole by the engine (less the exclusion's entries when one is armed): a view it does not cover yet.
+				// Not on the parity frames (ExcludeSun), or with the shadows not DCLF's (M1Active).
+				if (M1Active() && ExcludeSun(Scene::FrameView::Get().GetFrame()))
+					EngineOnlyCull::NoteWholeCull(self.vetoExclusion.load(std::memory_order_relaxed) ? EngineOnlyCull::WholeCull::SunNotCovered :
+					                                                                                     EngineOnlyCull::WholeCull::SunNoExclusion);
 				const std::int64_t start = Now();
 				func(a_light, a_lists, a_nodes);
 				const std::int64_t ticks = Now() - start;

@@ -1,6 +1,7 @@
 // FrameDriver: the render thread's DCLF work at each engine point of the frame (see the header).
 
 #include "Features/DrawcallLimitFix/Core/Render/FrameDriver.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/EngineOnlyCull.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Deferred.h"
@@ -460,6 +461,9 @@ namespace DCLF
 			PrimaryCull::Get().RestoreSceneLists();
 		if (a_map < Extensions::kOcclusionMaps)
 			occlusionFrames.engine[a_map] += needed ? 1 : 0;
+		// A map DCLF draws in normal play (on, not its parity's reference) that the engine renders whole: a view DCLF does not cover yet.
+		if (needed && a_running && a_map < Extensions::kOcclusionMaps && Extensions::OcclusionOn(ActiveToggles(), a_map))
+			EngineOnlyCull::NoteWholeCull(EngineOnlyCull::WholeCull::OcclusionNotTaken);
 		return needed;
 	}
 
