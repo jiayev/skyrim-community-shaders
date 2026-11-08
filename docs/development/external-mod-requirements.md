@@ -33,7 +33,17 @@ Writes to objects that are not attached to the world yet need no report: DCLF ca
 
 ## RaceMenu (skee64)
 
-Based on the public skee64 source (`SKSE64Plugins/skee64`). The current release may differ in details.
+Based on the public skee64 source (`github.com/expired6978/SKSE64Plugins`, checked 2026-11-08):
+
+- `master` (`skee64/`, last commit 2026-10-26): the classic SKSE64 build. The newest release on Nexus, 0.4.20.0 (2026-04-19, game
+  1.6.1170 and GOG 1.6.1179), was built before the 2026-08 commit that adds body morph interface version 5. Its `BodyMorph`
+  interface is version 4.
+- `CommonLibSSE-NG` (last commit 2026-10-26): the source of the 0.5.0 betas the author posts on Patreon (b6 the newest seen), AE
+  only.
+
+Both branches apply body morphs the same way. skee64.dll exports only `SKSEPlugin_Load` and `SKSEPlugin_Version`. Its API is the
+interface map it hands out at `InterfaceExchangeMessage`: `Override`, `Overlay`, `NiTransform`, `BodyMorph`, `ItemData`, `TintMask`,
+`FaceMorph`, `ActorUpdateManager`, `Attachment`, `Command`, `FormTag`. Its only mod event is `NiOverride_Internal_EraseUID`.
 
 ### Body morphs
 
@@ -42,8 +52,16 @@ the copy. `NIOVTaskUpdateSkinPartition::Run` (`BodyMorphInterface.cpp`) uploads 
 `NiSkinInstance::skinPartition`, under the render manager's and the skin's locks. On the main thread this happens at once. From
 any other thread (an armour attached off the main thread, a plugin's call from a worker) it happens in an SKSE task a frame or more
 later: `ApplyMorphs` decides by thread, whatever `deferUpdate` says. No engine writer runs and skee sends no event, so nothing
-tells another renderer the shape changed. `IBodyMorphInterface::AddMorphShapeCallback` exists but is an empty stub, and it would run
-before the swap anyway.
+tells another renderer the shape changed.
+
+Interface version 5 declares `IBodyMorphInterface::AddMorphShapeCallback(MorphShapeCallback, order)`, on both branches. It does not
+help today:
+
+- `BodyMorphInterface::AddMorphShapeCallback` is an empty function, so no callback is ever registered, and the callbacks
+  `ApplyMorph` would call never run.
+- By its own comment it runs after the vertices are morphed on the CPU, but before they are copied to the other partitions,
+  uploaded and stored. It is passed the old partition, possibly on a worker thread.
+- Released 0.4.20.0 does not have it at all (version 4).
 
 Face sculpting (`FaceMorphInterface.cpp`) replaces a head's partition the same way.
 
@@ -52,6 +70,11 @@ Face sculpting (`FaceMorphInterface.cpp`) replaces a head's partition the same w
 1. After the new partition is stored, call `NotifyWritten(geometry, SWF_FIELD_SKIN)` for every geometry that uses the skin
    instance, including the overlays on it. Call it from the task, after the store, on the main thread, both for body morphs and for
    face sculpting. The task holds only the skin instance today, so `ApplyMorph` would pass the geometry along.
+
+   Alternatively, a callback in skee's own interface would do, if it runs after the store: implement `AddMorphShapeCallback`, and
+   add a second callback (or a version 6 interface) called from `NIOVTaskUpdateSkinPartition::Run` and the face sculpt task after
+   `skinPartition` is stored. Pass the geometry, its skin instance and the new partition. DCLF would register for it at
+   `InterfaceExchangeMessage`. The SWF report reaches every renderer at once, so it is the one DCLF prefers.
 2. Give the new partition a vertex buffer DCLF can share with the game: `D3D11_USAGE_DEFAULT`, no CPU access, created with its
    data. Do not change its contents after the partition is stored; a later morph already makes a new partition. With
    `bBodyMorphRebind=1` (the default), skee creates `D3D11_USAGE_DYNAMIC` buffers with CPU write access instead. DCLF's renderer
