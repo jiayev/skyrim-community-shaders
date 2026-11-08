@@ -63,6 +63,20 @@ ms faster on DXVK.
 -   **Fixed: wrong frustum culling.** The portal interpreter's short-circuit loop gave wrong verdicts on AMD (about 900 visible
     objects a frame culled: trees, rocks, plants missing). AMD now takes the uniform scan (`CS_GPU_AMD`); set parity shows 0
     wrong rejections, and frustum-culled GPU-driven shots match CPU-driven ones.
+-   **Fixed (2026-11-08): objects disappearing while the camera turns.** That parity check was with a still camera. In a camera
+    sweep, set parity counted about 100k in-view rejections per 300 frames, all from the portal programs (0 with
+    `CS_DCLF_CULL=none`), in both evaluators and on either queue. The cause is AMD's compiler: in `PortalTestAt`, past the
+    `program == kPortalNoProgram || program >= count` return, it took the program to be `kPortalNoProgram`, so every lane read its
+    directory entry at byte 128 + 0xFFFFFFFF * 32 = 96 (the mask and counts). That gave cull mode 18, the skip-view bit and the
+    wrong operator bases. The SPIR-V was right (`BASICRHI_VK_DUMP_LOWERED`); the ISA (`BASICRHI_VK_DUMP_ISA`) loaded the entry
+    from constant offsets 0x60, 0x64 and 0x78. `program >= count` alone covers both cases, and parity now shows 0 wrong culls in
+    sweeps. With the bug restored, it flags 105k to 127k per 300 frames.
+    -   Found with the decision trace (`CS_DCLF_PORTAL_TRACE` with `CS_DCLF_PORTAL_CAPTURE`): the inline batch records each
+        query's deciding step and hashes of the planes and directory entry it loaded; the capture compares them with the CPU's.
+        The GPU's directory hash matched the captured words from word 24 on, not word 32 where program 0's entry is.
+    -   Set parity's frustum count also held occluder and portal culls. It now judges each in-view rejection on the CPU's program
+        and flags the ones it has in view (`<- WRONG CULLS`). About 98% of the remaining in-view rejections in a sweep are culled by
+        the program too (occluders), about 2% are decided on the preprocessed node flags, which the CPU reads later.
 -   **Open: the HZB reads back empty**, so occlusion culled nearly everything. AMD defaults to frustum culling until it is found
     (dclf-open-defects.md). That costs the Z-prepass about 0.6 ms against the CPU-driven pipeline's culling.
 -   Pixel waves do not mix draws on this driver (a probe over 171 Lighting pipelines), so the pulled stages' per-draw descriptor
@@ -158,9 +172,21 @@ Ruled out:
     driver ignores a required subgroup size for fragment shaders, as the spec allows.
 -   **Barrier work itself and layout decompression:** see above.
 
-### DCLF: interop images rest in GENERAL, which costs depth compression
+### DCLF: interop images rested in GENERAL, which cost depth compression
 
-Every image the render graph imports rests in GENERAL on this driver (`DxvkImage::markOrgGeneral`), for DXVK's passes as well as
+**Fixed 2026-11-08: resting layouts.** The runtime opts in to `DXVK_ORG_INTEROP_RESTING_LAYOUTS` (`dxvkSetInteropOptions`), so
+DXVK no longer pins imported images. `DxvkImageImport` imports each image exclusively at the layout DXVK reports and seeds it as
+the texture's home layout (ORG's `ExternalTextureResource::SeedInitialLayout`), and BasicRHI samples depth in
+DEPTH_STENCIL_READ_ONLY_OPTIMAL. ORG's barrier trace shows the depth entering from DEPTH_STENCIL_READ with no discard; no colour or
+depth image is pinned. `CS_ORG_RESTING_LAYOUTS=0` restores the pinning. Frame times (Dev-Fast, vsync off):
+
+| Scene | DCLF off | CPU-driven | GPU-driven |
+| --- | --- | --- | --- |
+| Newest save, pinned GENERAL | 16.55 ms | 19.71 ms | 20.27 ms |
+| Newest save, resting layouts | 16.47 ms | 18.21 ms | 18.52 ms |
+| Whiterun, resting layouts | 16.52 ms | 12.21 ms | 12.61 ms |
+
+What it was: every image the render graph imports rested in GENERAL on this driver (`DxvkImage::markOrgGeneral`), for DXVK's passes as well as
 the graph's. With DCLF on, that is the main depth, both shadow map arrays (4096x4096x8 and x2), the terrain depth, the volumetric
 lighting and precipitation depth maps, the main colour, motion vectors and the shadow mask (`DXVK_LOG_ORG_GENERAL=1`). With DCLF
 off, no render target or depth buffer is pinned.
@@ -176,9 +202,6 @@ discard (ORG's barrier trace, `ORG_TRACE=barriers`), which was harmless while th
 
 ## Next
 
--   Interop images in their own layouts: ORG's external home states to seed an imported texture's entry state from its home
-    layout (not UNDEFINED with discard), DCLF's passes to declare depth and shadow targets as DepthReadWrite and DepthRead, then
-    DXVK to stop pinning attachments to GENERAL. The broken attempt ran 2.3 ms faster, an upper bound, since draws were missing.
 -   Pass boundaries: keep render targets in their attachment layout until something reads them, instead of returning each to
     its resting layout after every render pass.
 -   The HZB on AMD (dclf-open-defects.md), which would also bring GPU-driven DCLF under the CPU-driven pipeline's cost.

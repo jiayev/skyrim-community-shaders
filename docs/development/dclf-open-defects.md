@@ -516,7 +516,9 @@ refuses each, so they join instead of being registered by the engine every frame
     integrated GPU, driver 2.0.353, no duplicate limit), ten `VUID-vkCmdDraw-None-09600` on `kMAIN` all came in the window of the
     first graph build after the save loaded, then none in five minutes, including an interior change and its rebuild. It is the
     import's window: DXVK moves the main target into its attachment layout before `LockImage` pins it to GENERAL.
-    **Next:** pin the main targets when they are first described rather than when the graph imports them.
+    Since 2026-11-08 the runtime opts in to resting layouts and nothing is pinned, so this window may be gone; it has not been
+    re-run under the validation layer. **Next:** check with `amdval.env`, and pin at first description only if it remains under
+    `CS_ORG_RESTING_LAYOUTS=0`.
 -   **BasicRHI's `frontCCW` under Vulkan.** `frontCCW` has D3D's meaning on both backends. SARP and BasicRenderer set it true for
     glTF content. Their D3D12 behaviour is unchanged, but they have not been run under Vulkan since the mapping changed.
 

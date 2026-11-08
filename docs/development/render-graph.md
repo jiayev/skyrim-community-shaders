@@ -65,8 +65,10 @@ wait on another queue splits that list:
     work that waits for an earlier segment.
 4.  `CloseComputeEpoch` adds the stream's wait for the epoch's compute and copy work (`computeTail`) as a wait-only external
     command, after a flush when the execution's `exitSplit` says so.
-5.  DXVK's images are imported in GENERAL (`commonLayoutOnly`) and stay there. With external home states
-    (`CS_ORG_EXTERNAL_HOME`, on), every epoch leaves them on the graphics queue, where DXVK uses them between the epochs.
+5.  DXVK's images are imported at the layout DXVK reports for them (`DxvkImageImport`), which is their home: the runtime opts in
+    to `DXVK_ORG_INTEROP_RESTING_LAYOUTS`, so DXVK no longer pins them to GENERAL, and the graph uses real layouts on them. With
+    external home states (`CS_ORG_EXTERNAL_HOME`, on), every epoch returns them to that layout on the graphics queue, where DXVK
+    uses them between the epochs. `CS_ORG_RESTING_LAYOUTS=0` (or `CS_ORG_EXTERNAL_HOME=0`) keeps the old GENERAL pinning.
     Memory dependencies against D3D11 are the queue-boundary barriers (below).
 
 In the tours (2026-11-01), DXVK's command list is split 1.3 times a frame by the epochs (the Z-prepass's compute entry),
@@ -213,7 +215,8 @@ stream order, on its own command buffer, outside any render pass. DCLF's CPU-dri
 (`Core/Render/Direct/Sites.cpp`; dclf-architecture.md, "The CPU-driven pipeline"). The contract:
 
 -   **Entry.** DXVK has flushed its barriers (all earlier D3D11 work is visible) and every image is in its default layout
-    (`DxvkOrgInteropImageInfo::layout`, GENERAL for every image DCLF imports), deferred clears done.
+    (`DxvkOrgInteropImageInfo::layout`: its resting layout, GENERAL only for storage images and unified layouts), deferred
+    clears done.
 -   **Inside.** The callback begins and ends every rendering it opens. With `bindsState` DXVK forgets every binding it tracks
     afterwards (pipelines, descriptor buffers or heaps, push data, vertex and index buffers, dynamic state, render targets) and
     binds its own descriptors again, so the callback binds BasicRHI's heaps, layout and push data itself. BasicRHI wraps the

@@ -1780,7 +1780,8 @@ pass, so it was not kept.
     deferred variants there. An attachment the pixel stage has no output for gets write mask 0 (`SpirvReflection::outputLocations`),
     as DXVK builds the engine's pipeline.
 -   **Textures** (`Core/Gpu/GpuTextures`): one import per SRV, made stable in DXVK and imported into BasicRHI without ownership, with
-    simultaneous access (DXVK keeps images in GENERAL), with a view in ORG's shader-visible heap; a null SRV reads zero through a
+    the layout DXVK reports (`DxvkImageImport`: SHADER_READ_ONLY for a sampled colour image, DEPTH_STENCIL_READ_ONLY for depth,
+    simultaneous access only in GENERAL), with a view in ORG's shader-visible heap; a null SRV reads zero through a
     null descriptor. `Request` (any thread) never imports on the caller: the import thread answers, and a draw whose texture is
     pending is deferred (it stays the engine's), because marking an image stable is a synchronous DXVK CS chunk and view creation
     blocks in the driver (up to 20 ms measured while streaming). `ResolveBinding` imports inline only for the frame's textures. A
