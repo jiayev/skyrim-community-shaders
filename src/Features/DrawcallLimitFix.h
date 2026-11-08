@@ -120,6 +120,12 @@ struct DrawcallLimitFix : Feature
 	 * before the map is cleared for DCLF's.
 	 */
 	bool OcclusionReferenceFrame(OcclusionMap a_map);
+	/**
+	 * @brief DCLF draws the map (OcclusionReady): the engine's Precipitation::SetupMask culls and registers the frame's engine-only occluders
+	 * alone (the engine-only subset's casters, DCLF/Core/Scene/EngineCasters.h), so what DCLF cannot draw still occludes; the members
+	 * under their roots are withheld (the occlusion phase). False when there are none: the caller sets the projection and camera alone.
+	 */
+	bool OcclusionEngineOnlyMask(RE::Precipitation* a_precip);
 	void OcclusionReferenceRendered(OcclusionMap a_map);
 	/**
 	 * @brief The precipitation occlusion mask's render (Precipitation::SetupMask, then RenderMask), Skylighting's at its two points and

@@ -160,6 +160,8 @@ namespace DCLF
 			{ TestTurn, "CS_DCLF_TEST_TURN", T, N, false, "<start>:<end>:<degrees per frame>;...: turns the player" },
 			{ TestToggle, "CS_DCLF_TEST_TOGGLE", T, N, false, "<off frame>:<on frame>...: switches DCLF off and on" },
 			{ TestExit, "CS_DCLF_TEST_EXIT", T, N, false, "<frame>: the game exits at once after that many frames (startup loops)" },
+			{ TestRefuse, "CS_DCLF_TEST_REFUSE", T, N, false,
+				"<name>,...: geometry whose node name contains one is refused as an unstable buffer (a RaceMenu morph on test2): the engine-only subset's paths" },
 
 			{ UpscaleSubmit, "CS_UPSCALE_SUBMIT", O, N, false, "direct: upscaling's ring submissions wait for DXVK's command stream" },
 			{ StreamlineReflex, "CS_STREAMLINE_REFLEX", O, N, false, "0: Streamline does not load Reflex, PCL or DLSS-G (for Nsight captures)" },

@@ -90,6 +90,7 @@ namespace DCLF
 		TestTurn,
 		TestToggle,
 		TestExit,
+		TestRefuse,
 
 		// Other features' switches, read through the same file.
 		UpscaleSubmit,

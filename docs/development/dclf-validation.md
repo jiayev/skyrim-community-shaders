@@ -148,6 +148,7 @@ Each compares a live path with a reference built from scratch and flags every mi
 | `CS_DCLF_TEST_TURN` | `<start>:<end>:<degrees per frame>;...` | Turns the player. |
 | `CS_DCLF_TEST_TOGGLE` | `<off frame>:<on frame>...` | Switches DCLF off and on. |
 | `CS_DCLF_TEST_EXIT` | `<frame>` | The game exits after that many frames. The count includes the main menu's frames, so below about 200 the game exits before DCLF draws. |
+| `CS_DCLF_TEST_REFUSE` | `<name>,...` | Geometry whose node name contains one of the names is refused as an unstable buffer (what a RaceMenu-morphed shape got on test2), so a run has engine-only geometry of any class: the engine-only subset's paths (`Core/Scene/EngineCasters.h`). `Rock` in Riverwood gives about 860 roots: the sun's whole skip and the occlusion maps cull them alone (their report lines). |
 
 ### Tuning
 

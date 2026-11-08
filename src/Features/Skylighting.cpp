@@ -615,6 +615,8 @@ void Skylighting::RenderSkyOcclusionMap(RE::Precipitation* a_precip, bool a_dclf
 		_computeProjection(a_precip, a_precip->occlusionData.camera);
 		if (engine)
 			a_precip->SetupMask();
+		else if (dclf.OcclusionEngineOnlyMask(a_precip))
+			;  // DCLF's map, the engine's cull for its engine-only occluders alone (SetupMask set the camera)
 		else if (auto* accumulator = a_precip->occlusionData.accumulator.get())
 			accumulator->camera = a_precip->occlusionData.camera.get();  // what SetupMask sets
 		dclf.OcclusionView(DrawcallLimitFix::kSkyOcclusion);

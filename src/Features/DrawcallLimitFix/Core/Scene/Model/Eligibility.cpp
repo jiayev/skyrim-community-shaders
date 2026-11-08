@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
 #include <mutex>
@@ -83,6 +84,27 @@ namespace DCLF::Eligibility
 				return Ineligible::NoRendererData;
 			}
 			return Ineligible::None;
+		}
+
+		/** @brief CS_DCLF_TEST_REFUSE: whether a_leaf's node name contains one of the switch's comma-separated names. */
+		bool TestRefused(const SceneCapture::LeafView& a_leaf)
+		{
+			static const std::vector<std::string> names = [] {
+				std::vector<std::string> out;
+				const std::string value = SwitchValue(Switch::TestRefuse);
+				std::size_t start = 0;
+				while (start < value.size()) {
+					const auto end = value.find(',', start);
+					if (auto name = value.substr(start, end == std::string::npos ? std::string::npos : end - start); !name.empty())
+						out.push_back(std::move(name));
+					start = end == std::string::npos ? value.size() : end + 1;
+				}
+				return out;
+			}();
+			if (names.empty() || !a_leaf.node->name)
+				return false;
+			const std::string_view name = a_leaf.node->name;
+			return std::ranges::any_of(names, [&](const std::string& a_name) { return name.find(a_name) != std::string_view::npos; });
 		}
 
 		/**
@@ -165,6 +187,9 @@ namespace DCLF::Eligibility
 				return Ineligible::NotTriShape;
 		}
 
+		// CS_DCLF_TEST_REFUSE: the named geometry refused as a buffer DCLF cannot import, so a test run has engine-only geometry of any class.
+		if (TestRefused(a_leaf))
+			return Ineligible::UnstableBuffer;
 		if (const Ineligible buffers = BufferVerdict(g); buffers != Ineligible::None) {
 			if (buffers == Ineligible::SkinShape)
 				NoteSkinShape(a_leaf);

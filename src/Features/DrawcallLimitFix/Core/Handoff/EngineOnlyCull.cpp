@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Handoff/EngineOnlyCull.h"
 
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
 
 #include <atomic>
@@ -68,7 +69,22 @@ namespace DCLF::EngineOnlyCull
 		// The spot lights' and the sun's cascades' processes, and the point lights' (each class has its own slot).
 		stl::write_vfunc<0x16, Process1<0>>(RE::VTABLE_BSCullingProcess[0]);
 		stl::write_vfunc<0x16, Process1<1>>(RE::VTABLE_BSParabolicCullingProcess[0]);
-		logger::info("[DCLF] engine-only culls: Process1 limited to the subset on BSCullingProcess and BSParabolicCullingProcess while armed");
+		// The scene lists' (an occlusion map's SetupMask): after the primary cull's own hook of the slot (PrimaryCull::Install, which only
+		// stands in for the main camera's list processes).
+		stl::write_vfunc<0x16, Process1<2>>(RE::VTABLE_BSGeometryListCullingProcess[0]);
+		logger::info("[DCLF] engine-only culls: Process1 limited to the subset on BSCullingProcess, BSParabolicCullingProcess and BSGeometryListCullingProcess while armed");
+	}
+
+	void RunInline(const Scene::EngineOnlySubset* a_subset, std::uint8_t a_view, const std::function<void()>& a_cull)
+	{
+		auto& jobs = Engine::Global<void*>(Engine::Address::kListCullJobs);
+		void* const held = jobs;
+		jobs = nullptr;
+		{
+			Scope scope(a_subset, a_view);
+			a_cull();
+		}
+		jobs = held;
 	}
 
 	Stats TakeStats()
