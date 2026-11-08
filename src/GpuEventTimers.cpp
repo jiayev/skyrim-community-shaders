@@ -772,8 +772,163 @@ RWTexture2D<float> Out : register(u0);
 		return PassSkip::dropAt && GetCurrentThreadId() == PassSkip::thread;
 	}
 
+	// CS_GPU_EVENT_STATS=<name>|<name>...: D3D11 pipeline statistics (vertex and pixel invocations, primitives) of every render-thread
+	// event whose name contains one of the names, outside another such event, summed by name and logged per frame every
+	// CS_GPU_EVENT_TIMERS frames (else every 250): "[GpuStats] <name>: ...". The same counts on native D3D11 and DXVK compare the
+	// work each one does for an event.
+	namespace EventStats
+	{
+		struct Open
+		{
+			std::string name;
+			std::uint32_t query = ~0u;  // an index into the frame's queries, or none (not counted)
+		};
+		struct StatsFrame
+		{
+			std::vector<winrt::com_ptr<ID3D11Query>> queries;
+			std::vector<std::string> names;
+			std::uint32_t used = 0;
+			bool pending = false;
+		};
+		struct Totals
+		{
+			double vs = 0, ps = 0, prims = 0, clipped = 0, ia = 0;
+			std::uint64_t calls = 0;
+		};
+		constexpr std::uint32_t kStatsFrames = 8;
+		struct StatsState
+		{
+			bool read = false;
+			std::vector<std::string> filters;
+			std::uint32_t interval = 250;
+			DWORD thread = 0;
+			StatsFrame frames[kStatsFrames];
+			std::uint32_t write = 0;
+			std::vector<Open> stack;
+			std::uint32_t counting = 0;  // open events being counted (no nesting among them)
+			std::map<std::string, Totals> totals;
+			std::uint32_t collected = 0;
+		};
+		StatsState& Stats()
+		{
+			static StatsState state;
+			if (!state.read) {
+				state.read = true;
+				char value[512] = {};
+				const DWORD length = GetEnvironmentVariableA("CS_GPU_EVENT_STATS", value, sizeof(value));
+				if (length && length < sizeof(value)) {
+					std::string_view list(value, length);
+					while (!list.empty()) {
+						const auto bar = list.find('|');
+						if (const auto name = list.substr(0, bar); !name.empty())
+							state.filters.emplace_back(name);
+						list = bar == std::string_view::npos ? std::string_view{} : list.substr(bar + 1);
+					}
+					char interval[32] = {};
+					if (const DWORD n = GetEnvironmentVariableA("CS_GPU_EVENT_TIMERS", interval, sizeof(interval)); n && n < sizeof(interval))
+						state.interval = std::max<std::uint32_t>(1u, static_cast<std::uint32_t>(std::strtoul(interval, nullptr, 10)));
+					logger::info("[GpuStats] pipeline statistics on for {} event names, logged every {} frames", state.filters.size(), state.interval);
+				}
+			}
+			return state;
+		}
+
+		void Begin(std::string_view a_name)
+		{
+			auto& s = Stats();
+			if (s.filters.empty() || !s.thread || GetCurrentThreadId() != s.thread)
+				return;
+			Open open{ std::string(a_name) };
+			const bool match = std::ranges::any_of(s.filters, [&](const std::string& f) { return a_name.find(f) != std::string_view::npos; });
+			if (match && s.counting == 0) {
+				auto& frame = s.frames[s.write];
+				if (frame.used == frame.queries.size()) {
+					D3D11_QUERY_DESC desc{ D3D11_QUERY_PIPELINE_STATISTICS, 0 };
+					winrt::com_ptr<ID3D11Query> query;
+					if (SUCCEEDED(globals::d3d::device->CreateQuery(&desc, query.put()))) {
+						frame.queries.push_back(std::move(query));
+						frame.names.emplace_back();
+					}
+				}
+				if (frame.used < frame.queries.size()) {
+					open.query = frame.used++;
+					frame.names[open.query] = open.name;
+					globals::d3d::context->Begin(frame.queries[open.query].get());
+					++s.counting;
+				}
+			}
+			s.stack.push_back(std::move(open));
+		}
+
+		void End()
+		{
+			auto& s = Stats();
+			if (s.filters.empty() || !s.thread || GetCurrentThreadId() != s.thread || s.stack.empty())
+				return;
+			const auto open = std::move(s.stack.back());
+			s.stack.pop_back();
+			if (open.query != ~0u) {
+				globals::d3d::context->End(s.frames[s.write].queries[open.query].get());
+				--s.counting;
+			}
+		}
+
+		void Present()
+		{
+			auto& s = Stats();
+			if (s.filters.empty() || !globals::d3d::context)
+				return;
+			s.thread = GetCurrentThreadId();
+			auto* context = globals::d3d::context;
+			// Events still open at Present are closed here, so no query stays begun across frames.
+			for (auto it = s.stack.rbegin(); it != s.stack.rend(); ++it)
+				if (it->query != ~0u)
+					context->End(s.frames[s.write].queries[it->query].get());
+			for (auto& open : s.stack)
+				open.query = ~0u;
+			s.counting = 0;
+			s.frames[s.write].pending = true;
+			// Read the oldest finished frames back; one not ready yet is read later (or given up when its slot comes round).
+			for (std::uint32_t i = 1; i <= kStatsFrames; ++i) {
+				auto& frame = s.frames[(s.write + i) % kStatsFrames];
+				if (!frame.pending)
+					continue;
+				bool ready = true;
+				std::vector<D3D11_QUERY_DATA_PIPELINE_STATISTICS> data(frame.used);
+				for (std::uint32_t q = 0; q < frame.used && ready; ++q)
+					ready = context->GetData(frame.queries[q].get(), &data[q], sizeof(data[q]), i == 1 ? 0 : D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK;
+				if (!ready)
+					break;
+				for (std::uint32_t q = 0; q < frame.used; ++q) {
+					auto& t = s.totals[frame.names[q]];
+					t.vs += static_cast<double>(data[q].VSInvocations);
+					t.ps += static_cast<double>(data[q].PSInvocations);
+					t.prims += static_cast<double>(data[q].CPrimitives);
+					t.clipped += static_cast<double>(data[q].CInvocations);
+					t.ia += static_cast<double>(data[q].IAPrimitives);
+					++t.calls;
+				}
+				frame.pending = false;
+				frame.used = 0;
+				if (++s.collected >= s.interval) {
+					for (const auto& [name, t] : s.totals)
+						logger::info("[GpuStats] {}: {:.1f} calls, VS {:.0f}, IA prims {:.0f}, clip in {:.0f}, raster prims {:.0f}, PS {:.0f} (per frame, {} frames)", name,
+							double(t.calls) / s.collected, t.vs / s.collected, t.ia / s.collected, t.clipped / s.collected, t.prims / s.collected, t.ps / s.collected,
+							s.collected);
+					s.totals.clear();
+					s.collected = 0;
+				}
+			}
+			s.write = (s.write + 1) % kStatsFrames;
+			auto& next = s.frames[s.write];
+			next.pending = false;
+			next.used = 0;
+		}
+	}
+
 	void BeginEvent(std::string_view a_name)
 	{
+		EventStats::Begin(a_name);
 		PassSkip::Begin(a_name);
 		if (!Requested())
 			return;
@@ -799,6 +954,7 @@ RWTexture2D<float> Out : register(u0);
 
 	void EndEvent()
 	{
+		EventStats::End();
 		PassSkip::End();
 		if (!Requested())
 			return;
@@ -944,6 +1100,7 @@ RWTexture2D<float> Out : register(u0);
 
 	void OnPresent()
 	{
+		EventStats::Present();
 		PassSkip::Present();
 		if (!Requested())
 			return;
