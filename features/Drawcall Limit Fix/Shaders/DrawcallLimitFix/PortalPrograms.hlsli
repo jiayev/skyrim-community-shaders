@@ -6,6 +6,13 @@
 // preprocessed flags, the cull mode its room gives the process, the view planes, then BSCompoundFrustum::Process (0x140e320b0).
 // PortalViews::Visible is the same test on the CPU, on the same words.
 
+// AMD (CS_GPU_AMD, set by ComputeProgram on an AMD device) runs the uniform scan. On an RX 6600 (driver 2.0.353) the short-circuit
+// interpreter below gave wrong verdicts: about 900 visible objects a frame were culled from the main view, with returns or with breaks
+// in its loop. The uniform scan visits every record and agreed with the CPU's verdicts (set parity: 0 wrong frustum rejections).
+#if defined(CS_GPU_AMD) && !defined(DCLF_PORTAL_UNIFORM_SCAN)
+#	define DCLF_PORTAL_UNIFORM_SCAN 1
+#endif
+
 static const uint kPortalSetBytes = 112;
 static const uint kPortalHeaderBytes = kPortalSetBytes + 16;
 static const uint kPortalDirectoryBytes = 32;

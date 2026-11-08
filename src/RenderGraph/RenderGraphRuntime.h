@@ -133,6 +133,9 @@ public:
 	/** @brief Whether graph epochs can run. */
 	bool IsActive() const;
 
+	/** @brief The adopted Vulkan device's PCI vendor (0x1002 AMD, 0x10DE NVIDIA, 0x8086 Intel); 0 before a device was adopted. */
+	static std::uint32_t VendorId();
+
 	/** @brief Why the runtime is inactive (empty when active). */
 	const std::string& GetDisabledReason() const;
 

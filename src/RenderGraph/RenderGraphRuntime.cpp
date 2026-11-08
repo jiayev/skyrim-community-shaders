@@ -236,6 +236,17 @@ namespace
 	}
 }
 
+namespace
+{
+	// RenderGraphRuntime::VendorId: written once the device is described, read by shader compiles on any thread.
+	std::atomic<std::uint32_t> adoptedVendorId{ 0 };
+}
+
+std::uint32_t RenderGraphRuntime::VendorId()
+{
+	return adoptedVendorId.load(std::memory_order_relaxed);
+}
+
 struct RenderGraphRuntime::Impl
 {
 	winrt::com_ptr<IDXGIVkInteropDevice> interop;
@@ -1532,6 +1543,7 @@ bool RenderGraphRuntime::Initialize()
 	if (const auto getProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(info.getInstanceProcAddr(info.instance, "vkGetPhysicalDeviceProperties"))) {
 		VkPhysicalDeviceProperties properties{};
 		getProperties(info.physicalDevice, &properties);
+		adoptedVendorId.store(properties.vendorID, std::memory_order_relaxed);
 		const auto driver = properties.driverVersion;
 		// NVIDIA packs its driver version 10.8.8.6; the others use Vulkan's packing.
 		const auto driverText = properties.vendorID == 0x10DE ? fmt::format("{}.{:02}", driver >> 22, (driver >> 14) & 0xFF) :
@@ -2651,6 +2663,7 @@ bool RenderGraphRuntime::EmitExternalCommands(void (*)(void*, VkCommandBuffer), 
 	std::span<const ExternalCommandsWait>, bool, const char*, bool) { return false; }
 RenderGraphRuntime::ExternalCommandsWait RenderGraphRuntime::NativeTimelinePoint(const rhi::TimelinePoint&) { return {}; }
 std::vector<std::uint32_t> RenderGraphRuntime::InStreamEpochs() const { return {}; }
+std::uint32_t RenderGraphRuntime::VendorId() { return 0; }
 org::services::ShaderCompiler* RenderGraphRuntime::ShaderCompiler() { return nullptr; }
 const std::vector<std::filesystem::path>& RenderGraphRuntime::ShaderSourceFiles()
 {
