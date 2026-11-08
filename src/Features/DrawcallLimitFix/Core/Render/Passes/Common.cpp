@@ -205,6 +205,8 @@ namespace DCLF::Draws
 			a_list.BindLayout(a_layout);
 			a_list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_push.data());
 		};
+		if (std::ranges::none_of(a_calls, CallDrawable))
+			return;
 		// Every call preprocessed before the pass, with the execution's exact state (as MainOpaquePass), then executed in order.
 		auto& state = a_preprocess.Begin(a_recording.FrameSlot());
 		beginDrawPass(state);
@@ -227,6 +229,16 @@ namespace DCLF::Draws
 				NvPerf::PopCommandBufferRange(nvCommands, range);
 		}
 		commands.EndPass();
+	}
+
+	bool CallDrawable(const IndirectCall& a_call)
+	{
+		if (a_call.signature.valid())
+			return true;
+		static std::atomic<std::uint32_t> logged{ 0 };
+		if (logged.fetch_add(1) < 4)
+			logger::error("[DCLF] a device-generated call without a signature (capacity {}): skipped, its draws are not drawn", a_call.capacity);
+		return false;
 	}
 
 	void RecordPreprocessedDraw(org::PassRecordContext& a_recording, PreprocessStates& a_preprocess, const rhi::PassBeginInfo& a_begin, rhi::DescriptorHeapHandle a_resourceHeap,

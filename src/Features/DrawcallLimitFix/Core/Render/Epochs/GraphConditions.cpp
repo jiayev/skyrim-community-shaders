@@ -53,7 +53,7 @@ namespace DCLF::Draws
 	bool CpuPipelineForced()
 	{
 		const auto& pipelines = DrawPipelines::Get();
-		return pipelines.Enabled() && !pipelines.DeviceGenerated();
+		return pipelines.Enabled() && !pipelines.GpuDriven();
 	}
 
 	bool CpuPipelineForCell(const ToggleSet& a_set, bool a_interior)
@@ -77,6 +77,13 @@ namespace DCLF::Draws
 		                     std::ranges::contains(RenderGraphRuntime::Get().InStreamEpochs(), RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::Forward));
 		next.firstPersonForwardDirect = next.forwardDirect &&
 		                                std::ranges::contains(RenderGraphRuntime::Get().InStreamEpochs(), RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::FirstPerson));
+		// The first-person forward part has no plain buckets: without device-generated commands only the CPU pipeline draws it.
+		if (!next.cpuPipeline && !next.firstPersonForwardDirect && !DrawPipelines::Get().DeviceGenerated()) {
+			static std::atomic<bool> logged{ false };
+			if (!logged.exchange(true))
+				logger::warn("[DCLF] GPU-driven without device-generated commands and without the direct forward family (CS_DCLF_FORWARD_DIRECT): "
+							 "first-person blended draws are not drawn");
+		}
 		{
 			std::lock_guard lock(cutsMutex);
 			next.cuts = requestedCuts;

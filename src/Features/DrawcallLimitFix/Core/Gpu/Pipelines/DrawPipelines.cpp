@@ -134,8 +134,9 @@ namespace DCLF
 		// No vertex buffer arguments: the vertex stages pull their attributes through the buffers' views in the draw's push data
 		// (kDrawPushWords).
 		// Every path needs indirect bindings (the layouts' record-addressed ranges). Device-generated commands with pipeline sets draw the GPU
-		// path's colour classes; without them (Polaris and older AMD, most Intel) every cell draws CPU-driven (CpuPipelineForced), whose
-		// pushed draws bind each key's pipeline themselves.
+		// path's colour classes. Without them (RDNA2 and older AMD, most Intel) the GPU path draws colour with plain indirect draws, a
+		// counted draw per pipeline bucket, as its depth and shadow views always do. Without counted draws every cell draws CPU-driven
+		// (CpuPipelineForced), whose draws bind each key's pipeline themselves.
 		::IndirectCommandsFeatureInfo indirect{};
 		supported = device.QueryFeatureInfo(&indirect.header) == rhi::Result::Ok && indirect.indirectBindings;
 		if (!supported) {
@@ -143,9 +144,12 @@ namespace DCLF
 			return false;
 		}
 		deviceGenerated = indirect.pipelineSets && indirect.indexBufferArguments && indirect.maxPipelineSetCount >= kMaxPipelines;
-		if (!deviceGenerated)
-			logger::warn("[DCLF] Device-generated commands unavailable (pipeline sets {}, index buffers {}, up to {} pipelines): every cell draws "
-						 "CPU-driven",
+		gpuDriven = indirect.countedDraws;
+		if (!gpuDriven)
+			logger::warn("[DCLF] Counted indirect draws unavailable (drawIndirectCount): every cell draws CPU-driven");
+		else if (!deviceGenerated)
+			logger::info("[DCLF] Device-generated commands with pipeline sets unavailable (pipeline sets {}, index buffers {}, up to {} pipelines): "
+						 "the GPU path draws colour with plain indirect draws",
 				indirect.pipelineSets, indirect.indexBufferArguments, indirect.maxPipelineSetCount);
 		// The layouts' push data, the draw's words then the pass's (the frame push; the shadow views', kShadowPushWords, fewer). On descriptor
 		// heaps all of it is pushed, and BasicRHI refuses a layout past the device's maxPushDataSize (the indirect pipelines are then
@@ -156,7 +160,7 @@ namespace DCLF
 		constexpr std::uint32_t kPushBytes = 4 * (kDrawPushWords + kFramePushWords);
 		if (deviceGenerated && indirect.constantArgumentBytes && indirect.constantArgumentBytes < 4 * kDrawPushArgumentWords) {
 			logger::warn("[DCLF] Device-generated commands unavailable: a draw's Constant argument is {} B, and they may write {} B of push data; "
-						 "every cell draws CPU-driven",
+						 "the GPU path draws colour with plain indirect draws",
 				4 * kDrawPushArgumentWords, indirect.constantArgumentBytes);
 			deviceGenerated = false;
 		}
@@ -268,6 +272,11 @@ namespace DCLF
 	bool DrawPipelines::DeviceGenerated() const
 	{
 		return Enabled() && impl->deviceGenerated;
+	}
+
+	bool DrawPipelines::GpuDriven() const
+	{
+		return Enabled() && impl->gpuDriven;
 	}
 
 	bool DrawPipelines::IndirectBindable() const

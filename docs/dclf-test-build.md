@@ -11,9 +11,10 @@ This is a test build. Expect bugs, and please report them (see "What to send" be
 - **Skyrim SE 1.5.97, AE 1.6.1170 or AE 1.7.104.** Most testing has been on 1.6.1170, the current Steam build. On any other
   game version, DCLF turns itself off and the game renders as usual. The menu says why.
 - **A Vulkan driver with descriptor heaps (`VK_EXT_descriptor_heap`) or descriptor buffers (`VK_EXT_descriptor_buffer`).**
-  Community Shaders renders through Vulkan in this build (DXVK, bundled). With `VK_EXT_device_generated_commands`, the GPU
-  builds most of the draws. Without it (older AMD drivers, most Intel), the CPU records them; this is slower, but draws the same
-  scene. DCLF has been tested on NVIDIA (RTX 50 series, driver 621) and AMD (RX 6600, and a Radeon integrated GPU on driver
+  Community Shaders renders through Vulkan in this build (DXVK, bundled). The GPU builds most of the draws on any driver with
+  counted indirect draws (`drawIndirectCount`). With `VK_EXT_device_generated_commands` and its pipeline sets (NVIDIA), the colour
+  draws use them; without (AMD, Intel), they are plain indirect draws, one per pipeline. Without counted draws, the CPU records
+  them; this is slower, but draws the same scene. DCLF has been tested on NVIDIA (RTX 50 series, driver 621) and AMD (RX 6600, and a Radeon integrated GPU on driver
   2.0.353). If your driver lacks what it needs, DCLF turns itself off and the game renders as usual.
 - **RenderDoc turns DCLF off** while it is loaded: its capture layer hides the descriptor heap extension.
 

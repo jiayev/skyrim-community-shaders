@@ -43,7 +43,7 @@ namespace DCLF::Draws
 		bool operator==(const GraphConditions&) const = default;
 	};
 
-	/** @brief Whether the device makes every cell CPU-driven: no device-generated commands for the GPU path's colour (DrawPipelines::DeviceGenerated). */
+	/** @brief Whether the device makes every cell CPU-driven: no counted indirect draws for the GPU path (DrawPipelines::GpuDriven). */
 	bool CpuPipelineForced();
 
 	/** @brief Whether a_set draws a cell of a_interior CPU-driven (CpuPipelineFor: Toggles.h), or the device forces it (CpuPipelineForced). */

@@ -485,9 +485,15 @@ namespace DCLF
 		bool Enabled() const;
 		/**
 		 * @brief Whether the device draws the GPU path's colour classes: device-generated commands with pipeline sets (Enabled with them).
-		 * Without them every cell draws CPU-driven (Draws::CpuPipelineForced); the classes get no execution sets or signatures.
+		 * Without them the classes get no execution sets or signatures, and the GPU path draws colour with plain indirect draws alone
+		 * (the main, terrain, decal and forward buckets; GpuDriven).
 		 */
 		bool DeviceGenerated() const;
+		/**
+		 * @brief Whether the device can draw the GPU path at all (Enabled, with counted indirect draws: every epoch draws its buckets with
+		 * DrawIndexedIndirectCount). Without it every cell draws CPU-driven (Draws::CpuPipelineForced).
+		 */
+		bool GpuDriven() const;
 		/** @brief The lane's builds: whether the main set's pipelines are made indirect-bindable (an execution set holds them). */
 		bool IndirectBindable() const;
 

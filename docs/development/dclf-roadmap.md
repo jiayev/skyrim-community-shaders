@@ -318,10 +318,10 @@ dclf-open-defects.md). These items cut DCLF's fixed GPU cost.
 
 -   **Goal.** The colour segment draws with plain indirect draws instead of device-generated commands.
 -   **Why.** About 74 ns a sequence: 318 us for 4,291 sequences with nothing rasterized.
--   **State.** Not started. The colour segment sorts by pipeline for its device-generated draw (`Core/Render/Passes/Build.cpp`).
--   **Design.** Each draw must bind its row's blocks and textures through bindless indices instead of per-sequence state; the
-    pipeline sort stays to group the draws per pipeline.
--   **Needs.** Everything a sequence binds today reachable by index.
+-   **State.** Done: the main, terrain, decal and forward buckets (`CS_DCLF_*_PLAIN`, on by default) draw each pipeline's range with
+    one counted indirect draw and the pulled colour pipelines, which find their sequence by instance. Without device-generated
+    commands with pipeline sets (AMD, Intel) they are the only colour draws (dclf-architecture.md, "Explicit DGC preprocessing
+    and pipeline set versions"). Open: the first-person forward part has no buckets, so it needs the direct forward family there.
 
 ### 3.2 Early builds on the compute queue
 

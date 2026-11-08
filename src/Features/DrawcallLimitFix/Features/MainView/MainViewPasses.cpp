@@ -224,11 +224,13 @@ namespace DCLF::Draws
 
 		void PreprocessCall(rhi::CommandList& a_commands, rhi::CommandList& a_state, rhi::ResourceHandle a_sequences, const IndirectCall& a_call)
 		{
-			a_commands.PreprocessIndirect(a_state, a_call.signature, a_sequences, a_call.argumentsOffset, a_call.counts, a_call.countOffset, a_call.capacity);
+			if (CallDrawable(a_call))
+				a_commands.PreprocessIndirect(a_state, a_call.signature, a_sequences, a_call.argumentsOffset, a_call.counts, a_call.countOffset, a_call.capacity);
 		}
 		void ExecuteCall(rhi::CommandList& a_commands, rhi::ResourceHandle a_sequences, const IndirectCall& a_call)
 		{
-			a_commands.ExecuteIndirect(a_call.signature, a_sequences, a_call.argumentsOffset, a_call.counts, a_call.countOffset, a_call.capacity);
+			if (CallDrawable(a_call))
+				a_commands.ExecuteIndirect(a_call.signature, a_sequences, a_call.argumentsOffset, a_call.counts, a_call.countOffset, a_call.capacity);
 		}
 
 		/**

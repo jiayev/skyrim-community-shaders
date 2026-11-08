@@ -2,6 +2,7 @@
 // revision's shapes and latches from a publication and the frame's posted RevisionInputs, then AssembleRevision seals them. Also the
 // main shape's plans (shared with the commits).
 
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
@@ -145,6 +146,16 @@ namespace DCLF
 				a_plan.map.assign(kClassHeaderWords, 0u);
 				a_plan.map[0] = static_cast<std::uint32_t>(a_indirect.classOf.size());
 				a_plan.map.insert(a_plan.map.end(), a_indirect.classOf.begin(), a_indirect.classOf.end());
+				// Without device-generated commands the plain buckets are the only colour draws: their switches are ignored.
+				const bool deviceGenerated = DrawPipelines::Get().DeviceGenerated();
+				const auto plainOn = [&](Switch a_switch) {
+					if (SwitchOnUnlessZero(a_switch))
+						return true;
+					static std::atomic<bool> logged{ false };
+					if (!deviceGenerated && !logged.exchange(true))
+						logger::warn("[DCLF] plain buckets: a CS_DCLF_*_PLAIN switch is off, ignored without device-generated commands");
+					return !deviceGenerated;
+				};
 				// The plain draws' buckets: a set index's slots' capacities, from its group's a_firsts (a_groups: a set index's terrain group, empty
 				// for one range; a_halves each: the forward buckets' staging and sorted halves), group by group; none unless every set index with
 				// any has a plain colour pipeline (else one frame would draw some draws twice or not at all), then the section's words after the
@@ -153,10 +164,21 @@ namespace DCLF
 									  std::uint32_t a_halves, std::vector<SetClassPlan::PlainBucket>& a_buckets, std::uint32_t a_count) {
 					a_buckets.clear();
 					bool plain = a_on && std::ranges::any_of(a_sets, [](std::uint32_t a_capacity) { return a_capacity != 0; });
-					for (std::uint32_t set = 0; plain && set < a_sets.size(); ++set)
+					std::uint32_t missing = kNoBucket;
+					for (std::uint32_t set = 0; plain && set < a_sets.size(); ++set) {
 						plain = !a_sets[set] || (set < a_indirect.plainColour.size() && a_indirect.plainColour[set].valid());
-					if (!plain)
+						if (!plain)
+							missing = set;
+					}
+					if (!plain) {
+						// Without device-generated commands nothing else draws the range: a key without a plain colour pipeline fails its build
+						// (BuildPulledColour), so this is a defect. The range's draws are dropped (no call has a signature).
+						static std::atomic<std::uint32_t> logged{ 0 };
+						if (missing != kNoBucket && !deviceGenerated && logged.fetch_add(1) < 4)
+							logger::error("[DCLF] plain buckets: set index {} has draws and no plain colour pipeline, and no device-generated commands draw it",
+								missing);
 						return;
+					}
 					std::vector<std::uint32_t> bucketOf(a_indirect.classOf.size(), kNoBucket);
 					for (std::uint32_t g = 0; g < a_firsts.size(); ++g)
 						for (std::uint32_t set = 0; set < a_sets.size(); ++set) {
@@ -178,9 +200,9 @@ namespace DCLF
 				// the terrain ones (CS_DCLF_TERRAIN_PLAIN) over their groups' ranges.
 				std::array<std::uint32_t, 1> forwardFirst{ a_layout.sequenceDraws + a_layout.terrainCapacity[0] + a_layout.terrainCapacity[1] }, mainFirst{ 0u };
 				std::array<std::uint32_t, kTerrainGroups> terrainFirsts{ a_layout.sequenceDraws, a_layout.sequenceDraws + a_layout.terrainCapacity[0] };
-				plan(SwitchOnUnlessZero(Switch::ForwardPlain), a_forwardSets, {}, forwardFirst, 2, a_plan.forward, 1);
-				plan(SwitchOnUnlessZero(Switch::MainPlain), a_mainSets, {}, mainFirst, 1, a_plan.main, 2);
-				plan(SwitchOnUnlessZero(Switch::TerrainPlain), a_terrainSets, a_terrainGroups, terrainFirsts, 1, a_plan.terrain, 3);
+				plan(plainOn(Switch::ForwardPlain), a_forwardSets, {}, forwardFirst, 2, a_plan.forward, 1);
+				plan(plainOn(Switch::MainPlain), a_mainSets, {}, mainFirst, 1, a_plan.main, 2);
+				plan(plainOn(Switch::TerrainPlain), a_terrainSets, a_terrainGroups, terrainFirsts, 1, a_plan.terrain, 3);
 				// The decal buckets (CS_DCLF_DECAL_PLAIN): a pair of decal sub-ranges per decal set index (a_decalGroups: its group, 0 for none),
 				// past the classes' decal sub-ranges, group by group. Only while every one has a plain colour pipeline, and every one of a group
 				// with a depth prepass (Extensions::MainRanges: opaque decals) a Z-prepass pipeline.
@@ -189,7 +211,7 @@ namespace DCLF
 				for (const auto& range : Extensions::MainRanges().drawn)
 					if (range.slot < kDecalGroups && range.depthPrepass)
 						depthPrepass[range.slot] = true;
-				bool plainDecals = SwitchOnUnlessZero(Switch::DecalPlain) && std::ranges::any_of(a_decalGroups, [](std::uint32_t a_group) { return a_group != 0; });
+				bool plainDecals = plainOn(Switch::DecalPlain) && std::ranges::any_of(a_decalGroups, [](std::uint32_t a_group) { return a_group != 0; });
 				// The first decal set index that keeps them off, and why (logged when the outcome changes).
 				std::uint32_t declinedSet = kNoBucket;
 				const char* declined = "";
@@ -271,6 +293,14 @@ namespace DCLF
 				}
 			}
 			LayOutSetClasses(a_layout, a_indirect, decals, forwardSets, mainSets, terrainSets, terrainGroups, decalGroups, a_out);
+			// The plain buckets per range, logged when they change.
+			static std::atomic<std::uint64_t> lastBuckets{ ~0ull };
+			const std::uint64_t buckets = std::uint64_t(a_out.main.size()) | (std::uint64_t(a_out.terrain.size()) << 16) | (std::uint64_t(a_out.decals.size()) << 32) |
+			                              (std::uint64_t(a_out.forward.size()) << 48);
+			if (lastBuckets.exchange(buckets, std::memory_order_relaxed) != buckets)
+				logger::info("[DCLF] plain buckets: main {}, terrain {}, decals {}, forward {} (of {} set indices, {} with main slots)", a_out.main.size(),
+					a_out.terrain.size(), a_out.decals.size(), a_out.forward.size(), a_indirect.classOf.size(),
+					std::ranges::count_if(mainSets, [](std::uint32_t a_capacity) { return a_capacity != 0; }));
 		}
 
 		std::vector<LatchedCopy> MainLatchedLayout(const Resources& a_resources, bool a_depthOnly, const FrameBlockSizes& a_blocks, std::uint32_t a_buckets,

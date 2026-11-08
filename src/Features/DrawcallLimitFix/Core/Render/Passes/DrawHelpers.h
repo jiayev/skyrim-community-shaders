@@ -86,6 +86,11 @@ namespace DCLF::Draws
 		const char* preprocessRange = nullptr;  // and around its preprocess (none: none)
 	};
 	/**
+	 * @brief Whether a_call can be recorded: its class has a signature. Without device-generated commands no class has one, and every
+	 * range is drawn by plain buckets instead; a call reaching a recording then is a defect, logged once and skipped (its draws are lost).
+	 */
+	bool CallDrawable(const IndirectCall& a_call);
+	/**
 	 * @brief One explicitly preprocessed draw pass (the forward ranges'): the preprocess of every call on the frame slot's state list, set
 	 * up as the execution is (a_begin's attachments, the layout, the topology, the frame push data, the heaps), then the pass executing
 	 * them in order. Nothing without a call.
