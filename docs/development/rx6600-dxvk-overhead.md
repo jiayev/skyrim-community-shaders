@@ -111,7 +111,74 @@ GPU frame ms, run again in one session (vsync off, one sample per rung):
 -   The water cubemap and Terrain Blending are not helped by DXC. Both draw the game's Lighting shaders, and with every game shader
     through DXC they moved by +0.01 and +0.06 ms. Their extra cost on DXVK comes from somewhere else.
 
+## Attributing what was left
+
+### The blurs' real cause: zero-initialized shared memory
+
+dxbc-spirv declared every groupshared array with a null initializer. AMD's Windows driver implements that as a fill from one
+lane per wave before the shader starts (`s_ff1_i32_b64 exec`, then one `ds_write_b128` after another): 64 serial stores for a
+1 KiB array, about a thousand for the reflection blur's 15.6 KiB. D3D11 leaves shared memory undefined, and the micro benchmark's
+groupshared case runs the same on native D3D11 as on DXVK without the fill (1.47 and 1.46 ms; 3.43 ms with it). dxbc-spirv now has
+an option for it, and DXVK leaves shared memory uninitialized on AMD's proprietary driver (`DXVK_ZERO_LDS=0|1` overrides). With it,
+the blurs built with FXC cost the same as with DXC.
+
+DXVK also lowered every float-to-int conversion to about seven instructions on this driver. Its own conversion gives D3D11's
+results for NaN, infinities and out-of-range values, signed and unsigned (the micro benchmark's `ftoi-values`, the same as native),
+so the lowering is off there now as on NVIDIA (`DXVK_LOWER_FTOI=0|1`). That makes the micro benchmark's `Load` and conversion cases
+match native (2.2x to 1.06x), but changes nothing measurable in game.
+
+| Rung (newest save, 1280x720 render, GPU ms) | Start of this round | Now |
+|---|---|---|
+| Native D3D11 | 14.43 | |
+| DXVK, DCLF off | 16.96 | 16.55 |
+| DCLF CPU-driven | 19.98 | 19.71 |
+| DCLF GPU-driven | 20.55 | 20.27 |
+
+### Native against DXVK on the same build
+
+The native build above is upstream dev, so its features differ from this branch's. This branch runs on the system D3D11 with
+`CS_NATIVE_D3D11=1`, which also turns Upscaling off, so both sides of this pair render the full 1920x1080 with Upscaling disabled at
+boot. GPU event timers now work there too: native D3D11 reports no capture tool, so Community Shaders had skipped the perf events
+the timers read. The gap was 2.40 ms before the shared memory change and is 1.80 ms after (16.50 against 18.30). It barely changes
+with resolution (2.53 ms at the 1280x720 render), so it is not pixel shading. Where it is, by exclusive pass time:
+
+-   **Present and submission boundaries, about 0.4 ms.** DXVK splits the frame into about 11 submissions, and at each boundary the
+    GPU idles 0.04 to 0.14 ms although the next one was queued milliseconds earlier (`CS_GPU_IDLE_TRACE`: 0.42 ms a frame). The
+    present blit is 0.08 ms. Fewer splits (`d3d11.reproducibleCommandStream`) moved the frame by 0.07 ms, within noise.
+-   **Pass boundaries, about 0.4 ms** (self time of Player View and World). 109 render passes and 410 barrier commands a frame. The
+    barriers' own work is 0.4 ms in total (`DXVK_BARRIER_TIMING`) with no decompression among them; the cost is the drain each
+    one forces. In the micro benchmark a render target change costs 3.2 us on DXVK against 0.73 us native.
+-   The water cubemap's persistent pass list +0.2, SSGI +0.18 and SSS ray march +0.14 ms, and Lighting batches about 0.1 ms each.
+    One grass batch is 0.18 ms faster on DXVK.
+
+Ruled out:
+
+-   **Wave size.** AMD's Vulkan driver compiles the large deferred Lighting pixel shaders as wave32 and the D3D11 driver as wave64
+    (`DXVK_PIPELINE_ISA`, RGA's DX11 mode). Forcing wave64 (SPIR-V 1.5 with a subgroup-size read, DXC) moved the frame by 0.02 ms. The
+    driver ignores a required subgroup size for fragment shaders, as the spec allows.
+-   **Barrier work itself and layout decompression:** see above.
+
+### DCLF: interop images rest in GENERAL, which costs depth compression
+
+Every image the render graph imports rests in GENERAL on this driver (`DxvkImage::markOrgGeneral`), for DXVK's passes as well as
+the graph's. With DCLF on, that is the main depth, both shadow map arrays (4096x4096x8 and x2), the terrain depth, the volumetric
+lighting and precipitation depth maps, the main colour, motion vectors and the shadow mask (`DXVK_LOG_ORG_GENERAL=1`). With DCLF
+off, no render target or depth buffer is pinned.
+
+GENERAL turns depth compression off on AMD's Windows driver: putting every DXVK image in GENERAL (the unified layout path) makes the
+DCLF-off frame 1.3 ms slower, almost all of it in the shadow maps and the depth prepass. CPU-driven DCLF did not change, because its
+images are in GENERAL already. That is likely most of DCLF's remaining cost here (shadow views +1.45 ms, Depth +0.93 ms over the
+native passes).
+
+Letting those images keep their resting layouts is not a DXVK-only change. Imported exclusively at DXVK's layout, they rendered
+wrongly (terrain missing, corrupt depth tiles): the graph uses them in COMMON, and every execution enters them from UNDEFINED with
+discard (ORG's barrier trace, `ORG_TRACE=barriers`), which was harmless while they were simultaneous-access images in GENERAL.
+
 ## Next
 
--   TRUE_PBR Lighting's spills, then the water cubemap and Terrain Blending's passes, the next largest.
+-   Interop images in their own layouts: ORG's external home states to seed an imported texture's entry state from its home
+    layout (not UNDEFINED with discard), DCLF's passes to declare depth and shadow targets as DepthReadWrite and DepthRead, then
+    DXVK to stop pinning attachments to GENERAL. The broken attempt ran 2.3 ms faster, an upper bound, since draws were missing.
+-   Pass boundaries: keep render targets in their attachment layout until something reads them, instead of returning each to
+    its resting layout after every render pass.
 -   The HZB on AMD (dclf-open-defects.md), which would also bring GPU-driven DCLF under the CPU-driven pipeline's cost.
