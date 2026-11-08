@@ -19,6 +19,7 @@
 #include "Features/RemoteControl/NvPerf.h"
 #include "Features/ScreenshotFeature.h"
 #include "GpuEventTimers.h"
+#include "Features/Upscaling.h"
 #include "Globals.h"
 
 #include <Tracy/Tracy.hpp>
@@ -473,6 +474,15 @@ namespace DCLF
 						return;
 					}
 					if (RunTextureStreamingCommand(command))
+					// "dclf:fg=off|fsr|dlss": frame generation switched as the Upscaling menu's method stepper does (Upscaling::RequestFrameGenTest).
+					if (command.rfind("dclf:fg=", 0) == 0) {
+						const auto method = command.substr(8);
+						if (method == "off" || method == "fsr" || method == "dlss")
+							Upscaling::RequestFrameGenTest(method == "off" ? 0 : method == "fsr" ? 1 : 2);
+						else
+							logger::warn("[DCLF] dclf:fg: '{}' is not off, fsr or dlss", method);
+						return;
+					}
 						return;
 					// "dclf:pp=<sub-feature type>=0|1": a Post Processing effect's menu toggle (GetType(), e.g. "Depth of Field"), so a run
 					// can check that disabling an effect frees its textures and enabling it creates them again.

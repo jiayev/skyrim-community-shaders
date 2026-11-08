@@ -1078,14 +1078,24 @@ HRESULT HDRDisplay::HandleSwapChainPresent(
 	const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& presentChain)
 {
 	const bool hdrReady = loaded && hdrDataCB && outputTexture && IsHDREnabledForFrame();
-	if (Upscaling::IsWindowUnusable()) {
-		ClearUIBuffer();
-		return presentChain(swapChain, syncInterval, flags);
-	}
-
 	D3D11_VIEWPORT savedViewport{};
 	UINT viewportCount = 1;
 	globals::d3d::context->RSGetViewports(&viewportCount, &savedViewport);
+
+	// Unfocused, minimized or being resized: no HDR or UI composite this frame (upscaling and frame generation are suspended too).
+	// The UI still draws, straight into the framebuffer, so the menu and overlays stay visible while another window has focus (a
+	// second monitor). With HDR on they show in SDR until the window is usable again.
+	if (Upscaling::IsWindowUnusable()) {
+		ClearUIBuffer();
+		{
+			ZoneScopedN("CS.Present.Overlay");
+			auto& framebuffer = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kFRAMEBUFFER];
+			globals::d3d::context->OMSetRenderTargets(1, &framebuffer.RTV, nullptr);
+			globals::menu->DrawOverlay();
+		}
+		globals::d3d::context->RSSetViewports(1, &savedViewport);
+		return presentChain(swapChain, syncInterval, flags);
+	}
 
 	{
 		ZoneScopedN("CS.Present.ImGuiTarget");
