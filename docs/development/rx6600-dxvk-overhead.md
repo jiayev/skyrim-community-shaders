@@ -87,9 +87,31 @@ Three loads crashed (one GPU-driven in Whiterun, two with DCLF off at Bleak Fall
 `coc` load with SkyrimEngineTelemetry's zone hook on the stack and no DCLF frame (two executed heap memory, one read null);
 the Whiterun retry loaded.
 
+## The blurs through DXC
+
+The reflection blur is the game's `ISBlurCS` (descriptors `0x6C` and `0x6D`, defines `GRIDSIZE_X=960` or `GRIDSIZE_Y=540`,
+`TEXTAP=9`, `BLUR_SCALE=2`, `SIGMA=2`, `OUTPUT_CHANNEL_COUNT=4`). `package/Shaders/ISBlurCS.hlsl` transcribes it from the
+dumped DXBC. Built with FXC, it matches vanilla instruction for instruction, apart from an added bounds test on the store, and costs
+the same. Without `CS_SHADER_DXC`, Community Shaders now builds it and the volumetric blurs with DXC under DXVK (`CS_SHADER_DXC=^$`
+turns that off). Native D3D11 keeps FXC.
+
+GPU frame ms, run again in one session (vsync off, one sample per rung):
+
+| Rung | Newest save (GPU-bound) | Whiterun (CPU-bound for native) |
+|---|---|---|
+| Native D3D11 | 14.43 | 15.60 (GPU idle 4.96) |
+| DXVK, DCLF off, blurs through FXC | 18.16 | 16.82 |
+| DXVK, DCLF off, blurs through DXC | 16.96 | 16.01 |
+| DCLF GPU-driven, blurs through DXC | 20.55 | 15.07 |
+| DCLF CPU-driven, blurs through DXC | 19.98 | 14.60 |
+
+-   **DXC saves 1.2 ms at the GPU-bound save**, which cuts DXVK's gap to native from 3.7 ms to 2.5 ms (26% to 18%). The four
+    dispatches account for 0.99 ms of it: reflection blur 0.73 to 0.06, volumetric blurs 0.39 to 0.07.
+-   With DCLF at its defaults, the GPU-bound save went from 21.57 (GPU-driven) and 21.17 (CPU-driven) to 20.55 and 19.98.
+-   The water cubemap and Terrain Blending are not helped by DXC. Both draw the game's Lighting shaders, and with every game shader
+    through DXC they moved by +0.01 and +0.06 ms. Their extra cost on DXVK comes from somewhere else.
+
 ## Next
 
--   The reflection blur: dump the vanilla compute shader (`DXVK_SHADER_DUMP_PATH`), find what dxbc-spirv makes of it (typed UAV
-    loads, groupshared layout) and compare its cost per dispatch in the micro benchmark (`C:\Modding\CS-AB\mb`).
 -   TRUE_PBR Lighting's spills, then the water cubemap and Terrain Blending's passes, the next largest.
 -   The HZB on AMD (dclf-open-defects.md), which would also bring GPU-driven DCLF under the CPU-driven pipeline's cost.
