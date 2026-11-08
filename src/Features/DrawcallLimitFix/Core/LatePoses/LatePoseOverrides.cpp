@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/LatePoses.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <ankerl/unordered_dense.h>
 #include <atomic>
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
@@ -22,11 +23,13 @@ namespace DCLF::LatePoses
 		constexpr float kNoShrink = 0.5f;
 		// Nodes a frame may hide (a plan's scale index is 16 bits, 0 meaning none).
 		constexpr std::size_t kMaxHidden = 64;
+		constexpr std::size_t kTreeBoneCount = 0x128, kTreeBones = 0x130, kBoneStride = 0x80, kBoneWorld = 0x34, kBoneParent = 0x68, kBoneNode = 0x70, kSkinBoneWorlds = 0x30;
 
 		// One search's result, holding the engine objects it names (released on the render thread when replaced).
 		struct Search
 		{
 			std::vector<RE::NiPointer<RE::NiAVObject>> nodes;
+			std::vector<const RE::NiTransform*> worlds;
 			std::vector<float> worldScales;  // each node's world scale as found
 			struct Skin
 			{
@@ -83,6 +86,16 @@ namespace DCLF::LatePoses
 			// First the nodes: each node's hidden ancestor (its index + 1), the geometry met on the way.
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint16_t> hiddenOf;
 			std::vector<std::pair<RE::BSGeometry*, std::uint16_t>> geometry;
+			struct Tree
+			{
+				RE::NiAVObject* node = nullptr;
+				const std::byte* bones = nullptr;
+				std::uint32_t count = 0;
+				std::uint16_t hidden = 0;
+				std::vector<std::uint16_t> hiddenOf;
+			};
+			std::vector<Tree> trees;
+			static const std::uintptr_t treeVtable = REL::Relocation<std::uintptr_t>{ RE::VTABLE_BSFlattenedBoneTree[0] }.address();
 			std::vector<std::pair<RE::NiAVObject*, std::uint16_t>> stack{ { a_root, std::uint16_t{ 0 } } };
 			while (!stack.empty()) {
 				auto [object, hidden] = stack.back();
@@ -99,15 +112,48 @@ namespace DCLF::LatePoses
 				if (!hidden && object != a_root && a_out.nodes.size() < kMaxHidden)
 					if (Hidden(*object)) {
 						a_out.nodes.emplace_back(object);
+						a_out.worlds.push_back(&object->world);
 						a_out.worldScales.push_back(object->world.scale);
 						hidden = static_cast<std::uint16_t>(a_out.nodes.size());
 					}
 				if (hidden)
 					hiddenOf.emplace(object, hidden);
+				if (*reinterpret_cast<const std::uintptr_t*>(object) == treeVtable) {
+					const auto* base = reinterpret_cast<const std::byte*>(object);
+					if (const auto* bones = *reinterpret_cast<const std::byte* const*>(base + kTreeBones))
+						trees.push_back({ object, bones, *reinterpret_cast<const std::uint32_t*>(base + kTreeBoneCount), hidden, {} });
+				}
 				for (auto& child : Engine::Children(*node))
 					stack.emplace_back(child.get(), hidden);
 			}
-			if (hiddenOf.empty())
+			bool anyTreeHidden = false;
+			for (auto& tree : trees) {
+				tree.hiddenOf.assign(tree.count, 0);
+				const auto worldOf = [&](std::uint32_t a_bone) { return reinterpret_cast<const RE::NiTransform*>(tree.bones + a_bone * kBoneStride + kBoneWorld); };
+				for (std::uint32_t i = 0; i < tree.count; ++i) {
+					const auto* entry = tree.bones + i * kBoneStride;
+					const std::int16_t parent = *reinterpret_cast<const std::int16_t*>(entry + kBoneParent);
+					const bool parentEntry = parent >= 0 && static_cast<std::uint32_t>(parent) < i;
+					const std::uint16_t inherited = parentEntry ? tree.hiddenOf[parent] : tree.hidden;
+					const float parentScale = parentEntry ? worldOf(parent)->scale : tree.node->world.scale;
+					std::uint16_t hidden = inherited;
+					if (!hidden && parentScale > 1e-4f && worldOf(i)->scale < kHiddenRatio * parentScale) {
+						const auto* node = *reinterpret_cast<RE::NiAVObject* const*>(entry + kBoneNode);
+						const auto known = std::ranges::find_if(a_out.nodes, [&](const auto& a_node) { return node && a_node.get() == node; });
+						if (known != a_out.nodes.end())
+							hidden = static_cast<std::uint16_t>(known - a_out.nodes.begin() + 1);
+						else if (a_out.nodes.size() < kMaxHidden) {
+							a_out.nodes.emplace_back(tree.node);
+							a_out.worlds.push_back(worldOf(i));
+							a_out.worldScales.push_back(worldOf(i)->scale);
+							hidden = static_cast<std::uint16_t>(a_out.nodes.size());
+						}
+					}
+					tree.hiddenOf[i] = hidden;
+					anyTreeHidden |= hidden != 0;
+				}
+			}
+			if (hiddenOf.empty() && !anyTreeHidden)
 				return;
 			// Then the geometry: a skin by its bones (any skin under the root may have bones in a hidden subtree), the rest whole.
 			for (auto [shape, hidden] : geometry) {
@@ -121,11 +167,19 @@ namespace DCLF::LatePoses
 				const std::uint32_t bones = data->GetBoneCount();
 				std::vector<std::uint16_t> scaleOf(bones, 0);
 				bool any = false;
-				for (std::uint32_t b = 0; b < bones; ++b)
-					if (const auto it = hiddenOf.find(skin->bones[b]); it != hiddenOf.end()) {
+				const auto* const* worlds = *reinterpret_cast<const std::byte* const* const*>(reinterpret_cast<const std::byte*>(skin) + kSkinBoneWorlds);
+				for (std::uint32_t b = 0; b < bones; ++b) {
+					const std::byte* world = worlds ? worlds[b] : nullptr;
+					const auto tree = std::ranges::find_if(trees, [&](const Tree& a_tree) {
+						return world >= a_tree.bones + kBoneWorld && world < a_tree.bones + std::size_t(a_tree.count) * kBoneStride &&
+						       std::size_t(world - a_tree.bones - kBoneWorld) % kBoneStride == 0;
+					});
+					if (tree != trees.end())
+						scaleOf[b] = tree->hiddenOf[std::size_t(world - tree->bones) / kBoneStride];
+					else if (const auto it = hiddenOf.find(skin->bones[b]); it != hiddenOf.end())
 						scaleOf[b] = it->second;
-						any = true;
-					}
+					any |= scaleOf[b] != 0;
+				}
 				if (any)
 					a_out.skins.push_back({ RE::NiPointer<RE::BSGeometry>(shape), std::move(scaleOf) });
 			}
@@ -174,11 +228,11 @@ namespace DCLF::LatePoses
 		auto plan = std::make_shared<FramePlan>();
 		std::vector<std::uint16_t> index(s.inUse.nodes.size() + 1, 0);
 		for (std::size_t i = 0; i < s.inUse.nodes.size(); ++i) {
-			const auto& node = *s.inUse.nodes[i];
-			const float factor = node.world.scale > 1e-6f ? s.inUse.worldScales[i] / node.world.scale : 1.0f;
+			const auto& world = *s.inUse.worlds[i];
+			const float factor = world.scale > 1e-6f ? s.inUse.worldScales[i] / world.scale : 1.0f;
 			if (!(factor < kNoShrink))
 				continue;
-			const auto& at = node.world.translate;
+			const auto& at = world.translate;
 			plan->scales.push_back({ { at.x, at.y, at.z }, factor });
 			index[i + 1] = static_cast<std::uint16_t>(plan->scales.size());
 		}
@@ -213,8 +267,8 @@ namespace DCLF::LatePoses
 		s.searchedEmpty = search.rooted && search.Empty();
 		// The plan holds when each node it shrinks is shrunk now: else (the plugin stopped hiding one) the frame draws its first rows.
 		bool holds = s.planned;
-		for (std::size_t i = 0; holds && i < s.inUse.nodes.size(); ++i)
-			holds = std::ranges::find(search.nodes, s.inUse.nodes[i]) != search.nodes.end();
+		for (std::size_t i = 0; holds && i < s.inUse.worlds.size(); ++i)
+			holds = std::ranges::find(search.worlds, s.inUse.worlds[i]) != search.worlds.end();
 		if (s.planned)
 			++(holds ? counters.confirmed : counters.refused);
 		else if (!search.Empty())
