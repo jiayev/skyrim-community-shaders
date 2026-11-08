@@ -1470,7 +1470,8 @@ uint32_t State::GetRuntimePixelBits(const RE::BSShader& a_shader)
 
 bool State::PerfEventsConsumed() const
 {
-	if ((pPerf && pPerf->GetStatus()) || NvPerf::RangesActive())
+	// The GPU event timers read the events too. Native D3D11's GetStatus is false unless a capture tool is attached.
+	if ((pPerf && pPerf->GetStatus()) || NvPerf::RangesActive() || GpuEventTimers::Requested())
 		return true;
 #ifdef TRACY_ENABLE
 	return TracyIsConnected;
