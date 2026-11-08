@@ -896,6 +896,7 @@ namespace DCLF::Scene
 		publication->sunCandidates = sunCandidates;
 		publication->lightCandidates = lightCandidates;
 		publication->lightEntriesAppeared = lightEntriesAppeared;
+		publication->engineCasters = PublishEngineCasters();
 		// The point lights' category nodes, copied only when the set changed.
 		if (std::exchange(nodeSetsDirty, false) || !publishedCategoryNodes) {
 			DCLF_ZONE("CS.DCLF.Scene.PublishCategoryNodes");

@@ -487,6 +487,7 @@ namespace DCLF::Scene
 		if (d.candidateSet) {
 			trackedEntry->candidateFrame = d.candidateFrame;
 			trackedEntry->candidateReason = d.candidateReason;
+			NoteEngineCaster(geometry, r.write == EvalResult::Write::Record ? Ineligible::None : d.candidateReason);
 		}
 		if (r.referenceReason)
 			referenceReasons[geometry] = r.reason;

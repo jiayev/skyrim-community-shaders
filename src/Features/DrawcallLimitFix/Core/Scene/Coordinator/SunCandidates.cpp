@@ -164,6 +164,51 @@ namespace DCLF::Scene
 		(void)changed;
 	}
 
+	void Coordinator::NoteEngineCaster(RE::BSGeometry* a_geometry, Ineligible a_reason)
+	{
+		bool engine = Eligibility::EngineCasterReason(a_reason);
+		ShadowReject reject = ShadowReject::None;
+		if (engine) {
+			const auto leaf = mirror.Leaf(a_geometry);
+			reject = leaf ? ShadowCasterReject(leaf) : ShadowReject::None;
+			engine = leaf && (reject == ShadowReject::None || reject == ShadowReject::VolumetricOnly);
+		}
+		if (!engine) {
+			engineCasterGeometries.erase(a_geometry);
+			return;
+		}
+		const auto [it, inserted] = engineCasterGeometries.insert_or_assign(a_geometry, a_reason);
+		// The first few in the log: the engine culls each one's root for the sun, and the point lights cull it all while it is tracked.
+		static std::uint32_t logged = 0;
+		if (inserted && logged++ < 16)
+			logger::info("[DCLF] shadow caster '{}' stays the engine's ({}, caster rule {}): the engine culls its root for shadows ({} such)",
+				a_geometry->name.c_str(), kIneligibleNames[static_cast<std::size_t>(a_reason)], ShadowRejectName(reject), engineCasterGeometries.size());
+	}
+
+	std::shared_ptr<const EngineCasterRoots> Coordinator::PublishEngineCasters()
+	{
+		if (engineCasterGeometries.empty())
+			return nullptr;
+		// Made again for every publication: a root is only safe to name while it is owned now.
+		auto out = std::make_shared<EngineCasterRoots>();
+		for (const auto& [geometry, reason] : engineCasterGeometries) {
+			const auto entry = tracked.find(geometry);
+			const RE::NiAVObject* root = nullptr;
+			if (entry != tracked.end()) {
+				if (entry->second.lightRoot && rootOwners.contains(entry->second.lightRoot))
+					root = entry->second.lightRoot;
+				else if (entry->second.listedRoot && rootOwners.contains(entry->second.listedRoot))
+					root = entry->second.listedRoot;
+			}
+			++out->geometries;
+			if (!root)
+				++out->untargeted;
+			else if (std::find(out->roots.begin(), out->roots.end(), root) == out->roots.end())
+				out->roots.push_back(root);
+		}
+		return out;
+	}
+
 	std::string Coordinator::DescribeSunCandidate(const void* a_geometry) const
 	{
 		const auto it = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(a_geometry)));

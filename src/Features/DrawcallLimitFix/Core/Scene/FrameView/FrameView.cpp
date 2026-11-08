@@ -167,6 +167,7 @@ namespace DCLF::Scene
 			frameSunCandidates = installed->sunCandidates;
 			frameLightCandidates = installed->lightCandidates;
 			frameLightEntriesAppeared = installed->lightEntriesAppeared;
+			frameEngineCasters = installed->engineCasters;
 			frameCategoryNodes = installed->categoryNodes;
 		}
 	}

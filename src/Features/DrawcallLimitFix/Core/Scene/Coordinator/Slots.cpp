@@ -382,6 +382,7 @@ namespace DCLF::Scene
 				--(veto == Api::kVetoHold ? vetoHeld : vetoObserved);
 			sceneIdentity.Detach(a_geometry);
 			entryRanges.erase(a_geometry);
+			NoteEngineCaster(a_geometry, Ineligible::None);
 			HandBack(std::move(it->second.geometry));
 			HandBack(std::move(it->second.property));
 			HandBack(std::move(it->second.layerProperty));

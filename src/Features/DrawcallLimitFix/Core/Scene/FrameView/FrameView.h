@@ -13,6 +13,7 @@
 
 #include "Features/DrawcallLimitFix/Api/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Channels.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/FrameTables.h"
 
 namespace DCLF
@@ -179,6 +180,8 @@ namespace DCLF::Scene
 		std::uint32_t GetTablesGeneration() const { return frameTablesGeneration; }
 		/** @brief The sun entries DCLF can take out of the cascade culls (UpdateSunCandidates), with their generation. */
 		std::shared_ptr<const EntrySpace> GetSunCandidates() const { return frameSunCandidates; }
+		/** @brief The installed publication's engine-only shadow casters, by root (EngineCasters.h); null: none. Render thread. */
+		const std::shared_ptr<const EngineCasterRoots>& GetEngineCasters() const { return frameEngineCasters; }
 		/**
 		 * @brief The entries DCLF can take out of the point lights' culls (UpdateLightCandidates): light entries (LightEntryOf: an
 		 * actor's root, a reference's, a terrain block's multibound node) whose every tracked geometry is a table object
@@ -362,6 +365,7 @@ namespace DCLF::Scene
 		std::vector<RE::NiAVObject*> attachedRoots;  // the ingestion's attached subtrees, for CatchUpSwitches (scratch)
 		// The frame's copies, taken at frame start from the newest publication and the log (HandOverAtFrameStart).
 		std::shared_ptr<const EntrySpace> frameSunCandidates, frameLightCandidates;
+		std::shared_ptr<const EngineCasterRoots> frameEngineCasters;
 		std::uint64_t frameLightEntriesAppeared = 0;
 		std::uint32_t frameTablesGeneration = 0;  // GetTablesGeneration
 		std::vector<const RE::NiAVObject*> frameSwitchChanges;

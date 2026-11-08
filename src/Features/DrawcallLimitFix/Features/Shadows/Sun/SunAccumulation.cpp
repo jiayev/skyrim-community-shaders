@@ -2,6 +2,7 @@
 // thunks on the sun's Accumulate and its registrations (the render thread and the registration jobs), and the sun's bits for removed
 // entries.
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LocalLightCull.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -68,6 +69,9 @@ namespace DCLF::Features::Shadows::Sun
 		using SceneList = RE::BSTArray<RE::NiPointer<RE::NiAVObject>>;
 		RE::BSTArray<SceneList> emptySceneLists;
 		SceneList emptyExtraNodes;
+		// The whole skip's extra list when the frame has engine-only casters: their roots alone (EngineCasters.h), filled and emptied
+		// around the cull.
+		SceneList targetedExtraNodes;
 		constexpr std::uint32_t kMaxSceneLists = 32;
 		// FUN_1414f0920's fourth argument: the light's full-frustum processes, as the BSTArray<NiPointer<BSCullingProcess>> it reads (data,
 		// then the size at +0x10). The whole skip passes one of its own, of the processes holding entries.
@@ -251,6 +255,13 @@ namespace DCLF::Features::Shadows::Sun
 		}
 		if (!covered || cascades < a_light->GetRuntimeData().shadowmapDescriptors.size()) {
 			++stats.wholeDeclined;
+			return false;
+		}
+		// A caster that stays the engine's (a skin DCLF refuses, a buffer it cannot import) has only the engine's cull to draw its shadow.
+		// The whole skip culls its root for it (FullFrustum); one with no root to cull by takes the engine's whole cull.
+		if (const auto& casters = Scene::FrameView::Get().GetEngineCasters(); casters && casters->untargeted) {
+			++stats.wholeDeclined;
+			++stats.wholeEngineCasters;
 			return false;
 		}
 		// The builder's exclusion is not needed: taken as ArmExclusion would, so the slot's hand-off stays the same.
@@ -585,7 +596,19 @@ namespace DCLF::Features::Shadows::Sun
 					void* const held = jobs;
 					const std::int64_t start = Now();
 					jobs = nullptr;
-					func(a_light, emptySceneLists, emptyExtraNodes);
+					// The engine-only casters' roots, the one thing it culls (ArmWhole declined if any had none): their casters register as
+					// usual, and the members under them are withheld at their cascades' registrations (Register: claimed).
+					const auto& casters = Scene::FrameView::Get().GetEngineCasters();
+					if (casters && !casters->roots.empty()) {
+						for (const auto* root : casters->roots)
+							targetedExtraNodes.push_back(RE::NiPointer<RE::NiAVObject>(const_cast<RE::NiAVObject*>(root)));
+						++self.stats.wholeTargeted;
+						self.stats.wholeTargetedRoots += casters->roots.size();
+						func(a_light, emptySceneLists, targetedExtraNodes);
+						targetedExtraNodes.clear();
+					} else {
+						func(a_light, emptySceneLists, emptyExtraNodes);
+					}
 					jobs = held;
 					self.WholeApplied();
 					const std::int64_t ticks = Now() - start;

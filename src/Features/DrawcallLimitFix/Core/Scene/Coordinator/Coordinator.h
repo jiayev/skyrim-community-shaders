@@ -75,6 +75,7 @@ namespace DCLF
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/State/Dependents.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/State/Categories.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/State/Attach.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/State/Candidates.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/State/Placements.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/State/Hidden.h"
@@ -1244,6 +1245,16 @@ namespace DCLF
 			bool a_perFrameBefore, std::uint32_t a_traitsBefore, Ineligible a_reasonBefore);
 		/** @brief WriteObject's merge half: the Tracked delta, then the face, geometry slots and record. */
 		bool MergeWrite(RE::BSGeometry* a_geometry, Tracked& a_tracked, EvalResult& a_result, PartTimer& a_timer, Ineligible& a_bucket);
+		/**
+		 * @brief A geometry's verdict as EngineCasters.h counts it: a_reason its classification's, None once it has a record or is untracked.
+		 * Listed while the reason is an engine caster's (Eligibility::EngineCasterReason) and the engine would draw its shadow.
+		 */
+		void NoteEngineCaster(RE::BSGeometry* a_geometry, Ineligible a_reason);
+		/**
+		 * @brief The engine-only casters' roots for a publication (null: none): each one's light entry (an actor's root) or sun entry, while
+		 * the coordinator owns it (rootOwners), so it lives while the publication does; a caster with neither counts as untargeted.
+		 */
+		std::shared_ptr<const EngineCasterRoots> PublishEngineCasters();
 		/** @brief MergeWrite's geometry slots (a skin's partitions linked, or a LOD chain's ranges); Tables::kSlotFree: unstable, rebucketed. */
 		std::uint32_t ResolveWriteGeometry(RE::BSGeometry* a_geometry, const SceneCapture::GeometryRecord& a_record, const EvalResult& a_result, PartTimer& a_timer,
 			Ineligible& a_bucket);

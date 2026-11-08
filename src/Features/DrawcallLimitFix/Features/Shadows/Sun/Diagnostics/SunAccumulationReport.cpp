@@ -32,9 +32,10 @@ namespace DCLF::Features::Shadows::Sun
 		if (stats.wholeFrames || stats.wholeDeclined) {
 			const double whole = std::max<double>(stats.wholeFrames, 1.0);
 			logger::info("[DCLF] sun whole skip (no engine sun cull: DCLF draws every cascade): applied on {} of {} frames ({} declined: a cascade not DCLF's, or a parity "
-						 "frame); per frame {:.1f} full-frustum processes culled into the cascades ({:.1f} empty ones left out), {:.0f} main registrations took DCLF's bits "
+						 "frame; {} of them for an engine-only caster with no root; {} culled only engine-only casters' roots, {:.1f} a frame); per frame {:.1f} full-frustum processes culled into the cascades ({:.1f} empty ones left out), {:.0f} main registrations took DCLF's bits "
 						 "({:.0f} with a cascade), {} written without a stamp{}",
-				stats.wholeFrames, stats.frames, stats.wholeDeclined, stats.wholeProcessesCulled / whole, stats.wholeProcessesLeft / whole, c.wholeWritten / whole,
+				stats.wholeFrames, stats.frames, stats.wholeDeclined, stats.wholeEngineCasters, stats.wholeTargeted,
+				stats.wholeTargetedRoots / std::max<double>(stats.wholeTargeted, 1.0), stats.wholeProcessesCulled / whole, stats.wholeProcessesLeft / whole, c.wholeWritten / whole,
 				c.wholeWithBits / whole, c.wholeUnstamped, c.wholeUnstamped ? " <- STAMPS" : "");
 		}
 		if (stats.exclusionFrames || stats.exclusionStale || stats.exclusionMissing || stats.exclusionUnforwarded) {

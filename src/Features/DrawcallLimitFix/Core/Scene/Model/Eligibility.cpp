@@ -9,6 +9,9 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
+#include <mutex>
+#include <unordered_set>
+
 namespace DCLF::Eligibility
 {
 	bool Cacheable(Ineligible a_reason)
@@ -81,6 +84,35 @@ namespace DCLF::Eligibility
 			}
 			return Ineligible::None;
 		}
+
+		/**
+		 * @brief A skin the skinned path refuses (SkinShape) named in the log, once per geometry and at most kMax times a session: the engine
+		 * keeps such a shape, so its shadow is the engine's culls' alone.
+		 */
+		void NoteSkinShape(const SceneCapture::LeafView& a_leaf)
+		{
+			constexpr std::size_t kMax = 64;
+			static std::mutex mutex;
+			static std::unordered_set<const void*> seen;
+			const auto& g = *a_leaf.geometry;
+			{
+				std::lock_guard lock(mutex);
+				if (seen.size() >= kMax || !seen.insert(g.key).second)
+					return;
+			}
+			std::unordered_set<std::uint64_t> layouts;
+			std::uint32_t lod = 0;
+			for (const auto& p : g.partitions) {
+				layouts.insert(p.vertexDesc);
+				lod = std::max<std::uint32_t>(lod, p.lodByte);
+			}
+			static const REL::Relocation<const RE::NiRTTI*> dismemberSkinInstance{ RE::BSDismemberSkinInstance::Ni_RTTI };
+			logger::info("[DCLF] skin shape left to the engine: '{}' under '{}': {} bones ({} palette rows fit: {}), {} partitions (max {}), {} vertex layouts, LOD byte "
+						 "max {}, {} instance, {} shown flags",
+				a_leaf.node->name ? a_leaf.node->name : "", a_leaf.parent && a_leaf.parent->name ? a_leaf.parent->name : "", g.boneCount,
+				g.boneCount * SkinPalettes::kRowsPerBone, SkinPalettes::Fits(g.boneCount * SkinPalettes::kRowsPerBone), g.partitions.size(), kMaxSkinPartitions,
+				layouts.size(), lod, g.skinRtti == dismemberSkinInstance.get() ? "dismember" : "other", g.shown.size());
+		}
 	}
 
 	Ineligible Static(const SceneCapture::LeafView& a_leaf, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated)
@@ -133,8 +165,11 @@ namespace DCLF::Eligibility
 				return Ineligible::NotTriShape;
 		}
 
-		if (const Ineligible buffers = BufferVerdict(g); buffers != Ineligible::None)
+		if (const Ineligible buffers = BufferVerdict(g); buffers != Ineligible::None) {
+			if (buffers == Ineligible::SkinShape)
+				NoteSkinShape(a_leaf);
 			return buffers;
+		}
 
 		const auto* property = SceneCapture::LeafView::Lighting(a_leaf.property);
 		if (!property) {

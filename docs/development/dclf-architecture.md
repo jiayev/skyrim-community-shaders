@@ -2550,6 +2550,18 @@ passes (render modes `0x10`/`0x11`, `GetRenderPasses_ShadowMapOrMask`) are not w
     frame is not a parity frame, the full-frustum cull runs over empty scene lists (each process keeping one empty node of DCLF's so
     its cascade culls set their planes up), and `Accumulate` keeps its bookkeeping but culls and registers nothing. A caster not yet a
     member casts no sun shadow until it joins; it is never handed to the engine's cull.
+-   **Engine-only casters turn the whole skips off** (`Core/Scene/EngineCasters.h`). A tracked geometry that never joins but casts a
+    shadow the engine would draw (`Eligibility::EngineCasterReason`: a skin the skinned path refuses, a buffer DXVK cannot import, and
+    the other settled refusals; not fading, hidden, non-Lighting, blended or an unselected switch child) is counted by the coordinator
+    as it is classified and untracked (`NoteEngineCaster`), and each publication carries their roots (`PublishEngineCasters`: an actor
+    part's light entry, the actor's root; else its sun entry; only roots the coordinator owns, which live while the publication does).
+    The sun's whole skip then hands the full-frustum cull those roots as its extra list instead of an empty one: the engine culls and
+    registers their casters, and the members under them are withheld at their cascade registrations as always. A caster with no owned
+    root makes the skip decline (the engine's whole cull with the entry exclusion). The point lights' empty culls decline while there
+    are any. Measured with every actor's skins left to the engine (`dclf:skin partitions=0`, 26 roots, Dev-Fast): full-frustum cull plus
+    `Accumulate` 0.17 ms a frame, against 0.35-0.43 ms for the whole cull and 0.01 ms for the empty one. Without this, such a caster had no shadow at all: on test2, a RaceMenu-morphed body or BodySlide
+    outfit (a dynamic vertex buffer, before `MorphedPartitionCopy`) drew natively in the main view and cast nothing. The first few are
+    logged (`shadow caster '...' stays the engine's`), and the skips' report lines count the frames declined for them.
 -   **The GPU applies the same entry rule** to DCLF's inputs (`kCullSunEntry`, `OutsideSunEntry`): a sun input carries its entry
     sphere (`SetSunEntryRow`), and a sun view drops an input whose sphere lies outside every full-frustum process. Spot lights share
     mode 0xE's inputs, so only the sun's views apply it.
@@ -2587,7 +2599,7 @@ the layout grows (`ReserveMainLatch`). A frame where the sun did not accumulate 
     portals), so portal-strict lights take it too. It is an immutable snapshot built at the selection, holding its node; a node with
     an attach or detach is walked natively until the next build.
 -   **Empty culls:** a light is not culled at all when the exclusion is live, the frame is not a parity frame, the light is within the
-    mask's 32, and every view of it is covered with its casters in the set. A portal-strict light takes them too: its casters,
+    mask's 32, every view of it is covered with its casters in the set, and no tracked caster is the engine's alone (`EngineCasters.h`). A portal-strict light takes them too: its casters,
     DCLF's receivers and the engine's receivers' bits pass its strict gates (`dclf-portal-query-batches.md`, "Strict point-light
     gates"; `CS_DCLF_STRICT_LIGHT_CULLS=0` keeps it native). The bookkeeping is done as `BSShadowParabolicLight::Accumulate` does it
     (the light index `+0x160`, the bit `+0x164`, the count).

@@ -1,6 +1,7 @@
 // LocalLightCull: the point lights' shadow culls without DCLF's entries (LocalLightCull.h describes it): the frame's exclusion and
 // category filter (render thread), the Process1 skip and NiNode::OnVisible filter inside the lights' culls, and the lights' bits.
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LocalLightCull.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
@@ -173,6 +174,8 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		struct EmptyStats
 		{
 			std::atomic<std::uint64_t> lights{ 0 }, notCovered{ 0 }, portalStrict{ 0 }, given{ 0 }, withBits{ 0 }, unstamped{ 0 };
+			// Lights not culled empty because the frame has a caster only the engine's cull draws (Scene/EngineCasters.h).
+			std::atomic<std::uint64_t> engineCasters{ 0 };
 			// The spot lights' of these: culled empty, with a view not DCLF's, portal-strict kept native.
 			std::atomic<std::uint64_t> spots{ 0 }, spotsNotCovered{ 0 }, spotsStrict{ 0 };
 			std::atomic<std::uint64_t> spheresChecked{ 0 }, spheresDiffer{ 0 };
@@ -620,6 +623,11 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 				(spot ? emptyStats.spotsNotCovered : emptyStats.notCovered).fetch_add(1, std::memory_order_relaxed);
 				return false;
 			}
+			// A caster that stays the engine's has only the engine's cull to draw its shadow; the exclusion keeps its entry in the cull.
+			if (Scene::FrameView::Get().GetEngineCasters()) {
+				emptyStats.engineCasters.fetch_add(1, std::memory_order_relaxed);
+				return false;
+			}
 			// Portal-strict: its cull's rooms, shared nodes and room frusta are DCLF's strict gates (Portals/StrictGates.h), on its views'
 			// casters (BuildDrawsLatch::strictContext), DCLF's receivers (GpuShadowVolume::portalContext) and the engine's receivers' bits
 			// (StrictAdmits). With CS_DCLF_STRICT_LIGHT_CULLS=0 culled as before.
@@ -996,6 +1004,7 @@ namespace DCLF::Features::Shadows::Local::LocalLightCull
 		auto& e = emptyStats;
 		c.emptyLights = e.lights.exchange(0), c.emptyNotCovered = e.notCovered.exchange(0), c.emptyPortalStrict = e.portalStrict.exchange(0);
 		c.emptyGiven = e.given.exchange(0), c.emptyWithBits = e.withBits.exchange(0), c.emptyUnstamped = e.unstamped.exchange(0);
+		c.emptyEngineCasters = e.engineCasters.exchange(0);
 		c.emptySpots = e.spots.exchange(0), c.spotsNotCovered = e.spotsNotCovered.exchange(0), c.spotsStrict = e.spotsStrict.exchange(0);
 		c.spotCalls = spotCalls.exchange(0), c.spotTicks = spotTicks.exchange(0);
 		c.spheresChecked = e.spheresChecked.exchange(0), c.spheresDiffer = e.spheresDiffer.exchange(0);
