@@ -70,10 +70,12 @@ For anything you can see while the game runs, a diagnostic capture is the one fi
   replaces it.
 - After a crash: `CommunityShaders.dmp` if there is one, and your crash logger's log (for example Crash Logger's).
 - After the game froze or the screen went black: any `gpu-crash-*.nv-gpudmp` and `.nvdbg` files with that session's time.
-- If the game hangs (a load that never ends, or a frozen picture) and is still running: before you close it, open Task Manager,
-  right-click `SkyrimSE.exe` on the Details tab and choose "Create memory dump file". Send the `.DMP` file it names. It shows what
-  the game was waiting on, which no log can.
-- For a drawing problem tied to a mod: a compatibility monitor report written after you saw the problem.
+- If the game hangs (a load that never ends, or a frozen picture): after 15 seconds Community Shaders writes
+  `CommunityShaders-Hang-<date>-<time>.txt` and `.dmp` next to the log. They show what the game was waiting on, which no log
+  can. Wait about 20 seconds before you close the game, then send both. If neither file appears, open Task Manager before you
+  close the game, right-click `SkyrimSE.exe` on the Details tab and choose "Create memory dump file". Send the `.DMP` file it
+  names.
+- For a drawing problem tied to a mod: a diagnostic capture taken with the compatibility monitor on, after you saw the problem.
 
 Please also say where you were (the cell or location), what you did just before, and whether turning DCLF off makes the
 problem go away.

@@ -593,7 +593,7 @@ The bundle:
 | `capture.log` | Every line logged during the capture, with the two flushed report windows and the actor probes. |
 | `compat.txt` | The compatibility monitor's report, when it is on. |
 | `screenshot.*` | The first frame of the window. |
-| `logs/` | `CommunityShaders.log` (its first 1 MB and last 32 MB), the DXVK logs and device fault dump, `CommunityShaders-DCLF.ini`, `CommunityShaders.env`. |
+| `logs/` | `CommunityShaders.log` (its first 1 MB and last 32 MB), the DXVK logs and device fault dump, `CommunityShaders-DCLF.ini`, `CommunityShaders.env`, and the [hang reports](#hangs) (`.txt` only). |
 
 The text files have the user's profile path replaced with `%USERPROFILE%`.
 
@@ -929,13 +929,29 @@ and state); with the shadow site on it loses the device (dclf-architecture.md, "
     (`FUN_14xxxxxxx`) and `RELOCATION_ID`. Decompile the faulting function before attributing a crash: the logger's labels can
     be wrong (it labels by the nearest symbol), and a probable frame is not the same as a stack-scan hit.
 -   **Community Shaders' minidump**, `CommunityShaders.dmp` beside the game executable, is written from outside the game by
-    `tools/crash-dump-helper` (`CommunityShadersCrashDump.exe`). The plugin starts it at load (`XSEPlugin.cpp`,
-    `StartCrashDumpHelper`); on a crash its vectored handler signals it and logs `[CRASH] exception ... - writing
+    `tools/crash-dump-helper` (`CommunityShadersCrashDump.exe`). The plugin starts it at load (`CrashDump.cpp`,
+    `CrashDump::Start`); on a crash its vectored handler signals it and logs `[CRASH] exception ... - writing
     CommunityShaders.dmp`. `MiniDumpWriteDump` run inside the game deadlocked on the heap lock. Read the dump with cdb or
     WinDbg.
 -   **Heap corruption** shows its fault later and elsewhere. Typical DCLF causes are an engine object read through a raw pointer
     nothing held, and a last release on the wrong thread. `CS_DCLF_RELEASE_GUARD`, `CS_DCLF_HIDDEN_WATCH` and
     `CS_DCLF_MIRROR_WATCH` name the thread or writer.
+
+### Hangs
+
+-   **The render thread watchdog** (`HangWatchdog.cpp`) writes a report when no Present has happened for 15 s
+    (`CS_HANG_WATCHDOG=<seconds>`, 0 turns it off). It starts at data load and only counts while the game has the foreground,
+    or once it has seen the game present without it (`bAlwaysActive`, test runs on another monitor). It does nothing while a
+    debugger is attached. The crash dump helper writes the report from outside the game: `CommunityShaders-Hang-<time>.txt`
+    beside the log, with every thread's stack and the stuck thread first (symbols from the PDBs beside the modules), and a
+    minidump `CommunityShaders-Hang-<time>.dmp` for cdb or WinDbg. The log has `[HANG]` lines: the stall, the report written,
+    one line a minute while it lasts, and the recovery if it ends. There is one report per stall and at most three a session,
+    and the six newest are kept. The [diagnostic capture](#the-diagnostic-capture) copies the reports into `logs/`.
+-   **The stuck thread is the last one that presented.** A loading screen presents from one of the engine's job threads, the
+    game from `Skyrim Main`.
+-   **`CS_TEST_HANG=<seconds>`** makes the render thread sleep past the threshold once, that many seconds after the watch
+    starts, to check the watchdog and the helper end to end. Both switches are read from the environment (`CommunityShaders.env`
+    beside the log), not from `CommunityShaders-DCLF.ini`.
 
 ### GPU crashes
 
