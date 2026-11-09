@@ -200,8 +200,45 @@ Letting those images keep their resting layouts is not a DXVK-only change. Impor
 wrongly (terrain missing, corrupt depth tiles): the graph uses them in COMMON, and every execution enters them from UNDEFINED with
 discard (ORG's barrier trace, `ORG_TRACE=barriers`), which was harmless while they were simultaneous-access images in GENERAL.
 
+### DCLF against native, and where CPU-driven DCLF's cost goes (2026-11-08)
+
+Dev-Fast, 1080p without upscaling (native has none), vsync off, hang markers on; median frame time over frames 3000-4000:
+
+| Scene | Native D3D11 | DXVK, DCLF off | CPU-driven | GPU-driven |
+| --- | --- | --- | --- | --- |
+| Newest save | 16.30 ms | 18.75 ms | 21.07 ms | 21.41 ms |
+| Whiterun | 16.53 ms | 16.91 ms | 14.67 ms | 15.24 ms |
+
+At the newest save CPU-driven DCLF costs 2.32 ms over DCLF off (GPU event timers, four 250-frame blocks):
+
+| Work | DCLF off | CPU-driven | Difference |
+| --- | --- | --- | --- |
+| Colour opaque (the engine's batches and Terrain Blending's render passes; DCLF's main opaque) | 3.66 ms | 5.03 ms | +1.37 |
+| Depth and the water reflection's faces (DCLF's depth site draws both) | 2.16 ms | 2.46 ms | +0.30 |
+| Shadow maps and the Skylighting Mask | 4.69 ms | 5.34 ms | +0.65 |
+
+DCLF draws no more geometry: 2.79M triangles a frame in its shadow site against the engine's 2.81M, 2.07M at its depth site
+against 1.92M plus the reflection's, 1.70M at its colour site (`[CPU]` line, `CS_DCLF_STATS=1`; the engine's from
+`CS_GPU_EVENT_STATS`). Against the FSR runs (720p render), the colour difference is +0.54 ms fixed and +0.83 ms with the pixels;
+depth's and the shadows' are fixed. Both come from how DCLF's stages read a draw's data (`BASICRHI_VK_DUMP_ISA` against
+`DXVK_PIPELINE_ISA`):
+
+-   **Vertex stages: a serial chain of vector loads per wave.** A pulled depth vertex stage does 16-34 vector memory loads against
+    the engine's 3-6. Before its first vertex fetch it walks about eight dependent `global_load`s, each with `s_waitcnt vmcnt(0)`:
+    the draw's record (named by its instance), the sequence, the object word, the rows, the descriptor indices, then
+    `v_readfirstlane` into scalars. The values are the draw's, but they start from the instance index, which the compiler treats
+    as per lane. The latency is paid by every vertex wave whatever the resolution.
+-   **Pixel stages: the draw's rows through vector loads.** The deferred Lighting pixel stage (ps 00000011) has 54 `global_load`s,
+    95 `s_buffer_load`s and 96 `v_readfirstlane`s against the engine's 0, 158 and 17, for the same instruction count. The
+    material and pipeline rows are read through pointers per pixel wave, then made scalar, where the engine reads constant buffers.
+
+The fix is to make the draw's identity uniform before the loads: the vertex stage's record from the draw's base instance (an
+SGPR) or a `WaveReadLaneFirst` of it, and the pixel stage's object word made scalar before its row reads (pixel waves do not mix
+draws on this driver), with the row pointers read-only so the compiler can use scalar loads.
+
 ## Next
 
+-   DCLF's draw data through scalar loads (above): about 2 ms at the newest save.
 -   Pass boundaries: keep render targets in their attachment layout until something reads them, instead of returning each to
     its resting layout after every render pass.
 -   The HZB on AMD (dclf-open-defects.md), which would also bring GPU-driven DCLF under the CPU-driven pipeline's cost.
