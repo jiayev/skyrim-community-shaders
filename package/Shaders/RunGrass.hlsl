@@ -489,7 +489,7 @@ VS_OUTPUT main(uint a_vertex : SV_VertexID, uint a_instance : SV_InstanceID)
 	DCLFStreamsAt(vertexIndex, first, second);
 
 	VS_INPUT input;
-	input.Position = DCLFPullFloat4(0, first, second);
+	input.Position = DCLFPullPosition(first, second);
 	input.TexCoord = DCLFPullHalf2(1, first, second);
 	input.Normal = DCLFPullUnorm4(3, 0, first, second);
 	input.Color = DCLFPullUnorm4(5, 0, first, second);
