@@ -14,6 +14,8 @@
 - **[External mod requirements](./external-mod-requirements.md)** - Per mod, what it would change for DCLF to draw it without workarounds (RaceMenu first)
 - **[DCLF roadmap](./dclf-roadmap.md)** - The work left, by priority: engine work still on the render thread, the scene lane, GPU cost, coverage, integrations and tooling
 - **[Memory usage](./memory-usage.md)** - What occupies VRAM in the main menu, by owner and resource, for choosing ORG aliasing port targets
+- **[Full ORG port](./org-full-port.md)** - The plan for running the whole renderer, engine included, through ORG on Vulkan or D3D12 with DXVK optional: phases, tasks, lanes and verification
+- **[ORG extension API notes](./org-extension-api-notes.md)** - What external mods will need from an ORG extension API, collected while porting
 - **[Skyrim engine notes](./skyrim-engine-notes.md)** - What the decompiled game binary does, where features depend on it
 
 ## Subsystems
