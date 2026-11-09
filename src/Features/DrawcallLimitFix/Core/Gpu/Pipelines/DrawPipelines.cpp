@@ -153,9 +153,9 @@ namespace DCLF
 				indirect.pipelineSets, indirect.indexBufferArguments, indirect.maxPipelineSetCount);
 		// The layouts' push data, the draw's words then the pass's (the frame push; the shadow views', kShadowPushWords, fewer). On descriptor
 		// heaps all of it is pushed, and BasicRHI refuses a layout past the device's maxPushDataSize (the indirect pipelines are then
-		// unavailable, as above). On descriptor buffers BasicRHI pushes 128 B (the base-spec push constant size, on every GPU) and keeps
-		// the rest of the layout's constants in memory: the draw's 96 B are declared first, so they are pushed and the pass's 128 B spill,
-		// which the shaders read the same way. Device-generated commands write only pushed bytes: the draw's Constant argument must fit
+		// unavailable, as above). On descriptor buffers BasicRHI pushes the device's push constant size (128 to 256 B) and keeps
+		// the rest of the layout's constants in memory: the draw's 96 B are declared first, so they are pushed even at 128 B, where the
+		// pass's 128 B spill. At 256 B (AMD, NVIDIA) nothing spills; spilled words are read through pointers, per lane on AMD. Device-generated commands write only pushed bytes: the draw's Constant argument must fit
 		// IndirectCommandsFeatureInfo::constantArgumentBytes, counted from the first range (0: no limit).
 		constexpr std::uint32_t kPushBytes = 4 * (kDrawPushWords + kFramePushWords);
 		if (deviceGenerated && indirect.constantArgumentBytes && indirect.constantArgumentBytes < 4 * kDrawPushArgumentWords) {
