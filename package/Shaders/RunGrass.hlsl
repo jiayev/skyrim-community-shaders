@@ -40,11 +40,12 @@ static const uint kDCLFGrassWindVector = 64, kDCLFGrassTimeBase = 80, kDCLFGrass
 static const uint kDCLFGrassAlphaParams = 256 + 36;
 // GrassInstances::BucketRow (224 bytes): mesh[3] by tier, flags, ..., diffuse, depth sampler, colour sampler, alpha reference at 32;
 // wavePeriod at 64, pbrFlags at 76, scaleMask at 80, normal, RMAOS, features textures and the PBR sampler at 96, pbrParams1 and 2,
-// windDirection at 144, pbrParams3 and 4 at 160, fuzz and emissive textures at 192, canopyHeight[3] by tier at 200.
+// windDirection at 144, pbrParams3 and 4 at 160, fuzz and emissive textures at 192, canopyHeight[3] by tier at 200, fuzz roughness at 212.
 static const uint kDCLFGrassBucketStride = 224, kDCLFGrassBucketFlags = 12, kDCLFGrassBucketTextures = 32, kDCLFGrassBucketWavePeriod = 64,
 				  kDCLFGrassBucketPbrFlags = 76, kDCLFGrassBucketScaleMask = 80, kDCLFGrassBucketPbrTextures = 96, kDCLFGrassBucketPbrParams1 = 112,
 				  kDCLFGrassBucketPbrParams2 = 128, kDCLFGrassBucketWindDirection = 144, kDCLFGrassBucketPbrParams3 = 160,
-				  kDCLFGrassBucketPbrParams4 = 176, kDCLFGrassBucketFuzzEmissive = 192, kDCLFGrassBucketCanopyHeight = 200;
+				  kDCLFGrassBucketPbrParams4 = 176, kDCLFGrassBucketFuzzEmissive = 192, kDCLFGrassBucketCanopyHeight = 200,
+				  kDCLFGrassBucketFuzzRoughness = 212;
 static const uint kDCLFGrassBucketTruePbr = 1u << 0, kDCLFGrassBucketSphereNormal = 1u << 1;
 // GrassInstances::InstanceFrame (8 bytes): windCur and windPrev as halfs; the fade (unorm16) and, in the high 16 bits, the flags (bits 0-1 the
 // tier, 2 in collision range, 3 simple shading). The vertex stage takes it unpacked (DCLFGrassFrame: windCur, windPrev, fade as floats, flags).
@@ -662,6 +663,7 @@ static float3 PBRParams1;  // roughness scale, specular level, emissive scale
 static float4 PBRParams2;  // subsurface color, subsurface opacity
 static float4 PBRParams3;  // fuzz color, fuzz weight
 static float4 PBRParams4;  // subsurface balance, front/back specular weights, back roughness scale
+static float4 PBRParams5;  // fuzz roughness in x (negative uses base roughness)
 static uint DCLFGrassNormal, DCLFGrassRmaos, DCLFGrassFeatures, DCLFGrassFuzz, DCLFGrassEmissive, DCLFGrassPbrSampler;
 #			define SampNormalSampler DCLFGrassSamplerAt(DCLFGrassPbrSampler)
 #			define SampRMAOSSampler DCLFGrassSamplerAt(DCLFGrassPbrSampler)
@@ -702,6 +704,7 @@ void DCLFGrassPixelStatics(uint a_bucket)
 	PBRParams2 = asfloat(vk::RawBufferLoad<uint4>(DCLFGrassBucketRow + kDCLFGrassBucketPbrParams2, 4));
 	PBRParams3 = asfloat(vk::RawBufferLoad<uint4>(DCLFGrassBucketRow + kDCLFGrassBucketPbrParams3, 4));
 	PBRParams4 = asfloat(vk::RawBufferLoad<uint4>(DCLFGrassBucketRow + kDCLFGrassBucketPbrParams4, 4));
+	PBRParams5 = float4(asfloat(vk::RawBufferLoad<uint>(DCLFGrassBucketRow + kDCLFGrassBucketFuzzRoughness, 4)), 0, 0, 0);
 	const uint2 fuzzEmissive = vk::RawBufferLoad<uint2>(DCLFGrassBucketRow + kDCLFGrassBucketFuzzEmissive, 4);
 	DCLFGrassFuzz = fuzzEmissive.x;
 	DCLFGrassEmissive = fuzzEmissive.y;
@@ -795,6 +798,7 @@ cbuffer PerMaterial : register(b1)
 	float4 PBRParams2 : packoffset(c1);    // subsurface color, subsurface opacity
 	float4 PBRParams3 : packoffset(c2);    // fuzz color, fuzz weight
 	float4 PBRParams4 : packoffset(c3);    // subsurface balance, front/back specular weights, back roughness scale
+	float4 PBRParams5 : packoffset(c4);    // fuzz roughness in x (negative uses base roughness)
 };
 #			endif
 
@@ -916,15 +920,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 	[branch] if (pbrDetail && (PBRFlags & PBR::Flags::Fuzz) != 0)
 	{
-		material.FuzzColor = PBRParams3.xyz;
+		material.FuzzColor = Color::LinearSRGBToWorking(PBRParams3.xyz);
 		material.FuzzWeight = PBRParams3.w;
+		material.FuzzRoughness = PBRParams5.x;
 		[branch] if ((PBRFlags & PBR::Flags::HasFeatureTexture1) != 0)
 		{
 			float4 fuzz = TexFuzzSampler.Sample(SampFuzzSampler, input.TexCoord.xy);
-			material.FuzzColor *= Color::Albedo(Color::LinearSRGBToWorking(fuzz.xyz));
+			material.FuzzColor *= Color::LinearSRGBToWorking(fuzz.xyz);
 			material.FuzzWeight *= fuzz.w;
 		}
 	}
+	const float grassNdotV = clamp(abs(dot(normal, viewDirection)), EPSILON_DOT_CLAMP, 1.0f);
+	material.Fuzz = PBR::CreateFuzzLayer(material, grassNdotV, pbrDetail);
+	PBR::CacheFuzzLTC(material.Fuzz, normal, viewDirection, grassNdotV);
 
 	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition);
@@ -944,7 +952,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (!SharedData::InInterior)
 		dirLightColor *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 #				if defined(WATER_EFFECTS)
-	dirLightColor *= WaterEffects::ComputeCaustics(SharedData::GetWaterData(input.WorldPosition.xyz), input.WorldPosition.xyz);
+	dirLightColor *= WaterEffects::ComputeCaustics(SharedData::GetWaterData(input.WorldPosition.xyz), input.WorldPosition.xyz, input.HPosition.xy);
 #				endif
 
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
@@ -987,7 +995,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	WetnessEffects::ApplySurfaceWetnessAlbedo(material.BaseColor, wetnessState, wetnessPorosity);
 #				endif
 
-	PBR::ThinSurface grassSurface = PBR::CreateThinSurface(material, clamp(abs(dot(normal, viewDirection)), EPSILON_DOT_CLAMP, 1.0f), pbrDetail);
+	PBR::ThinSurface grassSurface = PBR::CreateThinSurface(material, grassNdotV, pbrDetail);
 
 	float3 wetnessDirectSpecularColor = 0;
 #				if defined(SCREEN_SPACE_SHADOWS)
@@ -1386,7 +1394,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (!SharedData::InInterior)
 		dirLightColor *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 #				if defined(WATER_EFFECTS)
-	dirLightColor *= WaterEffects::ComputeCaustics(SharedData::GetWaterData(input.WorldPosition.xyz), input.WorldPosition.xyz);
+	dirLightColor *= WaterEffects::ComputeCaustics(SharedData::GetWaterData(input.WorldPosition.xyz), input.WorldPosition.xyz, input.HPosition.xy);
 #				endif
 
 	float dirShadow = SharedData::InInterior ? 1.0 : shadowColor.x;
@@ -1723,7 +1731,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (!SharedData::InInterior)
 		dirLightColor *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 #			if defined(WATER_EFFECTS)
-	dirLightColor *= WaterEffects::ComputeCaustics(SharedData::GetWaterData(input.WorldPosition.xyz), input.WorldPosition.xyz);
+	dirLightColor *= WaterEffects::ComputeCaustics(SharedData::GetWaterData(input.WorldPosition.xyz), input.WorldPosition.xyz, input.HPosition.xy);
 #			endif
 
 	float dirDetailedShadow = 1.0;

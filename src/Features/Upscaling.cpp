@@ -10,6 +10,7 @@
 #include "PostProcessing.h"
 #include "RenderDoc.h"
 #include "RenderGraph/RenderGraphRuntime.h"
+#include "ScreenshotFeature.h"
 #include "State.h"
 #include "Upscaling/DXVKInterop.h"
 #include "Upscaling/FrameGenController.h"
@@ -2080,6 +2081,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 	auto& upscaling = globals::features::upscaling;
 
 	upscaling.PostDisplay();
+	globals::features::screenshotFeature.SnapshotCleanScene();
 
 	auto& hdr = globals::features::hdrDisplay;
 	if (hdr.loaded)

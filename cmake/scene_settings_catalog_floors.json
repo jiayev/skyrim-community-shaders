@@ -20,6 +20,7 @@
         "PerformanceOverlay": 12,
         "PhysicalSky": 163,
         "PostProcessing": 291,
+        "ProceduralSun": 9,
         "ScreenSpaceGI": 22,
         "ScreenSpaceShadows": 5,
         "SkySync": 15,

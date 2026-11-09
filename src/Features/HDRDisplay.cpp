@@ -251,6 +251,7 @@ namespace
 	{
 		static void thunk(int64_t a1)
 		{
+			globals::features::screenshotFeature.SnapshotCleanScene();
 			globals::features::hdrDisplay.SetUIBuffer();
 			func(a1);
 		}
@@ -620,11 +621,9 @@ void HDRDisplay::RestoreDefaultSettings()
 	settings.dontShowHDRWarning = false;
 }
 
-void HDRDisplay::DataLoaded()
+void HDRDisplay::PreCreateRenderTargets()
 {
-	// Skyrim's ini setting that makes its HDR render targets 16-bit float. The targets exist by now, so this reaches them only through
-	// the next launch, if the game writes SkyrimPrefs.ini. So it follows HDR's setting: forced on without HDR, one write made every
-	// later launch's main target 64-bit (about 2 ms a frame on an RX 6600). Off also clears a value such a write left.
+	// Read the final prefs before target creation; keep fp16 targets tied to the HDR setting.
 	auto setting = RE::GetINISetting("bUse64bitsHDRRenderTarget:Display");
 	if (setting) {
 		bool enableHDR = false;
@@ -850,7 +849,9 @@ void HDRDisplay::SetUIBuffer()
 	}
 
 	float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	globals::profiler->BeginPass("HDRDisplay::ClearUI");
 	globals::d3d::context->ClearRenderTargetView(uiTexture->rtv.get(), clearColor);
+	globals::profiler->EndPass();
 
 	fb.RTV = uiTexture->rtv.get();
 	globals::d3d::context->OMSetRenderTargets(1, &fb.RTV, nullptr);
@@ -1114,7 +1115,9 @@ void HDRDisplay::ClearUIBuffer()
 	auto* context = globals::d3d::context;
 	if (context && uiTexture && uiTexture->rtv) {
 		float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		globals::profiler->BeginPass("HDRDisplay::ClearUI");
 		context->ClearRenderTargetView(uiTexture->rtv.get(), clearColor);
+		globals::profiler->EndPass();
 	}
 
 	if (savedFramebufferRTV) {
@@ -1163,12 +1166,14 @@ void HDRDisplay::ApplyHDR()
 
 		if (!GetHDROutputCS()) {
 			// Fallback: HDR shader files not present - copy kFRAMEBUFFER directly to output
+			globals::profiler->BeginPass("HDRDisplay::BackBufferCopy");
 			ID3D11Texture2D* backBuffer = nullptr;
 			HRESULT hr = globals::d3d::swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
 			if (SUCCEEDED(hr) && backBuffer) {
 				context->CopyResource(backBuffer, framebufferRT.texture);
 				backBuffer->Release();
 			}
+			globals::profiler->EndPass();
 
 			RestoreCleanScene();
 			state->EndPerfEvent();
@@ -1178,6 +1183,7 @@ void HDRDisplay::ApplyHDR()
 		DispatchHDROutput(sceneSRV, uiSRV, outputTexture->uav.get());
 	}
 
+	globals::profiler->BeginPass("HDRDisplay::BackBufferCopy");
 	{
 		ID3D11Texture2D* backBuffer = nullptr;
 		HRESULT hr = globals::d3d::swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
@@ -1186,6 +1192,7 @@ void HDRDisplay::ApplyHDR()
 			backBuffer->Release();
 		}
 	}
+	globals::profiler->EndPass();
 
 	RestoreCleanScene();
 	state->EndPerfEvent();
@@ -1265,7 +1272,9 @@ void HDRDisplay::SnapshotCleanScene()
 		cleanSceneCapture->CreateSRV(srvDesc);
 	}
 
+	globals::profiler->BeginPass("HDRDisplay::CleanSceneSnapshot");
 	globals::d3d::context->CopyResource(cleanSceneCapture->resource.get(), hdrTexture->resource.get());
+	globals::profiler->EndPass();
 	cleanSceneCaptureFrame = globals::state->frameCount;
 }
 
@@ -1275,7 +1284,9 @@ void HDRDisplay::RestoreCleanScene()
 		!cleanSceneCapture || !cleanSceneCapture->resource)
 		return;
 
+	globals::profiler->BeginPass("HDRDisplay::CleanSceneRestore");
 	globals::d3d::context->CopyResource(hdrTexture->resource.get(), cleanSceneCapture->resource.get());
+	globals::profiler->EndPass();
 }
 
 bool HDRDisplay::IsCleanSceneCaptureFresh() const

@@ -14,6 +14,7 @@
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Utils/Clipboard.h"
+#include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/FileSystem.h"
 
@@ -26,6 +27,7 @@
 #pragma warning(pop)
 
 #include <format>
+#include <fstream>
 #include <functional>
 #include <malloc.h>
 
@@ -37,7 +39,6 @@ namespace
 	{
 		ID3D11Texture2D* texture = nullptr;
 		ID3D11ShaderResourceView* srv = nullptr;
-		ID3D11ShaderResourceView* uiSRV = nullptr;
 		// kFRAMEBUFFER's SRV aliases the swap-chain backbuffer, which ImGui's DX11
 		// backend can't sample directly. When true, the preview path copies through
 		// the SRV-readable cache instead.
@@ -312,6 +313,14 @@ namespace
 			}
 		}
 
+		if (!IsFlatHdrScreenshotCapture()) {
+			if (auto* clean = globals::features::screenshotFeature.GetFreshCleanScene()) {
+				src.texture = clean;
+				src.description = "Pre-UI scene snapshot (no HUD, no menu blur)";
+				return src;
+			}
+		}
+
 		// Frame generation runs on DXVK's Vulkan presenter, after the D3D11 back buffer: the back buffer is the composite.
 		if (IsFlatHdrScreenshotCapture()) {
 			src.texture = ResolveDisplayedBackBuffer(holder);
@@ -461,6 +470,44 @@ namespace
 		return saved;
 	}
 
+	/** @brief Removes the cICP chunk from a PNG; Discord misreads it, while the iCCP profile still describes the HDR colour space. */
+	bool StripPngCicpChunk(const std::filesystem::path& path)
+	{
+		constexpr size_t kPngSignatureSize = 8;
+		constexpr size_t kChunkTypeOffset = 4;
+		constexpr size_t kChunkOverhead = 12;  // length + type + CRC
+
+		std::error_code ec;
+		const auto fileSize = std::filesystem::file_size(path, ec);
+		if (ec) {
+			return false;
+		}
+		std::string data(fileSize, '\0');
+		{
+			std::ifstream file(path, std::ios::binary);
+			if (!file.read(data.data(), static_cast<std::streamsize>(data.size()))) {
+				return false;
+			}
+		}
+
+		for (size_t offset = kPngSignatureSize; offset + kChunkOverhead <= data.size();) {
+			uint32_t length;
+			std::memcpy(&length, &data[offset], sizeof(length));
+			const size_t chunkSize = kChunkOverhead + _byteswap_ulong(length);
+			const auto* type = &data[offset + kChunkTypeOffset];
+			// cICP must precede IDAT, so stop there.
+			if (offset + chunkSize > data.size() || std::memcmp(type, "IDAT", 4) == 0) {
+				return false;
+			}
+			if (std::memcmp(type, "cICP", 4) == 0) {
+				data.erase(offset, chunkSize);
+				return Util::FileHelpers::WriteFileAtomically(path, data, "HDR screenshot");
+			}
+			offset += chunkSize;
+		}
+		return false;
+	}
+
 	bool SaveSdrScreenshot(
 		DirectX::ScratchImage& image,
 		const std::filesystem::path& outputPath,
@@ -533,11 +580,6 @@ void ScreenshotFeature::ApplyVanillaScreenshotSetting()
 	}
 }
 
-void ScreenshotFeature::ClearShaderCache()
-{
-	compositeCS = nullptr;
-}
-
 void ScreenshotFeature::LoadSettings(json& a_json)
 {
 	if (a_json.contains("ScreenshotPath"))
@@ -548,6 +590,8 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		hdrPngBitDepth = std::clamp<unsigned int>(a_json["HdrPngBitDepth"], 7u, 16u);
 	if (a_json.contains("HdrUseAvif") && a_json["HdrUseAvif"].is_boolean())
 		hdrUseAvif = a_json["HdrUseAvif"];
+	if (a_json.contains("FixDiscordHdr") && a_json["FixDiscordHdr"].is_boolean())
+		fixDiscordHdr = a_json["FixDiscordHdr"];
 	if (a_json.contains("SdrUsePng"))
 		sdrUsePng = a_json["SdrUsePng"];
 	if (a_json.contains("CopyToClipboard"))
@@ -565,6 +609,7 @@ void ScreenshotFeature::SaveSettings(json& a_json)
 	a_json["ApplyCropToScreenshot"] = applyCropToScreenshot;
 	a_json["HdrPngBitDepth"] = hdrPngBitDepth;
 	a_json["HdrUseAvif"] = hdrUseAvif;
+	a_json["FixDiscordHdr"] = fixDiscordHdr;
 	a_json["SdrUsePng"] = sdrUsePng;
 	a_json["CopyToClipboard"] = copyToClipboard;
 	a_json["DisableVanillaScreenshot"] = disableVanillaScreenshot;
@@ -607,6 +652,12 @@ void ScreenshotFeature::DrawSettings()
 					"%s", T(TKEY("hdr_bit_depth_tooltip"),
 							  "Quantization for the 48 bpp RGB PNG payload. 11-bit is a good default; "
 							  "higher values increase file size with diminishing returns."));
+			ImGui::Checkbox(T(TKEY("fix_discord_hdr"), "Fix Discord HDR screenshots"), &fixDiscordHdr);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text(
+					"%s", T(TKEY("fix_discord_hdr_tooltip"),
+							  "Removes the cICP tag from HDR PNGs, which Discord misreads and shows washed out.\n"
+							  "The embedded ICC profile still describes the HDR colour space."));
 		}
 	} else {
 		ImGui::TextWrapped("%s",
@@ -682,15 +733,11 @@ void ScreenshotFeature::DrawSettings()
 
 	ImGui::SeparatorText(T(TKEY("crop"), "Crop"));
 
-	// Preview reflects what Capture() would save.
+	// Preview reflects what Capture() would save; asks next frame's pre-UI hook for a snapshot.
+	previewVisible = true;
 	CaptureStateGuard guard(globals::d3d::context);
 	winrt::com_ptr<ID3D11Texture2D> previewTextureKeepAlive;
-	auto src = SelectCaptureSource(previewTextureKeepAlive, /*forCapture=*/false);
-	if (src.texture && src.uiSRV) {
-		src.texture = CompositeCapture(src.texture, src.srv, src.uiSRV);
-		src.srv = src.texture ? compositeTexture->srv.get() : nullptr;
-		src.needsPreviewCache = false;
-	}
+	const auto src = SelectCaptureSource(previewTextureKeepAlive, /*forCapture=*/false);
 
 	ID3D11ShaderResourceView* previewView = src.srv;
 	if (src.texture && (src.needsPreviewCache || !previewView)) {
@@ -703,59 +750,6 @@ void ScreenshotFeature::DrawSettings()
 	}
 
 	subrect.DrawEditor(previewView, src.texture, 1.0f, 0.0f, OpaquePreviewBlendCallback);
-}
-
-ID3D11Texture2D* ScreenshotFeature::CompositeCapture(ID3D11Texture2D* sourceTexture, ID3D11ShaderResourceView* sceneSRV, ID3D11ShaderResourceView* uiSRV)
-{
-	if (!sourceTexture || !sceneSRV || !uiSRV)
-		return nullptr;
-
-	if (!compositeCS) {
-		std::vector<std::pair<const char*, const char*>> defines;
-		compositeCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Screenshot\\CompositeCS.hlsl", defines, "cs_5_0")));
-		if (!compositeCS) {
-			logger::error("Failed to compile screenshot compositor.");
-			return nullptr;
-		}
-	}
-
-	D3D11_TEXTURE2D_DESC desc{};
-	sourceTexture->GetDesc(&desc);
-	if (!compositeTexture || compositeTexture->desc.Width != desc.Width || compositeTexture->desc.Height != desc.Height || compositeTexture->desc.Format != desc.Format) {
-		desc.MipLevels = 1;
-		desc.ArraySize = 1;
-		desc.SampleDesc.Count = 1;
-		desc.SampleDesc.Quality = 0;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		desc.CPUAccessFlags = 0;
-		desc.MiscFlags = 0;
-		auto texture = std::make_unique<Texture2D>(desc, "Screenshot::Composite");
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		srvDesc.Format = desc.Format;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-		srvDesc.Texture2D.MipLevels = 1;
-		texture->CreateSRV(srvDesc);
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-		uavDesc.Format = desc.Format;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-		texture->CreateUAV(uavDesc);
-		compositeTexture = std::move(texture);
-	}
-
-	auto* context = globals::d3d::context;
-	ID3D11ShaderResourceView* srvs[2] = { sceneSRV, uiSRV };
-	context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-	auto* uav = compositeTexture->uav.get();
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShader(compositeCS.get(), nullptr, 0);
-	context->Dispatch((desc.Width + 7) / 8, (desc.Height + 7) / 8, 1);
-	srvs[0] = nullptr;
-	srvs[1] = nullptr;
-	context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-	uav = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	return compositeTexture->resource.get();
 }
 
 void ScreenshotFeature::EnsurePreviewCache(ID3D11Texture2D* sourceTexture)
@@ -812,6 +806,39 @@ void ScreenshotFeature::Reset()
 	}
 }
 
+void ScreenshotFeature::SnapshotCleanScene()
+{
+	const bool previewWanted = std::exchange(previewVisible, false);
+	if (!loaded || !(captureRequested || previewWanted) || IsFlatHdrScreenshotCapture() || !globals::game::renderer)
+		return;
+
+	winrt::com_ptr<ID3D11Texture2D> sceneKeepAlive;
+	auto* scene = ResolveSlotTexture(globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER], sceneKeepAlive);
+	if (!scene)
+		return;
+
+	D3D11_TEXTURE2D_DESC desc{};
+	scene->GetDesc(&desc);
+	if (!cleanSceneTexture || cleanSceneTexture->desc.Width != desc.Width || cleanSceneTexture->desc.Height != desc.Height || cleanSceneTexture->desc.Format != desc.Format) {
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.SampleDesc.Count = 1;
+		desc.SampleDesc.Quality = 0;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = 0;
+		desc.CPUAccessFlags = 0;
+		desc.MiscFlags = 0;
+		cleanSceneTexture = std::make_unique<Texture2D>(desc, "Screenshot::CleanScene");
+	}
+	globals::d3d::context->CopyResource(cleanSceneTexture->resource.get(), scene);
+	cleanSceneFrame = globals::state->frameCount;
+}
+
+ID3D11Texture2D* ScreenshotFeature::GetFreshCleanScene() const
+{
+	return cleanSceneTexture && cleanSceneFrame == globals::state->frameCount ? cleanSceneTexture->resource.get() : nullptr;
+}
+
 void ScreenshotFeature::ProcessCaptureRequest()
 {
 	ProcessPendingReadbacks();
@@ -825,6 +852,13 @@ void ScreenshotFeature::ProcessCaptureRequest()
 		}
 	}
 	if (captureRequested.exchange(false)) {
+		// User captures wait for a pre-UI snapshot; scripted captures stay on their requested Present.
+		if (captureOutputPath.empty() && !IsFlatHdrScreenshotCapture() && !GetFreshCleanScene() && !captureDeferred) {
+			captureDeferred = true;
+			captureRequested = true;
+			return;
+		}
+		captureDeferred = false;
 		try {
 			Capture();
 		} catch (const std::exception& e) {
@@ -931,6 +965,10 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 				screenshot.saveAsHdrAvif ? "HDR AVIF" : (screenshot.saveAsHdrPng ? "HDR PNG" : "SDR"));
 		}
 
+		if (saveOk && screenshot.saveAsHdrPng && screenshot.fixDiscordHdr && !StripPngCicpChunk(screenshot.outputPath)) {
+			logger::warn("Failed to strip cICP chunk from HDR PNG for Discord.");
+		}
+
 		if (saveOk) {
 			CopySavedPathToClipboard(screenshot.copyToClipboard, screenshot.outputPath);
 		}
@@ -973,11 +1011,7 @@ void ScreenshotFeature::Capture()
 		logger::error("Failed to acquire screenshot source texture ({}).", src.description);
 		return;
 	}
-	ID3D11Texture2D* sourceTexture = src.uiSRV ? CompositeCapture(src.texture, src.srv, src.uiSRV) : src.texture;
-	if (!sourceTexture) {
-		logger::error("Failed to composite screenshot UI.");
-		return;
-	}
+	ID3D11Texture2D* sourceTexture = src.texture;
 
 	D3D11_TEXTURE2D_DESC srcDesc{};
 	sourceTexture->GetDesc(&srcDesc);
@@ -1044,6 +1078,7 @@ void ScreenshotFeature::Capture()
 	screenshot.saveAsHdrAvif = saveAsHdrAvif;
 	screenshot.saveAsSdrPng = saveAsSdrPng;
 	screenshot.hdrPngBitDepth = static_cast<int>(hdrPngBitDepth);
+	screenshot.fixDiscordHdr = fixDiscordHdr;
 	const char* extension = saveAsHdrAvif ? ".avif" : (saveAsHdrPng || saveAsSdrPng ? ".png" : ".bmp");
 	screenshot.outputPath = captureOutputPath.empty() ? BuildScreenshotPath(screenshotPath, extension) : std::filesystem::path(captureOutputPath).replace_extension(extension);
 	screenshot.copyToClipboard = copyToClipboard && captureOutputPath.empty();

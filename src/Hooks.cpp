@@ -34,6 +34,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/PostProcessing.h"
 #include "Features/RainRefraction.h"
+#include "Features/RemoteControl/FrameRecorder.h"
 #include "Features/RemoteControl/NvPerf.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenshotFeature.h"
@@ -639,6 +640,8 @@ struct IDXGISwapChain_Present
 			globals::state->Reset();
 		}
 
+		FrameRecorder::OnPresentEnd();
+
 		NvPerf::OnPresentEnd();
 
 		TracyD3D11Collect(globals::state->tracyCtx);
@@ -807,6 +810,8 @@ struct BSShaderRenderTargets_Create
 		if (++calls > 1)
 			logger::warn("[Hooks] the engine is creating its render targets again (call {}); CS's resources are not made for that", calls);
 		Util::SetGameSettingValue<std::int32_t>("iNumFocusShadow:Display", iNumFocusShadow, 0);
+		if (globals::features::hdrDisplay.loaded)
+			globals::features::hdrDisplay.PreCreateRenderTargets();
 		{
 			// Everything the game creates here is its render targets (VRAM attribution); each is then labeled by name.
 			Vram::OwnerScope vramScope("Game/RenderTarget");

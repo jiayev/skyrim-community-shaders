@@ -97,7 +97,8 @@ namespace DCLF::GrassInstances
 		float pbrParams4[4]{};                 // subsurface balance, front and back specular weights, back roughness scale
 		DescriptorIndex fuzzIndex, emissiveIndex;
 		float canopyHeight[kTiers]{ 1.0f, 1.0f, 1.0f };  // the mesh's model-space height, by tier
-		std::uint32_t pad2[3]{};
+		float fuzzRoughness = -1.0f;  // negative uses base roughness
+		std::uint32_t pad2[2]{};
 	};
 	static_assert(sizeof(BucketRow) == 224);
 	static_assert(offsetof(BucketRow, flags) == 12 && offsetof(BucketRow, visibleBase) == 16 && offsetof(BucketRow, instanceCount) == 28 &&
@@ -107,7 +108,8 @@ namespace DCLF::GrassInstances
 				  offsetof(BucketRow, normalIndex) == 96 && offsetof(BucketRow, pbrSampler) == 108 && offsetof(BucketRow, pbrParams1) == 112 &&
 				  offsetof(BucketRow, pbrParams2) == 128 && offsetof(BucketRow, windDirection) == 144 &&
 				  offsetof(BucketRow, lodMeshCost) == 152 && offsetof(BucketRow, pbrParams3) == 160 && offsetof(BucketRow, pbrParams4) == 176 &&
-				  offsetof(BucketRow, fuzzIndex) == 192 && offsetof(BucketRow, emissiveIndex) == 196 && offsetof(BucketRow, canopyHeight) == 200);
+				  offsetof(BucketRow, fuzzIndex) == 192 && offsetof(BucketRow, emissiveIndex) == 196 && offsetof(BucketRow, canopyHeight) == 200 &&
+				  offsetof(BucketRow, fuzzRoughness) == 212);
 
 	// InstanceFrame::flags: the tier, whether the instance is in the collision's range, whether it is shaded simply (far).
 	inline constexpr std::uint32_t kFrameTierMask = 3u;

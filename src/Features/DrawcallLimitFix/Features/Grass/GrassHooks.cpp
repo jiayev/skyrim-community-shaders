@@ -43,6 +43,7 @@ namespace DCLF::Features::Grass
 				std::memcpy(source.pbrParams2, pbr.params2, sizeof(source.pbrParams2));
 				std::memcpy(source.pbrParams3, pbr.params3, sizeof(source.pbrParams3));
 				std::memcpy(source.pbrParams4, pbr.params4, sizeof(source.pbrParams4));
+				source.fuzzRoughness = pbr.fuzzRoughness;
 			}
 			return source;
 		}

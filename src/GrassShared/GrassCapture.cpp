@@ -83,6 +83,7 @@ namespace GrassShared
 			std::copy_n(constants.params2, 4, out.params2);
 			std::copy_n(constants.params3, 4, out.params3);
 			std::copy_n(constants.params4, 4, out.params4);
+			out.fuzzRoughness = constants.params5[0];
 		}
 
 		/**

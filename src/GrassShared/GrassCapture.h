@@ -71,6 +71,7 @@ namespace GrassShared
 			float params2[4]{};  // subsurface colour rgb, opacity
 			float params3[4]{};  // fuzz colour rgb, weight
 			float params4[4]{};  // subsurface balance, front and back specular weights, back roughness scale
+			float fuzzRoughness = -1.0f;
 		} pbrData;
 
 		enum class Source : uint8_t

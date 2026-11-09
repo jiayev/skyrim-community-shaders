@@ -20,6 +20,7 @@ struct LODBlending;
 struct InteriorSun;
 struct NRD;
 struct PhysicalSky;
+struct ProceduralSun;
 struct RainRefraction;
 struct ScreenSpaceGI;
 struct ScreenSpaceReflections;
@@ -123,6 +124,7 @@ namespace globals
 		extern InteriorSun interiorSun;
 		extern NRD nrd;
 		extern PhysicalSky physicalSky;
+		extern ProceduralSun proceduralSun;
 		extern RainRefraction rainRefraction;
 		extern ScreenSpaceGI screenSpaceGI;
 		extern ScreenSpaceReflections screenSpaceReflections;

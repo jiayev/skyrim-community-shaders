@@ -64,6 +64,7 @@ namespace DCLF::Features::Grass
 		std::uint32_t triangleCount = 0;
 		std::uint32_t pbrFlags = 0;
 		float pbrParams1[3]{}, pbrParams2[4]{}, pbrParams3[4]{}, pbrParams4[4]{};
+		float fuzzRoughness = -1.0f;
 	};
 
 	/**

@@ -14,6 +14,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PhysicalSky.h"
+#include "Features/ProceduralSun.h"
 #include "Features/PseudoSunBounce.h"
 #include "Features/RainRefraction.h"
 #include "Features/ScreenSpaceGI.h"
@@ -75,5 +76,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::physicalSky.cbData,
 		globals::features::pseudoSunBounce.settings,
 		globals::features::rainRefraction.GetCommonBufferData(),
-		globals::features::viewAtmosphere.settings);
+		globals::features::viewAtmosphere.settings,
+		globals::features::proceduralSun.GetCommonBufferData());
 }

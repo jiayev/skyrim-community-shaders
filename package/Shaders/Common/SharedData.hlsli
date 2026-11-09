@@ -681,6 +681,23 @@ namespace SharedData
 		float2 pad1;
 	};
 
+	struct ProceduralSunSettings
+	{
+		uint enabled;
+		float sunDiskCos;
+		float diskIntensity;
+		float edgeSoftness;
+
+		uint haloEnabled;
+		float sunHaloCos;
+		float haloIntensity;
+		float haloFalloff;
+
+		float cloudOcclusionStrength;
+		float sunQuadModelRadius;
+		float2 pad0;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings NSCB(SharedData, grassLightingSettings);
@@ -711,6 +728,7 @@ namespace SharedData
 		PseudoSunBounceSettings NSCB(SharedData, pseudoSunBounceSettings);
 		RainRefractionSettings NSCB(SharedData, rainRefractionSettings);
 		ViewAtmosphereSettings NSCB(SharedData, viewAtmosphereSettings);
+		ProceduralSunSettings NSCB(SharedData, proceduralSunSettings);
 	};
 	NSCB_ALIAS(SharedData, GrassLightingSettings, grassLightingSettings)
 	NSCB_ALIAS(SharedData, CPMSettings, extendedMaterialSettings)
@@ -740,6 +758,7 @@ namespace SharedData
 	NSCB_ALIAS(SharedData, PhysSkyData, physSkyData)
 	NSCB_ALIAS(SharedData, PseudoSunBounceSettings, pseudoSunBounceSettings)
 	NSCB_ALIAS(SharedData, ViewAtmosphereSettings, viewAtmosphereSettings)
+	NSCB_ALIAS(SharedData, ProceduralSunSettings, proceduralSunSettings)
 
 	Texture2D<float4> DepthTexture : register(t17);
 
@@ -775,14 +794,9 @@ namespace SharedData
 	// Returns water data for the tile containing worldPosition (camera-relative XY).
 	float4 GetWaterData(float3 worldPosition)
 	{
-		float2 cellF = (worldPosition.xy + FrameBuffer::CameraPosAdjust.xy) / 4096.0;
-		float2 cellFrac = cellF - floor(cellF);  // floor keeps this in [0, 1] for negative coordinates too
-		int2 cellInt;
-
-		cellF = worldPosition.xy / float2(4096.0, 4096.0);  // remap to cell scale
-		cellF += 2.5;                                       // 5x5 cell grid
-		cellF -= cellFrac;                                  // align to cell borders
-		cellInt = round(cellF);
+		// floor keeps negative coordinates and cell borders exact
+		float2 absolutePosition = worldPosition.xy + FrameBuffer::CameraPosAdjust.xy;
+		int2 cellInt = (int2)(floor(absolutePosition / 4096.0) - floor(FrameBuffer::CameraPosAdjust.xy / 4096.0)) + 2;  // 5x5 cell grid
 
 		uint waterTile = (uint)clamp(cellInt.x + (cellInt.y * 5), 0, 24);  // remap xy to 0-24
 
