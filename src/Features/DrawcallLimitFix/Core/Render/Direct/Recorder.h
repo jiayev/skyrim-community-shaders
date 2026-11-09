@@ -159,6 +159,7 @@ namespace DCLF::Direct
 		// already bound (another bucket of the same pipeline), and per-draw push constants.
 		std::uint32_t binds = 0, sameBinds = 0, pushes = 0, indirects = 0;
 		std::uint32_t countedBinds = 0, countedSameBinds = 0, countedPushes = 0, countedIndirects = 0;
+		std::uint64_t indices = 0, countedIndices = 0;  // the direct draws' indices (FrameCounters::indices[site])
 		// Whether the draw words pushed last are a run's (a direct draw's replace them).
 		bool runWordsPushed = false;
 	};
@@ -179,7 +180,8 @@ namespace DCLF::Direct
 	 * draws, then for main colour its terrain groups' apart (RecordTerrainGroup's), in lane order, with the pulled pipelines. Draws that
 	 * would not fit are not written: hasRuns stays false, and the recorder draws its lanes directly.
 	 */
-	void WriteIndirectDraws(CulledBatch& a_batch, const ViewBatchSet& a_set, ViewType a_view, bool a_depthPass, const RecordBindings& a_bindings, const IndirectBuffer& a_buffer, CullArena& a_arena);
+	/** @brief (Also) the indices of the draws written. */
+	std::uint64_t WriteIndirectDraws(CulledBatch& a_batch, const ViewBatchSet& a_set, ViewType a_view, bool a_depthPass, const RecordBindings& a_bindings, const IndirectBuffer& a_buffer, CullArena& a_arena);
 
 	/**
 	 * @brief A_batch's draws in lane order: per kept lane, its sequences, the lane's bucket's pipeline bound when it changes. Main's colour

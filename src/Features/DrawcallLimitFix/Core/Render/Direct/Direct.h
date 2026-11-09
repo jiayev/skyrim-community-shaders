@@ -440,5 +440,7 @@ namespace DCLF::Direct
 		std::uint32_t binds = 0, sameBinds = 0, pushes = 0;
 		// Indirect mode: the indirect draws recorded (their draws are counted in drawn).
 		std::uint32_t indirects = 0;
+		// The indices the sites' draws submitted (every draw is one instance), by site: their triangles are a third.
+		std::array<std::uint64_t, static_cast<std::size_t>(Site::kCount)> indices{};
 	};
 }
