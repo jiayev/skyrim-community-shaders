@@ -10,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/DrawHelpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Readback/Readbacks.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
@@ -425,10 +426,17 @@ namespace DCLF::Features::Shadows::Engine
 {
 	namespace
 	{
-		/** @brief What the views' latched copies write: the blocks, the counters, the commit's values in the constants. */
+		/**
+		 * @brief What the views' latched copies write: the blocks, the commit's values in the constants, and the GPU culls' counters, which
+		 * they zero. A CPU pipeline's graph copies no zeroed lists (LatchedSource::zeros), so it declares no counter: declared, each would be
+		 * a barrier in every execution for nothing.
+		 */
 		std::vector<Draws::LatchedTarget> LatchedTargets(const Draws::ShadowResources& a_shadow)
 		{
-			std::vector<Draws::LatchedTarget> out{ { nullptr, a_shadow.viewBlocks.buffer }, { a_shadow.constants, nullptr }, { a_shadow.casterRowsUsed, nullptr } };
+			std::vector<Draws::LatchedTarget> out{ { nullptr, a_shadow.viewBlocks.buffer }, { a_shadow.constants, nullptr } };
+			if (Draws::CurrentGraphConditions().cpuPipeline)
+				return out;
+			out.push_back({ a_shadow.casterRowsUsed, nullptr });
 			for (std::size_t s = 0; s < a_shadow.count.size(); ++s) {
 				out.push_back({ a_shadow.count[s], nullptr });
 				out.push_back({ nullptr, a_shadow.bucketCounts[s] });
