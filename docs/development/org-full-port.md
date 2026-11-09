@@ -11,21 +11,43 @@ Work happens on `org-port/*` branches, never on `org_integration` itself (only d
 collects on the CS branch `org-port/integration`, which also carries the submodule bumps. Nothing is pushed yet; several
 pinned submodule commits exist only locally, so a fresh clone cannot fetch them.
 
-| Task                                                                                                           | State                                                                  | Where                                                                   |
-| -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Phase R                                                                                                        | Done                                                                   | `engine-d3d11-surface.md`                                               |
-| P0.1-P0.4 (stencil, blend constants, dual source, logic op, sample mask, depth clip, dynamic viewport/scissor) | Done, D3D12 and Vulkan smokes                                          | BasicRHI `org-port/p0-pipeline-state`                                   |
-| P0.5-P0.6 (input layouts, keyed pipelines at record time, generate mips, MSAA resolve)                         | Done, ORG tests 32/32                                                  | ORG `org-port/p0-pipelines`                                             |
-| P0.7, P0.11 (memory budget, native crash markers) and the AMD device-creation fix                              | Done                                                                   | BasicRHI `org-port/p0-device-diagnostics`                               |
-| P0.8-P0.10 (present without a host wait, HDR colour spaces and metadata, frame latency, tearing)               | Done; HDR and present_wait not run (no HDR display, no driver support) | BasicRHI `org-port/p0-present`                                          |
-| P0.12-P0.13 (on-disk pipeline cache, allocator owners and spillable memory)                                    | Done; defragmentation not built                                        | BasicRHI `org-port/p0-cache-alloc`                                      |
-| All of Phase 0 merged                                                                                          | Done, every smoke passes on both backends                              | BasicRHI `org-port/p0-integration`; CS builds against it                |
-| P2.2, P2.4 (frame anchors, raster programs)                                                                    | Done, checked in game (self-test on and off)                           | CS `org-port/p2-anchors`                                                |
-| P1 (inversion), P2.1, P2.3                                                                                     | In progress                                                            | `org-port/p1-inversion`, `org-port/p2-resources`, `org-port/p2-shaders` |
+| Task                                                                                                           | State                                                                                     | Where                                                    |
+| -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Phase R                                                                                                        | Done                                                                                      | `engine-d3d11-surface.md`                                |
+| P0.1-P0.4 (stencil, blend constants, dual source, logic op, sample mask, depth clip, dynamic viewport/scissor) | Done, D3D12 and Vulkan smokes                                                             | BasicRHI `org-port/p0-pipeline-state`                    |
+| P0.5-P0.6 (input layouts, keyed pipelines at record time, generate mips, MSAA resolve)                         | Done, ORG tests 32/32                                                                     | ORG `org-port/p0-pipelines`                              |
+| P0.7, P0.11 (memory budget, native crash markers) and the AMD device-creation fix                              | Done                                                                                      | BasicRHI `org-port/p0-device-diagnostics`                |
+| P0.8-P0.10 (present without a host wait, HDR colour spaces and metadata, frame latency, tearing)               | Done; HDR and present_wait not run (no HDR display, no driver support)                    | BasicRHI `org-port/p0-present`                           |
+| P0.12-P0.13 (on-disk pipeline cache, allocator owners and spillable memory)                                    | Done; defragmentation not built                                                           | BasicRHI `org-port/p0-cache-alloc`                       |
+| All of Phase 0 merged                                                                                          | Done, every smoke passes on both backends                                                 | BasicRHI `org-port/p0-integration`; CS builds against it |
+| P2.1-P2.5 (graph resources, anchors, shader builds, raster programs, GPU timers)                               | Done, checked in game                                                                     | CS `org-port/integration`                                |
+| P2.6-P2.7 (shared constants, deferred composite)                                                               | Done; composite registers once, A/B within noise                                          | CS `org-port/integration`                                |
+| P1 (ownership inversion) and its fix (graph in the owned frame, HDR without a copy)                            | Merged; **open:** with DCLF on the owned frame stops presenting                           | CS `org-port/integration`                                |
+| P1.6 (ImGui on BasicRHI, Overlay anchor)                                                                       | Done; menu A/B matches D3D11                                                              | CS `org-port/integration`                                |
+| P3 W1: IBL, Screen Space/Terrain/Volumetric Shadows, Skylighting, Grass Collision, LLF remainder               | Merged; all-on batch A/B within noise; Grass Collision and LLF local shadows still to A/B | CS `org-port/integration`                                |
+| P3 W2: SSGI, Subsurface Scattering, Exponential Height Fog                                                     | Merged, run in the batch; fog and Subsurface still to A/B with the feature visibly on     | CS `org-port/integration`                                |
+| DCLF graph textures (publish API, t30 proof)                                                                   | Merged; **open:** switching path mid-scene loses the device                               | CS `org-port/integration`                                |
+| P3 W2/W4/W5: Dynamic Cubemaps, Cloud Shadows, UnifiedWater flowmap, FX runtime design                          | Being written                                                                             | CS `org-port/integration`                                |
 
 **Root cause worth knowing:** a BasicRHI-created Vulkan device failed on AMD because the driver rejects acceleration
 structures in a mutable descriptor list at any count. DXVK never enables acceleration structures, so the adopted device
 never hit it. Acceleration-structure SRVs are now dropped from the descriptor-buffer model where this happens.
+
+**Bugs found by in-game testing (fixed on `org-port/integration`):**
+
+- ORG's alias planner sized a texture with an authored mip chain as one mip, so placements overlapped (SSGI's working
+  depth ran into its radiance). Placement now sizes textures from the description the backing creates them with.
+- ORG's descriptor manager made 2D views of 3D textures, so Skylighting's probe update wrote almost nothing readers saw.
+  3D textures now get Texture3D views.
+- A texture array's default view is its first slice: ports that read `Texture2DArray` (Skylighting's cascades, LLF's
+  shadow cache, the fog's shadow maps) now ask for the whole-array view. This is a trap for every port (AGENT-BRIEF).
+- Terrain Shadows uploaded its heightmap from an anchor commit, which async epochs cannot record: now a copy pass.
+- The composite re-registered every frame (the engine alternates the normals target): both are imported once.
+- ImGui's Overlay anchor was reserved after the graph fixed its epochs, and the DX11 backend's shutdown freed Win32's
+  main-viewport data. Both fixed.
+
+Diagnostics added on the way: `CS_ORG_ALIAS_LOG=1` (alias plans), `CS_SKYLIGHTING_READBACK=1` (probe volume means), and
+the alias check now names the overlapping pair.
 
 **Follow-ups found while building Phase 0:**
 
