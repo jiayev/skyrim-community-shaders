@@ -292,9 +292,11 @@ namespace DCLF::Direct
 			flush(counters.sameBinds, a_context.sameBinds, a_context.countedSameBinds);
 			flush(counters.pushes, a_context.pushes, a_context.countedPushes);
 			flush(counters.indirects, a_context.indirects, a_context.countedIndirects);
-			if (a_context.indices != a_context.countedIndices)
-				std::atomic_ref<std::uint64_t>(counters.indices[static_cast<std::size_t>(a_context.site)])
-					.fetch_add(a_context.indices - std::exchange(a_context.countedIndices, a_context.indices), std::memory_order_relaxed);
+			if (a_context.indices != a_context.countedIndices) {
+				const std::uint64_t added = a_context.indices - std::exchange(a_context.countedIndices, a_context.indices);
+				std::atomic_ref<std::uint64_t>(counters.indices[static_cast<std::size_t>(a_context.site)]).fetch_add(added, std::memory_order_relaxed);
+				std::atomic_ref<std::uint64_t>(counters.viewIndices[static_cast<std::size_t>(a_context.view)]).fetch_add(added, std::memory_order_relaxed);
+			}
 		}
 
 		/** @brief A forward draw's sort key (ForwardSortCS.hlsl, SortKey) and what records it. */

@@ -442,5 +442,8 @@ namespace DCLF::Direct
 		std::uint32_t indirects = 0;
 		// The indices the sites' draws submitted (every draw is one instance), by site: their triangles are a third.
 		std::array<std::uint64_t, static_cast<std::size_t>(Site::kCount)> indices{};
+		// The same by view type: a site draws several (the shadow site the occlusion maps and local lights too, the depth site the
+		// reflection faces), so these compare with the engine's own passes.
+		std::array<std::uint64_t, kViewTypes> viewIndices{};
 	};
 }

@@ -314,8 +314,10 @@ namespace DCLF::Direct::detail
 		out->commands = nullptr;
 		out->hasRuns = false;
 		if (DrawsIndirect(a_run, a_view))
-			if (const auto indices = WriteIndirectDraws(*out, *a_slot.set, a_view.type, a_view.depthPass, a_bindings, a_slot.indirect, a_worker.arena))
+			if (const auto indices = WriteIndirectDraws(*out, *a_slot.set, a_view.type, a_view.depthPass, a_bindings, a_slot.indirect, a_worker.arena)) {
 				std::atomic_ref<std::uint64_t>(a_slot.counters.indices[static_cast<std::size_t>(a_run.site)]).fetch_add(indices, std::memory_order_relaxed);
+				std::atomic_ref<std::uint64_t>(a_slot.counters.viewIndices[static_cast<std::size_t>(a_view.type)]).fetch_add(indices, std::memory_order_relaxed);
+			}
 		if (a_secondary && out->count)
 			if (auto* commands = a_worker.lists.Next(a_run.device)) {
 				RecordContext context{ *commands, *a_slot.set, a_view.type, a_view.view.viewIndex, a_run.site, a_view.depthPass, a_bindings, &a_slot.counters };
@@ -1131,6 +1133,7 @@ namespace DCLF::Direct::detail
 			window.sum.batches[v] += c.batches[v];
 			window.sum.drawn[v] += c.drawn[v];
 			window.sum.cullUs[v] += c.cullUs[v];
+			window.sum.viewIndices[v] += c.viewIndices[v];
 		}
 		for (std::size_t site = 0; site < kSites; ++site) {
 			window.sum.recordUs[site] += c.recordUs[site];
