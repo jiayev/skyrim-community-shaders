@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/SiteStats.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
@@ -984,8 +985,10 @@ namespace DCLF::Direct::detail
 			// The epoch's ORG execution: the commits' uploads, its CPU pipeline passes, then its late pass, which records the draws
 			// (RecordExecutingSite), with ORG's barriers, its entry and exit full (the external queue boundary).
 			executing = &run;
+			const std::uint32_t statsSlot = SiteStats::Begin(run.device, a_commandBuffer, site);
 			if (segment < run.execution->segments.size())
 				run.execution->Execute(segment, run.adopted.Get());
+			SiteStats::End(a_commandBuffer, statsSlot);
 			executing = nullptr;
 			if (lastSegment && !run.recordedDraws && !std::exchange(S().loggedNoLatePass, true))
 				logger::error("[DCLF] CPU pipeline: the {} site's epoch was executed without its late pass (no draws pass in its recording): it draws nothing", site);
@@ -1110,6 +1113,7 @@ namespace DCLF::Direct::detail
 	void Release(FrameSlot& a_slot)
 	{
 		DCLF_ZONE("CS.DCLF.Cpu.Release");
+		SiteStats::Collect();
 		// Nothing of its frame still runs on the pool (frames ago: in practice never waited for), and a continuation not started yet
 		// will do nothing.
 		a_slot.generation.fetch_add(1, std::memory_order_seq_cst);
