@@ -5,7 +5,7 @@
 #include "Features/DeveloperTools.h"
 
 #include "Features/RemoteControl.h"
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
 #include "Features/RenderDoc.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -100,12 +100,12 @@ void DeveloperTools::DrawSettings()
 	}
 
 	// Nsight Perf. Probe() loads the profiler library once; later calls are cheap.
-	NvPerf::Probe();
-	const auto device = NvPerf::GetDeviceInfo();
+	GpuCounters::Probe();
+	const auto device = GpuCounters::GetDeviceInfo();
 	remoteControl.UpdateNvPerfHistory();
-	const auto nvperfState = NvPerf::GetStatus().state;
-	const bool nvperfBusy = nvperfState == NvPerf::CaptureState::Waiting || nvperfState == NvPerf::CaptureState::Capturing ||
-	                        nvperfState == NvPerf::CaptureState::Decoding;
+	const auto nvperfState = GpuCounters::GetStatus().state;
+	const bool nvperfBusy = nvperfState == GpuCounters::CaptureState::Waiting || nvperfState == GpuCounters::CaptureState::Capturing ||
+	                        nvperfState == GpuCounters::CaptureState::Decoding;
 	auto& nvperfCard = cards[static_cast<size_t>(Tool::NsightPerf)];
 	nvperfCard.icon = ICON_TI_CHART_BAR;
 	nvperfCard.title = T(TKEY("nsight"), "Nsight Perf");
@@ -200,7 +200,7 @@ void DeveloperTools::DrawSettings()
 			break;
 		case Tool::NsightPerf:
 			if (nvperfBusy)
-				NvPerf::CancelCapture();
+				GpuCounters::CancelCapture();
 			else
 				remoteControl.RequestNvPerfCapture();
 			break;

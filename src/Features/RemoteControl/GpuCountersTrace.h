@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -63,7 +63,7 @@
  * relative half-width, e.g. 0.02) override the template's). Its startFrame counts from the first present after the load: on
  * the main menu and loading screens the graph's owners do not build, so a capture there would measure lists recorded before it.
  */
-namespace NvPerf::Trace
+namespace GpuCounters::Trace
 {
 	struct MetricGroup
 	{
@@ -216,7 +216,7 @@ namespace NvPerf::Trace
 
 	/// Whether CS_NVPERF_TEMPLATE requests a headless trace.
 	bool EnvironmentRequested();
-	/// Render thread, from NvPerf::OnPresentEnd: starts the headless trace, queues the next capture, merges finished ones.
+	/// Render thread, from GpuCounters::OnPresentEnd: starts the headless trace, queues the next capture, merges finished ones.
 	void OnPresentEnd(std::uint64_t presents);
 	/// SKSE's kPostLoadGame (any thread): a headless trace's startFrame counts from the next present.
 	void OnGameLoaded();

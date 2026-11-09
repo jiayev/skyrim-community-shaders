@@ -5,7 +5,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
 #include "RenderGraph/DxvkImageImport.h"
 
 namespace DCLF::Draws
@@ -175,7 +175,7 @@ namespace DCLF::Draws
 		if (a_calls.empty())
 			return;
 		auto& commands = a_recording.Commands();
-		void* const nvCommands = NvPerf::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(commands) : nullptr;
+		void* const nvCommands = GpuCounters::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(commands) : nullptr;
 		auto beginDrawPass = [&](rhi::CommandList& a_list) {
 			a_list.SetDescriptorHeaps(a_resourceHeap, a_samplerHeap);
 			a_list.BeginPass(a_begin);
@@ -188,23 +188,23 @@ namespace DCLF::Draws
 		// Every call preprocessed before the pass, with the execution's exact state (as MainOpaquePass), then executed in order.
 		auto& state = a_preprocess.Begin(a_recording.FrameSlot());
 		beginDrawPass(state);
-		const bool preprocessRange = nvCommands && a_preprocessRange && NvPerf::PushCommandBufferRange(nvCommands, a_preprocessRange);
+		const bool preprocessRange = nvCommands && a_preprocessRange && GpuCounters::PushCommandBufferRange(nvCommands, a_preprocessRange);
 		for (const auto& call : a_calls) {
-			const bool callRange = nvCommands && call.preprocessRange && NvPerf::PushCommandBufferRange(nvCommands, call.preprocessRange);
+			const bool callRange = nvCommands && call.preprocessRange && GpuCounters::PushCommandBufferRange(nvCommands, call.preprocessRange);
 			commands.PreprocessIndirect(state, call.signature, a_arguments, call.argumentsOffset, call.counts, call.countOffset, call.capacity);
 			if (nvCommands)
-				NvPerf::PopCommandBufferRange(nvCommands, callRange);
+				GpuCounters::PopCommandBufferRange(nvCommands, callRange);
 		}
 		if (nvCommands)
-			NvPerf::PopCommandBufferRange(nvCommands, preprocessRange);
+			GpuCounters::PopCommandBufferRange(nvCommands, preprocessRange);
 		state.EndPass();
 		state.End();
 		beginDrawPass(commands);
 		for (const auto& call : a_calls) {
-			const bool range = nvCommands && call.range && NvPerf::PushCommandBufferRange(nvCommands, call.range);
+			const bool range = nvCommands && call.range && GpuCounters::PushCommandBufferRange(nvCommands, call.range);
 			commands.ExecuteIndirect(call.signature, a_arguments, call.argumentsOffset, call.counts, call.countOffset, call.capacity);
 			if (nvCommands)
-				NvPerf::PopCommandBufferRange(nvCommands, range);
+				GpuCounters::PopCommandBufferRange(nvCommands, range);
 		}
 		commands.EndPass();
 	}

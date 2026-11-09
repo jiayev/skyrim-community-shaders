@@ -21,7 +21,7 @@
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include <OpenRenderGraph/GraphHost.h>
 #include <Render/LatchBlock.h>
@@ -373,14 +373,14 @@ namespace DCLF::Draws
 			};
 			const rhi::IndexBufferView pool{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt };  // the whole buffer
 			// nvperf ranges around each view's pass, when a capture selects them.
-			void* const nvCommands = NvPerf::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(commands) : nullptr;
+			void* const nvCommands = GpuCounters::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(commands) : nullptr;
 			std::uint32_t recordedDraws = 0;
 			static constexpr const char* kViewRanges[] = { "cs.dclf.shadow.view-0", "cs.dclf.shadow.view-1", "cs.dclf.shadow.view-2", "cs.dclf.shadow.view-3",
 				"cs.dclf.shadow.view-4", "cs.dclf.shadow.view-5", "cs.dclf.shadow.view-6", "cs.dclf.shadow.view-7+" };
 			for (std::size_t i = 0; i < a_prepared.views.size(); ++i) {
 				const auto& view = frame.views[a_prepared.views[i].index];
 				const char* range = IsOcclusionTarget(view.target) ? "cs.dclf.shadow.occlusion-map" : kViewRanges[std::min<std::size_t>(i, std::size(kViewRanges) - 1)];
-				const bool viewRange = nvCommands && NvPerf::PushCommandBufferRange(nvCommands, range);
+				const bool viewRange = nvCommands && GpuCounters::PushCommandBufferRange(nvCommands, range);
 				commands.BeginPass(begins[i]);
 				commands.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
 				commands.BindLayout(frame.indirect.layout);
@@ -406,7 +406,7 @@ namespace DCLF::Draws
 				}
 				commands.EndPass();
 				if (nvCommands)
-					NvPerf::PopCommandBufferRange(nvCommands, viewRange);
+					GpuCounters::PopCommandBufferRange(nvCommands, viewRange);
 			}
 			// A recording is replayed until its shape changes: a few of them say how many indirect draws the views cost.
 			static std::atomic<std::uint32_t> logged{ 0 };

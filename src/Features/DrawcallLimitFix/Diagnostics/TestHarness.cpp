@@ -18,7 +18,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/TelemetryProfile.h"
 #include "Features/PostProcessing.h"
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Upscaling.h"
 #include "GpuEventTimers.h"
@@ -164,7 +164,7 @@ namespace DCLF
 			if (condition == "nvperf") {
 				if (!harness.nvperfCapture)
 					return true;
-				const auto latest = NvPerf::LatestResult();
+				const auto latest = GpuCounters::LatestResult();
 				return latest && latest->id >= harness.nvperfCapture;
 			}
 			if (condition.rfind("signal:", 0) == 0)
@@ -631,15 +631,15 @@ namespace DCLF
 					// frame, 3 samples by default; its rows are logged and appended to the CSV, and dclf:wait=nvperf waits for it.
 					if (command.rfind("dclf:nvperf=", 0) == 0) {
 						std::string value = command.substr(12);
-						NvPerf::CaptureConfiguration configuration;
+						GpuCounters::CaptureConfiguration configuration;
 						configuration.samples = 3;
-						// "@<metric>[:<kind>],...": those metrics instead of the defaults (NvPerf::ParseMetric's form).
+						// "@<metric>[:<kind>],...": those metrics instead of the defaults (GpuCounters::ParseMetric's form).
 						if (const auto at = value.rfind('@'); at != std::string::npos) {
 							std::stringstream list(value.substr(at + 1));
 							for (std::string metric; std::getline(list, metric, ',');) {
-								NvPerf::MetricRequest request;
+								GpuCounters::MetricRequest request;
 								std::string error;
-								if (NvPerf::ParseMetric(metric, request, error))
+								if (GpuCounters::ParseMetric(metric, request, error))
 									configuration.metrics.push_back(std::move(request));
 								else
 									logger::warn("[DCLF] test command: NvPerf metric '{}': {}", metric, error);
@@ -661,7 +661,7 @@ namespace DCLF
 						}
 						std::uint64_t id = 0;
 						std::string error;
-						if (NvPerf::RequestCapture(configuration, id, error)) {
+						if (GpuCounters::RequestCapture(configuration, id, error)) {
 							Harness().nvperfCapture = id;
 							logger::info("[DCLF] test command: NvPerf capture {} of {} ranges, {} samples", id, configuration.ranges.size(), configuration.samples);
 						} else

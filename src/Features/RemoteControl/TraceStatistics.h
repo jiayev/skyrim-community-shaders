@@ -16,7 +16,7 @@
  * Built with the render graph (CS_HAS_RENDER_GRAPH), which brings BasicTelemetry; without it Available() is false, a
  * summary carries the mean, median and percentiles only, and nothing converges.
  */
-namespace NvPerf::Trace::Statistics
+namespace GpuCounters::Trace::Statistics
 {
 	struct Config
 	{

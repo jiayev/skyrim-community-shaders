@@ -20,7 +20,7 @@
  * Render thread only, apart from Collecting() and CurrentFrame() (any thread). Needs the render graph (CS_HAS_RENDER_GRAPH):
  * without it Start fails.
  */
-namespace NvPerf::Timestamps
+namespace GpuCounters::Timestamps
 {
 	enum class Queue : std::uint8_t
 	{
@@ -34,7 +34,7 @@ namespace NvPerf::Timestamps
 		std::string name;
 		Queue queue = Queue::Graphics;
 		bool barrier = false;   // a barrier batch around a pass (cs.org.barrier.<where>.<pass>)
-		bool nested = false;    // a part of a pass, inside its range (NvPerf::PushCommandBufferRange: a shadow view, a draw group)
+		bool nested = false;    // a part of a pass, inside its range (GpuCounters::PushCommandBufferRange: a shadow view, a draw group)
 		bool replayed = false;  // from a recording kept across frames (its own queries)
 		double us = 0.0;        // end - begin
 		// The queue's ticks (comparable within one queue, across its epochs) and their length: a trace's spans (NvPerfTrace.h).
@@ -56,7 +56,7 @@ namespace NvPerf::Timestamps
 	bool Collecting() noexcept;
 	/// Frames presented so far (NvPerf's present count).
 	std::uint64_t CurrentFrame() noexcept;
-	/// Render thread, from NvPerf::OnPresentEnd.
+	/// Render thread, from GpuCounters::OnPresentEnd.
 	void OnPresentEnd(std::uint64_t a_presents);
 
 	/// An epoch submitted in a_frame (non-zero), whose completion follows.

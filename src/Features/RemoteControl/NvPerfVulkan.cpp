@@ -3,7 +3,7 @@
 // volk must precede every Vulkan header in this translation unit.
 #	include <rhi_interop_vulkan.h>
 
-#	include "Features/RemoteControl/NvPerfBackend.h"
+#	include "Features/RemoteControl/GpuCountersBackend.h"
 
 #	include "Globals.h"
 #	include "RenderGraph/DxvkOrgInterop.h"
@@ -40,7 +40,7 @@
  * so a range's path is its own name; the chip is named by the first capture; the profiler decodes on DXVK's submission
  * thread at the last pass's boundary, so a sample is never seen Decoding.
  */
-namespace NvPerf::detail
+namespace GpuCounters::detail
 {
 	namespace
 	{
@@ -90,6 +90,8 @@ namespace NvPerf::detail
 		{
 		public:
 			const char* Name() const noexcept override { return "Vulkan"; }
+			const char* Profiler() const noexcept override { return "Nsight Perf"; }
+			std::vector<MetricRequest> DefaultMetrics() const override { return NvPerfDefaultMetrics(); }
 
 			// DXVK's exports, its device's queue, the graph host's hooks. Nothing here loads the library.
 			bool Register(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::GraphHost& a_host)
@@ -468,7 +470,7 @@ namespace NvPerf::detail
 		};
 	}
 
-	std::unique_ptr<Backend> MakeVulkanBackend(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::GraphHost& a_host)
+	std::unique_ptr<Backend> MakeNvPerfVulkanBackend(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::GraphHost& a_host)
 	{
 		auto backend = std::make_unique<VulkanBackend>();
 		backend->Register(a_info, a_dxvkModule, a_host);
@@ -478,11 +480,11 @@ namespace NvPerf::detail
 
 #else
 
-#	include "Features/RemoteControl/NvPerfBackend.h"
+#	include "Features/RemoteControl/GpuCountersBackend.h"
 
-namespace NvPerf::detail
+namespace GpuCounters::detail
 {
-	std::unique_ptr<Backend> MakeVulkanBackend(const DxvkOrgInteropDeviceInfo&, void*, org::GraphHost&)
+	std::unique_ptr<Backend> MakeNvPerfVulkanBackend(const DxvkOrgInteropDeviceInfo&, void*, org::GraphHost&)
 	{
 		return nullptr;
 	}

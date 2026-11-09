@@ -8,7 +8,7 @@
 #include <cmath>
 #include <numeric>
 
-namespace NvPerf::Trace::Statistics
+namespace GpuCounters::Trace::Statistics
 {
 	bool Available()
 	{

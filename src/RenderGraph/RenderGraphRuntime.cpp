@@ -12,7 +12,7 @@
 #include "Profiler.h"
 #include "RenderGraph/DxvkOrgInterop.h"
 #include "Features/RemoteControl/GpuTimestamps.h"
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
 #include "Features/DrawcallLimitFix.h"
 #include "GpuIdleTrace.h"
 #include "State.h"
@@ -747,7 +747,7 @@ struct RenderGraphRuntime::Impl
 	// Written by the render thread when an epoch executes, read when its timestamps come back - on the host's
 	// own thread with async epochs.
 	std::array<std::atomic<Segment>, kSegmentRing> frameSegments{};
-	// The frame each host frame's epoch ran in, while a timestamp trace collects (NvPerf::Timestamps; 0: not collected).
+	// The frame each host frame's epoch ran in, while a timestamp trace collects (GpuCounters::Timestamps; 0: not collected).
 	std::array<std::atomic<std::uint64_t>, kSegmentRing> frameTimestampFrames{};
 	std::array<SegmentTime, kSegments> segmentTimes{};
 	std::uint32_t timedEpochs = 0;
@@ -772,7 +772,7 @@ struct RenderGraphRuntime::Impl
 		std::vector<CompletedPass> otherQueuePasses;
 		// While a timestamp trace collects: the frame the epoch ran in, and every range it timed (passes and barrier batches).
 		std::uint64_t timestampFrame = 0;
-		std::vector<NvPerf::Timestamps::Range> ranges;
+		std::vector<GpuCounters::Timestamps::Range> ranges;
 	};
 	bool asyncEpochs = false;
 	std::vector<CompletedEpoch> hostPending;  // the host's thread only
@@ -782,7 +782,7 @@ struct RenderGraphRuntime::Impl
 	{
 		++completedFrames;
 		if (a_epoch.timestampFrame)
-			NvPerf::Timestamps::Completed(a_epoch.timestampFrame, std::move(a_epoch.ranges));
+			GpuCounters::Timestamps::Completed(a_epoch.timestampFrame, std::move(a_epoch.ranges));
 		if (globals::profiler && a_epoch.segment < kSegments)
 			for (const auto& completed : a_epoch.otherQueuePasses)
 				if (completed.inclusiveMs >= kProfilerMinPassMs)
@@ -872,11 +872,11 @@ struct RenderGraphRuntime::Impl
 		if (a_out.timestampFrame) {
 			a_out.ranges.reserve(timestamps.size());
 			for (const auto& timestamp : timestamps) {
-				NvPerf::Timestamps::Range range;
+				GpuCounters::Timestamps::Range range;
 				range.name = std::string(timestamp.name);
-				range.queue = timestamp.queueKind == rhi::QueueKind::Graphics ? NvPerf::Timestamps::Queue::Graphics :
-				              timestamp.queueKind == rhi::QueueKind::Compute  ? NvPerf::Timestamps::Queue::Compute :
-				                                                                NvPerf::Timestamps::Queue::Copy;
+				range.queue = timestamp.queueKind == rhi::QueueKind::Graphics ? GpuCounters::Timestamps::Queue::Graphics :
+				              timestamp.queueKind == rhi::QueueKind::Compute  ? GpuCounters::Timestamps::Queue::Compute :
+				                                                                GpuCounters::Timestamps::Queue::Copy;
 				range.barrier = timestamp.kind == org::runtime::TimestampRangeKind::Barrier;
 				range.nested = timestamp.kind == org::runtime::TimestampRangeKind::Sub;
 				range.replayed = timestamp.replayed;
@@ -951,11 +951,11 @@ struct RenderGraphRuntime::Impl
 	// Render thread, for the epoch a host frame runs: its segment, and while a timestamp trace collects, the frame it runs in.
 	void MarkEpoch(std::uint64_t a_hostFrame, Segment a_segment)
 	{
-		const std::uint64_t timestampFrame = NvPerf::Timestamps::Collecting() ? NvPerf::Timestamps::CurrentFrame() + 1 : 0;
+		const std::uint64_t timestampFrame = GpuCounters::Timestamps::Collecting() ? GpuCounters::Timestamps::CurrentFrame() + 1 : 0;
 		frameTimestampFrames[a_hostFrame % kSegmentRing].store(timestampFrame, std::memory_order_release);
 		frameSegments[a_hostFrame % kSegmentRing].store(a_segment, std::memory_order_release);
 		if (timestampFrame)
-			NvPerf::Timestamps::Submitted(timestampFrame);
+			GpuCounters::Timestamps::Submitted(timestampFrame);
 	}
 
 	void RecordEpoch(Segment a_segment, std::chrono::steady_clock::duration a_elapsed)
@@ -1818,7 +1818,7 @@ bool RenderGraphRuntime::Initialize()
 	impl = std::move(state);
 	disabledReason.clear();
 	// Nsight Perf's Vulkan backend: its captures run on DXVK's graphics queue, with the graph's passes as ranges.
-	NvPerf::RegisterVulkanDevice(info, d3d11, *impl->host);
+	GpuCounters::RegisterVulkanDevice(info, d3d11, *impl->host);
 	logger::info("[ORG] Render graph adopted DXVK's Vulkan device (queue family {}, index {}); submissions {}",
 		info.graphicsQueueFamily, info.graphicsQueueIndex,
 		impl->enqueueSubmission ? "go through DXVK's command stream" : "flush DXVK each epoch");

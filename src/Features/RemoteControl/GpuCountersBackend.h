@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -10,20 +10,29 @@
 #include <vector>
 
 /**
- * @brief Internal to NvPerf: the capture in flight as the front end (NvPerf.cpp) tracks it, and the interface of the
- * profiler backends that take it (NvPerfD3D11.cpp, NvPerfVulkan.cpp).
+ * @brief Internal to GpuCounters: the capture in flight as the front end (GpuCounters.cpp) tracks it, and the interface of
+ * the profiler backends that take it: NVIDIA's Nsight Perf (NvPerfD3D11.cpp, NvPerfVulkan.cpp) and AMD's GPUPerfAPI
+ * (GpaD3D11.cpp, GpaVulkan.cpp).
  *
- * The front end owns everything both backends share: requests, status, the delay before the first pass, the result's
+ * The front end owns everything the backends share: requests, status, the delay before the first pass, the result's
  * summary, log and CSV, the completion callback. A backend owns its profiler: configuring a capture, its passes, the
  * ranges, decoding samples into CaptureResult::rangeResults.
  */
-namespace NvPerf::detail
+namespace GpuCounters::detail
 {
 	// NVPW's enums (nvperf_host.h), so the metric helpers build without the SDK.
 	inline constexpr std::uint8_t kCounter = 0, kRatio = 1, kThroughput = 2;
 	inline constexpr std::uint8_t kRollupAvg = 0, kRollupSum = 3;
 	inline constexpr std::uint16_t kSubmetricNone = 0, kSubmetricPerCycleActive = 10, kSubmetricPctOfPeakActive = 15, kSubmetricPctOfPeakElapsed = 16,
 								   kSubmetricRatio = 21;
+	// A profiler's own counter, reported under its plain name (GPUPerfAPI's): summed over ranges (times, counts, bytes) or
+	// averaged, weighted by time (percentages, ratios). The backend resolves a requested metric to one of these.
+	inline constexpr std::uint8_t kPlainSummed = 100, kPlainAveraged = 101;
+
+	/// Nsight Perf's default metrics (both NvPerf backends).
+	std::vector<MetricRequest> NvPerfDefaultMetrics();
+	/// Whether a metric is a range's GPU time, the weight of averaged metrics (gpu__time_duration, GPUTime).
+	bool IsTimeMetric(const MetricRequest& a_metric);
 
 	bool IsSummed(const MetricRequest& a_metric);
 	bool NameMatches(std::string_view a_filter, std::string_view a_name);
@@ -66,6 +75,10 @@ namespace NvPerf::detail
 
 		/// "D3D11" or "Vulkan".
 		virtual const char* Name() const noexcept = 0;
+		/// The profiler: "Nsight Perf" or "GPUPerfAPI".
+		virtual const char* Profiler() const noexcept = 0;
+		/// The metrics a request naming none measures.
+		virtual std::vector<MetricRequest> DefaultMetrics() const = 0;
 		/// Loads the library and identifies the device into a_device; sets a_device.probed once the answer is final. The
 		/// front end's mutex is held.
 		virtual bool Probe(DeviceInfo& a_device) = 0;
@@ -94,8 +107,17 @@ namespace NvPerf::detail
 		virtual void PopCommandBufferRange(void*, bool) {}
 	};
 
-	/// The D3D11 backend (NVPERF_ENABLED), or null.
-	std::unique_ptr<Backend> MakeD3D11Backend();
-	/// The Vulkan backend on DXVK's device (NVPERF_ENABLED with the render graph), or null.
-	std::unique_ptr<Backend> MakeVulkanBackend(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::GraphHost& a_host);
+	/// Nsight Perf's D3D11 backend (NVPERF_ENABLED), or null.
+	std::unique_ptr<Backend> MakeNvPerfD3D11Backend();
+	/// Nsight Perf's Vulkan backend on DXVK's device (NVPERF_ENABLED with the render graph), or null.
+	std::unique_ptr<Backend> MakeNvPerfVulkanBackend(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::GraphHost& a_host);
+	/// GPUPerfAPI's D3D11 backend on the game's immediate context (AMD GPUs).
+	std::unique_ptr<Backend> MakeGpaD3D11Backend();
+	/// GPUPerfAPI's Vulkan backend on DXVK's device (AMD GPUs; with the render graph), or null.
+	std::unique_ptr<Backend> MakeGpaVulkanBackend(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::GraphHost& a_host);
+	/// DXVK's physical device's PCI vendor (0: unknown).
+	std::uint32_t VulkanVendor(const DxvkOrgInteropDeviceInfo& a_info);
+	/// Before the game creates its D3D11 device (InstallEarlyHooks, after DXVK loaded): GPUPerfAPI must be initialized before
+	/// the device (D3D11) or its queues (Vulkan) exist, and DXVK's device must enable its driver extensions.
+	void GpaBeforeDeviceCreation(void* a_dxvkModule);
 }

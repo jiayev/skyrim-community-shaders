@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace NvPerf
+namespace GpuCounters
 {
 	struct CaptureResult;
 }
@@ -66,7 +66,7 @@ private:
 	// The Nsight Perf section's inputs. UI state only: nothing here is saved.
 	struct NvPerfPanel
 	{
-		std::vector<char> defaultMetricEnabled;  // per NvPerf::DefaultMetrics() entry
+		std::vector<char> defaultMetricEnabled;  // per GpuCounters::DefaultMetrics() entry
 		std::string extraMetrics;                // comma-separated name[:kind]
 		std::string ranges;                      // comma-separated range filters
 		int samples = 1;
@@ -77,7 +77,7 @@ private:
 		/** @brief A finished capture and when it was first seen. */
 		struct RecentCapture
 		{
-			std::shared_ptr<const NvPerf::CaptureResult> result;
+			std::shared_ptr<const GpuCounters::CaptureResult> result;
 			std::filesystem::file_time_type time;
 		};
 		std::vector<RecentCapture> recent;  // newest first

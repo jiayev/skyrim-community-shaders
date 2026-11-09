@@ -12,7 +12,7 @@
 #include <mutex>
 
 // NvPerf's timestamp samples (GpuTimestamps.h): the frames RenderGraphRuntime's epochs make up, assembled as they come back.
-namespace NvPerf::Timestamps
+namespace GpuCounters::Timestamps
 {
 	namespace
 	{

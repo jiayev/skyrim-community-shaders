@@ -1,10 +1,10 @@
-#include "Features/RemoteControl/NvPerfHost.h"
+#include "Features/RemoteControl/GpuCountersHost.h"
 
 #include "Globals.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 
-namespace NvPerf::Host
+namespace GpuCounters::Host
 {
 	ID3D11Device* Device()
 	{

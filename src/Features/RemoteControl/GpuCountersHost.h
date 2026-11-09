@@ -11,7 +11,7 @@ struct ID3D11DeviceContext;
  *
  * The host implements these in its own translation unit (NvPerfHost.cpp here).
  */
-namespace NvPerf::Host
+namespace GpuCounters::Host
 {
 	ID3D11Device* Device();
 	/// The immediate context the frame's perf events are recorded on.
