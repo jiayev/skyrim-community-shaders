@@ -1,6 +1,8 @@
 // PrimaryCull: the list jobs' stand-in (Process1, AppendVirtual; job threads), the render thread's frame around them, the cut's
 // plans and admission, and the synthetic membership passes (any thread).
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/EngineOnlyCull.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
@@ -37,6 +39,7 @@
 #include <cstring>
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 namespace DCLF
 {
@@ -288,7 +291,7 @@ namespace DCLF
 				rejected = PlanNameOf(a_object);
 				return;
 			}
-			for (const auto& child : node->GetChildren())
+			for (const auto& child : Engine::Children(*node))
 				a_self(a_self, child.get(), false);
 		};
 		visit(visit, a_root, true);
@@ -370,15 +373,10 @@ namespace DCLF
 		}
 		Diagnostics::Notify(Diagnostics::CutSlotsReset{ count });
 		// The stand-in needs a current snapshot; otherwise the engine culls every entry (less the leaf exclusion).
-		if (!ActiveToggles().excludePrimaryEntries) {
-			if (!ownedRoots.empty() || !standInRoots.empty())
-				ClearRootOwnership();
-			frameLive.store(true, std::memory_order_release);
-			return;
-		}
 		// The sun's exclusion is not a precondition: listed roots' fade is DCLF's alone, and a whole entry the sun's cull reaches
 		// without it has its casters' passes withheld (the Sun source's accumulation, PassCapture).
 		if (!candidates) {
+			EngineOnlyCull::NoteWholeCull(EngineOnlyCull::WholeCull::PrimaryNoSnapshot);
 			++(candidates ? cutStats.skippedPreconditions : cutStats.skippedStale);
 			liveStale = true;
 			// The engine culls the stood-in roots and writes their kAccumulated this frame; the next decode writes them all.
@@ -649,7 +647,7 @@ namespace DCLF
 		// batch goes back whole to the render thread, which drops its snapshot.
 		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "CS.DCLF.CutPlans",
 				[this, batch = batch.release()](const auto&) {
-					ZoneScopedN("CS.DCLF.CutPlans");
+					DCLF_ZONE("CS.DCLF.CutPlans");
 					for (auto& planned : batch->entries) {
 						const EngineReadWindow::Lease lease;
 						if (!lease || !EngineReleases::Alive(batch->candidates->publication))
@@ -934,7 +932,7 @@ namespace DCLF
 	{
 		if (!installed)
 			return;
-		ZoneScopedN("CS.DCLF.AccumulatedWrites");
+		DCLF_ZONE("CS.DCLF.AccumulatedWrites");
 		// Roots no longer stood in are left to the engine's cull this frame.
 		IndirectDraws::Get().WriteAccumulated(a_running, [this](const void* a_root) { return standInRoots.contains(a_root); });
 		// The stand-in observers (the tree manager's loop, later in this Main::Update, takes the stood-in trees' visibility from those
@@ -1090,7 +1088,7 @@ namespace DCLF
 
 	void PrimaryCull::AfterFullFrustum()
 	{
-		ZoneScopedN("CS.DCLF.AfterFullFrustum");
+		DCLF_ZONE("CS.DCLF.AfterFullFrustum");
 		frameLive.store(false, std::memory_order_relaxed);
 		gpuSunFrame = false;
 		// The Sun source ends its frame's state (Features/Shadows/Sun) and says whether its exclusion applied.
@@ -1143,11 +1141,11 @@ namespace DCLF
 		const std::uint64_t flags = lighting->flags;
 		const bool blended = a_leaf.AlphaBlending();
 		// Settled state, not the current fade: GetRenderPasses (1414adfb0) draws a screen-door fade of an unblended opaque material
-		// as the plain opaque pass with alpha = materialAlpha. Translucent objects take hints 1 and 9; not modelled.
+		// as the plain opaque pass with alpha = materialAlpha. A blended fade (hint 9) is BlendFading's, below.
 		const bool translucent = lighting->materialAlpha < 1.0f || blended;
 		// The bits taken inside a cascade; BuildDraws drops them on a miss (kObjectSunTest). A layer takes none: the registrations
 		// write light masks on the main property alone (FUN_1414b2140).
-		const std::uint32_t sun = a_layer ? 0u : SunShadowStatic(a_leaf);
+		std::uint32_t sun = a_layer ? 0u : SunShadowStatic(a_leaf);
 		std::uint32_t hint = 0;
 		syntheticFail = a_layer ? 4 : 5;
 		if (a_layer) {
@@ -1164,7 +1162,12 @@ namespace DCLF
 			hint = 4;
 		} else if (flags & 0xc000000ull)
 			hint = translucent ? 3 : 2;  // the decal groups
-		else if (translucent && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward))
+		else if (BlendFading(a_leaf, lighting) && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward)) {
+			// The root is fading: the engine's fading pass (hint 9), drawn by the forward epoch while the fade lasts. Translucent,
+			// so GetRenderPasses gives it no shadow bits.
+			hint = kFadingHint;
+			sun = 0;
+		} else if (translucent && !Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward))
 			return false;
 		else if (translucent)
 			hint = 1;  // the blended group (FUN_1414b2330's hint 1), drawn by the forward epoch
@@ -1244,7 +1247,7 @@ namespace DCLF
 				std::uint64_t result;
 				{
 					// The render thread's wait for the main camera's list jobs.
-					ZoneScopedN("CS.DCLF.ListJobsWait");
+					DCLF_ZONE("CS.DCLF.ListJobsWait");
 					result = func(a_1, a_2, a_3, a_4);
 				}
 				PrimaryCull::Get().AfterListJobs();

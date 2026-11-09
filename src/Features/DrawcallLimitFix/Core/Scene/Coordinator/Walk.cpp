@@ -5,6 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Engine/SkinPalettes.h"
 #include "Features/DrawcallLimitFix/Core/Engine/SkinPartitions.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
@@ -495,6 +496,7 @@ namespace DCLF::Scene
 		if (d.candidateSet) {
 			trackedEntry->candidateFrame = d.candidateFrame;
 			trackedEntry->candidateReason = d.candidateReason;
+			NoteEngineCaster(geometry, r.write == EvalResult::Write::Record ? Ineligible::None : d.candidateReason);
 		}
 		if (r.referenceReason)
 			referenceReasons[geometry] = r.reason;
@@ -914,7 +916,7 @@ namespace DCLF::Scene
 		// worker started it). A buffer this misses still resolves, alone.
 		if (!frameResolveBuffers)
 			return;
-		ZoneScopedN("CS.DCLF.Scene.PrefetchBuffers");
+		DCLF_ZONE("CS.DCLF.Scene.PrefetchBuffers");
 		std::vector<ID3D11Buffer*> buffers;
 		auto add = [&](const void* a_shape, ID3D11Buffer* a_vertices, ID3D11Buffer* a_indices) {
 			if (!a_shape)
@@ -1130,7 +1132,7 @@ namespace DCLF::Scene
 		skinnedObjects.push_back(a_geometry);
 		++stats.lightSkins;
 		if (tables.skinPartitions[slot] != a_result.skinPartitions || tables.skinLodPartitions[slot] != a_result.skinLodPartitions)
-			tables.NoteChange(slot, kChangeSkin | kChangeStructure);
+			tables.NoteChange(slot, kChangeSkin);
 		// The features' components follow a partition change (Features/Decals: blood decals' slots follow the partitions).
 		if (tables.skinPartitions[slot] != a_result.skinPartitions)
 			ComponentsRewritten(slot, false, tables.skinPartitions[slot], a_result.skinPartitions);
@@ -1211,6 +1213,16 @@ namespace DCLF::Scene
 				List(propertyDependents, propertyDependentsAt, emittance, a_geometry);
 			a_tracked.listedEmittance = emittance;
 		}
+		// The property's fade node: its currentFade crossing 1 (or its door byte) changes the synthetic pass's hint (BlendFading).
+		const auto* fadeRecord = lighting && lighting->fadeNode ? leaf.FadeNodeOf(lighting) : nullptr;
+		const void* fadeNode = fadeRecord ? fadeRecord->key : nullptr;
+		if (fadeNode != a_tracked.listedFadeNode) {
+			if (a_tracked.listedFadeNode)
+				Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedFadeNode, a_geometry);
+			if (fadeNode)
+				List(propertyDependents, propertyDependentsAt, fadeNode, a_geometry);
+			a_tracked.listedFadeNode = fadeNode;
+		}
 		// A multi-index shape's layer property.
 		const void* layer = leaf.geometry ? leaf.geometry->Layer() : nullptr;
 		if (layer != a_tracked.listedLayerProperty) {
@@ -1232,6 +1244,9 @@ namespace DCLF::Scene
 			Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedEmittance, a_geometry);
 		if (a_tracked.listedLayerProperty)
 			Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedLayerProperty, a_geometry);
+		if (a_tracked.listedFadeNode)
+			Unlist(propertyDependents, propertyDependentsAt, a_tracked.listedFadeNode, a_geometry);
+		a_tracked.listedFadeNode = nullptr;
 		a_tracked.listedProperty = nullptr;
 		a_tracked.listedAlpha = nullptr;
 		a_tracked.listedEmittance = nullptr;
@@ -1892,7 +1907,7 @@ namespace DCLF::Scene
 		// Ordered streaming merge: chunks are claimed by pool helpers and this thread; chunk k merges as soon as it is ready, this
 		// thread evaluating unclaimed chunks or waiting meanwhile. Safe because a merge writes only state no evaluation reads (its own
 		// entries' Tracked, tables, slots, lists). A late helper finds every chunk claimed and touches only the shared Shards.
-		ZoneScopedN("CS.DCLF.Scene.EvaluateStream");
+		DCLF_ZONE("CS.DCLF.Scene.EvaluateStream");
 		struct Shards
 		{
 			explicit Shards(std::size_t a_chunks) :
@@ -2077,6 +2092,7 @@ namespace DCLF::Scene
 			entry.bucket = Tracked::kNoBucket;
 			entry.listedProperty = nullptr;
 			entry.listedAlpha = nullptr;
+			entry.listedFadeNode = nullptr;
 		}
 		BuildFullOrder();
 	}

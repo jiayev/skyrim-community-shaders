@@ -44,7 +44,7 @@ namespace DCLF::Features::Grass
 		Api::SceneResourcesId tablesId;  // install
 
 		// The tables' first capacities (instance, shape, bucket and mesh slots), doubled as the mirror needs.
-		constexpr std::uint32_t kInitialInstances = 256 * 1024, kInitialShapes = 4096, kInitialBuckets = 256, kInitialMeshes = 256;
+		constexpr std::uint32_t kInitialInstances = 256 * 1024, kInitialShapes = 4096, kInitialMeshes = 256;
 
 		/*
 		 * Stage 0's values (reverse-engineered: BSGrassShader::SetupGeometry's and SetupTechnique's): what the engine's grass passes bind
@@ -249,6 +249,7 @@ namespace DCLF::Features::Grass
 				return nullptr;
 			}
 			const bool smallStart = a_setup.smallStart;
+			tables->smallStart = smallStart;
 			const std::uint32_t instances = smallStart ? 4u : kInitialInstances;
 			// The instance tables grow a quarter past the slots asked, not to a power of two: a large list's grass runs to millions of
 			// instances, and the four of them hold 68 bytes an instance.
@@ -261,7 +262,7 @@ namespace DCLF::Features::Grass
 			tables->frame = make(instances, sizeof(InstanceFrame), true, "cs.dclf.grass-frame", instanceGrowth);
 			tables->visible = make(instances, kVisibleUnitBytes, true, "cs.dclf.grass-visible", instanceGrowth);
 			tables->shapes = make(smallStart ? 4u : kInitialShapes, sizeof(ShapeRow), false, "cs.dclf.grass-shapes");
-			tables->buckets = make(smallStart ? 4u : kInitialBuckets, sizeof(BucketRow), false, "cs.dclf.grass-buckets");
+			tables->buckets = make(smallStart ? 4u : kMaxBuckets, sizeof(BucketRow), false, "cs.dclf.grass-buckets");
 			tables->meshes = make(smallStart ? 4u : kInitialMeshes, sizeof(MeshRow), false, "cs.dclf.grass-meshes");
 			tables->draw = Draws::CreateWords(sizeof(DrawRow) / 4, false, "cs.dclf.grass-draw");
 			tables->draws = Draws::CreateWords(kDrawsBytes / 4, true, "cs.dclf.grass-draws");
@@ -301,17 +302,21 @@ namespace DCLF::Features::Grass
 			Draws::Register(a_graph.graph, org::ResourceIdentifier("cs.dclf.grass-draws"), tables.draws);
 		}
 
-		// The tables by the mirror's posted slots; the buckets no further than the draws buffer's slots (kMaxBuckets: past them, the decision
-		// keeps grass the engine's).
+		// The tables by the mirror's posted slots, never below their first capacity, and the buckets at the draws buffer's slots
+		// (kMaxBuckets: past them, the decision keeps grass the engine's). Asked by the mirror's counts alone, an interior shrank them
+		// (CS_DCLF_SHRINK), and the first commits after a return to an exterior could not fit its grass, so they drew none while the
+		// engine's passes were withheld. The floors cost what the tables held at the start (about 17 MB, nearly all instances).
 		void Require(const Api::SceneResourcesRequirements& a_requirements)
 		{
 			const auto& tables = a_requirements.State<GrassTables>();
 			const auto& inputs = a_requirements.inputs;
 			auto& set = Draws::SceneBufferSet::Get();
-			Draws::UnitGroup{}.Add(tables.instances).Add(tables.owners).Add(tables.frame).Add(tables.visible).Require(a_requirements.build, inputs[kInstanceSlotsInput]);
-			set.Require(a_requirements.build, tables.shapes, inputs[kShapeSlotsInput]);
-			set.Require(a_requirements.build, tables.buckets, std::min(inputs[kBucketSlotsInput], kMaxBuckets));
-			set.Require(a_requirements.build, tables.meshes, inputs[kMeshSlotsInput]);
+			const auto floor = [&](std::uint32_t a_input, std::uint32_t a_initial) { return std::max<std::uint64_t>(inputs[a_input], tables.smallStart ? 0u : a_initial); };
+			Draws::UnitGroup{}.Add(tables.instances).Add(tables.owners).Add(tables.frame).Add(tables.visible).Require(a_requirements.build,
+				floor(kInstanceSlotsInput, kInitialInstances));
+			set.Require(a_requirements.build, tables.shapes, floor(kShapeSlotsInput, kInitialShapes));
+			set.Require(a_requirements.build, tables.buckets, kMaxBuckets);
+			set.Require(a_requirements.build, tables.meshes, floor(kMeshSlotsInput, kInitialMeshes));
 		}
 
 		// The mirror's slots: what the tables must hold.
@@ -533,7 +538,8 @@ namespace DCLF::Features::Grass
 			// The engine's passes were withheld: a commit that cannot draw the grass the mirror holds leaves a hole (none held: nothing to draw).
 			if (owned && mirror.InstanceSlots() && !tables->ready.load(std::memory_order_acquire))
 				Diagnostics::Notify(GrassMissed{ a_commit.frame, mirror.InstanceSlots(), a_commit.adopted.Of(*tables->instances).units, mirror.BucketSlots(),
-					a_commit.adopted.Of(*tables->buckets).units });
+					a_commit.adopted.Of(*tables->buckets).units, mirror.ShapeSlots(), a_commit.adopted.Of(*tables->shapes).units, mirror.MeshSlots(),
+					a_commit.adopted.Of(*tables->meshes).units });
 		}
 	}
 

@@ -90,6 +90,9 @@ namespace
 		// The descriptor-buffer model's heap sets are variable-count bindings (a bound heap need only cover its own capacity).
 		{ nullptr, "descriptorBindingVariableDescriptorCount" },
 		{ nullptr, "vulkanMemoryModelDeviceScope" },
+		// FidelityFX's Vulkan backend barriers a depth-stencil image with the depth aspect alone. That is valid only with
+		// separateDepthStencilLayouts, and AMD backs the game's D24S8 depth with D32_SFLOAT_S8_UINT (VUID-VkImageMemoryBarrier-image-03320).
+		{ nullptr, "separateDepthStencilLayouts" },
 		{ VK_EXT_DEVICE_GENERATED_COMMANDS_EXTENSION_NAME, "deviceGeneratedCommands" },
 	};
 
@@ -331,6 +334,36 @@ struct RenderGraphRuntime::Impl
 	std::vector<VkSemaphoreSubmitInfo> computeWaits;  // scratch for the entry submission's waits
 
 	/**
+	 * Each unreached point a shared copy queue submission waits for, with whether the seal covers it: sealed (on its way to the
+	 * device), newer than the seal (submitted since the last present, maybe not yet on the device), or a timeline the seal does not
+	 * have (a timeline of the host's made since, or not the host's: the frame wait's, a client's).
+	 */
+	std::string DescribeUnsealed(std::span<const VkSemaphore> a_semaphores, std::span<const std::uint64_t> a_values)
+	{
+		static const auto counterValue = deviceProcAddr ? reinterpret_cast<PFN_vkGetSemaphoreCounterValue>(deviceProcAddr(adoptedDevice, "vkGetSemaphoreCounterValue")) : nullptr;
+		std::vector<std::pair<VkSemaphore, std::uint64_t>> sealed;
+		if (host)
+			for (const auto& [timeline, value] : host->SealedPoint().points) {
+				rhi::VulkanTimelineInfo info{};
+				if (timeline && *timeline && rhi::QueryNativeTimeline(timeline->Get(), rhi::RHI_IID_VK_TIMELINE, &info, sizeof(info)))
+					sealed.emplace_back(static_cast<VkSemaphore>(info.timeline), value);
+			}
+		std::string out;
+		for (std::size_t i = 0; i < a_semaphores.size(); ++i) {
+			std::uint64_t reached = 0;
+			if (counterValue)
+				counterValue(vkDevice, a_semaphores[i], &reached);
+			if (reached >= a_values[i])
+				continue;
+			const auto known = std::ranges::find(sealed, a_semaphores[i], &std::pair<VkSemaphore, std::uint64_t>::first);
+			const char* state = known == sealed.end() ? "not in the seal" : a_values[i] > known->second ? "newer than the seal: a cycle if the frame waits for this queue" : "sealed";
+			const char* name = a_semaphores[i] == streamPoint ? " streamPoint" : a_semaphores[i] == computeExit ? " computeExit" : a_semaphores[i] == copyExit ? " copyExit" : "";
+			out += fmt::format("{}{}{} wants {}, at {} ({})", out.empty() ? "" : "; ", static_cast<const void*>(a_semaphores[i]), name, a_values[i], reached, state);
+		}
+		return out;
+	}
+
+	/**
 	 * Waits on the CPU until every point has been reached (see copyQueue). Bounded: a device that stops making progress is left to
 	 * the submission that follows to report.
 	 */
@@ -349,8 +382,14 @@ struct RenderGraphRuntime::Impl
 		wait.semaphoreCount = a_count;
 		wait.pSemaphores = semaphores.data();
 		wait.pValues = values.data();
-		if (waitSemaphores(vkDevice, &wait, 10'000'000'000ull) != VK_SUCCESS)
-			logger::warn("[ORG] A shared copy queue submission went ahead after 10 s without its waits");
+		// Half a second first: a wait for a point newer than the seal (GraphHost::SealedPoint) may be for work that reaches the device
+		// only once the frame presents, while the render thread waits for what this queue holds behind it. The first few are named.
+		if (waitSemaphores(vkDevice, &wait, 500'000'000ull) == VK_SUCCESS)
+			return;
+		if (static std::atomic<std::uint32_t> warned = 0; warned.fetch_add(1, std::memory_order_relaxed) < 4)
+			logger::error("[ORG] A shared copy queue submission has waited 0.5 s for {}", DescribeUnsealed(semaphores, values));
+		if (waitSemaphores(vkDevice, &wait, 9'500'000'000ull) != VK_SUCCESS)
+			logger::warn("[ORG] A shared copy queue submission went ahead after 10 s without its waits: {}", DescribeUnsealed(semaphores, values));
 	}
 
 	/**
@@ -462,6 +501,9 @@ struct RenderGraphRuntime::Impl
 	std::unique_ptr<org::contributor::ContributorHost> contributors;
 	rhi::PipelineLayoutPtr contributorLayout;             // the pipeline service's layout: bindless, 16 root constants
 	std::shared_ptr<rhi::TimelinePtr> frameWaitTimeline;  // FrameWaitTimeline
+	// Any timeline of the device, kept for NativeTimelinePoint: a timeline handle resolves through a Timeline's device and table.
+	// The frame-wait timeline cannot serve: it exists only with an upload queue, which a device with no transfer family lacks.
+	rhi::TimelinePtr nativeTimelines;
 	std::atomic<bool> faulted = false;
 
 	// The thread that drives the D3D11 immediate context (the one running epochs).
@@ -1623,6 +1665,8 @@ bool RenderGraphRuntime::Initialize()
 																										   fmt::format("{}:{}", info.copyQueueFamily, info.copyQueueIndex));
 	if (rhi::vulkan::AdoptVulkanDevice(adopt, *state->device) != rhi::Result::Ok || !*state->device)
 		return disable("BasicRHI could not adopt DXVK's Vulkan device");
+	if ((*state->device)->CreateTimeline(state->nativeTimelines, 0, "CS native timeline lookup") != rhi::Result::Ok || !state->nativeTimelines)
+		return disable("BasicRHI could not create a timeline on DXVK's Vulkan device");
 
 	try {
 		org::GraphHost::Desc desc{};
@@ -1874,6 +1918,7 @@ void RenderGraphRuntime::Shutdown()
 	} catch (const std::exception& e) {
 		logger::error("[ORG] Runtime shutdown failed: {}", e.what());
 	}
+	state->nativeTimelines.Reset();
 	// Non-owning: BasicRHI never destroys the adopted VkDevice.
 	state->device.reset();
 	disabledReason = "shut down";
@@ -1980,6 +2025,12 @@ void RenderGraphRuntime::SignalFramePace(bool a_active)
 	}
 	++state.framePaceValue;
 	state.framePaceSignalled = true;
+}
+
+void RenderGraphRuntime::SealPresented()
+{
+	if (impl && impl->host)
+		impl->host->SealSubmitted();
 }
 
 void RenderGraphRuntime::WaitFramePace()
@@ -2528,11 +2579,11 @@ bool RenderGraphRuntime::EmitExternalCommands(void (*a_record)(void* a_user, VkC
 
 RenderGraphRuntime::ExternalCommandsWait RenderGraphRuntime::NativeTimelinePoint(const rhi::TimelinePoint& a_point)
 {
-	const auto timeline = Get().FrameWaitTimeline();
+	const auto& runtime = Get();
 	rhi::Timeline object(a_point.t);
-	if (timeline && *timeline) {
-		object.impl = timeline->Get().impl;
-		object.vt = timeline->Get().vt;
+	if (runtime.IsActive() && runtime.impl->nativeTimelines) {
+		object.impl = runtime.impl->nativeTimelines.Get().impl;
+		object.vt = runtime.impl->nativeTimelines.Get().vt;
 	}
 	rhi::VulkanTimelineInfo info{};
 	if (!object || !rhi::QueryNativeTimeline(object, rhi::RHI_IID_VK_TIMELINE, &info, sizeof(info)))
@@ -2621,6 +2672,7 @@ winrt::com_ptr<ID3D11Buffer> RenderGraphRuntime::WrapBuffer(org::Resource&, cons
 void RenderGraphRuntime::ReportGpuTimings(std::uint32_t, bool) {}
 std::uint32_t RenderGraphRuntime::TakeSubmittedSegments() { return 0; }
 void RenderGraphRuntime::SignalFramePace(bool) {}
+void RenderGraphRuntime::SealPresented() {}
 void RenderGraphRuntime::WaitFramePace() {}
 org::services::PipelineRegistry* RenderGraphRuntime::PipelineRegistry() { return nullptr; }
 void RenderGraphRuntime::RequestShaderReload(std::string_view, bool) {}

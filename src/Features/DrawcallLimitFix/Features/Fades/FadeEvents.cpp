@@ -10,6 +10,11 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 
+#include <algorithm>
+#include <atomic>
+#include <mutex>
+#include <vector>
+
 namespace DCLF::Features::Fades
 {
 	namespace
@@ -32,6 +37,12 @@ namespace DCLF::Features::Fades
 		 */
 		// No wake: written every frame of a fade; the next pass takes them.
 		EventQueue<const void*> fadeAmountEvents;
+
+		// The nodes RecheckFadeAmount pushed whose event the scene lane has not taken yet (TakeRecheck). Rechecks are rare: one per newly
+		// seeded actor root.
+		std::mutex recheckMutex;
+		std::vector<const void*> rechecked;
+		std::atomic<std::uint32_t> recheckPending{ 0 };
 
 		// FUN_14147aa20: a fade node's placement snap. The cell attaches (FUN_1402d1280, FUN_1402d5090) call it after writing the
 		// fade statics (LOD type `and`/`or` at +0x153, range through FUN_14021f200), so its update carries them. Its key goes to the
@@ -64,6 +75,34 @@ namespace DCLF::Features::Fades
 			if (root->AsFadeNode())
 				Extensions::PushNodeUpdate(root, Api::kNodeFieldFadeAmount);  // the mirror's value
 		}
+	}
+
+	void RecheckFadeAmount(RE::NiAVObject* a_node)
+	{
+		if (a_node && a_node->AsFadeNode()) {
+			{
+				std::lock_guard lock(recheckMutex);
+				// Bounded: a node whose event never reaches a listed root is not kept forever.
+				if (rechecked.size() >= 1024)
+					rechecked.erase(rechecked.begin());
+				rechecked.push_back(a_node);
+				recheckPending.store(static_cast<std::uint32_t>(rechecked.size()), std::memory_order_release);
+			}
+			PushFadeAmount(a_node);
+		}
+	}
+
+	bool TakeRecheck(const void* a_node)
+	{
+		if (recheckPending.load(std::memory_order_acquire) == 0)
+			return false;
+		std::lock_guard lock(recheckMutex);
+		const auto it = std::find(rechecked.begin(), rechecked.end(), a_node);
+		if (it == rechecked.end())
+			return false;
+		rechecked.erase(it);
+		recheckPending.store(static_cast<std::uint32_t>(rechecked.size()), std::memory_order_release);
+		return true;
 	}
 
 	void RegisterEngine(Api::InstallContext& a_context, Api::EngineChannelId& a_snaps, Api::EngineChannelId& a_amounts)

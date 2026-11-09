@@ -54,7 +54,7 @@ only `0` turns it off. Parity, diagnostic and test switches are off unless set.
 | `CS_DCLF_PRECOMPILE` | on (unless 0) | `0`: DCLF's SPIR-V programs compile on first use instead of alongside the engine's shaders. |
 | `CS_DCLF_CULL` | `occlusion` | `off`, `frustum` or `occlusion`: GPU culling. `off` and `frustum` count as a reduced featureset. |
 | `CS_DCLF_PIPELINE` | `gpu` | `cpu`: the CPU-driven pipeline (an experiment; dclf-architecture.md, "The CPU-driven pipeline"). Live: `dclf:pipeline=gpu\|cpu`, from the next build point. |
-| `CS_DCLF_CPU_RECORD` | `indirect` | `serial`: the CS thread records each draw. `parallel`: the CPU pipeline's plain lists recorded into a secondary per batch on the pool. Live: `dclf:cpu-record=indirect\|serial\|parallel`. |
+| `CS_DCLF_CPU_RECORD` | `serial` on NVIDIA, `indirect` elsewhere | `serial`: the CS thread records each draw. `indirect`: the cull jobs write draws (needs pulled colour, 0.21 ms of GPU time on an RTX 5080). `parallel`: the CPU pipeline's plain lists recorded into a secondary per batch on the pool. Live: `dclf:cpu-record=indirect\|serial\|parallel`. |
 | `CS_DCLF_CPU_CADENCE` | `frame` | `frame\|snapshot`, or `<view>=frame\|snapshot,...`: a CPU pipeline view culled every frame or once per snapshot (main always per frame). Live: `dclf:cpu-cadence-<view>=frame\|snapshot`, `dclf:cpu-cadence=frame\|snapshot`. Views: `main`, `decal`, `forward`, `refraction`, `sun`, `spot`, `point`, `sky`, `precipitation`, `reflection`, `first-person`. |
 | `CS_DCLF_CPU_BATCH` | 256 | The CPU pipeline's batch lanes, at startup (a multiple of 8). |
 | `CS_DCLF_SKINNED` | on (unless 1) | `0`: skinned objects stay native. |
@@ -76,9 +76,6 @@ only `0` turns it off. Parity, diagnostic and test switches are off unless set.
 | `CS_DCLF_LOD_TREES` | on (unless 1) | `0`: tree LOD stays native. |
 | `CS_DCLF_LOD_GATES` | on (unless 0) | `0`: the engine's LOD swaps are ungated. By default a swap keeps the outgoing level shown, and the incoming hidden, until DCLF's claims cover the incoming. |
 | `CS_DCLF_SHADOWS` | on (unless 1) | `0`: DCLF does not draw the shadow views. |
-| `CS_DCLF_SUN_SKIP` | on (unless 1) | `0`: the engine keeps culling and registering the sun's casters. |
-| `CS_DCLF_SUN_EXCLUDE` | on (unless 1) | `0`: DCLF's objects stay in the sun's culls. |
-| `CS_DCLF_PRIMARY_EXCLUDE` | on (unless 1) | `0`: DCLF's objects stay in the main camera's cull. |
 | `CS_DCLF_TREE_LIST_ALL` | **off** | `1`: the tree manager's list loop gets DCLF's verdict for every `BSTreeNode` DCLF lists; off: for the stood-in trees alone. |
 | `CS_DCLF_SKYLIGHT` | on (unless 1) | `0`: Skylighting's occlusion map stays native. |
 | `CS_DCLF_PRECIPITATION` | on (unless 1) | `0`: the precipitation occlusion mask stays native. |
@@ -146,11 +143,12 @@ Each compares a live path with a reference built from scratch and flags every mi
 
 | Switch | Format | Effect |
 | --- | --- | --- |
-| `CS_DCLF_TEST_COMMANDS` | `<frame>:<command>;...` | A console command at a frame. Also `dclf:<toggle name>=0\|1` (a live toggle), `dclf:cull=`, `dclf:pipeline=`, `dclf:cpu-record=` and `dclf:cpu-cadence[-<view>]=` (the toggles that are not flags), `dclf:pov=first\|third`, `dclf:draw=1\|0` (weapons or magic hands drawn or sheathed), `dclf:rebuild` (a graph rebuild), `dclf:compat=0\|1` and `dclf:compat-report` (the compatibility monitor and its report), `dclf:foreign-write=<n>` (an unhooked alpha threshold write on up to n references near the player) and `dclf:kill-scene-pump` (the scene pump stopped for good, for its watchdog). The run's sequencing (`dclf:wait=`, `dclf:define=`, `dclf:mark=`, `dclf:gpu-window=`, `dclf:nvperf=`, `dclf:feature=`, `dclf:signal=`): [Timing runs](#timing-runs). |
+| `CS_DCLF_TEST_COMMANDS` | `<frame>:<command>;...` | A console command at a frame. Also `dclf:<toggle name>=0\|1` (a live toggle), `dclf:cull=`, `dclf:pipeline=`, `dclf:cpu-record=` and `dclf:cpu-cadence[-<view>]=` (the toggles that are not flags), `dclf:pov=first\|third`, `dclf:draw=1\|0` (weapons or magic hands drawn or sheathed), `dclf:cast=<spell form ID>,<left\|right>[,<seconds>]` (the spell equipped to that hand and cast as a player does: the hand's attack button held, then released), `dclf:face-female=<n>,<distance>,<side>[,strip]` (`dclf:face-npc` among the female actors; `strip` unequips her worn armor), `dclf:morph-female=<n>,<morph>[,<value>]` (a RaceMenu body morph on her, through `NiOverride.SetBodyMorph` and `UpdateModelWeight`: skee then swaps her body's and her BodySlide outfit's skin partitions), `dclf:rebuild` (a graph rebuild), `dclf:compat=0\|1` and `dclf:compat-report` (the compatibility monitor and its report), `dclf:foreign-write=<n>` (an unhooked alpha threshold write on up to n references near the player) and `dclf:kill-scene-pump` (the scene pump stopped for good, for its watchdog). The run's sequencing (`dclf:wait=`, `dclf:define=`, `dclf:mark=`, `dclf:gpu-window=`, `dclf:nvperf=`, `dclf:feature=`, `dclf:signal=`): [Timing runs](#timing-runs). |
 | `CS_DCLF_TEST_MOVE` | `<start>:<end>:<units per frame>;...` | Carries the player forward. |
 | `CS_DCLF_TEST_TURN` | `<start>:<end>:<degrees per frame>;...` | Turns the player. |
 | `CS_DCLF_TEST_TOGGLE` | `<off frame>:<on frame>...` | Switches DCLF off and on. |
 | `CS_DCLF_TEST_EXIT` | `<frame>` | The game exits after that many frames. The count includes the main menu's frames, so below about 200 the game exits before DCLF draws. |
+| `CS_DCLF_TEST_REFUSE` | `<name>,...` | Geometry whose node name contains one of the names is refused as an unstable buffer (what a RaceMenu-morphed shape got on test2), so a run has engine-only geometry of any class: the engine-only subset's paths (`Core/Scene/EngineCasters.h`). `Rock` in Riverwood gives about 860 roots: the sun's whole skip and the occlusion maps cull them alone (their report lines). |
 
 ### Tuning
 
@@ -384,8 +382,8 @@ off, each of their events costs its one flag test.
 Each missed difference, leak or eviction is an offender. A node or geometry offender is keyed by its owning reference: the
 probe tags every record with the form ID of the nearest ancestor with user data. A property or alpha offender is keyed by the
 shared object, since one write shows on every instance of the mesh, and lists the references it was found under. Each new
-offender logs one `<- OFFENDER` line. The menu lists them, and "Write report" (or `dclf:compat-report`) writes
-`CommunityShaders-DCLF-Compat-<time>.txt` beside the log. The report holds the build, the game version, the offenders with
+offender logs one `<- OFFENDER` line. The menu lists them. The [diagnostic capture](#the-diagnostic-capture) writes the report
+as `compat.txt` while the monitor is on, and `dclf:compat-report` writes `CommunityShaders-DCLF-Compat-<time>.txt` beside the log. The report holds the build, the game version, the offenders with
 reference, base object and plugin, the load order and the SKSE DLLs. Turning the monitor on starts a fresh list.
 `dclf:foreign-write=<n>` makes offenders to check it with.
 
@@ -516,6 +514,7 @@ These need no parity switch. Most come with `CS_DCLF_STATS=1`.
 | --- | --- | --- |
 | `[DCLF] main camera since the last report: N native passes drawn, N of them set members' ...` | `<- LEAK` | A set member the engine drew in the main camera. Must be 0. Printed in every run. |
 | `[DCLF] persistent draws (last frame, colour): N kept inputs, N sequences, ...` | | Sequences must be thousands in a populated cell, never 0. |
+| `[DCLF] claims published that their records do not draw: N (first: ...)` | `<- UNDRAWN CLAIM` | A claim its publication's tables do not draw (`CheckClaimsDrawable`). Printed only when N > 0. Must never appear: such an object is drawn by nobody until the next publication. |
 | `[DCLF] indirect draws (last frame): N candidates ..., skipped: ...` | | Per reason: `pipeline`, `geometry`, `texture`, `sampler`, `constants`, `capacity`, `not-in-set`, `candidate-only`. `constants` and `texture` must be 0. |
 | `[DCLF] N pairs read constant registers no frame slot supplies (...): their members are not drawn` | (warning) | Every pair of a pipeline whose constant register the commit does not supply is rejected: its members are withheld and drawn by nobody. |
 | `[DCLF] frame textures (last colour epoch): N reads of registers the commit could not resolve, which read zero: ...` | (warning) | A frame texture a pipeline reads that the commit could not resolve. |
@@ -556,6 +555,56 @@ the measurement and what would remove each; this list says how each shows in the
 | Hint-10 passes DCLF does not model. | Capture parity's "native-only passes". |
 
 ## Diagnostics and probes
+
+### The diagnostic capture
+
+The player's report of a problem (`Diagnostics/Capture/`). The menu's "Create diagnostic capture" arms it, and it starts two seconds
+after the menu closes, so the menu is in neither the screenshot nor the timings. `dclf:capture[=<seconds>]` starts it at the next
+Present. It records for the slider's time (10 s by default), then a worker writes `DCLF-Capture-<time>.zip` beside the log with
+Windows' `tar.exe`. If the zip fails, the folder is kept. It runs with DCLF off, not installed or unavailable too. The parts that
+need DCLF's scene work say "skipped" in the manifest.
+
+How it reuses the reports:
+
+- The log tee (`Utils/LogTee.h`) copies every line logged during the capture into `capture.log`.
+- At the start and the end the capture calls `Reports::Flush`, which ends the report window on every clock (`Due`, `Crossing`,
+  `Window`). So `capture.log` begins with the window before the capture (the time leading up to the click). Then comes one
+  window that covers exactly the capture.
+- While it records, `Reports::FullStatistics()` is true, so that window holds the full `CS_DCLF_STATS` report. Counters that are
+  only kept under `CS_DCLF_STATS` (the frame data writes, the MainBuild part timings, the shadow cull counters) stay empty.
+- The actor probe runs at the start and the end (`capture-start`, `capture-end` in `capture.log`).
+- The capture's telemetry phase replaces a running `dclf:telemetry` one.
+
+The bundle:
+
+| File | What it answers |
+|---|---|
+| `manifest.json` | The window's frames and times, and each section's state: ok, skipped or failed and why. |
+| `environment.json` | Build, game runtime, GPU, DXVK or native, DCLF installed / on / faulted / unavailable and why, every switch set, observers left on (a `warning` when any is: they slow the normal path), requested and active toggles, the graph's pipeline and cell kind, uptime and CPU time. |
+| `features.json` | Every CS feature (loaded, version, disabled) and each DCLF integration's status line. |
+| `settings.json` | The whole CS settings (`State::SaveToJson`). |
+| `loadorder.txt`, `location.json` | The plugins in order; the player's cell, worldspace and position (read on the main thread). |
+| `modules.txt` | Every loaded DLL with its file version. |
+| `start/`, `end/` | `snapshot.txt` (the menu's "This frame" lines, the scene executor's queues and `ParallelFor` waits, the integrations, the render-thread growth census), `fades.json` (the fade census), `scene-growth.txt` (the scene lane's growth census) and the VRAM attribution JSON. |
+| `frames.csv` | One row per Present: Present-to-Present ms, DCLF's render-thread µs in the last finished frame, the wait for a scene snapshot, frames since the last scene pass, epochs not ready, the executor's queues by domain, loading, running, CPU pipeline, interior. |
+| `telemetry/` | The BasicTelemetry phase `capture`: frames, scopes (the render graph's and DCLF's own zones), stalls of 2 ms or more, and `capture.threads.csv`, each DCLF zone's count, total and longest time on each thread, by name. `top_level_ns` adds up to a thread's DCLF time; the log line `DCLF zone time by thread` lists the busiest threads. |
+| `capture.log` | Every line logged during the capture, with the two flushed report windows and the actor probes. |
+| `compat.txt` | The compatibility monitor's report, when it is on. |
+| `screenshot.*` | The first frame of the window. |
+| `logs/` | `CommunityShaders.log` (its first 1 MB and last 32 MB), the DXVK logs and device fault dump, `CommunityShaders-DCLF.ini`, `CommunityShaders.env`, and the [hang reports](#hangs) (`.txt` only). |
+
+The text files have the user's profile path replaced with `%USERPROFILE%`.
+
+Reading a capture:
+
+- **Slow frames.** `telemetry/capture.threads.csv` says which thread spends DCLF's time and in which zone. In `frames.csv`, compare `present_ms` with `dclf_render_thread_us` and `adopt_wait_us`. A long Present with
+  little DCLF time is not DCLF's render thread. A growing `scene_lag_frames` or queues that stay full mean the scene work falls
+  behind. In `environment.json`, check `graph.cpuPipeline`, any `observers` and `warning`. Then compare the two growth censuses for
+  containers that grew during the window. `telemetry/capture.stalls.csv` names the scopes that were off the CPU.
+- **See-through actors.** `end/fades.json` lists every root whose fade is below 1, or whose node, mirror and row disagree. Each
+  row has the actor's form ID and name, the three values, the root's bits and generation, the frame of DCLF's last store, and
+  `lastWriter` (the path that last wrote its fade). `totals.refreshNoMirror` counts the fade refreshes dropped because the mirror
+  had no record. The actor probe in `capture.log` adds how each actor's geometry is bound.
 
 ### The periodic report
 
@@ -810,7 +859,8 @@ withheld and drawn by nobody. Before reading parity or timing, check in each run
         done) and `signal:<name>` (a remote client's `dclf:signal=<name>`).
     -   `dclf:define=<NAME>[=<value>],...` adds defines to every DCLF stage compiled from then on (empty: none). With
         `dclf:reload-shaders=<file>` and `dclf:wait=reload` after it, a shader A/B is an `#if` in the source compared in one launch.
-    -   `dclf:telemetry=<label>` starts a BasicTelemetry session for a phase, and `dclf:telemetry=off` ends the last. Each writes per-Present frame times, scope totals and off-CPU stalls to `<log directory>/dclf-telemetry`, and a frame time summary to the log.
+    -   `dclf:capture[=<seconds>]` takes a [diagnostic capture](#the-diagnostic-capture) at the next Present (no Explorer window, nothing on the clipboard).
+    -   `dclf:telemetry=<label>` starts a BasicTelemetry session for a phase, and `dclf:telemetry=off` ends the last. Each writes per-Present frame times, scope totals, off-CPU stalls and DCLF's zones by thread to `<log directory>/dclf-telemetry`, and a frame time summary and each thread's DCLF zone time to the log. DCLF's zones are `DCLF_ZONE` / `DCLF_ZONE_NAMED` (`Diagnostics/Zones.h`), which open a Tracy zone and, during a phase only, a BasicTelemetry scope and a per-thread tally, so they record in builds without Tracy too. Use them in place of `ZoneScopedN` / `ZoneNamedN` under the tree.
     -   `dclf:mark=<label>` marks a phase's boundary in the log; `dclf:gpu-window=<label>` makes the GPU event timers
         (`CS_GPU_EVENT_TIMERS`, with an interval too large to reach) log the frames from there to the next window as one block,
         frames in flight included ("[GpuEvents] window '<label>'"; `-` is not logged).
@@ -877,13 +927,29 @@ and state); with the shadow site on it loses the device (dclf-architecture.md, "
     (`FUN_14xxxxxxx`) and `RELOCATION_ID`. Decompile the faulting function before attributing a crash: the logger's labels can
     be wrong (it labels by the nearest symbol), and a probable frame is not the same as a stack-scan hit.
 -   **Community Shaders' minidump**, `CommunityShaders.dmp` beside the game executable, is written from outside the game by
-    `tools/crash-dump-helper` (`CommunityShadersCrashDump.exe`). The plugin starts it at load (`XSEPlugin.cpp`,
-    `StartCrashDumpHelper`); on a crash its vectored handler signals it and logs `[CRASH] exception ... - writing
+    `tools/crash-dump-helper` (`CommunityShadersCrashDump.exe`). The plugin starts it at load (`CrashDump.cpp`,
+    `CrashDump::Start`); on a crash its vectored handler signals it and logs `[CRASH] exception ... - writing
     CommunityShaders.dmp`. `MiniDumpWriteDump` run inside the game deadlocked on the heap lock. Read the dump with cdb or
     WinDbg.
 -   **Heap corruption** shows its fault later and elsewhere. Typical DCLF causes are an engine object read through a raw pointer
     nothing held, and a last release on the wrong thread. `CS_DCLF_RELEASE_GUARD`, `CS_DCLF_HIDDEN_WATCH` and
     `CS_DCLF_MIRROR_WATCH` name the thread or writer.
+
+### Hangs
+
+-   **The render thread watchdog** (`HangWatchdog.cpp`) writes a report when no Present has happened for 15 s
+    (`CS_HANG_WATCHDOG=<seconds>`, 0 turns it off). It starts at data load and only counts while the game has the foreground,
+    or once it has seen the game present without it (`bAlwaysActive`, test runs on another monitor). It does nothing while a
+    debugger is attached. The crash dump helper writes the report from outside the game: `CommunityShaders-Hang-<time>.txt`
+    beside the log, with every thread's stack and the stuck thread first (symbols from the PDBs beside the modules), and a
+    minidump `CommunityShaders-Hang-<time>.dmp` for cdb or WinDbg. The log has `[HANG]` lines: the stall, the report written,
+    one line a minute while it lasts, and the recovery if it ends. There is one report per stall and at most three a session,
+    and the six newest are kept. The [diagnostic capture](#the-diagnostic-capture) copies the reports into `logs/`.
+-   **The stuck thread is the last one that presented.** A loading screen presents from one of the engine's job threads, the
+    game from `Skyrim Main`.
+-   **`CS_TEST_HANG=<seconds>`** makes the render thread sleep past the threshold once, that many seconds after the watch
+    starts, to check the watchdog and the helper end to end. Both switches are read from the environment (`CommunityShaders.env`
+    beside the log), not from `CommunityShaders-DCLF.ini`.
 
 ### GPU crashes
 

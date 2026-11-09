@@ -7,6 +7,7 @@
 // watchpoints on what the check found stale.
 
 #include "SceneObservers.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
@@ -289,7 +290,7 @@ namespace DCLF::Diagnostics
 				return;
 			}
 			if (m.probe) {
-				ZoneScopedN("CS.DCLF.Scene.MirrorParity");
+				DCLF_ZONE("CS.DCLF.Scene.MirrorParity");
 				Check(V::mirror(Scene::Coordinator::Get()), *m.probe, m.eventKeys, m.eventFields);
 				if (const void* property = std::exchange(m.missedProperty, nullptr))
 					m.watchProperty.store(property, std::memory_order_release);
@@ -328,7 +329,7 @@ namespace DCLF::Diagnostics
 			m.probeRequests.Drain([&request](std::shared_ptr<MirrorProbeRequest>&& a_request) { request = std::move(a_request); });
 			if (!request)
 				return;
-			ZoneScopedN("CS.DCLF.Ingest.ProbeMirror");
+			DCLF_ZONE("CS.DCLF.Ingest.ProbeMirror");
 			// Live (the update done, before the culls): each geometry's records and its ancestors' up to the world's root, each object once.
 			// Each geometry is held by the request.
 			// Each record's owning reference too (the nearest with user data, the geometry's own or an ancestor's), for the compatibility

@@ -333,7 +333,7 @@ namespace DCLF::Features::Shadows::Local::StrictLightParity
 				if (!node)
 					return;
 				path.push_back(a_object);
-				for (const auto& child : node->GetChildren())
+				for (const auto& child : Engine::Children(*node))
 					Cull(child.get());
 				path.pop_back();
 			}
@@ -537,7 +537,7 @@ namespace DCLF::Features::Shadows::Local::StrictLightParity
 				if (!node)
 					return;
 				const auto children = [&](std::uint32_t a_childMode, std::uint32_t a_childProgram) {
-					for (const auto& child : node->GetChildren())
+					for (const auto& child : Engine::Children(*node))
 						Visit(child.get(), a_childMode, a_childProgram);
 				};
 				const bool walks = a_object->worldBound.radius != 0.0f || (flags & kAlwaysDraw);
@@ -604,7 +604,7 @@ namespace DCLF::Features::Shadows::Local::StrictLightParity
 							const auto& list = parent->GetChildren();
 							children = fmt::format("; switch index {} (vtable {:#x}), {} children of capacity {}:", At<std::int32_t>(parent, kSwitchIndex),
 								*reinterpret_cast<const std::uintptr_t*>(node) - Base() + 0x140000000, list.size(), list.capacity());
-							for (std::uint16_t c = 0; c < list.capacity(); ++c)
+							for (std::uint16_t c = 0; c < list.free_idx(); ++c)
 								if (const auto* child = list[c].get())
 									children += fmt::format(" [{}] {}{}{}", c, child->name.empty() ? "?" : child->name.c_str(), Engine::IsHidden(child) ? " hidden" : "",
 										a_model.visited.contains(child) ? " visited" : "");
@@ -700,7 +700,7 @@ namespace DCLF::Features::Shadows::Local::StrictLightParity
 				if (!node)
 					return;
 				const auto children = [&] {
-					for (const auto& child : node->GetChildren())
+					for (const auto& child : Engine::Children(*node))
 						Visit(child.get());
 				};
 				const bool walks = a_object->worldBound.radius != 0.0f || (flags & kAlwaysDraw);

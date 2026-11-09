@@ -3,6 +3,7 @@
 // thread posts back.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Materials.h"
@@ -93,7 +94,7 @@ namespace DCLF::Scene
 		// The scene work, its frame's FrameGlobals bound, the captures drained (ApplyEvents): the written materials' records, then the
 		// frame components (a rewrite keeps the slot's frame parts, which the signatures bring to this frame's sources). The texture
 		// transforms are no record's (TextureTransformList). No engine read: the captures and the frame's sample are the inputs.
-		ZoneScopedN("CS.DCLF.Scene.MaterialRecords");
+		DCLF_ZONE("CS.DCLF.Scene.MaterialRecords");
 		++materialRecordStats.passes;
 		stats.materialWrites = stats.materialsRewritten = stats.materialsHeld = stats.frameMaterialSamples = 0;
 		RewriteCapturedMaterials();
@@ -232,7 +233,7 @@ namespace DCLF::Scene
 		// The frame's witness (MaterialPort::FrameComponentsWitness, what of the sources the components read): while it is the one the
 		// signatures were last evaluated against, every applied signature already holds this frame's components, and only a signature
 		// not applied yet or whose probe failed (a new probe, or the same one again) is evaluated.
-		ZoneScopedN("CS.DCLF.Scene.MaterialSignatures");
+		DCLF_ZONE("CS.DCLF.Scene.MaterialSignatures");
 		auto& r = materialRecordStats;
 		const auto& sources = FrameGlobals::Current().material;
 		auto& w = signatureWitness;
@@ -455,7 +456,7 @@ namespace DCLF::Scene
 		};
 		if (FanoutMode(a_keys.size()) == 2) {
 			SceneScheduler::Executor().ParallelFor("CS.DCLF.Scene.ShadingShards", a_keys.size(), kGrain, [&](std::size_t a_begin, std::size_t a_end) {
-				ZoneScopedN("CS.DCLF.Scene.ShadingShards");
+				DCLF_ZONE("CS.DCLF.Scene.ShadingShards");
 				const auto scope = ShardScope(*this, true);
 				prepare(a_begin, a_end);
 			});

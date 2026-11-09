@@ -38,21 +38,8 @@ namespace DCLF::Features::Shadows::Sun
 
 		void Install(Api::InstallContext& a_context)
 		{
-			// Where Core's were listed: right after the shadows' (the registration skip's switch, then the entry exclusion's after it), before
-			// the primary exclusion's.
-			const auto skipSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_SUN_SKIP", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
-				.description = "0: the engine keeps culling and registering the sun's casters (live toggle's seed)", .after = "CS_DCLF_SHADOWS" });
-			const auto excludeSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_SUN_EXCLUDE", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::UnlessOne,
-				.description = "0: DCLF's objects stay in the sun's culls (live toggle's seed)", .after = "CS_DCLF_SUN_SKIP" });
-			// Where Core's were, in the shadow views' section: after the shadows' and before the primary exclusion's, which needs the entry
-			// exclusion by name (Core's "exclude primary entries": without this feature it never takes effect).
-			const auto skip = a_context.RegisterToggle({ .name = "skip sun accumulation", .label = "Skip the engine's sun shadow culling and registration",
-				.tooltip = "The engine stops building sun shadow passes for the casters DCLF draws; it still sets their shadow bits for the main pass.",
-				.seed = skipSwitch, .after = "shadows", .needs = { "shadows" } });
-			const auto exclude = a_context.RegisterToggle({ .name = "exclude sun entries", .label = "Take DCLF's objects out of the engine's sun culls",
-				.tooltip = "The sun's cascade culls skip every reference whose shadows DCLF draws entirely, and while DCLF draws every cascade the engine culls nothing for the sun; DCLF sets the objects' sun shadow bits for the main pass.",
-				.seed = excludeSwitch, .after = "skip sun accumulation", .needs = { "skip sun accumulation" } });
-			SunAccumulation::SetToggles(skip, exclude);
+			// No switch or toggle turns the skip or the exclusion off: the engine never culls the whole scene for a sun DCLF draws (the
+			// engine-only subset is what it culls, Scene/EngineCasters.h).
 			// The directional views draw while the source is registered; its cameras are the hook's (the Sun board), which Core reads through
 			// the source's camera and the sun volume (the colour commits' cascades, the shadow inputs' full-frustum planes).
 			a_context.RegisterShadowSource({ .source = Api::ShadowSource::Sun, .camera = &SunCamera, .fullFrustumWindowEnd = &FullFrustumWindowEnd });

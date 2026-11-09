@@ -23,6 +23,10 @@ namespace DCLF
 	struct FrameGlobals;
 	struct BindlessPlacement;
 	struct BindlessShading;
+	namespace LatePoses
+	{
+		struct FramePlan;
+	}
 	namespace Direct
 	{
 		struct ViewBatchSet;
@@ -93,6 +97,17 @@ namespace DCLF
 		bool Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
 			std::vector<ShadingFieldValue> a_fieldValues, std::shared_ptr<const FrameGlobals> a_globals);
 		/**
+		 * @brief Render thread, before Kick: the frame's late pose plan (LatePoses::PrepareFrame; null: none). Kick leases a second placement
+		 * and palette backing for it with the frame's, and the frame's producer fills them: the frame's rows with the plan's shrink applied.
+		 * No other work and no other wait: they go up with the frame's rows, under the frame's signal.
+		 */
+		void SetLatePoses(std::shared_ptr<const LatePoses::FramePlan> a_plan);
+		/**
+		 * @brief Render thread, at the depth commit, before the depth epoch is submitted: the draws from here read the late backings
+		 * (PlacementsIndex, PalettesIndex), when Kick leased them. The work before (the shadow epoch) keeps the frame's first ones.
+		 */
+		void UseLatePoses();
+		/**
 		 * @brief Render thread, before Kick: the claims whose CategoryRoot views' members the frame draws (null: none, those views'
 		 * epochs do not draw this frame: the first person's). Kick samples those members' rows and skin palettes itself, before Main::Draw
 		 * moves the first-person skeleton into its root's space (FUN_1414cb020); the producer never samples a root view's item.
@@ -129,6 +144,11 @@ namespace DCLF
 		static FirstPersonPaletteStats TakeFirstPersonPaletteStats();
 		/** @brief Render thread: a frame with no producer (DCLF not running): no batch waits for one. */
 		void Skip();
+		/**
+		 * @brief Render thread, before the Present: once the frame's producers are done, waits until the last one's signal is on the
+		 * copy queue (see the .cpp). EndFrame waits too, when this did not run.
+		 */
+		void WaitSignalSubmitted();
 		/** @brief Render thread, after the frame's last submission: binds the frame's backings to it (SubmittedRetirementPoint). */
 		void EndFrame();
 		/** @brief A GPU wait on a Vulkan timeline semaphore (VkSemaphore): none while semaphore is null. */

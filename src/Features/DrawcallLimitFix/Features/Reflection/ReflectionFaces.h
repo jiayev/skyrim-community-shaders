@@ -71,6 +71,7 @@ namespace DCLF::Features::Reflection::ReflectionFaces
 	struct RootStats
 	{
 		std::uint32_t updates = 0, lodSkipped = 0, treeSkipped = 0;
+		std::uint32_t engineOnlyRoots = 0;  // engine-only subset roots added under a skipped LOD root (Scene/EngineCasters.h)
 	};
 	RootStats TakeRootStats();
 }

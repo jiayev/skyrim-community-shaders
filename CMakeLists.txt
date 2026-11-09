@@ -78,6 +78,11 @@ option(
     ON
 )
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
+option(
+    CS_NO_TRACY
+    "Compile out every Tracy zone, the render graph's too, so the plugin links no Tracy client and opens no socket. Needs TRACY_SUPPORT=OFF."
+    OFF
+)
 # Nsight Perf (Remote Control's GPU counters; both NvPerf backends). On by default with the SDK BasicRenderer ships, when
 # this checkout sits in SARP; otherwise opt in with NVPERF_SDK_ROOT.
 set(_NVPERF_DEFAULT_ROOT
@@ -108,6 +113,7 @@ message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO archive to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
+message("\tTracy compiled out: ${CS_NO_TRACY}")
 message("\tNsight Perf: ${NVPERF_SUPPORT}")
 
 # #######################################################################################################################
@@ -200,6 +206,23 @@ find_package(unordered_dense CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
+# The render graph and BasicTelemetry always link Tracy, and the Tracy target hands TRACY_ENABLE to everything that
+# links it. Without that define Tracy's macros do nothing, so no code calls the client and the linker drops it.
+if(CS_NO_TRACY)
+    if(TRACY_SUPPORT)
+        message(FATAL_ERROR "CS_NO_TRACY needs TRACY_SUPPORT=OFF")
+    endif()
+    get_target_property(
+        _cs_tracy_defs
+        Tracy::TracyClient
+        INTERFACE_COMPILE_DEFINITIONS
+    )
+    list(REMOVE_ITEM _cs_tracy_defs TRACY_ENABLE)
+    set_target_properties(
+        Tracy::TracyClient
+        PROPERTIES INTERFACE_COMPILE_DEFINITIONS "${_cs_tracy_defs}"
+    )
+endif()
 find_package(effects11 CONFIG REQUIRED)
 
 if(DEVBENCH_BRIDGE)

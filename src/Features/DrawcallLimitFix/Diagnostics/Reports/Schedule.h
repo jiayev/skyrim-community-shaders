@@ -1,7 +1,9 @@
 #pragma once
 
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -30,18 +32,59 @@ namespace DCLF::Reports
 		return interval;
 	}
 
-	/** @brief The render thread's clock: frame a_frame (each number once) ends a window. */
-	inline bool Due(std::uint32_t a_frame) { return a_frame % Interval() == 0; }
+	/** @brief True while a diagnostic capture records: the reports log their full statistics for its window, as under CS_DCLF_STATS. */
+	inline std::atomic<bool> captureStatistics{ false };
+
+	/**
+	 * @brief Whether the reports log their full statistics: CS_DCLF_STATS, or a capture recording. Counters that are only kept under
+	 * CS_DCLF_STATS stay empty during a capture.
+	 */
+	inline bool FullStatistics() { return Diagnostics::Observe().stats || captureStatistics.load(std::memory_order_relaxed); }
+
+	/**
+	 * @brief The flushes asked for so far. A flush ends the current window early on every clock: the render thread's at its next
+	 * frame, each Crossing and Window at its next call. The diagnostic capture flushes at its start and its end, so its log holds
+	 * one window that covers exactly the capture.
+	 */
+	inline std::atomic<std::uint32_t> flushGeneration{ 0 };
+
+	/** @brief Any thread: ends the current report window on every clock (see flushGeneration). */
+	inline void Flush() { flushGeneration.fetch_add(1, std::memory_order_acq_rel); }
+
+	/** @brief True once per clock after each Flush: a_seen holds the generation that clock last saw. */
+	inline bool TakeFlush(std::uint32_t& a_seen)
+	{
+		const auto now = flushGeneration.load(std::memory_order_acquire);
+		if (now == a_seen)
+			return false;
+		a_seen = now;
+		return true;
+	}
+
+	/** @brief The render thread's flush, seen by Due. */
+	inline std::uint32_t renderThreadFlushSeen = 0;
+
+	/** @brief The render thread's clock: frame a_frame (each number once) ends a window. Call once per frame. */
+	inline bool Due(std::uint32_t a_frame)
+	{
+		// The flush is taken once a frame, so every Due call of that frame agrees.
+		static std::uint32_t frameOfFlush = ~0u;
+		if (TakeFlush(renderThreadFlushSeen))
+			frameOfFlush = a_frame;
+		return a_frame % Interval() == 0 || a_frame == frameOfFlush;
+	}
 
 	/** @brief A clock that may skip frame numbers: due when a_frame is in a later window than the last call's. */
 	struct Crossing
 	{
 		std::uint32_t window = 0;
+		std::uint32_t flushSeen = 0;
 
 		bool Due(std::uint32_t a_frame)
 		{
+			const bool flushed = TakeFlush(flushSeen);
 			const std::uint32_t now = a_frame / Interval();
-			if (now == window)
+			if (now == window && !flushed)
 				return false;
 			window = now;
 			return true;
@@ -52,10 +95,12 @@ namespace DCLF::Reports
 	struct Window
 	{
 		std::uint32_t count = 0;
+		std::uint32_t flushSeen = 0;
 
 		bool Tick()
 		{
-			if (++count < Interval())
+			const bool flushed = TakeFlush(flushSeen);
+			if (++count < Interval() && !flushed)
 				return false;
 			count = 0;
 			return true;

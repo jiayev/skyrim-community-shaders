@@ -2,6 +2,9 @@
 // thunks on the sun's Accumulate and its registrations (the render thread and the registration jobs), and the sun's bits for removed
 // entries.
 #include "Features/DrawcallLimitFix/Features/Shadows/Sun/SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/EngineOnlyCull.h"
+#include "Features/DrawcallLimitFix/Core/Render/StartupHold.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Local/LocalLightCull.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -68,6 +71,9 @@ namespace DCLF::Features::Shadows::Sun
 		using SceneList = RE::BSTArray<RE::NiPointer<RE::NiAVObject>>;
 		RE::BSTArray<SceneList> emptySceneLists;
 		SceneList emptyExtraNodes;
+		// The whole skip's extra list when the frame has engine-only casters: their roots alone (EngineCasters.h), filled and emptied
+		// around the cull.
+		SceneList targetedExtraNodes;
 		constexpr std::uint32_t kMaxSceneLists = 32;
 		// FUN_1414f0920's fourth argument: the light's full-frustum processes, as the BSTArray<NiPointer<BSCullingProcess>> it reads (data,
 		// then the size at +0x10). The whole skip passes one of its own, of the processes holding entries.
@@ -91,14 +97,10 @@ namespace DCLF::Features::Shadows::Sun
 		constexpr std::size_t kGeometryType = 0x150;
 		constexpr std::size_t kDismemberSkinReady = 0x98;
 
-		// The feature's toggles (SetToggles): written at its install alone (the main thread, before DCLF's threads start), read-only after.
-		Api::ToggleId skipToggle, excludeToggle;
-
 		/** @brief Whether the registration skip applies this frame: the set it skips registrations by withholds casters. */
-		bool M1Active(const ToggleSet& a_toggles)
+		bool M1Active()
 		{
-			return a_toggles.On(skipToggle) && PassCapture::ShadowWithholdingEnabled() &&
-			       !PassCapture::Get().Bypassed();
+			return PassCapture::ShadowWithholdingEnabled() && !PassCapture::Get().Bypassed();
 		}
 
 		/**
@@ -193,20 +195,13 @@ namespace DCLF::Features::Shadows::Sun
 		return instance;
 	}
 
-	void SunAccumulation::SetToggles(Api::ToggleId a_skip, Api::ToggleId a_exclude)
-	{
-		skipToggle = a_skip;
-		excludeToggle = a_exclude;
-	}
-
 	void SunAccumulation::ArmExclusion(RE::BSShadowDirectionalLight* a_light)
 	{
 		auto exclusion = Local::SunExclusionSlot::Get().Take();
 		previousExclusion = std::move(frameState.exclusion);
 		frameState.exclusion.reset();
 		armedExclusion.reset();
-		const auto toggles = ActiveToggles();
-		if (!toggles.On(excludeToggle) || !M1Active(toggles) || !a_light)
+		if (!M1Active() || !a_light)
 			return;
 		auto* node = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
 		if (!node || node->GetRuntimeData().sunShadowDirLight != a_light)
@@ -233,8 +228,7 @@ namespace DCLF::Features::Shadows::Sun
 
 	bool SunAccumulation::ArmWhole(RE::BSShadowDirectionalLight* a_light)
 	{
-		const auto toggles = ActiveToggles();
-		if (!toggles.On(excludeToggle) || !M1Active(toggles) || !a_light)
+		if (!M1Active() || !a_light)
 			return false;
 		auto* node = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
 		if (!node || node->GetRuntimeData().sunShadowDirLight != a_light)
@@ -250,10 +244,17 @@ namespace DCLF::Features::Shadows::Sun
 			covered = covered && view.covered && PassCapture::Get().CastersForBatch(view.batch);
 		}
 		if (!covered || cascades < a_light->GetRuntimeData().shadowmapDescriptors.size()) {
-			++stats.wholeDeclined;
-			return false;
+			// The session's first frames (Core/Render/StartupHold.h): held black, the whole skip kept rather than the engine's whole cull.
+			// Not a parity frame's (ExcludeSun).
+			if (!StartupHold::Active() || !ExcludeSun(Scene::FrameView::Get().GetFrame())) {
+				++stats.wholeDeclined;
+				return false;
+			}
+			StartupHold::NoteHeld(StartupHold::View::Sun);
+			++stats.wholeHeld;
 		}
-		// The builder's exclusion is not needed: taken as ArmExclusion would, so the slot's hand-off stays the same.
+		// A caster that stays the engine's (a skin DCLF refuses, a buffer it cannot import) has only the engine's cull to draw its shadow:
+		// the whole skip culls the engine-only subset's roots for it (FullFrustum), never the scene. The builder's exclusion is not needed: taken as ArmExclusion would, so the slot's hand-off stays the same.
 		previousExclusion = Local::SunExclusionSlot::Get().Take();
 		frameState.exclusion.reset();
 		armedExclusion.reset();
@@ -415,7 +416,7 @@ namespace DCLF::Features::Shadows::Sun
 				auto& self = SunAccumulation::Get();
 				SunCall call;
 				auto& descriptors = a_light->GetRuntimeData().shadowmapDescriptors;
-				const bool active = M1Active(ActiveToggles());
+				const bool active = M1Active();
 				call.accumulators.reserve(descriptors.size());
 				call.claims.reserve(descriptors.size());
 				for (std::uint32_t i = 0; i < descriptors.size(); ++i) {
@@ -585,7 +586,19 @@ namespace DCLF::Features::Shadows::Sun
 					void* const held = jobs;
 					const std::int64_t start = Now();
 					jobs = nullptr;
-					func(a_light, emptySceneLists, emptyExtraNodes);
+					// The engine-only subset's roots (Scene/EngineCasters.h), the one thing it culls: their casters register as usual, and the
+					// members under them are withheld at their cascades' registrations (Register: claimed).
+					const auto& subset = Scene::FrameView::Get().GetEngineCasters();
+					if (const auto* casters = subset ? &subset->Of(Scene::EngineOnlySubset::kCaster) : nullptr; casters && !casters->roots.empty()) {
+						for (const auto* root : casters->roots)
+							targetedExtraNodes.push_back(RE::NiPointer<RE::NiAVObject>(const_cast<RE::NiAVObject*>(root)));
+						++self.stats.wholeTargeted;
+						self.stats.wholeTargetedRoots += casters->roots.size();
+						func(a_light, emptySceneLists, targetedExtraNodes);
+						targetedExtraNodes.clear();
+					} else {
+						func(a_light, emptySceneLists, emptyExtraNodes);
+					}
 					jobs = held;
 					self.WholeApplied();
 					const std::int64_t ticks = Now() - start;
@@ -594,6 +607,11 @@ namespace DCLF::Features::Shadows::Sun
 					return;
 				}
 				self.ArmExclusion(a_light);
+				// A sun DCLF draws, culled whole by the engine (less the exclusion's entries when one is armed): a view it does not cover yet.
+				// Not on the parity frames (ExcludeSun), or with the shadows not DCLF's (M1Active).
+				if (M1Active() && ExcludeSun(Scene::FrameView::Get().GetFrame()))
+					EngineOnlyCull::NoteWholeCull(self.vetoExclusion.load(std::memory_order_relaxed) ? EngineOnlyCull::WholeCull::SunNotCovered :
+					                                                                                     EngineOnlyCull::WholeCull::SunNoExclusion);
 				const std::int64_t start = Now();
 				func(a_light, a_lists, a_nodes);
 				const std::int64_t ticks = Now() - start;

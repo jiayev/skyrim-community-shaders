@@ -1,6 +1,7 @@
 // Terrain Shadows: its shadow height map (t60), a frame texture. The render thread's callback reads the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/TerrainShadows/TerrainShadows.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 
 #include "Features/TerrainShadows.h"
 
@@ -27,6 +28,6 @@ namespace DCLF::Integrations::TerrainShadows
 
 	Api::Feature Integration()
 	{
-		return { "terrain shadows", &Install };
+		return { .name = "terrain shadows", .install = &Install, .status = [] { return FeatureStatus(globals::features::terrainShadows); } };
 	}
 }

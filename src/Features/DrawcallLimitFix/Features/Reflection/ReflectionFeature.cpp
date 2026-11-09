@@ -91,7 +91,7 @@ namespace DCLF::Features::Reflection
 			// section; the first feature toggle registered after the maps', so its bit in the packed word is where Core's was.
 			const auto reflections = a_context.RegisterToggle({ .name = "reflections", .label = "Draw the water reflection's distant land, objects and trees",
 				.tooltip = "DCLF draws the LOD the water's cube map reflects from its own tables on the GPU; the engine draws the sky, and any LOD DCLF cannot draw yet.",
-				.section = "Reflections", .seed = reflectionsSwitch, .after = "exclude primary entries" });
+				.section = "Reflections", .seed = reflectionsSwitch, .after = "shadows" });
 			// The view (Core's view machinery: its epochs, revisions, set decisions and withholding read it as data).
 			a_context.RegisterView(Contribution(reflections));
 			// The faces' targets, the LOD slots' forward pipelines and tree LOD's, and the view's resources, after tree LOD's decision; the

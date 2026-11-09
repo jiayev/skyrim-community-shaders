@@ -12,6 +12,8 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 
@@ -42,6 +44,25 @@ namespace DCLF::MaterialWrites
 		{
 			static EventQueue<const RE::BSShaderMaterial*, 8192> queue;
 			return queue;
+		}
+		// The kept shadow build runs only while DCLF draws shadows. While it does not, nothing drains the queue, and a full queue
+		// allocates for each push, so pushes stop once it has not drained for kTransformConsumerIdle. The next drain is then told
+		// that moves were lost (DrainTransformMoves).
+		constexpr auto kTransformConsumerIdle = std::chrono::seconds(2);
+		std::atomic<std::int64_t> transformConsumerSeen{ 0 };  // steady_clock ticks of the last drain, 0 before the first
+		std::atomic<bool> transformMovesLost{ false };
+		std::atomic<std::uint64_t> transformMovesDropped{ 0 };
+		void PushTransformMove(const RE::BSShaderMaterial* a_material)
+		{
+			const auto seen = transformConsumerSeen.load(std::memory_order_relaxed);
+			const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+			if (seen && now - seen < std::chrono::duration_cast<std::chrono::steady_clock::duration>(kTransformConsumerIdle).count())
+				TransformMoves().Push(a_material);
+			else {
+				transformMovesDropped.fetch_add(1, std::memory_order_relaxed);
+				if (!transformMovesLost.load(std::memory_order_relaxed))
+					transformMovesLost.store(true, std::memory_order_relaxed);
+			}
 		}
 
 		// ---- Hooks.
@@ -144,7 +165,7 @@ namespace DCLF::MaterialWrites
 					if (moved && property->material == material && !Extensions::FrameVSVariablePatched())
 						NoteWritten(material);
 					if (moved)
-						TransformMoves().Push(material);
+						PushTransformMove(material);
 					break;
 				}
 			case kDestination:
@@ -245,6 +266,12 @@ namespace DCLF::MaterialWrites
 		MaterialPort::PushCapture(a_material);
 	}
 
+	void NoteShading(const RE::BSShaderProperty* a_property)
+	{
+		if (a_property)
+			ShadingQueue().Push(a_property);
+	}
+
 	bool Drain(ankerl::unordered_dense::set<const RE::BSShaderMaterial*>& a_out)
 	{
 		// The queue loses nothing (it spills when full), so a drain is always complete.
@@ -261,9 +288,20 @@ namespace DCLF::MaterialWrites
 namespace DCLF::Extensions
 {
 	// The transform moves' consumer side (Core/Extensions/MaterialWrites.h); the queue is the hooks'.
-	void DrainTransformMoves(std::vector<const RE::BSShaderMaterial*>& a_out)
+	bool DrainTransformMoves(std::vector<const RE::BSShaderMaterial*>& a_out)
 	{
-		MaterialWrites::TransformMoves().Drain([&](const RE::BSShaderMaterial* a_material) { a_out.push_back(a_material); });
+		using namespace MaterialWrites;
+		// Seen first, then the flag: a push that found the consumer idle has set the flag before this drain reads it, or pushes after it.
+		transformConsumerSeen.store(std::chrono::steady_clock::now().time_since_epoch().count(), std::memory_order_relaxed);
+		const bool lost = transformMovesLost.exchange(false, std::memory_order_acq_rel);
+		TransformMoves().Drain([&](const RE::BSShaderMaterial* a_material) { a_out.push_back(a_material); });
+		return lost;
+	}
+
+	TransformMoveCounts TransformMoveStats()
+	{
+		using namespace MaterialWrites;
+		return { TransformMoves().Spilled(), transformMovesDropped.load(std::memory_order_relaxed) };
 	}
 }
 

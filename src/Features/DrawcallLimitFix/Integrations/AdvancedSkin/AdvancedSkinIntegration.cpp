@@ -1,6 +1,8 @@
 // Advanced Skin's wetness field: its membership hook (the actors' index, from the publications' writes) and its capture (each actor's
 // value at the frame's start, fanned out). Render thread. Its material textures are SkinTextures.cpp's.
 
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/AdvancedSkin.h"
 #include "Features/DrawcallLimitFix/Integrations/AdvancedSkin/OwnerValues.h"
@@ -21,6 +23,9 @@ namespace DCLF::Integrations::AdvancedSkin
 			return owners;
 		}
 
+		// The last capture's counts (render thread), for the diagnostic capture.
+		OwnerValues::Stats lastStats;
+
 		void Membership(const Api::ShadingFieldMembership& a_membership)
 		{
 			auto& owners = Owners();
@@ -38,7 +43,7 @@ namespace DCLF::Integrations::AdvancedSkin
 			// frame (the first call; later ones, including its own SetupGeometry hook for the draws the engine still makes this frame,
 			// return the same value), so calling it here for every actor in the tables advances every actor's fade once a frame,
 			// whether or not the engine draws it. Its cache is not thread-safe: the render thread's, at the frame's start.
-			ZoneScopedN("CS.DCLF.Capture.Wetness");
+			DCLF_ZONE("CS.DCLF.Capture.Wetness");
 			auto& skin = globals::features::skin;
 			const bool wetness = skin.loaded && skin.settings.EnableSkin;
 			// The actors' membership is the render thread's own index (the log's changes, Membership), their geometries the newest
@@ -47,7 +52,9 @@ namespace DCLF::Integrations::AdvancedSkin
 			const auto wetnessStats = Owners().Update([&](std::uint32_t o) {
 				auto* mesh = o < geometry.size() ? geometry[o] : nullptr;
 				const float4 value = wetness && mesh ? skin.GetWetness(mesh) : float4{};
-				return OwnerValues::Value{ value.x, value.y, value.z, value.w }; }, [&](std::uint32_t o, const auto& row) { a_capture.Put(o, row); });
+				return OwnerValues::Value{ value.x, value.y, value.z, value.w };
+			}, [&](std::uint32_t o, const auto& row) { a_capture.Put(o, row); });
+			lastStats = wetnessStats;
 			TracyPlot("CS.DCLF.Wetness.Actors", static_cast<std::int64_t>(wetnessStats.actors));
 			TracyPlot("CS.DCLF.Wetness.ChangedActors", static_cast<std::int64_t>(wetnessStats.changed));
 			TracyPlot("CS.DCLF.Wetness.VisitedMeshes", static_cast<std::int64_t>(wetnessStats.visited));
@@ -64,6 +71,14 @@ namespace DCLF::Integrations::AdvancedSkin
 
 	Api::Feature Integration()
 	{
-		return { "advanced skin", &Install };
+		return { .name = "advanced skin", .install = &Install, .status = [] { return FeatureStatus(globals::features::skin); } };
+	}
+
+	std::vector<std::string> GrowthLines()
+	{
+		const auto& owners = Owners();
+		return { fmt::format("advanced skin wetness groups {}", owners.GroupCount()), fmt::format("advanced skin wetness slots {}", owners.SlotCount()),
+			fmt::format("advanced skin wetness last capture actors {}, changed {}, visited {}, members {}", lastStats.actors, lastStats.changed, lastStats.visited,
+				lastStats.members) };
 	}
 }

@@ -1,6 +1,7 @@
 // Subsurface Scattering: the "beast race" reference fact and the IsBeastRace object flag. Both read the feature live: the fact on the
 // capturing thread, the flag on the join pool.
 
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Commits.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
@@ -73,6 +74,6 @@ namespace DCLF::Integrations::SubsurfaceScattering
 
 	Api::Feature Integration()
 	{
-		return { "subsurface scattering", &Install };
+		return { .name = "subsurface scattering", .install = &Install, .status = [] { return FeatureStatus(globals::features::subsurfaceScattering); } };
 	}
 }

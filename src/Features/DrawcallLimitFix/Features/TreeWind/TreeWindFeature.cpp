@@ -22,7 +22,7 @@ namespace DCLF::Features::TreeWind
 				.description = "0: trees stay native (live toggle's seed)", .after = "CS_DCLF_SKIN_PARTITIONS" });
 			listAllSwitch = a_context.RegisterSwitch({ .name = "CS_DCLF_TREE_LIST_ALL", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::Never,
 				.description = "1 (T7f; off by default): the tree manager's list loop given DCLF's verdict for every BSTreeNode DCLF lists; off: the stood-in trees alone (T7b5's fix)",
-				.after = "CS_DCLF_PRIMARY_EXCLUDE" });
+				.after = "CS_DCLF_SHADOWS" });
 			// The TreeAnim technique, whose vertex animation reads TreeParams and WindTimers per object (extras rows): an object class
 			// (its technique contribution's toggle: RegisterObjects).
 			return a_context.RegisterToggle({ .name = "trees", .label = "Trees", .seed = trees, .entersClassification = true, .after = "skinned" });

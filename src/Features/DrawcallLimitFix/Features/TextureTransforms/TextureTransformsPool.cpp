@@ -5,6 +5,7 @@
 // rows (animated-material-rows: a backing per frame the GPU alone writes, TextureTransformsCS).
 
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransformsPool.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
@@ -38,7 +39,7 @@ namespace DCLF::Features::TextureTransforms
 		// Render thread, at Kick: the installed payload's TexcoordOffset rows for the frame's producer.
 		Api::FrameValueInput Kick(const Api::FrameValuePoolKick&)
 		{
-			ZoneScopedN("CS.DCLF.FV.Kick.TextureTransforms");
+			DCLF_ZONE("CS.DCLF.FV.Kick.TextureTransforms");
 			rowsNeeded = std::max<std::uint64_t>(rowsNeeded, (installed ? installed->entries.size() + installed->animatedSlots.size() : 0u) + 1u);
 			return { installed, rowsNeeded };
 		}
@@ -71,7 +72,7 @@ namespace DCLF::Features::TextureTransforms
 			};
 			std::vector<Chunk> chunks((a_count + kGrain - 1) / kGrain);
 			SceneScheduler::Executor().ParallelFor("CS.DCLF.FrameValues.TextureTransforms", a_count, kGrain, [&](std::size_t a_begin, std::size_t a_end) {
-				ZoneScopedN("CS.DCLF.FrameValues.TextureTransformsShards");
+				DCLF_ZONE("CS.DCLF.FrameValues.TextureTransformsShards");
 				auto& mine = chunks[a_begin / kGrain];
 				// One engine-read lease for the chunk: unreadable, each of its entries is unread.
 				EngineReadWindow::Lease lease;
@@ -116,7 +117,7 @@ namespace DCLF::Features::TextureTransforms
 			// declared frame variables (the Effect port's falloff and base colour) as the window finds them: the engine's update wrote them, and
 			// its SetupMaterial reads them in the same span (the parity reads them again at the producer's end).
 			// TextureTransformsCS stores the entries into the payload's rows before the frame's draws.
-			ZoneScopedN("CS.DCLF.FrameValues.TextureTransforms");
+			DCLF_ZONE("CS.DCLF.FrameValues.TextureTransforms");
 			auto& p = produced;
 			a_producer.BeginBuild(p.transforms);
 			auto& out = p.transforms.Mutable();

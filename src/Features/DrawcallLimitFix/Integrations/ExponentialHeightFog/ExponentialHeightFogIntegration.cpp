@@ -1,6 +1,7 @@
 // Exponential Height Fog: its integrated light scattering volume (t19), a frame texture. The render thread's callback reads the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/ExponentialHeightFog/ExponentialHeightFog.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 
 #include "Features/ExponentialHeightFog.h"
 
@@ -27,6 +28,6 @@ namespace DCLF::Integrations::ExponentialHeightFog
 
 	Api::Feature Integration()
 	{
-		return { "exponential height fog", &Install };
+		return { .name = "exponential height fog", .install = &Install, .status = [] { return FeatureStatus(globals::features::exponentialHeightFog); } };
 	}
 }

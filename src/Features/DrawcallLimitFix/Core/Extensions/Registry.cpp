@@ -10,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameBindings.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/LatePoses.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
@@ -119,6 +120,8 @@ namespace DCLF::Extensions
 			Api::LightVolumesContribution lightVolumes{};
 			Api::SunVolumeContribution sunVolume{};
 			Api::AncestorValueContribution ancestorValue{};
+			// The late poses, in registration order. Resolved at the end (ResolveLatePoses).
+			std::vector<Api::LatePoseContribution> latePoses;
 			// The vertex stream (entry class Count: none). Resolved at the end (ResolveVertexStream).
 			Api::VertexStreamContribution vertexStream{};
 			// The main cull input (no name: none). Resolved at the end (ResolveMainCullInput).
@@ -718,6 +721,16 @@ namespace DCLF::Extensions
 				lists.ancestorValue = a_value;
 			}
 
+			void RegisterLatePose(const Api::LatePoseContribution& a_pose) override
+			{
+				if (a_pose.name.empty() || !a_pose.root)
+					stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered an incomplete late pose", feature));
+				for (const auto& other : lists.latePoses)
+					if (other.name == a_pose.name)
+						stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} registered late pose {} twice", feature, a_pose.name));
+				lists.latePoses.push_back(a_pose);
+			}
+
 			void RegisterReportLines(const Api::ReportLines& a_lines) override
 			{
 				// A point composing its text takes text lines; the others, logged lines.
@@ -1291,6 +1304,7 @@ namespace DCLF::Extensions
 		ResolveLightVolumes(lists.lightVolumes);
 		ResolveSunVolume(lists.sunVolume);
 		ResolveAncestorValue(lists.ancestorValue);
+		ResolveLatePoses(lists.latePoses);
 		// The views' entries, from Core's slots and the features' contributions, work and view roots; the occlusion maps', shadow sources' and shadow exclusion's, from
 		// the features' contributions; then both families' phases and view bits; the draw families' from their registrations; the main
 		// ranges' draw order; the vertex stream's (and the scene resources' order: its first); the main cull input's; the cull bindings'; the depth pyramid's; the primary view's; the shadow epochs'; the root states'; the palette rows classes'; the shading fields'

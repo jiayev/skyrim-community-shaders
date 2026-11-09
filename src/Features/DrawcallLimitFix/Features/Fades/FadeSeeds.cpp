@@ -3,6 +3,8 @@
 // FrameValues' producer; FadeStateCS and the builds read them as the cull binding RootSeeds.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
+#include "Features/DrawcallLimitFix/Features/Fades/FadesInternal.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeState.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
@@ -69,6 +71,9 @@ namespace DCLF::Features::Fades
 		KeptWholeArray<FadeRootStatic> fadeSeeds;
 		std::vector<SeedCopy> owedSeeds;
 
+		// The two lists' sizes as their owners last left them, for the diagnostic capture (PeekSeedCounts).
+		std::atomic<std::size_t> unsentSeedCount{ 0 }, owedSeedCount{ 0 };
+
 		// Render thread, every Kick: the node as the frame's start has it, before this frame's culls update it (FadeStateCS's first
 		// update is this frame's): its bytes copied here, the row made from the copy by the producer (StaticOf, with the frame's globals:
 		// its LOD scale).
@@ -78,6 +83,9 @@ namespace DCLF::Features::Fades
 			for (auto& seed : seeds) {
 				if (!seed.node)
 					continue;
+				// An actor's root: its fadeAmount taken again now that it is listed (RecheckFadeAmount).
+				if (const auto* reference = seed.node->GetUserData(); reference && reference->IsActor())
+					RecheckFadeAmount(seed.node.get());
 				auto& copy = unsentSeeds.emplace_back();
 				std::memcpy(copy.bytes.data(), seed.node.get(), FadeState::NodeBytes(FadeState::PlanOf(*seed.node)));
 				copy.node = std::move(seed.node);
@@ -86,15 +94,17 @@ namespace DCLF::Features::Fades
 				copy.generation = seed.generation;
 				seedRows = std::max(seedRows, seed.row + 1);
 			}
+			unsentSeedCount.store(unsentSeeds.size(), std::memory_order_relaxed);
 		}
 
 		// Render thread, at Kick: every copy taken since the last kick, for the frame's producer.
 		Api::FrameValueInput FadeSeedsKick(const Api::FrameValuePoolKick&)
 		{
-			ZoneScopedN("CS.DCLF.FV.Kick.FadeSeeds");
+			DCLF_ZONE("CS.DCLF.FV.Kick.FadeSeeds");
 			if (!unsentSeeds.empty()) {
 				auto input = std::make_shared<SeedInput>();
 				input->values = std::exchange(unsentSeeds, {});
+				unsentSeedCount.store(0, std::memory_order_relaxed);
 				input->rows = seedRows;
 				return { std::move(input), seedRows };
 			}
@@ -108,7 +118,7 @@ namespace DCLF::Features::Fades
 
 		void FadeSeedsSample(Api::FrameValuePoolProducer& a_producer)
 		{
-			ZoneScopedN("CS.DCLF.FrameValues.FadeSeeds");
+			DCLF_ZONE("CS.DCLF.FrameValues.FadeSeeds");
 			a_producer.BeginBuild(fadeSeeds);
 			auto& out = fadeSeeds.Mutable();
 			const auto* input = a_producer.Input<SeedInput>();
@@ -150,6 +160,7 @@ namespace DCLF::Features::Fades
 				for (const auto& copy : input->values)
 					seed(copy);
 			a_producer.NoteSeeded(seeded);
+			owedSeedCount.store(owedSeeds.size(), std::memory_order_relaxed);
 			// The carried copies' references to the render thread (the input's go with the input).
 			for (auto& copy : carried)
 				ReleaseLater(copy.node);
@@ -180,5 +191,10 @@ namespace DCLF::Features::Fades
 	const std::vector<FadeRootStatic>* SeedsIfDone(bool a_wait)
 	{
 		return FrameValues::Get().ProducerDone(a_wait) ? &fadeSeeds.Get() : nullptr;
+	}
+
+	SeedCounts PeekSeedCounts()
+	{
+		return { unsentSeedCount.load(std::memory_order_relaxed), owedSeedCount.load(std::memory_order_relaxed) };
 	}
 }

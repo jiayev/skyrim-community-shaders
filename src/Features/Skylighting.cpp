@@ -602,7 +602,9 @@ void Skylighting::RenderSkyOcclusionMap(RE::Precipitation* a_precip, bool a_dclf
 	// and clears the map. Otherwise, or on a frame DCLF did not draw it, the engine does.
 	auto& dclf = globals::features::drawcallLimitFix;
 	const bool reference = a_dclf && dclf.OcclusionReferenceFrame(DrawcallLimitFix::kSkyOcclusion);
-	const bool engine = !a_dclf || reference;
+	// Held by Drawcall Limit Fix's startup hold: rendered here without the engine's cull, as DCLF's own variant is.
+	const bool held = !a_dclf && dclf.OcclusionHeld(DrawcallLimitFix::kSkyOcclusion);
+	const bool engine = (!a_dclf && !held) || reference;
 	{
 		ZoneScopedN("Skylighting - Setup Projection");
 		// The engine positions the precipitation camera using its previous world
@@ -615,6 +617,8 @@ void Skylighting::RenderSkyOcclusionMap(RE::Precipitation* a_precip, bool a_dclf
 		_computeProjection(a_precip, a_precip->occlusionData.camera);
 		if (engine)
 			a_precip->SetupMask();
+		else if (dclf.OcclusionEngineOnlyMask(a_precip))
+			;  // DCLF's map, the engine's cull for its engine-only occluders alone (SetupMask set the camera)
 		else if (auto* accumulator = a_precip->occlusionData.accumulator.get())
 			accumulator->camera = a_precip->occlusionData.camera.get();  // what SetupMask sets
 		dclf.OcclusionView(DrawcallLimitFix::kSkyOcclusion);

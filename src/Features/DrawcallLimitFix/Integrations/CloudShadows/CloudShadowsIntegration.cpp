@@ -1,6 +1,7 @@
 // Cloud Shadows: its cloud occlusion cubemap (t25), a frame texture. The render thread's callback reads the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/CloudShadows/CloudShadows.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 
 #include "State.h"
 
@@ -34,6 +35,6 @@ namespace DCLF::Integrations::CloudShadows
 
 	Api::Feature Integration()
 	{
-		return { "cloud shadows", &Install };
+		return { .name = "cloud shadows", .install = &Install, .status = [] { return FeatureStatus(globals::features::cloudShadows); } };
 	}
 }

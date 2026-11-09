@@ -41,7 +41,6 @@ namespace DCLF
 		ProjectedUv,
 		PlainSnowSparkle,
 		Shadows,
-		PrimaryExclude,
 		OrgEpochs,
 		OrgAsyncEpochs,
 		OrgClosed,
@@ -91,6 +90,7 @@ namespace DCLF
 		TestTurn,
 		TestToggle,
 		TestExit,
+		TestRefuse,
 
 		// Other features' switches, read through the same file.
 		UpscaleSubmit,

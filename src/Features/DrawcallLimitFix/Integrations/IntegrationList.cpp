@@ -9,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Integrations/ExponentialHeightFog/ExponentialHeightFog.h"
 #include "Features/DrawcallLimitFix/Integrations/ExtendedTranslucency/ExtendedTranslucency.h"
 #include "Features/DrawcallLimitFix/Integrations/IBL/IBL.h"
+#include "Features/DrawcallLimitFix/Integrations/ImprovedCamera/ImprovedCamera.h"
 #include "Features/DrawcallLimitFix/Integrations/LightLimitFix/LightLimitFix.h"
 #include "Features/DrawcallLimitFix/Integrations/PhysicalSky/PhysicalSky.h"
 #include "Features/DrawcallLimitFix/Integrations/Skylighting/Skylighting.h"
@@ -40,6 +41,7 @@ namespace DCLF::Integrations
 		// constants of their own (the reflection's faces) read them too: Volumetric Shadows' shadow map (t18), Cloud Shadows' occlusion
 		// (t25), Dynamic Cubemaps' reflections and environment (t30, t31), Exponential Height Fog's light scattering (t19), Skylighting's probes and shadow visibility (t50, t53), Terrain Shadows' height map
 		// (t60), Water Effects' caustics (t65), IBL's SH and static cubemaps (t76-t79); no early or source hook.
+		// Improved Camera (an SKSE plugin): the player's first-person pose, a late pose; no early or source hook.
 		static const std::array kIntegrations{
 			AdvancedSkin::Integration(),
 			TerrainBlending::Integration(),
@@ -57,7 +59,16 @@ namespace DCLF::Integrations
 			TerrainShadows::Integration(),
 			WaterEffects::Integration(),
 			IBL::Integration(),
+			ImprovedCamera::Integration(),
 		};
 		return kIntegrations;
+	}
+
+	std::vector<std::string> StatusLines()
+	{
+		std::vector<std::string> lines;
+		for (const auto& integration : List())
+			lines.push_back(fmt::format("{}: {}", integration.name, integration.status ? integration.status() : std::string("installed")));
+		return lines;
 	}
 }

@@ -3,6 +3,7 @@
 // accumulator latches. Render thread: everything here reads or writes live engine state.
 
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/Hash.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
@@ -108,7 +109,7 @@ namespace DCLF::Scene
 				if (a_item < a_job.pinNodes.size()) {
 					auto* node = a_job.pinNodes[a_item];
 					auto& keys = capture.children[node];
-					for (auto& child : node->GetChildren())
+					for (auto& child : Engine::Children(*node))
 						if (child) {
 							keys.push_back(child.get());
 							pinSubtree(child.get());
@@ -151,7 +152,7 @@ namespace DCLF::Scene
 		/** @brief The items left, each under its own lease, until one is refused (the window closed: the rest wait for the next). */
 		void RunFrameStartJob(FrameStartJob& a_job)
 		{
-			ZoneScopedN("CS.DCLF.Ingest.FrameStartJob");
+			DCLF_ZONE("CS.DCLF.Ingest.FrameStartJob");
 			for (const std::size_t items = a_job.Items(); a_job.next < items; ++a_job.next) {
 				const EngineReadWindow::Lease lease;
 				if (!lease)
@@ -398,7 +399,7 @@ namespace DCLF::Scene
 			if (auto* tes = RE::TES::GetSingleton()) {
 				// BSMultiBoundNodes under ObjectLODRoot (TES::objRoot), in exteriors and (holding the rooms) interiors.
 				if (auto* objRoot = tes->objRoot) {
-					for (auto& child : objRoot->GetChildren()) {
+					for (auto& child : Engine::Children(*objRoot)) {
 						if (auto* multiBound = child ? netimmerse_cast<RE::BSMultiBoundNode*>(child.get()) : nullptr)
 							current.insert(multiBound);
 					}
@@ -493,7 +494,7 @@ namespace DCLF::Scene
 
 	void FrameView::ServeFrameRequests(bool a_running)
 	{
-		ZoneScopedN("CS.DCLF.FrameRequests");
+		DCLF_ZONE("CS.DCLF.FrameRequests");
 		RenderThreadBudget::Part budget(RenderThreadBudget::Bucket::SceneCaptures);
 		// The passes' switch catch-ups (engine writes, before the culls), and every switch after a load. The requests' references
 		// are dropped here, on the render thread.
@@ -564,7 +565,7 @@ namespace DCLF::Scene
 		const bool world = std::exchange(worldCatchUpPending, false);
 		if (!world && a_attached.empty() && a_switches.empty())
 			return;
-		ZoneScopedN("CS.DCLF.Ingest.SwitchCatchUps");
+		DCLF_ZONE("CS.DCLF.Ingest.SwitchCatchUps");
 		const auto start = std::chrono::steady_clock::now();
 		const auto* root = static_cast<const RE::NiAVObject*>(RE::Main::WorldRootNode());
 		auto inWorld = [root](const RE::NiAVObject* a_object) {
@@ -586,7 +587,7 @@ namespace DCLF::Scene
 					continue;
 				if (auto* switchNode = node->AsSwitchNode(); switchNode && CatchUpSwitch(*switchNode))
 					++count;
-				for (auto& child : node->GetChildren())
+				for (auto& child : Engine::Children(*node))
 					if (child)
 						stack.push_back(child.get());
 			}
@@ -644,7 +645,7 @@ namespace DCLF::Scene
 		// The set changes only when a cell attaches or detaches: remade when the signature moved or a detach was seen (walk parity
 		// finds anything both miss). The signature itself is read again only after an edit of a node it reads children of (the tracker's
 		// watch) or a move of its O(1) inputs; the pins and the mirror's pushes are the frame start's job (on the pool, leased).
-		ZoneScopedN("CS.DCLF.Ingest.CaptureCategories");
+		DCLF_ZONE("CS.DCLF.Ingest.CaptureCategories");
 		const auto start = std::chrono::steady_clock::now();
 		const auto timed = [&] { categoryCaptureNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()); };
 		SceneTracker::RetireCategoryNodes();
@@ -691,7 +692,7 @@ namespace DCLF::Scene
 		channels.mirrorCaptureRequests.Drain([&requests](RE::NiPointer<RE::NiAVObject>&& a_request) { requests.push_back(std::move(a_request)); });
 		if (requests.empty())
 			return;
-		ZoneScopedN("CS.DCLF.Ingest.MirrorRequests");
+		DCLF_ZONE("CS.DCLF.Ingest.MirrorRequests");
 		auto& tracker = SceneTracker::Get();
 		ankerl::unordered_dense::set<const RE::NiAVObject*> captured;
 		for (const auto& object : requests) {  // a geometry, or (AddSubtree) a subtree's root
@@ -716,7 +717,7 @@ namespace DCLF::Scene
 
 	void FrameView::PrepareAccumulatePhase()
 	{
-		ZoneScopedN("CS.DCLF.Accumulate.Prepare");
+		DCLF_ZONE("CS.DCLF.Accumulate.Prepare");
 		// No sceneBuilt test (the coordinator's, and the scene pass may be running): requests are answered regardless, and the
 		// queue is empty when no join ran.
 		ServeMaterialRequests();
@@ -737,7 +738,7 @@ namespace DCLF::Scene
 
 	void FrameView::PostAccumulateInputs()
 	{
-		ZoneScopedN("CS.DCLF.Accumulate.Inputs");
+		DCLF_ZONE("CS.DCLF.Accumulate.Inputs");
 		DrainCapture();
 		Diagnostics::Notify<Diagnostics::FramePoint::RegistrationsDone>();
 		PostAncestorMap();

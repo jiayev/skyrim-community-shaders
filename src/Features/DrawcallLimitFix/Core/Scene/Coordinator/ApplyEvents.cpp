@@ -3,10 +3,12 @@
 // goes back through the retirement chain. Also the load screen's discard and the detach safety net.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Shading/MaterialWrites.h"
 
 namespace DCLF::Scene
 {
@@ -45,7 +47,7 @@ namespace DCLF::Scene
 
 	std::shared_ptr<Coordinator::EventBatch> Coordinator::CollectEvents()
 	{
-		ZoneScopedN("CS.DCLF.Scene.CollectEvents");
+		DCLF_ZONE("CS.DCLF.Scene.CollectEvents");
 		// The queues' one consumer. Each is drained to where it stands now, so later pushes are the next pass's and a pass always ends.
 		// The render thread's posts were taken before, so every event older than its capture is in this batch or an earlier one.
 		auto& tracker = SceneTracker::Get();
@@ -131,6 +133,15 @@ namespace DCLF::Scene
 		auto& s = materialSnapshotStats;
 		// The parity's passes keep the deduplicated materials, which RewriteCapturedMaterials evaluates as every capture once was.
 		const bool parity = Diagnostics::Observe().scene && Diagnostics::ParityDue(passSerial, kMaterialDedupParityOffset);
+		// The Lighting materials captured: the material, its alpha, the capture's sequence.
+		struct AlphaWritten
+		{
+			const RE::BSShaderMaterial* material;
+			float alpha;
+			std::uint64_t sequence;
+		};
+		std::vector<AlphaWritten> alphaWritten;
+		constexpr std::size_t kMaterialAlpha = offsetof(RE::BSLightingShaderMaterialBase, materialAlpha);
 		MaterialPort::captures.Drain([&](std::unique_ptr<MaterialPort::HeldSnapshot>&& a_held) {
 			++s.captured;
 			const RE::BSShaderMaterial* material = a_held->reference;
@@ -140,6 +151,8 @@ namespace DCLF::Scene
 				HandBackHeld(std::move(a_held));
 				return;
 			}
+			if (a_held->snapshot.port == 0 && a_held->snapshot.size >= kMaterialAlpha + sizeof(float))
+				alphaWritten.push_back({ material, a_held->snapshot.At<float>(kMaterialAlpha), a_held->sequence });
 			// A capture equal to the held one (every attached leaf captures its shared material; a controller rewrites the same value)
 			// changes no record: the newer is kept, nothing is rewritten. One whose frame-owned bytes alone moved (the transform buffers, a
 			// port's declared frame variables: the Effect port's falloff and base colour) is counted as watched while a feature patches them
@@ -190,6 +203,25 @@ namespace DCLF::Scene
 			entry.listed = true;
 			materialsCaptured.push_back(material);
 		});
+		// A Lighting material's alpha written in place, with no engine setter: RaceMenu stores an overlay's alpha into its material, and
+		// the texture load that follows rewrites the material's values (ReceiveValuesFromRootMaterial), which captured it. Its properties
+		// cache the alpha (PropertyRecord::materialAlpha, their derivations' translucency) and sample it into their shading rows, and
+		// neither has an event of its own: the record takes the capture's alpha (unless captured after it), and the row is sampled again.
+		for (const auto& written : alphaWritten)
+			for (const void* key : mirror.PropertiesOfMaterial(written.material)) {
+				const auto* record = mirror.Property(key);
+				// Only a record captured before the material was (a newer one read the alpha itself).
+				if (!record || record->sequence > written.sequence ||
+					std::bit_cast<std::uint32_t>(record->materialAlpha) == std::bit_cast<std::uint32_t>(written.alpha))
+					continue;
+				SceneCapture::PropertyRecord update = *record;
+				update.materialAlpha = written.alpha;
+				SceneCapture::Update apply{ SceneCapture::PropertyRecord::kMaterialAlpha, std::move(update) };
+				apply.sequence = written.sequence;
+				mirror.Update(apply);
+				propertyChanged.push_back(key);
+				MaterialWrites::NoteShading(static_cast<const RE::BSShaderProperty*>(key));
+			}
 		// Answers to the joins' requests (a served capture was pushed before its answer): the join may ask again.
 		channels.materialRequestsAnswered.Drain([&](MaterialAnswer&& a_answer) {
 			materialRequested.erase(a_answer.material);
@@ -244,7 +276,7 @@ namespace DCLF::Scene
 	{
 		// Material captures first: an attach names materials whose captures were pushed before it.
 		{
-			ZoneScopedN("CS.DCLF.Scene.MaterialCaptures");
+			DCLF_ZONE("CS.DCLF.Scene.MaterialCaptures");
 			DrainMaterialCaptures();
 		}
 		auto batch = std::move(a_batch);
@@ -360,7 +392,7 @@ namespace DCLF::Scene
 			if (event->type == SceneTracker::EventType::Attached) {
 				++stats.attachedEvents;
 				if (!categoryNodes.empty()) {
-					ZoneScopedN("CS.DCLF.Scene.SubtreesMerge");
+					DCLF_ZONE("CS.DCLF.Scene.SubtreesMerge");
 					const auto mergeStart = std::chrono::steady_clock::now();
 					if (subtreeMode == 0)
 						AddSubtree(event->node.get());
@@ -394,7 +426,7 @@ namespace DCLF::Scene
 
 	void Coordinator::ApplyDetaches(const std::vector<RE::BSGeometry*>& a_detached)
 	{
-		ZoneScopedN("CS.DCLF.Scene.Detaches");
+		DCLF_ZONE("CS.DCLF.Scene.Detaches");
 		auto& a = attachStats;
 		const auto detachStart = std::chrono::steady_clock::now();
 		a.detachedGeometries += a_detached.size();
@@ -414,7 +446,7 @@ namespace DCLF::Scene
 
 	void Coordinator::HoldLeafProperties(const BatchIndex& a_index)
 	{
-		ZoneScopedN("CS.DCLF.Scene.LeafHolds");
+		DCLF_ZONE("CS.DCLF.Scene.LeafHolds");
 		const auto leafStart = std::chrono::steady_clock::now();
 		for (const auto* records : a_index.leaves) {
 			attachStats.leafKeys += records->geometries.size();
@@ -450,11 +482,11 @@ namespace DCLF::Scene
 		const std::uint32_t frame = SceneCapture::Frame();
 		const std::size_t jobs = captures.size() * SceneMirror::kTypes;
 		auto body = [&](std::size_t a_begin, std::size_t a_end) {
-			ZoneScopedN("CS.DCLF.Scene.Mirror.PrepareShards");
+			DCLF_ZONE("CS.DCLF.Scene.Mirror.PrepareShards");
 			for (std::size_t j = a_begin; j < a_end; ++j)
 				SceneMirror::Prepare(*captures[j / SceneMirror::kTypes], static_cast<std::uint32_t>(j % SceneMirror::kTypes), frame, mirrorPreps[j / SceneMirror::kTypes]);
 		};
-		ZoneScopedN("CS.DCLF.Scene.Mirror.Prepare");
+		DCLF_ZONE("CS.DCLF.Scene.Mirror.Prepare");
 		const auto start = std::chrono::steady_clock::now();
 		// The serial modes prepare here too: the parity runs apply what the normal path does (moved, not copied).
 		if (FanoutMode(records, kMirrorFanoutRecords) == 2) {
@@ -502,11 +534,41 @@ namespace DCLF::Scene
 
 		// A mirror update, its record moved into the mirror; the trait and skin inputs it names and its hidden store noted.
 		void ApplyMirrorUpdate(SceneMirror& a_mirror, SceneTracker::Event& a_event, ankerl::unordered_dense::set<const void*>& a_mirrorMotionNodes,
-			ankerl::unordered_dense::set<const void*>& a_mirrorSkinGeometries, std::vector<CoordinatorHidden::BatchHidden>& a_batchHidden)
+			ankerl::unordered_dense::set<const void*>& a_mirrorSkinGeometries, std::vector<CoordinatorHidden::BatchHidden>& a_batchHidden,
+			std::vector<const void*>& a_fadeChanged)
 		{
+			// A fade node's currentFade crossing 1, or its door byte changing: its members' synthetic pass changes hint (BlendFading). The
+			// node is their listed key (ListDependents), so it goes in as a property event.
+			using Node = SceneCapture::NodeRecord;
+			const void* fadeKey = nullptr;
+			bool fadingBefore = false;
+			std::uint8_t doorBefore = 0;
+			if (a_event.update.fields & (Node::kFadeCurrent | Node::kFadeDoor))
+				if (const auto* record = std::get_if<Node>(&a_event.update.record))
+					if (const auto* before = a_mirror.Node(record->key)) {
+						fadeKey = record->key;
+						fadingBefore = before->currentFade < 1.0f;
+						doorBefore = before->fadeDoor;
+					}
 			// The update's record is the mirror's to keep from here (moved; the event's fields, leaf, sequence and site stay).
 			const auto* hidden = a_event.update.hiddenSite != ~0u ? std::get_if<SceneCapture::NodeRecord>(&a_event.update.record) : nullptr;
 			const CoordinatorHidden::BatchHidden hiddenEvent = hidden ? CoordinatorHidden::BatchHidden{ hidden->key, a_event.update.hiddenSite, (hidden->flags & 1u) != 0, a_event.update.sequence } : CoordinatorHidden::BatchHidden{};
+			// A skin's update names no geometry (SceneEvents' PushSkinShown: the dismember partitions' shown flags). Every geometry on
+			// the skin takes it: RaceMenu's overlays share their base's skin instance, so armour equipped over a painted body hides the
+			// paint's partitions too. The others take a copy here; the event's own record goes to the first.
+			if (auto* skinUpdate = std::get_if<SceneCapture::GeometryRecord>(&a_event.update.record); skinUpdate && !skinUpdate->key && skinUpdate->skin) {
+				const auto sharers = a_mirror.GeometriesOfSkin(skinUpdate->skin);
+				for (std::size_t i = 1; i < sharers.size(); ++i) {
+					SceneCapture::Update copy = a_event.update;
+					std::get<SceneCapture::GeometryRecord>(copy.record).key = sharers[i];
+					const auto [sharerType, sharer] = a_mirror.UpdateTaking(copy);
+					Diagnostics::Notify(Diagnostics::MirrorUpdateApplied{ sharerType, sharer, a_event.update.fields });
+					if (sharer)
+						a_mirrorSkinGeometries.insert(sharer);
+				}
+				if (!sharers.empty())
+					skinUpdate->key = sharers.front();
+			}
 			const auto [type, key] = a_mirror.UpdateTaking(a_event.update);
 			Diagnostics::Notify(Diagnostics::MirrorUpdateApplied{ type, key, a_event.update.fields });
 			// A trait's input (a node's controllers or rigid body) or a skin's (its instance, its dismember partitions' shown flags):
@@ -518,19 +580,22 @@ namespace DCLF::Scene
 			// A hidden store, for DrainHiddenEvents (same batch as the mirror's bit).
 			if (hidden)
 				a_batchHidden.push_back(hiddenEvent);
+			if (fadeKey)
+				if (const auto* after = a_mirror.Node(fadeKey); after && ((after->currentFade < 1.0f) != fadingBefore || after->fadeDoor != doorBefore))
+					a_fadeChanged.push_back(fadeKey);
 		}
 	}
 
 	void Coordinator::ApplyMirrorEvents(const EventBatch& a_batch, BatchIndex& a_index)
 	{
-		ZoneScopedN("CS.DCLF.Scene.Mirror");
+		DCLF_ZONE("CS.DCLF.Scene.Mirror");
 		mirror.SetChecking(Policy::CheckMirrorApply());
 		mirror.BeginBatch();
 		std::vector<const SceneCapture::Records*> captures;
 		std::size_t records = 0;
 		PinMirrorBatch(a_batch, captures, records);
 		PrepareMirrorCaptures(captures, records);
-		ZoneNamedN(mirrorApplyZone, "CS.DCLF.Scene.Mirror.Apply", true);
+		DCLF_ZONE_NAMED(mirrorApplyZone, "CS.DCLF.Scene.Mirror.Apply", true);
 		const auto applyStart = std::chrono::steady_clock::now();
 		std::size_t nextPrep = 0;
 		// The apply's time by event kind (AttachStats::mirrorKindMs), taken where the kind changes: runs of one kind cost one clock read.
@@ -577,7 +642,7 @@ namespace DCLF::Scene
 					ComponentsStacked(Api::EngineChannelId{ event->stackedChannel },
 						Api::Stacked{ event->stackedToken, event->stackedPinned, event->stackedNamed, event->stampNs, event->stampFrame });
 				} else {
-					ApplyMirrorUpdate(mirror, *event, mirrorMotionNodes, mirrorSkinGeometries, batchHidden);
+					ApplyMirrorUpdate(mirror, *event, mirrorMotionNodes, mirrorSkinGeometries, batchHidden, propertyChanged);
 				}
 			}
 		};
@@ -597,7 +662,7 @@ namespace DCLF::Scene
 
 	void Coordinator::PinMirrorBatch(const EventBatch& a_batch, std::vector<const SceneCapture::Records*>& a_captures, std::size_t& a_records)
 	{
-		ZoneScopedN("CS.DCLF.Scene.Mirror.Pins");
+		DCLF_ZONE("CS.DCLF.Scene.Mirror.Pins");
 		// One walk for the pins and the captures to prepare; the pins from the events that carry any. The batch's pins by key: the
 		// only source of references while it applies.
 		std::vector<const std::vector<RE::NiPointer<RE::NiRefObject>>*> pinned;

@@ -3,6 +3,7 @@
 // the same list when none did), counted as a payload carries them, installed for the pool at adoption (TextureTransformsPool.cpp).
 
 #include "Features/DrawcallLimitFix/Features/TextureTransforms/TextureTransforms.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PayloadProducts.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
@@ -121,7 +122,7 @@ namespace DCLF::Features::TextureTransforms
 
 		std::shared_ptr<const void> Build(const Api::PayloadProductBuild& a_build)
 		{
-			ZoneScopedN("CS.DCLF.BuildMain.TextureTransforms");
+			DCLF_ZONE("CS.DCLF.BuildMain.TextureTransforms");
 			const auto& rows = a_build.rows;
 			const auto& tables = a_build.tables;
 			const std::size_t slots = std::min({ rows.materials.size(), tables.materials.size(), tables.materialSlotKey.size(), tables.materialVersion.size() });

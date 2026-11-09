@@ -2,6 +2,7 @@
 // recordings requested for them on ORG's host thread, sealed; and the render thread's use of the selected revision (RevisionOf).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Triggers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
@@ -258,7 +259,7 @@ namespace DCLF
 
 	void IndirectDraws::Impl::AssembleRevision(std::uint32_t a_frame)
 	{
-		ZoneScopedN("CS.DCLF.AssembleRevision");
+		DCLF_ZONE("CS.DCLF.AssembleRevision");
 		using R = SceneRevisions;
 		auto& rv = revisions;
 		// A graph build asked of the frame (shadow view slots: ServeRevisionRequests) not made yet: a recording now would be of the graph

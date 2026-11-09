@@ -1,6 +1,7 @@
 // ImportRelocations: DXVK's moves of the pinless imports, taken on the render thread and routed to their importers (see the header).
 
 #include "Features/DrawcallLimitFix/Core/Gpu/ImportRelocations.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include <array>
 #include <vector>
@@ -36,7 +37,7 @@ namespace DCLF::ImportRelocations
 		auto& runtime = RenderGraphRuntime::Get();
 		if (!runtime.PinlessImports())
 			return;
-		ZoneScopedN("CS.DCLF.Imports.PollRelocations");
+		DCLF_ZONE("CS.DCLF.Imports.PollRelocations");
 		std::array<DxvkOrgInteropRelocation, 256> taken{};
 		std::vector<Relocation> images, buffers;
 		for (;;) {

@@ -85,6 +85,7 @@ namespace DCLF::Features::Grass
 		// family became DCLF's, the bindings' generation (GpuTextures), the buckets waiting for a texture.
 		float prevTimeBase = 0.0f;
 		bool countsZeroed = false, owned = false;
+		bool smallStart = false;  // CS_DCLF_TABLE_START=small: the tables start and stay small (no floors in Require)
 		std::uint32_t bindingGeneration = ~0u;
 		std::uint64_t relocationCursor = 0;  // GpuTextures::RelocatedViews
 		std::vector<std::uint32_t> unbound;

@@ -6,6 +6,7 @@
 
 #include "Features/DrawcallLimitFix/Api/MaterialWrites.h"
 
+#include <cstdint>
 #include <vector>
 
 namespace DCLF::Extensions
@@ -26,6 +27,17 @@ namespace DCLF::Extensions
 	 * transform on the CPU in every configuration); the plain one rereads every row each build (ShadowTexcoord) and drains nothing. The
 	 * records do not use this channel (they follow the writes' captures, or the frame VS variable's patch: FrameVSVariablePatched).
 	 * Defined with the hooks (Core/Shading/MaterialWrites.cpp).
+	 *
+	 * Returns true when moves were dropped: the hooks stop queueing while no build has drained for a while (DCLF off, or not
+	 * drawing shadows), and before the first drain. The caller then treats every material it keeps as moved.
 	 */
-	void DrainTransformMoves(std::vector<const RE::BSShaderMaterial*>& a_out);
+	bool DrainTransformMoves(std::vector<const RE::BSShaderMaterial*>& a_out);
+
+	/** @brief The transform moves' counts since startup (any thread): moves the full queue allocated for, and moves dropped while no build drained. */
+	struct TransformMoveCounts
+	{
+		std::uint64_t spilled = 0;
+		std::uint64_t dropped = 0;
+	};
+	TransformMoveCounts TransformMoveStats();
 }

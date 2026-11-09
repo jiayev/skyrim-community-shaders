@@ -73,7 +73,7 @@ public:
 
 		bool vsync = false;
 		// Zero disables the cap; positive values divide the monitor refresh rate.
-		int frameRateLimitDivisor = 1;
+		int frameRateLimitDivisor = 0;
 	};
 
 	Settings settings;
@@ -94,6 +94,11 @@ public:
 	static bool IsWindowMinimized();
 
 	static void NotifyWindowFocus(bool a_focused);        // WM_ACTIVATEAPP / WM_ACTIVATE
+	/**
+	 * @brief Any thread (a test run's dclf:fg command): frame generation set as the menu's method stepper sets it, at the next render
+	 * frame's start. 0: off, 1: FSR-FG, 2: DLSS-G.
+	 */
+	static void RequestFrameGenTest(int a_method);
 	static void NotifyWindowModifying(bool a_modifying);  // WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE
 	static void NotifyDisplayState(bool a_on);            // GUID_CONSOLE_DISPLAY_STATE
 	static void NotifyDesktopChanged();                   // WM_DISPLAYCHANGE
@@ -105,6 +110,7 @@ public:
 	static bool IsWindowUnusable();
 
 	static inline std::atomic<bool> s_windowUnfocused{ false };
+	static inline std::atomic<int> s_frameGenTestRequest{ -1 };  // RequestFrameGenTest's, -1: none
 	static inline std::atomic<bool> s_windowModifying{ false };
 	static inline std::atomic<bool> s_displayOff{ false };
 	static inline std::atomic<std::uint64_t> s_displayChangedTick{ 0 };

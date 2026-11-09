@@ -1,6 +1,7 @@
 // The main epochs' commit (render thread, inside the epoch): stream views, CommitMainPayload (the frame's values
 // into the selected revision's shape) and the depth commit's scene uploads.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Direct.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
@@ -36,7 +37,7 @@ namespace DCLF
 	std::shared_ptr<const StreamViews> Draws::MakeStreamViews(ObjectRecordStore& a_objects, ExtrasStore& a_extras, GeometryStore& a_geometries, const TablesContentEpochs& a_oldest,
 			std::shared_ptr<const SceneTables> a_hold, const SceneTables& a_tables, std::uint32_t a_generation, std::uint32_t a_frame)
 		{
-			ZoneScopedN("CS.DCLF.MakeStreamViews");
+			DCLF_ZONE("CS.DCLF.MakeStreamViews");
 			auto views = std::make_shared<StreamViews>();
 			views->tables = std::move(a_hold);
 			views->generation = a_generation;
@@ -61,7 +62,7 @@ namespace DCLF
 					store(s);
 			} else {
 				SceneScheduler::Executor().ParallelFor("CS.DCLF.MakeStreamViews.Stores", 3, 1, [&](std::size_t a_begin, std::size_t a_end) {
-					ZoneScopedN("CS.DCLF.MakeStreamViews.StoresShards");
+					DCLF_ZONE("CS.DCLF.MakeStreamViews.StoresShards");
 					for (std::size_t s = a_begin; s < a_end; ++s)
 						store(s);
 				});
@@ -539,7 +540,7 @@ namespace DCLF
 		const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats,
 		std::vector<std::shared_ptr<const void>>& a_bindingOwners, const EpochRevision& a_revision)
 	{
-		ZoneScopedN("CS.DCLF.CommitMainPayload");
+		DCLF_ZONE("CS.DCLF.CommitMainPayload");
 		// Cleared geometry slots' buffers, held until this execution retires.
 		for (auto& owner : Scene::FrameView::Get().TakeRetiredImports())
 			a_bindingOwners.push_back(std::move(owner));
@@ -650,7 +651,7 @@ namespace DCLF
 			a_resources->depthCommitted = { frameNumber, cull.inputCount, adopted.Serial() };
 
 		{
-			ZoneScopedN("CS.DCLF.CMP.LatchedFinish");
+			DCLF_ZONE("CS.DCLF.CMP.LatchedFinish");
 			(void)latched.Finish();
 		}
 		TracyCZoneEnd(cLatch);

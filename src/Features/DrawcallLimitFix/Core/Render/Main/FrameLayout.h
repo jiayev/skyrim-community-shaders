@@ -6,6 +6,7 @@
 
 // volk must precede every Vulkan header in this translation unit.
 #include <rhi_interop_vulkan.h>
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/DrawFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
@@ -301,7 +302,7 @@ namespace DCLF::Draws
 		// The frame slot's list, reset and recording.
 		rhi::CommandList& Begin(std::uint32_t a_frameSlot)
 		{
-			ZoneScopedN("CS.DCLF.Record.RecyclePreprocessState");
+			DCLF_ZONE("CS.DCLF.Record.RecyclePreprocessState");
 			auto& slot = slots[a_frameSlot % slots.size()];
 			slot.list->Recycle(slot.allocator.Get());
 			return slot.list.Get();

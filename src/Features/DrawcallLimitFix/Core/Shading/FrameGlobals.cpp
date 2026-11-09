@@ -2,6 +2,7 @@
 // diagnostics: Diagnostics::RootSubtreeSynced) and the scoped reads.
 
 #include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Shading/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
@@ -263,7 +264,7 @@ namespace DCLF
 
 	std::shared_ptr<const FrameGlobals> FrameGlobals::Capture()
 	{
-		ZoneScopedN("CS.DCLF.FrameGlobals.Capture");
+		DCLF_ZONE("CS.DCLF.FrameGlobals.Capture");
 		renderThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 		auto g = std::make_shared<FrameGlobals>();
 		g->loading = Scene::FrameView::IsLoadingScreenUp();

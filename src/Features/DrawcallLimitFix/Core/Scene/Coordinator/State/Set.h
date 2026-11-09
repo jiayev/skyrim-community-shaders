@@ -33,16 +33,14 @@ namespace DCLF::Scene
 		std::uint32_t setCommitFrame = 0;
 		std::uint32_t setCommitToggles = 0;  // the toggles generation the last commit was made under
 		ToggleSet setCommitToggleSet{};      // ... and the set (the frame inputs', which the pass evaluated under)
-		// The claims as applied (a freed slot clears Tables::setPhases): what RevokeUndrawnClaims checks against, with each base slot's
+		// The claims as applied (a freed slot clears Tables::setPhases): what CheckClaimsDrawable checks against, with each base slot's
 		// geometry.
 		std::vector<std::uint8_t> setPhasesApplied;
 		std::vector<const RE::BSGeometry*> setGeometryApplied;
-		LogCursor revokeCursor;
-		std::uint64_t revokedGeometries = 0, revokedMain = 0;
-		// Slots whose structure (kStructureCauses) changed since the selected revision's join: a claim among them is revoked at the join
-		// (its shapes predate the change) until a later revision is selected.
-		std::vector<std::uint32_t> structureChanged;
-		std::uint64_t revokedStructureGeometries = 0;
+		LogCursor claimCheckCursor;
+		// Claims a publication made that its tables do not draw (CheckClaimsDrawable): a defect, never handed back to the engine.
+		std::uint64_t undrawnClaims = 0;
+		std::string undrawnFirst;
 		std::vector<const RE::BSGeometry*> setGeometry;  // per slot: the geometry a base member is published under
 		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> setMemberSlot;  // published geometry -> its slot
 		LogCursor setCursor;
@@ -77,8 +75,6 @@ namespace DCLF::Scene
 		std::vector<ClaimsEntry> claimsPool;
 		std::size_t claimsPublished = ~std::size_t(0);  // publicationClaims' entry
 		bool claimsFresh = false;                       // made by this publication (else shared from the last: held, never written)
-		// The claims this publication's revocation takes back (RevokeUndrawnClaims), applied to its claims alone.
-		std::vector<std::pair<const RE::BSGeometry*, std::uint8_t>> claimsRevoked;
 		bool setSnapshotDirty = true;  // setBuilding changed since the last published claims
 		/** @brief One slot's decision: phases, whether and why it waits, and the observers' notes of a CategoryRoot view's slot (first person's). */
 		struct SlotDecision

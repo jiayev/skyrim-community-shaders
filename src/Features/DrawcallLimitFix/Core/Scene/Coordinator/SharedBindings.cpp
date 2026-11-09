@@ -1,6 +1,7 @@
 // Coordinator::UpdateSharedBindings and its helpers (SharedBindings.h), scene lane.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 namespace DCLF::Scene
 {
@@ -16,7 +17,7 @@ namespace DCLF::Scene
 
 	void Coordinator::UpdateSharedBindings()
 	{
-		ZoneScopedN("CS.DCLF.Scene.SharedBindings");
+		DCLF_ZONE("CS.DCLF.Scene.SharedBindings");
 		auto& sb = sharedBindings;
 		const std::uint32_t answeredKinds = DrainSharedReplies();
 		// The shadow textures answered (an answer for one the index has let go meanwhile is dropped with arrived).

@@ -1,6 +1,9 @@
 // FrameDriver: the render thread's DCLF work at each engine point of the frame (see the header).
 
 #include "Features/DrawcallLimitFix/Core/Render/FrameDriver.h"
+#include "Features/DrawcallLimitFix/Core/Handoff/EngineOnlyCull.h"
+#include "Features/DrawcallLimitFix/Core/Render/StartupHold.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Deferred.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
@@ -10,6 +13,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ClassifyInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
+#include "Features/DrawcallLimitFix/Core/LatePoses/LatePoseOverrides.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PaletteRows.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PrimaryView.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
@@ -22,6 +26,7 @@
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/ImportRelocations.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
@@ -98,7 +103,7 @@ namespace DCLF
 		ScopedPerfEvent event("CS DCLF: scene tables");
 		// The frame number, the frame's globals captured and the frame inputs posted (an engine capture: the budget's scene captures).
 		{
-			ZoneScopedN("CS.DCLF.BF.ViewBeginFrame");
+			DCLF_ZONE("CS.DCLF.BF.ViewBeginFrame");
 			RenderThreadBudget::Part captures(RenderThreadBudget::Bucket::SceneCaptures);
 			view.BeginFrame();
 		}
@@ -128,7 +133,7 @@ namespace DCLF
 			TracyCZoneEnd(bfAdoptSnapshot);
 			view.HandOverAtFrameStart(std::move(adopted));
 			{
-				ZoneScopedN("CS.DCLF.BF.SyncFrameTables");
+				DCLF_ZONE("CS.DCLF.BF.SyncFrameTables");
 				view.SyncFrameTables();
 			}
 		}
@@ -147,7 +152,7 @@ namespace DCLF
 		draws.PostLookupInputs();
 		TracyCZoneEnd(bfViewsStart);
 		{
-			ZoneScopedN("CS.DCLF.BF.Claims");
+			DCLF_ZONE("CS.DCLF.BF.Claims");
 			// The claims are installed on every covered frame. Before the first (NotDrawingYet: tables, resources and the first revision
 			// being made) a frame has none, and the engine draws everything; after it, DCLF never hands drawing back: the frame waited for
 			// a snapshot it can draw from (AdoptCurrentSnapshot), so one it does not cover is a defect, reported with the coverage state
@@ -178,17 +183,17 @@ namespace DCLF
 		FrameValues::Get().SetRootViewClaims(rootViewsCovered ? view.FrameClaims() : nullptr);
 		// What the next builds ahead take from the frame.
 		{
-			ZoneScopedN("CS.DCLF.BF.PostAheadContext");
+			DCLF_ZONE("CS.DCLF.BF.PostAheadContext");
 			draws.PostAheadContext();
 		}
 		// The root states' task (Features/Fades' write-back of the stood-in roots) and the visibility readbacks: tasks on DCLF's executor,
 		// never joined.
 		{
-			ZoneScopedN("CS.DCLF.BF.RootStatesKick");
+			DCLF_ZONE("CS.DCLF.BF.RootStatesKick");
 			Extensions::RootStatesKick();
 		}
 		{
-			ZoneScopedN("CS.DCLF.BF.KickVisibilityReadback");
+			DCLF_ZONE("CS.DCLF.BF.KickVisibilityReadback");
 			draws.KickVisibilityReadback();
 		}
 		TracyCZoneEnd(bfKicks);
@@ -203,25 +208,25 @@ namespace DCLF
 		// The shadow sources' frame start, in source order (Features/Shadows/Local's point-light culls: this frame's paraboloid exclusion).
 		TracyCZoneN(bfFamilies, "CS.DCLF.BF.SourcesAndFamilies", true);
 		{
-			ZoneScopedN("CS.DCLF.BF.ShadowSourcesFrameStart");
+			DCLF_ZONE("CS.DCLF.BF.ShadowSourcesFrameStart");
 			Extensions::ShadowSourcesFrameStart(view.GetFrame());
 		}
 		{
-			ZoneScopedN("CS.DCLF.BF.RefreshMainRenderers");
+			DCLF_ZONE("CS.DCLF.BF.RefreshMainRenderers");
 			PassCapture::Get().RefreshMainRenderers();
 		}
 		// The draw families' for the frame (Features/TreeLod's), before the main camera's cull registers its passes; the views' work after
 		// it (Features/Reflection's: the water reflection's forward pipelines).
 		{
-			ZoneScopedN("CS.DCLF.BF.DecideDrawFamilies");
+			DCLF_ZONE("CS.DCLF.BF.DecideDrawFamilies");
 			draws.DecideDrawFamilies(view.GetFrame());
 		}
 		{
-			ZoneScopedN("CS.DCLF.BF.ViewWorkAfterTreeLod");
+			DCLF_ZONE("CS.DCLF.BF.ViewWorkAfterTreeLod");
 			RunViewWork(Api::ViewPoint::FrameStartAfterTreeLod);
 		}
 		{
-			ZoneScopedN("CS.DCLF.BF.PublishListFilter");
+			DCLF_ZONE("CS.DCLF.BF.PublishListFilter");
 			PrimaryCull::Get().PublishListFilter();
 		}
 		TracyCZoneEnd(bfFamilies);
@@ -231,14 +236,19 @@ namespace DCLF
 		// built and GPU ready before it was posted), named for the frame's epochs (MakeFramePayload).
 		// The capture reads the shading changes the take empties.
 		{
-			ZoneScopedN("CS.DCLF.BF.FrameValuesKick");
+			DCLF_ZONE("CS.DCLF.BF.FrameValuesKick");
 			TracyCZoneN(bfFields, "CS.DCLF.BF.CaptureShadingFields", true);
 			auto fields = Extensions::CaptureShadingFields(view);
 			TracyCZoneEnd(bfFields);
+			// The CPU frames signalled before the last present join its seal: the producers' uploads may wait for those points only.
+			SealCpuFrames();
+			// The late poses' plan (Core/LatePoses): the last frame's hidden nodes, which the frame's producer applies to a second copy of
+			// its rows.
+			FrameValues::Get().SetLatePoses(LatePoses::PrepareFrame());
 			(void)FrameValues::Get().Kick(view.TakePlacementPlans(), view.TakeShadingItems(), std::move(fields), view.FrameGlobalsOfFrame());
 		}
 		{
-			ZoneScopedN("CS.DCLF.BF.MakeFramePayload");
+			DCLF_ZONE("CS.DCLF.BF.MakeFramePayload");
 			(void)draws.MakeFramePayload();
 		}
 		// Under the parities the scene pass runs here, inline, so the render thread's observers keep their placement; the normal path
@@ -254,6 +264,10 @@ namespace DCLF
 		// The Z-prepass and the views' work here (the reflection's faces and first person's depth, which the depth epoch hosts) are submitted
 		// under depth.committed.
 		Extensions::TriggerScope trigger(Draws::CoreTriggerOf(Draws::CoreTrigger::DepthCommitted));
+		// The late poses (Core/LatePoses): parts a plugin hid after the shadow maps. Before the depth epoch is submitted, so the epochs
+		// from here read the late copies the frame's producer filled, when the frame's plan holds now.
+		if (LatePoses::ConfirmFrame())
+			FrameValues::Get().UseLatePoses();
 		// The views' work at the depth commit (Features/Reflection's: the frame's reflection faces, every TESWaterReflections::Update of the
 		// frame having run, two a frame, a face each, drawn by DCLF before the water reads the cube; dclf-architecture.md, "Water
 		// reflections"; then Features/FirstPerson's: the frame's first-person depth, its camera set by Main::Draw before RenderDepth, drawn
@@ -282,8 +296,19 @@ namespace DCLF
 				run(context);
 	}
 
+	void FrameDriver::BeforePresent()
+	{
+		// The CPU pipeline's frame signal behind its sites' callbacks: the present sends it on with the frame's work. EndFrame runs after
+		// the present (State::Reset), where it would ride the next frame's command list.
+		Direct::QueueFrameSignal();
+		FrameValues::Get().WaitSignalSubmitted();
+		LatePoses::CheckAtPresent();
+	}
+
 	void FrameDriver::EndFrame(bool a_running)
 	{
+		// The session's first frames' hold (StartupHold.h): advanced, and released once DCLF covers its views.
+		StartupHold::OnFrameEnd(a_running);
 		// The engine's next update follows Present: no worker may be inside its memory from here (EngineReadWindow).
 		{
 			RenderThreadBudget::Part boundary(RenderThreadBudget::Bucket::EngineBoundary);
@@ -293,7 +318,7 @@ namespace DCLF
 		TracyCZoneN(efCull, "CS.DCLF.EF.PrimaryCull", true);
 		PrimaryCull::Get().EndFrame();
 		TracyCZoneEnd(efCull);
-		// The CPU pipeline's frame signal, behind its sites' callbacks, first: the retirement points bound below cover it.
+		// The CPU pipeline's frame (its signal queued before the present, BeforePresent), first: the retirement points bound below cover it.
 		Direct::EndFrame();
 		TracyCZoneN(efBind, "CS.DCLF.EF.BindAdoptedAndValues", true);
 		// The growable versions and the payload the frame read: kept from reuse until what it submitted retires.
@@ -431,8 +456,12 @@ namespace DCLF
 		return taken;
 	}
 
+	bool FrameDriver::OcclusionHeld(std::uint32_t a_map) const { return a_map < 32 && (occlusionHeld & (1u << a_map)); }
+
 	bool FrameDriver::OcclusionNeedsEngine(std::uint32_t a_map, bool a_running)
 	{
+		if (a_map < 32)
+			occlusionHeld &= ~(1u << a_map);
 		// At the engine's occlusion point: the engine renders the map whole unless this frame's shadow epoch drew it (AfterShadowMaps).
 		const bool needed = !a_running || a_map >= Extensions::kOcclusionMaps || !(occlusionDrawn & (1u << a_map));
 		// The engine's cull of the map reads the scene lists: whole again.
@@ -440,6 +469,18 @@ namespace DCLF
 			PrimaryCull::Get().RestoreSceneLists();
 		if (a_map < Extensions::kOcclusionMaps)
 			occlusionFrames.engine[a_map] += needed ? 1 : 0;
+		// A map DCLF draws in normal play (on, not its parity's reference) that the engine would render whole: a view DCLF does not cover
+		// yet. Held in the session's first frames (StartupHold.h: black, the map not rendered), else counted.
+		if (needed && a_running && a_map < Extensions::kOcclusionMaps && Extensions::OcclusionOn(ActiveToggles(), a_map)) {
+			// Held: the map still renders at the engine's point, its camera set and DCLF's view of it taken (OcclusionView), but without the
+			// engine's cull (the shell skips SetupMask for a held map, OcclusionHeld): no occluder until DCLF takes it, under the blackout.
+			if (StartupHold::Active()) {
+				StartupHold::NoteHeld(StartupHold::View::Occlusion);
+				occlusionHeld |= 1u << a_map;
+				return needed;
+			}
+			EngineOnlyCull::NoteWholeCull(EngineOnlyCull::WholeCull::OcclusionNotTaken);
+		}
 		return needed;
 	}
 

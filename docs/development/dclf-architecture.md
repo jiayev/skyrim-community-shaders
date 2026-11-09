@@ -427,6 +427,35 @@ because `Skin::GetWetness` advances an actor's fade on its first call each frame
 would cost the game threads more than its ~1 us a frame); and the per-frame values FrameValues samples. Measured when the polls
 became events (60 s motion): p99.9 frame 63.4 to 30.0 ms; scene work evaluates 245-303 entries a frame instead of 620-820.
 
+**Plugins' direct writes.** A plugin that stores into scene objects itself is reported through SWF's `NotifyWritten` (`OnWritten`,
+`SWF_EVENT_WRITTEN`; swf.h lists the object each `SWF_FIELD_*` names): materials and per-object values, shader flags, property swaps,
+skins, transforms. RaceMenu (skee64) is the known writer that does not report yet (what it would change:
+external-mod-requirements.md):
+-   **Body morphs** store a deep-copied skin partition, with new vertex buffers, into `NiSkinInstance::skinPartition`, and its overlay
+    relink stores a cloned skin instance into the geometry. FrameValues compares each sampled skin's partition with the mirror's
+    (`PlacementPlan::Item::skinPartition`, `SkinPartitionMoved`) and captures the geometry again: one pointer compare a skin it already
+    reads. Without it DCLF drew the old partition until the actor's 3D was attached again. FrameValues samples only skins that
+    move, so a detour on `NiObject::CreateDeepCopy` (`SkinPartitionWatch`) names each skin partition being copied, and for 5 s
+    after, every kept item holding it is due (`MarkDue`), moving or not: a still actor's morph is seen too. The new partition's buffers are DYNAMIC
+    (skee's `bBodyMorphRebind`), which DXVK cannot import; a partition RaceMenu morphed (its shape carries "SHAPEDATA") draws from a
+    DEFAULT copy of its CPU vertices instead (`MorphedPartitionCopy`, at the capture). RaceMenu writes every morph into a new partition,
+    so a copy keyed by the partition never goes stale; a writer that maps a buffer in place stays native (`UnstableBuffer`).
+-   **Overlays** (body, hand, feet and face paint) copy their base's skin, so they share its partition, vertices and depth. They are
+    blended decals (RaceMenu forces the decal flag), which DCLF's decal group 2 draws after the base. Two things kept them unseen:
+    -   *Shown flags.* A dismember skin's partitions draw only while shown (`SkinPartitions::Mask`), and the flags are the skin
+        instance's, but each geometry record holds a copy. An overlay captured while armour hid the body kept the armour's flags after
+        RaceMenu relinked it to the new body skin, so it drew only the neck. A `kSkin` update now brings the new instance's flags, and
+        a dismember update, which names only the skin, reaches every geometry on it (`SceneMirror::geometriesBySkin`,
+        `ApplyMirrorUpdate`).
+    -   *Material alpha.* RaceMenu stores an overlay's alpha into its material with no setter. The texture load that follows rewrites
+        the material's values, which captures it, but the property record caches the alpha (`PropertyRecord::materialAlpha`) and the
+        shading row samples it only when told. A Lighting material's capture now updates the records of the properties on it
+        (`SceneMirror::propertiesByMaterial`) and samples their shading again (`DrainMaterialCaptures`).
+-   **NiOverride values** (overlay and skin colours, alpha, glow, glossiness) are stores into the material or property with no engine
+    call after them. They are taken when a texture change follows (skee then calls `FUN_1414ad420`, whose
+    `ReceiveValuesFromRootMaterial` is hooked), as a preset load does. A value changed alone, such as a RaceMenu colour slider, stays
+    at its last capture until RaceMenu reports it (`NotifyWritten(property, SWF_FIELD_MATERIAL)`).
+
 ### Movers by event
 
 A static reference never moves in place: a script or console move is `Disable` then `Enable`, a detach and an attach. So what
@@ -627,10 +656,18 @@ phase (`Core/Scene/Model/SceneSet.h`, `Core/Scene/Coordinator/SceneSet.cpp`).
     smaller buffers, as at startup) and a member past it has no build input (`CommitReadinessSources`).
 -   **`ApplySet`** applies the commits inside `PublishScene` into `Tables::setPhases`, the record's `kObjectMember` and the lacking
     counts; a slot freed or reassigned since takes no phase. Records and `setPhases` change only there.
--   **Structural changes.** `kChangeStructure` is noted when what a revision's shapes are made from changes (the record's or draw's
-    pipeline, the geometry half and partitions, the shadow and occlusion techniques). `RevokeUndrawnClaims` takes a slot's claim
-    back whole when it changed structurally since the last publication, or when the work stopped drawing a claimed phase; the next
-    publication claims it again.
+-   **A claim is never taken back.** The commit runs in the pass that publishes, right before the publication, and judges every slot the
+    change log named since the last one (a structural change always carries a cause the commit reads). Nothing writes the tables
+    between them, and the snapshot builder makes the draws, payload and revision from that publication's own tables. So every claim
+    is one its publication draws. `CheckClaimsDrawable` checks this from the change log and reports a claim the records do not draw
+    (`<- UNDRAWN CLAIM`); it hands nothing back to the engine.
+    -   Until 2026-11-06 a revocation (`RevokeUndrawnClaims`, from the async model of October, when claims were installed apart from
+        an older revision) took back any claim whose slot had a structural change since the last publication. That window included
+        the commit's own pass, so every object that joined in the pass that wrote its record was revoked for one publication. A
+        revoked caster was then drawn by nobody in the shadow views the engine no longer culls (the empty light culls, the sun's
+        whole skip), which showed as a one-frame shadow flicker. In the Bannered Mare, Havok clutter (plates, a wine bottle, a book)
+        moves between the cell's nodes as it wakes and sleeps, with DCLF on or off, and every move re-tracks the object. A Whiterun
+        tour revoked 20,194 claims in 30 seconds.
 -   **The claims** (`SetSnapshot`, published to the hooks through `PassCapture::PublishSet` and to DCLF's readers as
     `FrameView::FrameClaims`) are installed with the revision from the same publication, so a frame draws exactly the set its
     claims name.
@@ -726,7 +763,7 @@ hold (`Core/Runtime/KeptState.h`). One implementation each:
     (`Tracked::objectStamp`, `objectId`).
 -   **The change log** (`Tables::changeLog`, a `SharedEventLog<Change>` in `Core/Scene/Model/Tables.h`). Each entry is a slot and its
     `ChangeCause` bits: `kChangeBindings`, `kChangeAncestorValue` (Light Limit Fix's room index), `kChangeSkin`, `kChangeExtras`,
-    `kChangeShadow`, `kChangeGeometry`, `kChangeMembership`, `kChangeStructure`. There is no placement, palette or shading cause:
+    `kChangeShadow`, `kChangeGeometry`, `kChangeMembership`. There is no placement, palette or shading cause:
     those are FrameValues', never a column. `Tables::NoteChange` notes only non-empty causes; writers in full compare columns
     before and after (`ColumnsOf`, `CausesBetween`, `NoteWrite`). `InvalidateChangeLog` makes every reader resync.
 -   **Other logs**: `geometryLog` (geometry slot writes, which `GeometryStore` repacks by), `materialLog` (material version moves),
@@ -887,6 +924,17 @@ scene tables hold none of them.
     claimed first-person rows and palettes (before `Main::Draw` moves the skeleton into its root's space,
     `FrameValues::SetRootViewClaims`), and the shading fields only it may read (Advanced Skin's wetness).
 -   **The ordered-node interleave key** (`BindlessPlacement::forwardSort`) is sampled here too ([Ordered nodes](#ordered-nodes)).
+-   **Late poses** (`Api/LatePoses.h`, `Core/LatePoses/LatePoseOverrides.h`). Improved Camera hides the first-person head (its
+    neck node), arms, bow and quiver after the shadow maps: it sets those nodes' local scale to 0.001, updates the world
+    transforms, and puts the scale back by the next frame's start. At the depth commit the render thread searches the contributed
+    roots for that sign: a node's world scale far below its parent's. At the next frame's start the search becomes a plain-data
+    plan: a scale about each hidden node's world position (its hidden world scale over its world scale then), and the skin bones
+    and rigid geometry under it. The frame's own producer applies it to the
+    rows it sampled and sends a second placement and palette backing, with the plan's rows spliced into the frame's runs (copies
+    of one batch must not overlap). The next build marks those rows changed, so the journal stays true for every backing. At the
+    depth commit, if every planned node is hidden now, `UseLatePoses` points the epochs from there at the second backings; the
+    shadow epoch keeps the first. No second producer, no extra signal and no wait. A hide shows one frame late; a hide that ends
+    does not. It stands in for an API that sets view masks on geometry.
 
 ### Texture transforms and frame variables
 
@@ -940,6 +988,22 @@ snapshot is the only source of them (no rings, no duplicate copies).
     that frame on the GPU (`IUploadService::QueueStreamingWait`, the GPU point `BindFrameLeases` noted for the bound point): no
     thread waits, and the frame's draws already wait for its values (the frame-wait timeline), so fewer copies bound how far the CPU
     runs ahead instead of costing a copy of every row per frame in flight.
+-   **Sealed points.** A producer whose signal later work of the same frame waits for may only wait for work the last present sent
+    on to the device: `SealedGpuPoint()`, the graph host's `SealedPoint` (taken after each present, `RenderGraphRuntime::SealPresented`)
+    and the CPU frames signalled before it. `SubmittedGpuPoint()` taken mid-frame also names the frame's own work, which may sit in
+    DXVK's stream until the present: the CPU pipeline's site signals join DXVK's command list, and the GPU-driven epochs reach the
+    queue at DXVK's next flush. On a copy queue shared with the graph's copies the uploader holds such a wait on the CPU, the frame's
+    signal behind it, and `FrameValues::EndFrame` holds the present for that signal: a deadlock (a late producer that waited for
+    "everything submitted" at the depth commit hung so on both pipelines). On the CPU pipeline even a GPU wait cycles, since the depth
+    site's wait for the signal joins the same submission as the shadow site's work. So the frame's producers lease at `Kick`
+    (the late poses' backings too, `SetLatePoses`), when every bound point is from earlier frames. `ReusedCopyPoint` says once
+    when a wait is not sealed, and a shared-queue wait still pending after 0.5 s names each point against the seal.
+    What a frame puts in DXVK's stream must be queued before the present that sends it on: DCLF's `EndFrame` runs from
+    `State::Reset`, after the present, so the CPU pipeline's frame signal and the frame values' signal wait go in
+    `FrameDriver::BeforePresent` (the Present hook, before the frame pace). Queued after it, the frame signal rode the next frame's
+    command list, and that frame's producer, reusing a copy the frame bound, waited for its own frame's work: the first CPU frames
+    after a switch hung so. The uploader meets its waits on its own thread before it submits (`CopyQueueUploadService`), outside the
+    RHI's submission, whose device timeline lock every timeline query takes.
 -   **Shrinking.** One policy gives memory back for every growable scene buffer (`PooledBackings::Shrink`, `CS_DCLF_SHRINK`;
     ORGModuleServices `ElasticCapacity.h`): a capacity the scene asked at most a quarter of for 5 s (and 2 asks) goes to its growth
     policy's fresh size for that window's peak, so it is at least half used and grows back only past the peak (no thrash). It
@@ -1353,7 +1417,7 @@ culls are below ([The sun's cascades without DCLF's objects](#the-suns-cascades-
 
 ### The main camera's stand-in
 
-`PrimaryCull` (`Core/Handoff/PrimaryCull.{h,cpp}`; toggle "exclude primary entries", `CS_DCLF_PRIMARY_EXCLUDE`) takes DCLF's objects
+`PrimaryCull` (`Core/Handoff/PrimaryCull.{h,cpp}`; always on, no switch or toggle) takes DCLF's objects
 out of the main camera's cull. The engine's list jobs still run, and the render thread still waits at their `JobList::Finish`
 (`CS.DCLF.ListJobsWait`); DCLF stands in inside them.
 -   It hooks the list processes' `Process1` (vtable slot `0x16`, `0x140e28390`), filtered by process, on the job's thread. Entry 0
@@ -1763,7 +1827,24 @@ root's fade (Features/Fades; `Core/Scene/Model/Records.h`, `FadeRootStatic`; `Fa
     material's alpha; the object record names the root (`recordFlags` bits 9-31 = root slot + 1); the frame record binds the states
     at t120 and the static rows at t119. A generation-0 row means no fade. The Z-prepass reads the same row, so it tests the same
     alpha.
--   **Blended fades** (hint 9) are drawn in their opaque group with the faded alpha: DCLF has no blended pass for them.
+-   **Blended fades** (hint 9). While a member's fade node is fading (the mirror's `currentFade` below 1) and the fade is not a
+    screen-door fade of an unblended property, the engine draws its pass in geometry group 7 (`FUN_1414b3390`, right before the
+    blended list): blended with the alpha property's mode, else mode 1; depth tested, never written; no shadow bits, no depth pass.
+    DCLF follows it with the binding. The synthetic pass gives such a member hint 9 (`BlendFading`, `PrimaryCull::SyntheticPass`),
+    and `DeriveForward` makes it a forward key with that state, so the forward epoch draws it while the fade lasts. Each member lists
+    its fade node in `propertyDependents`, and the mirror apply marks the node changed when `currentFade` crosses 1 or its door byte
+    changes, so the members bind again at the start and end of a fade. The binding lags a publication at each end, while the alpha is
+    near 1.
+    -   **Two differences from the engine.** A fading part writes depth when its property has `kZBufferWrite`, and a fading root's parts
+        sort as one group at the fade node's centre, last child first (`StoreForwardSort`). The engine writes no depth there and relies on
+        its group 7 order to hide an actor's back parts. Sorted by each part's own bound with no depth, DCLF's faded NPCs drew their
+        head as a dark mask over the hair and under the mouth (the "black face" seen on NPCs fading in after a cell load), and no
+        fixed order hides both. Checked with `dclf:npc-alpha` at 0.9 and 0.5 against the engine (`dclf:actors=0`) in the Bannered Mare.
+    -   **Not a difference: shadow lights.** A fading pass has no shadow lights (`numShadowLights` 0, measured on the engine's own
+        pass), so Light Limit Fix ignores every shadow-casting light for it, the engine's draw and DCLF's alike. An NPC fading in by
+        a shadowed hearth is lit by ambient and the unshadowed lights alone, in both.
+-   **The alpha test's reference** takes the fade, as the engine's does (`FUN_14150bae0`: `int(threshold * property alpha) / 255`):
+    the pixel row scales it by the faded alpha (`DCLFPixelObjectRowOf`), so a fading cut-out keeps its shape.
 
 ### DCLF as the single fade writer
 
@@ -1787,7 +1868,8 @@ milestones are written back onto them (`Features/Fades/FadeRecords.h`, `FadeScen
 -   For each root DCLF writes, FadeStateCS appends a `FadeEvent` to `cs.dclf.fade-events` when its milestone changes from the one in
     `cs.dclf.fade-reported`. The event carries root, generation, flags, `currentFade`, `levels` (`+0x152 | +0x153 << 8`) and `blend`
     (`+0x14C`). A milestone is faded out, fading or faded in, combined with the leaf LOD level (`+0x152 & 0xF`) and transition
-    (`+0x153 & 0x70`), so a level step and its settling are events; blend steps are not.
+    (`+0x153 & 0x70`), so a level step and its settling are events; blend steps are not. A root that is not stood in has parts the
+    engine draws, which read the node's fade, so while it fades each of 32 fade steps is a milestone too.
 -   The `fades.events` copy pass takes the list to the host on the `HostEventRing` scheme (one host buffer per frame slot, harvest
     then arm, staging sets kept, growth by `wanted`); the depth commit writes the list header whether or not anything is appended
     (`FadeCommit.cpp`).
@@ -2319,9 +2401,8 @@ the incoming blocks for the frames before DCLF claims them, and the engine draws
 -   **The scene side.** The mirror marks each incoming root gated (`SceneMirror::SetGated`), and `HiddenForWalk` ignores a gated node's
     own hidden bit, so the incoming are classified, bound and joined while hidden. An incoming geometry carries `kVetoObserve` (its
     phases recorded, none applied); the outgoing get `kVetoHold` after the flip. A gate flips when no incoming geometry is pending,
-    none is unmirrored, and it has an incoming root. The flip (`GateFlip`) is a component delta on the publication log. A ready gate
-    whose incoming records were written since the last publication waits one commit (structurally changed slots are unclaimed in that
-    publication).
+    none is unmirrored, and it has an incoming root. The flip (`GateFlip`) is a component delta on the publication log, and its
+    publication claims every incoming geometry the commit found ready.
 -   **Adoption.** The frame start hands the installed publications' flips to the component (`Extensions::ComponentsAdopt`), which calls
     `LodGates::Flip` (incoming shown, outgoing hidden) in the frame whose claims are post-swap; outcomes (`LodGates::DrainOutcomes`)
     retire gates, and the next LOD drain releases the outgoing through the engine's own functions. A reattached held block posts a
@@ -2449,10 +2530,10 @@ passes (render modes `0x10`/`0x11`, `GetRenderPasses_ShadowMapOrMask`) are not w
 
 #### The sun's cascades without DCLF's objects
 
--   **No sun registration for members** (`Features/Shadows/Sun/SunAccumulation.{h,cpp}`; `CS_DCLF_SUN_SKIP`). It hooks `Accumulate`
+-   **No sun registration for members** (`Features/Shadows/Sun/SunAccumulation.{h,cpp}`; always on). It hooks `Accumulate`
     (vtable slot 9) and `FUN_140e28af0`'s two calls of the registration. For a member, the registration runs only its early-outs and
     its mask write (`WriteMaskOnly`), and no pass is built only to be withheld.
--   **The entry exclusion** (`CS_DCLF_SUN_EXCLUDE`, needs the skip). Entries all of whose geometries DCLF draws, or whose geometries
+-   **The entry exclusion** (always on). Entries all of whose geometries DCLF draws, or whose geometries
     build no shadow pass anyway, are sun candidates (`Coordinator::UpdateSunCandidates`, `SunEntryAllows`; judged again only for
     entries a change touched). The exclusion is built with the shadow payload (`BuildSunExclusion`; `ExclusionBuild`,
     `Features/Shadows/Local/`; the contribution's types in `SunExclusion.h`, which Core's payload holds opaquely) and linked forward
@@ -2469,6 +2550,42 @@ passes (render modes `0x10`/`0x11`, `GetRenderPasses_ShadowMapOrMask`) are not w
     frame is not a parity frame, the full-frustum cull runs over empty scene lists (each process keeping one empty node of DCLF's so
     its cascade culls set their planes up), and `Accumulate` keeps its bookkeeping but culls and registers nothing. A caster not yet a
     member casts no sun shadow until it joins; it is never handed to the engine's cull.
+-   **The engine-only subset: no view culls the whole scene for what DCLF cannot draw** (`Core/Scene/EngineCasters.h`,
+    `Core/Handoff/EngineOnlyCull.{h,cpp}`). A tracked geometry that never joins but casts a shadow the engine would draw
+    (`Eligibility::EngineCasterReason`: a skin the skinned path refuses, a buffer DXVK cannot import, and the other settled refusals;
+    not fading, hidden, non-Lighting, blended or an unselected switch child) is kept by the coordinator as it is classified and
+    untracked (`NoteEngineCaster`). Each publication carries the subset (`PublishEngineCasters`): per caster its light entry (an
+    actor's root) or sun entry while the coordinator owns it, else the geometry itself (tracked, so retired through the same chain),
+    and the keys of every node above those roots (the mirror's chain). Every root lives while the publication does.
+    -   **Sun:** the whole skip hands the full-frustum cull the roots as its extra list instead of an empty one; the engine culls and
+        registers their casters, and the members under them are withheld at their cascade registrations as always.
+    -   **Point and spot lights:** a covered light (`CullEmpty`'s `LightCull::Subset`) runs the engine's own `Accumulate` under an
+        `EngineOnlyCull::Scope`. The scope arms the subset on `BSCullingProcess` and `BSParabolicCullingProcess`'s `Process1`: an
+        object that is neither a root nor an ancestor of one is skipped, so the engine walks down to the roots alone with its portal,
+        room and bound tests on the path; its bits for everything else are DCLF's, as for an empty cull.
+    -   Measured with every actor's skins left to the engine (`dclf:skin partitions=0`, Dev-Fast). Sun at 26 roots: full-frustum cull
+        plus `Accumulate` 0.17 ms a frame, against 0.35-0.43 ms for the whole cull and 0.01 ms for the empty one. Dragonsreach's two
+        point and two spot lights: the subset culls cost about what the whole culls did (point 42-47 against 45-54 ms per 600 calls,
+        spot 37-45 against 36-46; empty: under 1), because nearly all of it is the engine registering the casters it must draw.
+    -   No switch or toggle turns the main camera's exclusion, the sun's skip and exclusion or the portal-strict lights' culls off.
+    -   **Water reflections and occlusion maps** take the same subset. The colour view holds engine-only shapes under an object class's
+        category root (the LOD land root); a reflection that skips an LOD root adds back the colour roots under it. An occlusion map
+        DCLF draws runs the engine's `Precipitation::SetupMask` under the subset (`EngineOnlyCull::RunInline`: the list culls inline,
+        `Process1` limited), so engine-only occluders stay in the sky and precipitation maps.
+    -   **Views DCLF does not cover** are reported, not handed to the engine silently: every remaining whole engine cull is counted by
+        reason (`EngineOnlyCull::NoteWholeCull`; warned once each, and a `<- WHOLE ENGINE CULL` line in the primary cull's report). A light
+        whose views DCLF has not made yet casts no shadow until they exist, and point lights cull empty on frames without a current
+        exclusion (a cell change), so neither falls back.
+    -   **The startup hold** (`Core/Render/StartupHold.{h,cpp}`). After the session's first load, DCLF's sun cascades and occlusion maps
+        are not covered for a few dozen frames (its views come from frames that draw the world). The hold keeps the sun's whole skip
+        and renders those maps without the engine's cull (`OcclusionHeld`), while the CS overlay draws the screen black
+        (`DrawcallLimitFix::StartupBlackout`); it ends after two covered frames (measured: 27 frames) or at 600. Left: the main
+        camera's one frame before DCLF's first snapshot, which the engine draws whole.
+    -   Test runs: `CS_DCLF_TEST_REFUSE=<name>,...` refuses geometry by node name as an unstable buffer, so any class can be engine-only.
+    -   Without the subset such a caster had no shadow at all: on test2, a RaceMenu-morphed body or BodySlide outfit (a dynamic vertex
+        buffer, before `MorphedPartitionCopy`) drew natively in the main view and cast nothing. The first few are logged (`shadow
+        caster '...' stays the engine's`); the sun's whole-skip line counts the frames that culled the roots, and the point lights'
+        lines count the subset lights and the armed culls' roots, ancestors and skipped objects.
 -   **The GPU applies the same entry rule** to DCLF's inputs (`kCullSunEntry`, `OutsideSunEntry`): a sun input carries its entry
     sphere (`SetSunEntryRow`), and a sun view drops an input whose sphere lies outside every full-frustum process. Spot lights share
     mode 0xE's inputs, so only the sun's views apply it.
@@ -2506,9 +2623,9 @@ the layout grows (`ReserveMainLatch`). A frame where the sun did not accumulate 
     portals), so portal-strict lights take it too. It is an immutable snapshot built at the selection, holding its node; a node with
     an attach or detach is walked natively until the next build.
 -   **Empty culls:** a light is not culled at all when the exclusion is live, the frame is not a parity frame, the light is within the
-    mask's 32, and every view of it is covered with its casters in the set. A portal-strict light takes them too: its casters,
+    mask's 32, every view of it is covered with its casters in the set, and no tracked caster is the engine's alone; with one, its own `Accumulate` culls the engine-only subset alone (above). A portal-strict light takes them too: its casters,
     DCLF's receivers and the engine's receivers' bits pass its strict gates (`dclf-portal-query-batches.md`, "Strict point-light
-    gates"; `CS_DCLF_STRICT_LIGHT_CULLS=0` keeps it native). The bookkeeping is done as `BSShadowParabolicLight::Accumulate` does it
+    gates"). The bookkeeping is done as `BSShadowParabolicLight::Accumulate` does it
     (the light index `+0x160`, the bit `+0x164`, the count).
 -   **Spot lights' empty culls** (`SpotAccumulate`, on `BSShadowFrustumLight::Accumulate`, vtable slot 9, AE `0x14151aa60`). The
     engine's sets descriptor 0's light index and bit, then `FUN_1414f0920` culls the scene's whole object root through descriptor 0's
@@ -2842,7 +2959,7 @@ stand-ins and the engine boundary are the GPU path's: the same objects are DCLF'
     DCLF's retirement clock counts those signals with the host's submissions (`Core/Runtime/FrameRetirement.h`).
 
 **The modes and cadences.**
--   `dclf:cpu-record=indirect` (the default): each cull job writes its batch's draws into its frame slot's draw buffer
+-   `dclf:cpu-record=indirect` (the default off NVIDIA; NVIDIA defaults to `serial`, whose pushed colour saves 0.21 ms of GPU time on an RTX 5080): each cull job writes its batch's draws into its frame slot's draw buffer
     (`Direct/Recorder.h`, `IndirectDraw`), and the CS thread records one indirect draw per run of a pipeline. An indirect draw cannot
     push per draw, so a draw's instance names its record, which holds its sequence's index and its object word
     (`kDirectFlagDrawRecords`, `DCLFDrawSequence`). Colour therefore always uses the pulled pipelines; `kExpPushedColour` and

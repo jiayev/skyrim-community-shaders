@@ -2,6 +2,7 @@
 // movers (SceneWriter.h), each pushing the mirror's update and the scene pass's event on the writer's thread (SceneEvents.h).
 
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SkinPartitionWatch.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/EngineEvents.h"
@@ -9,7 +10,6 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Core/Shading/MaterialWrites.h"
-#include "Features/DrawcallLimitFix/Diagnostics/FadeProbe.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
 
@@ -39,8 +39,6 @@ namespace DCLF::Scene
 			}
 			const float before = FloatOf(a_scratch[0]);
 			const auto door = static_cast<std::uint8_t>(a_scratch[1]);
-			if (SceneWriter::CallOf(a_event).hook == SWF_HOOK_FADE_UPDATE)
-				Diagnostics::FadeProbe::NoteFade(before, CurrentFade(fade), fade->GetRuntimeData().unk154);  // TEMP
 			if (CurrentFade(fade) != before || fade->GetRuntimeData().unk154 != door)
 				PushNodeUpdate(fade, SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeDoor);
 		}
@@ -457,6 +455,55 @@ namespace DCLF::Scene
 			}
 		}
 
+		// A shader property's reported write: its material captured and its record taken again (the events its hooked writers push).
+		void PushPropertyWritten(RE::BSShaderProperty* a_property, SWF_Fields a_fields)
+		{
+			if (!a_property)
+				return;
+			if ((a_fields & SWF_FIELD_MATERIAL) && a_property->material) {
+				MaterialWrites::NoteWritten(a_property->material);
+				MaterialWrites::NoteShading(a_property);
+			}
+			PushProperty(a_property);
+			PushPropertyUpdate(a_property, (1u << SceneCapture::PropertyRecord::kFieldCount) - 1);
+		}
+
+		// SWF_EVENT_WRITTEN: a plugin's report of its own direct store (SWF_Api::NotifyWritten; swf.h lists the object each field
+		// names). RaceMenu's NiOverride values (overlay colour, alpha, glow, textures) and body morphs are such stores.
+		void OnWritten(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
+		{
+			const auto& written = *reinterpret_cast<const SWF_WrittenEvent*>(a_event);
+			const SWF_Fields fields = written.fields;
+			// A material is no NiObject: told by its vtable, never by a virtual call.
+			const void* vtable = *static_cast<const void* const*>(written.object);
+			if (Extensions::MaterialClassOf(vtable) || Extensions::PortOfVtable(vtable)) {
+				if (fields & SWF_FIELD_MATERIAL)
+					MaterialWrites::NoteWritten(static_cast<const RE::BSShaderMaterial*>(written.object));
+				return;
+			}
+			auto* object = static_cast<RE::NiObject*>(written.object);
+			if (fields & (SWF_FIELD_MATERIAL | SWF_FIELD_SHADER_FLAGS))
+				if (auto* property = netimmerse_cast<RE::BSShaderProperty*>(object)) {
+					PushPropertyWritten(property, fields);
+					return;
+				}
+			auto* node = netimmerse_cast<RE::NiAVObject*>(object);
+			if (!node)
+				return;
+			auto* geometry = node->AsGeometry();
+			if (geometry && (fields & (SWF_FIELD_MATERIAL | SWF_FIELD_SHADER_FLAGS)))
+				PushPropertyWritten(geometry->GetGeometryRuntimeData().shaderProperty.get(), fields);
+			if (geometry && (fields & SWF_FIELD_PROPERTIES))
+				PushLeafUpdate(*geometry);
+			if (geometry && (fields & SWF_FIELD_SKIN))
+				PushGeometryUpdate(geometry, SceneCapture::GeometryRecord::kSkin | SceneCapture::GeometryRecord::kRenderer |
+												 SceneCapture::GeometryRecord::kDismember);
+			if (fields & SWF_FIELD_TRANSFORM) {
+				PushNode(node);
+				FrameValueMoves::PushNode(node);
+			}
+		}
+
 		// NiSwitchNode's own child edits (its vtable's implementations of NiNode slots 0x35, 0x37-0x3C).
 		void OnSwitchStructural(const SWF_EventHeader* a_event, std::uintptr_t*, void*)
 		{
@@ -592,9 +639,14 @@ namespace DCLF::Scene
 		// has none, and every writer then stores itself.
 		if (const auto* api = SceneWriter::Api(); api && api->abiMinor >= 2 && !SceneWriter::Subscribe(SWF_EVENT_SCENE_WRITE, &OnSceneWrite))
 			stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused its scene write events at ABI minor 2");
+		// A plugin's reports of the stores it makes itself (NotifyWritten): every ABI has them.
+		if (!SceneWriter::Subscribe(SWF_EVENT_WRITTEN, &OnWritten))
+			stl::report_and_fail("Drawcall Limit Fix: the scene writer framework refused its written events");
 		logger::info("[DCLF] scene events subscribed to SceneWriterFramework ({} engine calls: fades, property flags, materials and material alpha, LOD fades, emittance, Havok node transforms, controllers)",
 			std::size(kCalls));
 		InstallMoveEvents();
+		// RaceMenu's skin partition swaps, which no writer reports: their copies (SkinPartitionWatch.h).
+		SkinPartitionWatch::Install();
 		// Actor::SetAlpha and the actors' reserved move writers are Features/Actors' (its early hooks, after the reflection's).
 		// The hidden stores are Features/HiddenNodes' (its early hooks, right after these). Object LOD's segment writers are Features/Lod's
 		// engine channel's source (its early hooks, before tree LOD's and the hidden nodes').

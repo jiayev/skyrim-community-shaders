@@ -453,11 +453,13 @@ bool FrustumInView(float3 a_centre, float a_radius, uint a_rootBits)
 // The fade write-back (dclf-architecture.md, "The fade write-back"): the engine reads a stood-in root's node (the
 // tree LOD's crossfade, the occlusion maps' cull, the animation gate, the next listing), which only this pass updates. Its
 // milestones: 0 faded out, 1 fading, 2 faded in; with them the leaf LOD's level (+0x152 & 0xF) and transition
-// (+0x153 & 0x70), so a level step or its settling is written too, not every blend step.
-uint FadeMilestone(FadeNodeState a_state)
+// (+0x153 & 0x70), so a level step or its settling is written too, not every blend step. A root that is not stood in has parts the
+// engine draws, which read the node's fade: while it fades, each of 32 fade steps is a milestone too (bits 9-13).
+uint FadeMilestone(FadeNodeState a_state, uint a_rootBits)
 {
 	const uint fade = a_state.CurrentFade <= 0.0 ? 0u : (a_state.CurrentFade >= 1.0 ? 2u : 1u);
-	return fade | ((a_state.Levels & 0xFu) << 2) | (((a_state.Levels >> 12) & 0x7u) << 6);
+	const uint step = fade == 1u && (a_rootBits & kFadeRootStoodIn) == 0u ? min(uint(a_state.CurrentFade * 32.0), 31u) : 0u;
+	return fade | ((a_state.Levels & 0xFu) << 2) | (((a_state.Levels >> 12) & 0x7u) << 6) | (step << 9);
 }
 
 // A root DCLF writes (kFadeRootWritten) whose milestone is not the one last reported appends an event, and counts it reported once
@@ -471,8 +473,8 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 	uint2 last = reported[a_index];
 	// A new listing seeds the state from the node (FadeState::ReadNode): the node holds that milestone.
 	if (last.x != a_root.Generation)
-		last = uint2(a_root.Generation, FadeMilestone(a_root.Initial));
-	const uint milestone = FadeMilestone(a_state);
+		last = uint2(a_root.Generation, FadeMilestone(a_root.Initial, a_root.Bits));
+	const uint milestone = FadeMilestone(a_state, a_root.Bits);
 	if ((a_root.Bits & kFadeRootWritten) == 0 || last.y == milestone) {
 		reported[a_index] = uint2(a_root.Generation, milestone);
 		return;

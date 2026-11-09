@@ -124,9 +124,9 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 	// What the GPU spent on each segment, measured by the graph itself; the menu shows the latest window.
 	if (due)
 		RenderGraphRuntime::Get().ReportGpuTimings(Interval(), DCLF::Diagnostics::Observe().stats);
-	if (due && !DCLF::Diagnostics::Observe().stats)
+	if (due && !FullStatistics())
 		timing = {};
-	if (DCLF::Diagnostics::Observe().stats && due) {
+	if (FullStatistics() && due) {
 		// The scene's statistics (the walk's, the set's, the tables', the materials', the scene report's) are the coordinator's, logged
 		// from its pass as its frame crosses the interval (Coordinator::ReportCoordinator); the lines here read the frame's own state.
 		const double frames = std::max(1u, timing.frames);

@@ -1,6 +1,7 @@
 // Skylighting: its probe array (t50) and shadow visibility (t53), frame textures. The render thread's callbacks read the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/Skylighting/Skylighting.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 
 #include "State.h"
 
@@ -44,6 +45,6 @@ namespace DCLF::Integrations::Skylighting
 
 	Api::Feature Integration()
 	{
-		return { "skylighting", &Install };
+		return { .name = "skylighting", .install = &Install, .status = [] { return FeatureStatus(globals::features::skylighting); } };
 	}
 }

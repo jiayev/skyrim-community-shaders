@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Features/Faces/FaceSnapshots.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 #include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include <ORGModuleServices/Async/LeasedArraySlots.h>
@@ -167,7 +168,7 @@ namespace DCLF::Features::Faces
 		{
 			a_out.clear();
 			std::uint32_t offset = 0;
-			for (const auto& child : a_head.GetChildren()) {
+			for (const auto& child : Engine::Children(a_head)) {
 				auto* geometry = child ? child->AsGeometry() : nullptr;
 				if (!geometry || geometry->GetType().get() != RE::BSGeometry::Type::kDynamicTriShape)
 					continue;

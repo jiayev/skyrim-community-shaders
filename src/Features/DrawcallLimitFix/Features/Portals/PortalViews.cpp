@@ -3,6 +3,7 @@
 // (skyrim-engine-notes.md, "Portals, rooms and occluders").
 
 #include "Features/DrawcallLimitFix/Features/Portals/PortalViews.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowCameras.h"
@@ -1017,7 +1018,7 @@ namespace DCLF
 	void PortalViews::Build()
 	{
 		// FUN_1401a43c0: every room holding the camera's near-plane centre walked from (only the first as the first), else unbound space.
-		ZoneScopedN("CS.DCLF.PortalViews");
+		DCLF_ZONE("CS.DCLF.PortalViews");
 		frame.valid = false;
 		frame.sceneFrame = Scene::FrameView::Get().GetFrame();
 		// Whatever this frame builds (nothing: no programs), the words FadeStateCS, BuildDraws and the checks read, and the VisibleSet.
@@ -1425,7 +1426,7 @@ namespace DCLF
 
 	void PortalViews::PublishVisible()
 	{
-		ZoneScopedN("CS.DCLF.PortalViews.VisibleSet");
+		DCLF_ZONE("CS.DCLF.PortalViews.VisibleSet");
 		// No walk this frame (no graph or camera): no graph, so every key answers true.
 		const void* graph = frame.valid ? frame.graph : nullptr;
 		if (graph) {

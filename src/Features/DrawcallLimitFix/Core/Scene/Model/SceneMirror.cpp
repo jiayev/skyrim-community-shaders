@@ -2,6 +2,7 @@
 // and hook updates. Scene-work thread (the coordinator's event application).
 
 #include "Features/DrawcallLimitFix/Core/Scene/Model/SceneMirror.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include <Tracy/Tracy.hpp>
 #include <algorithm>
@@ -32,6 +33,9 @@ namespace DCLF
 			if (!it->second.uses)
 				a_map.erase(it);
 		};
+		for (const void* key : { a_property, a_layer })
+			if (const auto it = key ? properties.find(key) : properties.end(); it != properties.end() && static_cast<int>(it->second.uses) + a_delta == 0)
+				IndexMaterial(key, it->second.record.material, nullptr);
 		adjust(properties, a_property);
 		adjust(properties, a_layer);
 		adjust(alphas, a_alpha);
@@ -103,7 +107,7 @@ namespace DCLF
 			return;
 		}
 		++work.replaysWalked;
-		ZoneScopedN("CS.DCLF.Scene.Mirror.Replay");
+		DCLF_ZONE("CS.DCLF.Scene.Mirror.Replay");
 		// The updates numbered after this capture's start: their writes may be newer than what it read.
 		replaying = true;
 		for (const auto& n : a_records.nodes)
@@ -142,7 +146,7 @@ namespace DCLF
 
 	void SceneMirror::ApplyCapture(const Records& a_records, Prepared* a_prepared)
 	{
-		ZoneScopedN("CS.DCLF.Scene.Mirror.Capture");
+		DCLF_ZONE("CS.DCLF.Scene.Mirror.Capture");
 		++applied;
 		// A record a newer capture took stays (two loader threads capture subtrees naming one shared property or ancestor; the
 		// older capture can be pushed last). A prepared record is stamped already, and moved in.
@@ -168,8 +172,12 @@ namespace DCLF
 		if (a_prepared && checking)
 			CheckPrepared(a_records, *a_prepared, work.preparedChecked, work.preparedWrong);
 		// Properties and alphas first (their values), then the geometries that count their uses.
-		for (std::size_t i = 0; i < a_records.properties.size(); ++i)
-			take(properties[a_records.properties[i].key].record, a_records.properties[i], a_prepared ? &a_prepared->properties[i] : nullptr);
+		for (std::size_t i = 0; i < a_records.properties.size(); ++i) {
+			auto& record = properties[a_records.properties[i].key].record;
+			const void* before = record.key ? record.material : nullptr;
+			take(record, a_records.properties[i], a_prepared ? &a_prepared->properties[i] : nullptr);
+			IndexMaterial(a_records.properties[i].key, before, record.material);
+		}
 		for (std::size_t i = 0; i < a_records.alphas.size(); ++i)
 			take(alphas[a_records.alphas[i].key].record, a_records.alphas[i], a_prepared ? &a_prepared->alphas[i] : nullptr);
 		for (std::size_t i = 0; i < a_records.geometries.size(); ++i) {
@@ -188,7 +196,7 @@ namespace DCLF
 			if (!inserted) {
 				Use(it->second.property, it->second.layerProperty, it->second.alpha, -1);
 				if (it->second.skin && it->second.skin != g.skin)
-					geometryBySkin.erase(it->second.skin);
+					UnlinkSkin(it->second.skin, g.key);
 			}
 			if (a_prepared)
 				it->second = std::move(a_prepared->geometries[i]);
@@ -196,14 +204,16 @@ namespace DCLF
 				it->second = g;
 			it->second.sequence = a_records.sequence;
 			if (g.skin)
-				geometryBySkin[g.skin] = g.key;
+				LinkSkin(g.skin, g.key);
 		}
 		// A property or alpha the capture took that no geometry counts (none can be: each comes with its geometry) is not kept. Only
 		// this capture's keys can be uncounted (every other record is a geometry's, and Use drops one at its last use): by key, not a
 		// walk over the maps (UnusedRecords' parity).
 		for (const auto& p : a_records.properties)
-			if (const auto it = properties.find(p.key); it != properties.end() && !it->second.uses)
+			if (const auto it = properties.find(p.key); it != properties.end() && !it->second.uses) {
+				IndexMaterial(p.key, it->second.record.material, nullptr);
 				properties.erase(it);
+			}
 		for (const auto& a : a_records.alphas)
 			if (const auto it = alphas.find(a.key); it != alphas.end() && !it->second.uses)
 				alphas.erase(it);
@@ -229,7 +239,7 @@ namespace DCLF
 			if (const auto it = geometries.find(geometry); it != geometries.end()) {
 				Use(it->second.property, it->second.layerProperty, it->second.alpha, -1);
 				if (it->second.skin)
-					geometryBySkin.erase(it->second.skin);
+					UnlinkSkin(it->second.skin, geometry);
 				geometries.erase(it);
 			}
 			nodes.erase(geometry);
@@ -424,11 +434,25 @@ namespace DCLF
 					assign(nodes, [](auto& a_value) -> NodeRecord& { return a_value; });
 				} else if constexpr (std::is_same_v<T, GeometryRecord>) {
 					if (!key)
-						if (const auto it = geometryBySkin.find(a_record.skin); it != geometryBySkin.end())
-							key = it->second;
+						if (const auto it = geometriesBySkin.find(a_record.skin); it != geometriesBySkin.end() && !it->second.empty())
+							key = it->second.front();
+					// A skin's update moves its instance's lookup (RaceMenu stores a cloned instance straight into an overlay: FrameValues'
+					// SkinPartitionMoved captures it).
+					const auto before = geometries.find(key);
+					const void* skinBefore = before != geometries.end() ? before->second.skin : nullptr;
 					assign(geometries, [](auto& a_value) -> GeometryRecord& { return a_value; });
+					if (const auto after = geometries.find(key); after != geometries.end() && !a_update.leaf && after->second.skin != skinBefore) {
+						if (skinBefore)
+							UnlinkSkin(skinBefore, key);
+						if (after->second.skin)
+							LinkSkin(after->second.skin, key);
+					}
 				} else if constexpr (std::is_same_v<T, PropertyRecord>) {
+					const auto before = properties.find(key);
+					const void* materialBefore = before != properties.end() ? before->second.record.material : nullptr;
 					assign(properties, [](auto& a_value) -> PropertyRecord& { return a_value.record; });
+					if (const auto after = properties.find(key); after != properties.end())
+						IndexMaterial(key, materialBefore, after->second.record.material);
 				} else {
 					assign(alphas, [](auto& a_value) -> AlphaRecord& { return a_value.record; });
 				}
@@ -447,6 +471,29 @@ namespace DCLF
 		return { type, key };
 	}
 
+	void SceneMirror::LinkSkin(const void* a_skin, const void* a_key)
+	{
+		auto& keys = geometriesBySkin[a_skin];
+		if (std::ranges::find(keys, a_key) == keys.end())
+			keys.push_back(a_key);
+	}
+
+	void SceneMirror::UnlinkSkin(const void* a_skin, const void* a_key)
+	{
+		const auto it = geometriesBySkin.find(a_skin);
+		if (it == geometriesBySkin.end())
+			return;
+		std::erase(it->second, a_key);
+		if (it->second.empty())
+			geometriesBySkin.erase(it);
+	}
+
+	std::vector<const void*> SceneMirror::GeometriesOfSkin(const void* a_skin) const
+	{
+		const auto it = geometriesBySkin.find(a_skin);
+		return it != geometriesBySkin.end() ? it->second : std::vector<const void*>{};
+	}
+
 	void SceneMirror::Clear()
 	{
 		++writes;
@@ -456,8 +503,9 @@ namespace DCLF
 		recentBase = 0;
 		recentNewest = 0;
 		geometries.clear();
-		geometryBySkin.clear();
+		geometriesBySkin.clear();
 		properties.clear();
+		propertiesByMaterial.clear();
 		alphas.clear();
 		Diagnostics::Notify(Diagnostics::MirrorCleared{});
 	}
@@ -478,6 +526,29 @@ namespace DCLF
 	{
 		const auto it = properties.find(a_key);
 		return it != properties.end() ? &it->second.record : nullptr;
+	}
+
+	std::vector<const void*> SceneMirror::PropertiesOfMaterial(const void* a_material) const
+	{
+		const auto it = propertiesByMaterial.find(a_material);
+		return it != propertiesByMaterial.end() ? it->second : std::vector<const void*>{};
+	}
+
+	void SceneMirror::IndexMaterial(const void* a_property, const void* a_before, const void* a_after)
+	{
+		if (a_before == a_after)
+			return;
+		if (a_before)
+			if (const auto it = propertiesByMaterial.find(a_before); it != propertiesByMaterial.end()) {
+				std::erase(it->second, a_property);
+				if (it->second.empty())
+					propertiesByMaterial.erase(it);
+			}
+		if (a_after) {
+			auto& keys = propertiesByMaterial[a_after];
+			if (std::ranges::find(keys, a_property) == keys.end())
+				keys.push_back(a_property);
+		}
 	}
 
 	const AlphaRecord* SceneMirror::Alpha(const void* a_key) const

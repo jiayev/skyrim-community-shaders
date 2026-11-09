@@ -43,6 +43,23 @@ namespace DCLF
 	 */
 	org::GraphHost::GpuPoint SubmittedGpuPoint();
 
+	/**
+	 * @brief Render thread, at the frame's start (before FrameValues::Kick): the CPU frames signalled so far, all before the last
+	 * present, join the host's seal (GraphHost::SealedPoint, taken after that present) in SealedGpuPoint.
+	 */
+	void SealCpuFrames();
+
+	/**
+	 * @brief Any thread: the GPU points of the work the last present sent on to the device (the host's sealed point, and the CPU-frame
+	 * timeline at the frame start's value). A producer whose signal later work of the frame waits for (FrameValues') may wait only for
+	 * these: work submitted since may reach the device only at the frame's present, which waits for that signal (EndFrame).
+	 * SubmittedGpuPoint is for binds, not for those waits.
+	 */
+	org::GraphHost::GpuPoint SealedGpuPoint();
+
+	/** @brief Any thread: every point of a_point is reached or covered by SealedGpuPoint. */
+	bool Sealed(const org::GraphHost::GpuPoint& a_point);
+
 	/** @brief The graph host's retired callback (any thread): every host submission up to a_submissions is complete. */
 	void NoteGraphSubmissionsRetired(std::uint64_t a_submissions);
 

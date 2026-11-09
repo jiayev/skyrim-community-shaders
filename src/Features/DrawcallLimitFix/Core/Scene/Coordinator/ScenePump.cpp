@@ -4,6 +4,8 @@
 // take, and the frame's own pass).
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Capture/Capture.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
@@ -198,7 +200,7 @@ namespace DCLF::Scene
 
 	void Coordinator::ScenePass(bool a_inline)
 	{
-		ZoneScopedN("CS.DCLF.ScenePass");
+		DCLF_ZONE("CS.DCLF.ScenePass");
 		if (throwNextPass.exchange(false, std::memory_order_acq_rel)) [[unlikely]]
 			throw 0;  // not a std::exception: past the pass's handler, into the pump's (SerializedTaskPump::RunOwned), which stops it
 		// A wake from here on is the next pass's: the sources taken before anything is (WakeScenePassBits' fence pairs with this one).
@@ -229,6 +231,9 @@ namespace DCLF::Scene
 			// set its publication is committed under), never the frame's or the live ones; its pool chunks bind the same (ShardScope).
 			ToggleSnapshotScope toggles(&passSnapshot.toggles);
 			RunSceneWork(!a_inline);
+			RunActorProbeIfAsked();
+			// The diagnostic capture's scene sections (the fade census, the growth census), on this lane, which owns their state.
+			DCLF::Capture::RunSceneLaneWork();
 		} catch (const std::exception& e) {
 			// Never out of the drain (the pump would close for good): the pass's flags put back, the next wake runs another.
 			if (pumpStats.failed++ < 4)
@@ -270,11 +275,11 @@ namespace DCLF::Scene
 		TracyPlot("CS.DCLF.ScenePassMs", ms);
 		{
 			// The pass of sceneFrame's inputs is done, its publication (if any) posted: the snapshot builder may publish for the frame now.
-			ZoneScopedN("CS.DCLF.Scene.NoteScenePassDone");
+			DCLF_ZONE("CS.DCLF.Scene.NoteScenePassDone");
 			IndirectDraws::Get().NoteScenePassDone(sceneFrame);
 		}
 		// The coordinator's report lines, when its frame crossed into a new window.
-		ZoneNamedN(passReportsZone, "CS.DCLF.Scene.PassReports", true);
+		DCLF_ZONE_NAMED(passReportsZone, "CS.DCLF.Scene.PassReports", true);
 		Reports::ScenePassEnd(*this, sceneFrame);
 		ReportMoverGate();
 		ReportPublicationPacing();
@@ -294,12 +299,12 @@ namespace DCLF::Scene
 			const auto reason = [&](PublishReason a_why) { return p.byReason[static_cast<std::size_t>(a_why)]; };
 			logger::info("[DCLF] publication pacing (W3: a publication only once the snapshot builder took the last, or for the frame's pass): {} full passes over {} frames "
 						 "({:.2f} a frame, max {}), {} publications ({:.2f} a frame, max {}; {} the frame's pass, {} the last taken, {} inline, {} the first), {} passes deferred "
-						 "({} folded into a later publication); claims {} replayed ({:.1f} keys each), {} copied whole, {} shared again, {} revoked; tables' whole-copied rest "
+						 "({} folded into a later publication); claims {} replayed ({:.1f} keys each), {} copied whole, {} shared again; tables' whole-copied rest "
 						 "{:.3f} ms a publication; paced parity {} checks, {} tables differ, {} claims differ{}{}",
 				p.passes, p.frames, static_cast<double>(p.passes) / frames, p.maxPasses, p.published, static_cast<double>(p.published) / frames, p.maxPublished,
 				reason(PublishReason::Frame), reason(PublishReason::Taken), reason(PublishReason::Inline), reason(PublishReason::First), p.deferred, p.folded,
 				p.claimsReplayed, static_cast<double>(p.claimsKeys) / static_cast<double>((std::max)(p.claimsReplayed, std::uint64_t(1))), p.claimsWhole,
-				p.claimsShared, p.claimsRevoked, p.restMs / publications, p.parityChecks, p.parityTables, p.parityClaims,
+				p.claimsShared, p.restMs / publications, p.parityChecks, p.parityTables, p.parityClaims,
 				!p.parityChecks ? "" : (p.parityTables || p.parityClaims) ? " <- PACED PUBLICATION DIFFERS; first: " : " <- OK", p.parityFirst);
 			// The key's words in CurrentPublishKey's order.
 			static constexpr std::array<const char*, std::tuple_size_v<decltype(PublishKey::words)> + 2> kKeyNames{ "tables generation", "change log",

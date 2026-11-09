@@ -1,4 +1,6 @@
 #include "LightLimitFix.h"
+
+#include <bitset>
 #include "CSEditor/EditorWindow.h"
 #include "DrawcallLimitFix.h"
 #include "Effects11.h"
@@ -779,18 +781,20 @@ void LightLimitFix::UpdateLights()
 
 	nextRoomNodes.clear();
 
-	auto addRoom = [&](RE::NiNode* node, LightData& light) {
-		uint8_t roomIndex = 0;
-		if (auto it = nextRoomNodes.find(node); it == nextRoomNodes.cend()) {
-			roomIndex = static_cast<uint8_t>(nextRoomNodes.size());
-			nextRoomNodes.insert_or_assign(node, roomIndex);
-		} else {
-			roomIndex = it->second;
-		}
-		light.roomFlags.SetBit(roomIndex, 1);
+	// The rooms each kept light reaches, by its index in lightsData. Their bits are set once every room has its number (below).
+	static eastl::vector<std::pair<uint32_t, RE::NiNode*>> lightRooms;
+	static eastl::vector<RE::NiNode*> currentLightRooms;
+	lightRooms.clear();
+
+	auto addRoom = [&](RE::NiNode* node) {
+		if (!node)
+			return;
+		nextRoomNodes.insert(eastl::make_pair(node, kNoRoomNumber));
+		currentLightRooms.push_back(node);
 	};
 
 	auto addLight = [&](const RE::NiPointer<RE::BSLight>& e) {
+		currentLightRooms.clear();
 		if (auto bsLight = e.get()) {
 			if (auto niLight = bsLight->light.get()) {
 				if (IsValidLight(bsLight)) {
@@ -812,11 +816,11 @@ void LightLimitFix::UpdateLights()
 					if (!IsGlobalLight(bsLight)) {
 						// List of BSMultiBoundRooms affected by a light
 						for (const auto& roomPtr : bsLight->rooms) {
-							addRoom(roomPtr, light);
+							addRoom(roomPtr);
 						}
 						// List of BSPortals affected by a light
 						for (const auto& portalPtr : bsLight->portals) {
-							addRoom(portalPtr->portalSharedNode.get(), light);
+							addRoom(portalPtr->portalSharedNode.get());
 						}
 						light.lightFlags.set(LightFlags::PortalStrict);
 					}
@@ -844,6 +848,8 @@ void LightLimitFix::UpdateLights()
 					SetLightPosition(light, niLight->world.translate);
 
 					if ((light.color.x + light.color.y + light.color.z) * light.fade > 1e-4 && light.radius > 1e-4) {
+						for (auto* room : currentLightRooms)
+							lightRooms.push_back({ static_cast<uint32_t>(lightsData.size()), room });
 						lightsData.push_back(light);
 					}
 				}
@@ -857,8 +863,38 @@ void LightLimitFix::UpdateLights()
 	for (auto& e : shadowSceneNode->GetRuntimeData().activeShadowLights) {
 		addLight(e);
 	}
-	// The numeric room IDs are transient, but their mapping often stands across thousands of frames.
-	// Only an actual mapping change invalidates DCLF's identity-to-index bindings.
+	// A room keeps its number while any light reaches it. DCLF's objects carry the number from its copy of this map, which reaches
+	// their draws a few frames late: a renumbered room would gate them as another room until then. A newly reached room takes the
+	// lowest free number. The shader's room flags hold 128 rooms: a room past them has no number, and its objects are not gated (-1).
+	{
+		std::bitset<kRoomNumbers> taken;
+		for (auto& [node, number] : nextRoomNodes)
+			if (const auto kept = roomNodes.find(node); kept != roomNodes.end() && kept->second < kRoomNumbers) {
+				number = kept->second;
+				taken.set(number);
+			}
+		std::size_t free = 0;
+		for (auto& [node, number] : nextRoomNodes) {
+			if (number != kNoRoomNumber)
+				continue;
+			while (free < kRoomNumbers && taken.test(free))
+				++free;
+			if (free == kRoomNumbers)
+				break;
+			number = static_cast<uint8_t>(free);
+			taken.set(free);
+		}
+		for (auto it = nextRoomNodes.begin(); it != nextRoomNodes.end();) {
+			if (it->second == kNoRoomNumber)
+				it = nextRoomNodes.erase(it);
+			else
+				++it;
+		}
+		for (const auto& [light, room] : lightRooms)
+			if (const auto it = nextRoomNodes.find(room); it != nextRoomNodes.end())
+				lightsData[light].roomFlags.SetBit(it->second, 1);
+	}
+	// The mapping often stands across thousands of frames. Only an actual mapping change invalidates DCLF's identity-to-index bindings.
 	bool roomMapChanged = nextRoomNodes.size() != roomNodes.size();
 	if (!roomMapChanged)
 		for (const auto& [node, index] : nextRoomNodes)

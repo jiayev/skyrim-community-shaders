@@ -4,6 +4,7 @@
 // Keep the decisions the shader's: a change to one is a change to both.
 
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Cull.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Render/Direct/CullSimd.h"
 #include "Features/DrawcallLimitFix/Core/Render/Readback/Readbacks.h"
@@ -12,6 +13,7 @@
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Core/Shading/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Diagnostics/ShadowMaskProbe.h"
 
 #include <Tracy/Tracy.hpp>
 
@@ -334,14 +336,25 @@ namespace DCLF::Direct
 		{
 			std::uint32_t mask = 0;
 			const float radius = a_bound[3] + a_view.planeMargin;
+			// The actor probe's verdicts (Diagnostics::ShadowMaskProbe), per volume: 0 taken, else the test that dropped it.
+			std::uint8_t rejects[64];
+			const bool probe = Diagnostics::ShadowMaskProbe::Armed() && a_view.shadowVolumeCount <= 64;
 			for (std::uint32_t v = 0; v < a_view.shadowVolumeCount; ++v) {
 				const auto& volume = a_view.shadowVolumes[v];
-				if ((mask & volume.maskBit) || (a_landscape && !volume.affectsLand))
+				if (probe)
+					rejects[v] = 0;
+				if ((mask & volume.maskBit) || (a_landscape && !volume.affectsLand)) {
+					if (probe)
+						rejects[v] = (mask & volume.maskBit) ? 5 : 4;
 					continue;
+				}
 				const float dx = a_bound[0] - volume.sphere[0], dy = a_bound[1] - volume.sphere[1], dz = a_bound[2] - volume.sphere[2];
 				const float reach = volume.sphere[3] + radius;
-				if (dx * dx + dy * dy + dz * dz > reach * reach)
+				if (dx * dx + dy * dy + dz * dz > reach * reach) {
+					if (probe)
+						rejects[v] = 1;
 					continue;
+				}
 				bool inside = true;
 				for (std::uint32_t p = 0; p < 12 && inside; ++p) {
 					if (!((p < 6 ? volume.masks[0] : volume.masks[1]) & (1u << (p % 6))))
@@ -349,12 +362,19 @@ namespace DCLF::Direct
 					const float* plane = volume.planes[p];
 					inside = plane[0] * a_bound[0] + plane[1] * a_bound[1] + plane[2] * a_bound[2] - plane[3] >= -radius;
 				}
+				if (probe && !inside)
+					rejects[v] = 2;
 				if (inside && volume.portalContext && a_view.strict && a_view.strict->rejects &&
-					a_view.strict->rejects(*a_view.strict, volume.portalContext - 1, a_object, a_bound, radius))
+					a_view.strict->rejects(*a_view.strict, volume.portalContext - 1, a_object, a_bound, radius)) {
 					inside = false;
+					if (probe)
+						rejects[v] = 3;
+				}
 				if (inside)
 					mask |= volume.maskBit;
 			}
+			if (probe)
+				Diagnostics::ShadowMaskProbe::Note(a_object, a_bound, a_view.planeMargin, mask, a_view.shadowVolumes, a_view.shadowVolumeCount, rejects);
 			return mask;
 		}
 
@@ -986,7 +1006,7 @@ namespace DCLF::Direct
 			}
 		}
 		std::uint32_t kept = 0;
-		ZoneScopedN("CS.DCLF.Cpu.CullLanes");
+		DCLF_ZONE("CS.DCLF.Cpu.CullLanes");
 		const auto laneLap = [&](CullProfile::Section a_section) {
 			if (laneLaps)
 				lap(a_section);
@@ -1154,7 +1174,7 @@ namespace DCLF::Direct
 
 		void DiffVisibility(const CullFrame& a_frame)
 		{
-			ZoneScopedN("CS.DCLF.Cpu.DiffVisibility");
+			DCLF_ZONE("CS.DCLF.Cpu.DiffVisibility");
 			auto& diff = visibilityDiff;
 			if (bool idle = false; !diff.running.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
 				if (a_frame.visibilityReset)

@@ -34,6 +34,10 @@ namespace DCLF
 
 namespace DCLF::Features::Fades
 {
+	struct FadeWriteBack;
+	/** @brief Any thread: a write-back going away is no longer the census's (FadeWriteBack.cpp). */
+	void ForgetWriteBackCensus(const FadeWriteBack* a_writeBack);
+
 	/**
 	 * @brief The fade write-back's host side (dclf-architecture.md, "The fade write-back"): its events handed to the write-back task
 	 * in batches through a lock-free stack. A frame whose epoch did not run is counted missed: FadeStateCS did not run either, so
@@ -89,14 +93,18 @@ namespace DCLF::Features::Fades
 		std::atomic<std::uint64_t> applied{ 0 }, stale{ 0 }, busy{ 0 }, storeNs{ 0 }, notWritten{ 0 }, dropped{ 0 };
 		// Since the last report: frames harvested (and those with events), events.
 		std::atomic<std::uint64_t> harvested{ 0 }, harvestedWithEvents{ 0 }, events{ 0 };
+		// For the diagnostic capture: batches pushed and not yet taken by a task, and the stores waiting for Main::Update's entry.
+		std::atomic<std::uint64_t> pendingBatches{ 0 }, readyStores{ 0 };
 
 		void Push(Batch* a_batch)
 		{
+			pendingBatches.fetch_add(1, std::memory_order_relaxed);
 			a_batch->next = batches.load(std::memory_order_relaxed);
 			while (!batches.compare_exchange_weak(a_batch->next, a_batch, std::memory_order_release, std::memory_order_relaxed)) {}
 		}
 		~FadeWriteBack()
 		{
+			ForgetWriteBackCensus(this);
 			delete ready.exchange(nullptr);
 			for (Batch* b = batches.exchange(nullptr); b;) {
 				Batch* following = b->next;
@@ -157,6 +165,31 @@ namespace DCLF::Features::Fades
 		Draws::Versioned fadeEvents, fadeReported;
 		std::shared_ptr<FadeWriteBack> fadeWriteBack;
 	};
+
+	/** @brief The live write-back's state for the diagnostic capture. The counters are those since the last report; nothing is reset. */
+	struct WriteBackCensus
+	{
+		bool present = false;  // false: no write-back was kicked yet, or its scene went away
+		std::uint64_t applied = 0, stale = 0, busy = 0, notWritten = 0, dropped = 0, harvested = 0, harvestedWithEvents = 0, events = 0;
+		std::uint64_t overflowed = 0, missed = 0, setsAdded = 0;
+		std::uint64_t pendingBatches = 0, readyStores = 0;
+		std::size_t appliedFrameSize = 0;
+		// Per root slot: the scene frame of the last event the task judged into a store (0: none). Filled only when asked.
+		std::vector<std::uint32_t> appliedFrame;
+	};
+	/**
+	 * @brief Any thread: the write-back the last kick ran, read under the census lock (the write-back task holds it while it judges, so
+	 * its per-root frames are copied whole). a_frames false skips the per-root copy. FadeWriteBack.cpp.
+	 */
+	WriteBackCensus PeekWriteBackCensus(bool a_frames);
+
+	/** @brief The seed copies waiting for a kick (render thread's) and those a refused lease left (the producer's), as last stored. */
+	struct SeedCounts
+	{
+		std::size_t unsent = 0, owed = 0;
+	};
+	/** @brief Any thread: SeedCounts. FadeSeeds.cpp. */
+	SeedCounts PeekSeedCounts();
 
 	/** @brief Fades' scene resources in a_scene (null: none made). FadeResources.cpp. */
 	FadeScene* SceneOf(const Draws::SceneBuffers& a_scene);

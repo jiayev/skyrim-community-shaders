@@ -1,6 +1,7 @@
 // The shading fields' entries, the published entry classes, and the frame start's calls into the fields (see the header).
 
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
@@ -92,7 +93,7 @@ namespace DCLF::Extensions
 		for (const auto& item : a_view.ShadingChanges())
 			changedObjects.push_back(item.slot);
 		for (const auto& entry : State().fields) {
-			ZoneScopedN("CS.DCLF.ShadingField");
+			DCLF_ZONE("CS.DCLF.ShadingField");
 			ZoneText(entry.name.data(), entry.name.size());
 			Api::ShadingFieldCapture capture{ entry.contribution.field, geometry, values, changedObjects };
 			// A slot that left the field's class first: its value zero (a member's own value follows: a slot that left and joined again

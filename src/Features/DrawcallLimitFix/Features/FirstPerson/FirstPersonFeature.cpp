@@ -71,7 +71,7 @@ namespace DCLF::Features::FirstPerson
 			// the actors (the player's skeleton).
 			const auto firstPerson = a_context.RegisterToggle({ .name = "first person", .label = "Draw the first-person arms and weapons",
 				.tooltip = "T7e: DCLF draws the first-person skeleton's geometry (arms, weapons, shield, magic hands) as a view of its scene, with the first-person camera, in the engine's depth and first-person passes. Off by default: the engine draws the skeleton's few draws for less than DCLF's two epochs cost (hand-back sweep: 0.15 ms a frame).",
-				.section = "First person", .seed = firstPersonSwitch, .entersClassification = true, .offByDefault = true, .after = "exclude primary entries", .needs = { "skinned", "actors" } });
+				.section = "First person", .seed = firstPersonSwitch, .entersClassification = true, .offByDefault = true, .after = "shadows", .needs = { "skinned", "actors" } });
 			// The view (Core's view machinery: its epochs, revisions, frame requests, classification and set decisions read it as data), and
 			// with CS_DCLF_FIRST_PERSON_DECALS (read once, here) a decal on a first-person entry as a forward object of its forward part.
 			a_context.RegisterView(Contribution(firstPerson, SwitchValue(decalsSwitch) != "0"));

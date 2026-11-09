@@ -1,6 +1,7 @@
 // ShaderPrograms: the stage cache, the compile requests and the pipeline lane's entries (see the header).
 
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/PulledSource.h"
 
 #include <algorithm>
@@ -493,7 +494,7 @@ namespace DCLF
 		{
 			a_vertexAttributes = 0;
 			org::services::ShaderCompileRequest request{};
-			ZoneScopedN("CS.DCLF.Shaders.RequestStage");
+			DCLF_ZONE("CS.DCLF.Shaders.RequestStage");
 			request.sourceName = a_sourceName;
 			request.source = a_source;
 			request.entryPoint = L"main";
@@ -845,7 +846,7 @@ namespace DCLF
 				return;
 			}
 		}
-		ZoneScopedN("CS.DCLF.Shaders.Precompile");
+		DCLF_ZONE("CS.DCLF.Shaders.Precompile");
 
 		const bool lighting = type == RE::BSShader::Type::Lighting;
 		const bool probe = lighting && (a_descriptor & static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::EnvironmentProbe));

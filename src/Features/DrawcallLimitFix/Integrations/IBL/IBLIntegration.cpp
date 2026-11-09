@@ -2,6 +2,7 @@
 // read the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/IBL/IBL.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 
 #include "State.h"
 
@@ -46,6 +47,6 @@ namespace DCLF::Integrations::IBL
 
 	Api::Feature Integration()
 	{
-		return { "image based lighting", &Install };
+		return { .name = "image based lighting", .install = &Install, .status = [] { return FeatureStatus(globals::features::ibl); } };
 	}
 }

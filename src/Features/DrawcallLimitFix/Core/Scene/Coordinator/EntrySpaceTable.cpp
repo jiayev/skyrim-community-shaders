@@ -1,6 +1,7 @@
 // EntrySpaceTable's reset and snapshot publication (coordinator thread). The readers of its published log are Core/Scene/EntrySpace's.
 
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/EntrySpaceTable.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
@@ -110,7 +111,7 @@ namespace DCLF::Scene
 		 */
 		void CatchUpSpare(EntrySpace& a_spare, const EntrySpace& a_source, Scene::EntrySpaceTable::Pooled::State& a_state)
 		{
-			ZoneScopedN("CS.DCLF.Scene.SunCandidates.Spare");
+			DCLF_ZONE("CS.DCLF.Scene.SunCandidates.Spare");
 			const auto& s = a_spare;
 			const std::uint32_t span = std::max(s.Capacity(), a_source.Capacity());
 			auto differs = [&](std::uint32_t e) {
@@ -171,7 +172,7 @@ namespace DCLF::Scene
 	std::shared_ptr<const EntrySpace> EntrySpaceTable::Publish(std::uint32_t& a_generation, std::uint64_t a_publication,
 		const std::function<RE::NiPointer<RE::NiAVObject>(const RE::NiAVObject*)>& a_ownedRoot)
 	{
-		ZoneScopedN("CS.DCLF.Scene.SunCandidates.Snapshot");
+		DCLF_ZONE("CS.DCLF.Scene.SunCandidates.Snapshot");
 		// A pooled snapshot no reader holds (the pool's own reference only), the one with the least of the log to read: the spare,
 		// brought up to the last publication (finished here if the pool has not yet), else a new one.
 		std::size_t at = pool.size();

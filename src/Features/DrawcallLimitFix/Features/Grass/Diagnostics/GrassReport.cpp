@@ -24,8 +24,10 @@ namespace DCLF::Features::Grass
 		void LogMissed(const GrassMissed& a_missed)
 		{
 			if (missedCommits++ < 8)
-				logger::warn("[DCLF] grass: frame {} withheld the engine's passes but the depth commit could not draw (tables {} of {} instance slots, {} of {} bucket slots)",
-					a_missed.frame, a_missed.instanceSlots, a_missed.bufferInstances, a_missed.bucketSlots, a_missed.bufferBuckets);
+				logger::warn("[DCLF] grass: frame {} withheld the engine's passes but the depth commit could not draw (tables {} of {} instance slots, {} of {} bucket "
+							 "slots, {} of {} shape slots, {} of {} mesh slots)",
+					a_missed.frame, a_missed.instanceSlots, a_missed.bufferInstances, a_missed.bucketSlots, a_missed.bufferBuckets, a_missed.shapeSlots,
+					a_missed.bufferShapes, a_missed.meshSlots, a_missed.bufferMeshes);
 		}
 
 		/** @brief The cull's line (newline-terminated): per frame, the cull's verdicts and the draws each array executed. */

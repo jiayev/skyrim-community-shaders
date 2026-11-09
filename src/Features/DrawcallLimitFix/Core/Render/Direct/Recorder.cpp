@@ -402,10 +402,11 @@ namespace DCLF::Direct
 		list.SetDescriptorHeaps(bindings.resourceHeap, bindings.samplerHeap);
 		list.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
 		// A colour list binds the main layout at its first bucket with a colour pipeline (BindBucket).
-		// Probe buckets write radiance, distance and normals. The main colour pipeline cannot replace their capture shader.
+		// Probes need their radiance, distance and normal capture shaders; reflections use different attachment formats.
 		a_context.pushedColour = !a_context.indirect && a_context.view != ViewType::EnvironmentProbe && bindings.main && bindings.main->layout.valid() &&
-		                         ((a_context.pass == RecordPass::Colour && ExperimentOn(kExpPushedColour) && !bindings.main->colour.empty()) ||
-									 (a_context.pass == RecordPass::Depth && ExperimentOn(kExpPushedDepth) && !bindings.offsetDepth && !bindings.main->depth.empty()));
+		                         ((a_context.pass == RecordPass::Colour && a_context.view != ViewType::Reflection && ExperimentOn(kExpPushedColour) &&
+		                              !bindings.main->colour.empty()) ||
+		                          (a_context.pass == RecordPass::Depth && ExperimentOn(kExpPushedDepth) && !bindings.offsetDepth && !bindings.main->depth.empty()));
 		BindListLayout(a_context, false);
 		a_context.runWordsPushed = false;
 		if (a_context.indirect) {

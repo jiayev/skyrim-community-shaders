@@ -226,6 +226,7 @@ namespace DCLF::Engine
 		inline constexpr Offset kAnimatedObjectsWaitCall{ { 39100, 0x52 }, { 38143, 0x52 } };  // the job's wait for its group (after the group's start)
 		inline constexpr Offset kAnimatedObjectsWait{ { 69353 }, { 67992 } };     // what it calls: the job group's wait
 		inline constexpr Offset kUpdateSkinInstance{ { 77461 }, { 75655 } };      // FUN_140e4ff90(skin, world): a skin instance's palette update
+		inline constexpr Offset kFrameCounter{ { 411489 }, { 525008 } };          // std::uint32_t gFrameCounter: Renderer::End (0x140e4482b) increments it
 		inline constexpr Offset kParabolaRadius{ { 391879 }, { 513818 } };          // float: the paraboloid shadow map's radius (ParabolaParam.x's inverse)
 		inline constexpr Offset kParabolaSide{ { 391880 }, { 513819 } };            // float: ParabolaParam.y
 		inline constexpr Offset kDepthBiasEnabled{ { 390939 }, { 513197 } };        // byte: ToggleDepthBias (read by FUN_1414b3bb0)

@@ -3,6 +3,7 @@
 // (PostLookupInputs).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
@@ -107,7 +108,7 @@ namespace DCLF::Draws
 		 */
 		void ResolveChangedPipelineLookups(const SceneTables& a_tables, const PipelineCatalog* a_catalog, Lookups& a_lookups, LookupsResolveState& a_state)
 		{
-			ZoneScopedN("CS.DCLF.Scene.PipelineLookups");
+			DCLF_ZONE("CS.DCLF.Scene.PipelineLookups");
 			BeginPipelineLookups(a_tables, a_catalog, a_lookups);
 			const std::uint64_t revision = a_catalog ? a_catalog->revision : 0;
 			const std::uint32_t generation = a_catalog ? a_catalog->generation : ~0u;
@@ -137,7 +138,7 @@ namespace DCLF::Draws
 	void ResolvePipelineLookups(const SceneTables& a_tables, const PipelineCatalog* a_catalog, Lookups& a_lookups)
 	{
 		// Every slot (the witnessed resolution's reference: its parity).
-		ZoneScopedN("CS.DCLF.Scene.PipelineLookupsFull");
+		DCLF_ZONE("CS.DCLF.Scene.PipelineLookupsFull");
 		BeginPipelineLookups(a_tables, a_catalog, a_lookups);
 		for (std::size_t p = 0; p < a_tables.pipelines.size(); ++p)
 			ResolvePipelineSlot(a_tables, a_catalog, a_lookups, p);
@@ -146,7 +147,7 @@ namespace DCLF::Draws
 	void ResolveShadowLookups(const SceneTables& a_tables, const PipelineCatalog* a_catalog, const ShadowLookupInputs& a_inputs, LookupsResolveState& a_state,
 		Lookups& a_lookups)
 	{
-		ZoneScopedN("CS.DCLF.Scene.ShadowLookups");
+		DCLF_ZONE("CS.DCLF.Scene.ShadowLookups");
 		// The shadow pipelines are the pipeline lane's: asked of it here, each key once, and resolved from the catalog the
 		// lookups are published with alone (its shadow entries, whose set version GetShadowIndirectState binds), so the indices and the set
 		// agree. Nothing below reads the engine or a render-thread service.

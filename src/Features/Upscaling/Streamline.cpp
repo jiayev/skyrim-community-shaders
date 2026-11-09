@@ -471,12 +471,20 @@ bool Streamline::Initialize()
 	// a 16 GB card). They do make the interposer enable VK_NV_low_latency on DXVK's device, which Nsight Graphics refuses to capture,
 	// so CS_STREAMLINE_REFLEX=0 leaves them out for a capture.
 	const bool reflexRequested = Util::SwitchFile::Value("CS_STREAMLINE_REFLEX") != "0";
-	std::vector<sl::Feature> featuresToLoad = { sl::kFeatureDLSS, sl::kFeatureDLSS_RR, sl::kFeatureFSR, sl::kFeatureFSR_G, sl::kFeatureXeSS };
+	// CS_STREAMLINE_DLSS=0 leaves DLSS, DLSS-RR and DLSS-G out. On a machine with an NVIDIA GPU, DLSS-G's plugin adds VK_NV_optical_flow to
+	// the device even when DXVK runs on another vendor's GPU (DXVK_FILTER_DEVICE_NAME), and that device then fails to create.
+	const bool dlssRequested = Util::SwitchFile::Value("CS_STREAMLINE_DLSS") != "0";
+	std::vector<sl::Feature> featuresToLoad = { sl::kFeatureFSR, sl::kFeatureFSR_G, sl::kFeatureXeSS };
+	if (dlssRequested) {
+		featuresToLoad.push_back(sl::kFeatureDLSS);
+		featuresToLoad.push_back(sl::kFeatureDLSS_RR);
+	} else
+		logger::info("[Streamline] CS_STREAMLINE_DLSS=0: DLSS, DLSS-RR and DLSS-G are not loaded");
 	if (reflexRequested) {
 		featuresToLoad.push_back(sl::kFeatureReflex);
 		featuresToLoad.push_back(sl::kFeaturePCL);
 	}
-	if (dlssgHardware && reflexRequested)
+	if (dlssgHardware && reflexRequested && dlssRequested)
 		featuresToLoad.push_back(sl::kFeatureDLSS_G);
 	if (reflexRequested)
 		logger::info("[Streamline] Reflex, PCL and DLSS-G loaded (CS_STREAMLINE_REFLEX=0 leaves them out)");

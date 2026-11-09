@@ -22,7 +22,7 @@ namespace DCLF::Features::Effects
 				.after = "CS_DCLF_FORWARD" });
 			const auto opaque = a_context.RegisterSwitch({ .name = "CS_DCLF_OPAQUE_EFFECTS", .kind = Api::SwitchKind::Feature, .reduced = Api::SwitchReduced::Zero,
 				.description = "default on (T7f item 7): opaque BSEffectShaderProperty meshes (hint 0: no blending alpha property, no Falloff, depth tested and written; forge coals, slag) drawn by DCLF in the G-buffer with the DEFERRED effect variant, through the opaque decal group's fixed slots and its decal depth pass without the bias (needs CS_DCLF_EFFECTS and CS_DCLF_DECALS); 0 they stay the engine's (effect-opaque)",
-				.after = "CS_DCLF_PRIMARY_EXCLUDE" });
+				.after = "CS_DCLF_SHADOWS" });
 			// Static blended BSEffectShaderProperty meshes, drawn by the forward epoch in the same GPU sort (needs forward; on by default:
 			// CS_DCLF_EFFECTS=0 seeds it off): an object class. Right after the forward epoch's, where Core's was (before Features/Particles'
 			// and Features/Billboards', which need it and register after this feature).

@@ -2,6 +2,7 @@
 // revision's shapes and latches from a publication and the frame's posted RevisionInputs, then AssembleRevision seals them. Also the
 // main shape's plans (shared with the commits).
 
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
@@ -579,7 +580,7 @@ namespace DCLF
 		std::uint32_t RequirementsMoved(ImplProducer& a_producer, const ImplSnapshotBuilder::RevisionReuse& a_reuse, const ScenePublication& a_publication,
 			const Lookups& a_lookups, ImplSnapshotBuilder::RevisionReuse::Key& a_key)
 		{
-			ZoneScopedN("CS.DCLF.MakeRevisionShapes.Key");
+			DCLF_ZONE("CS.DCLF.MakeRevisionShapes.Key");
 			const auto& tables = *a_publication.tables;
 			const auto& producer = a_producer.producer;
 			const auto& inputs = producer.inputs;
@@ -872,7 +873,7 @@ namespace DCLF
 	void IndirectDraws::Impl::MakeRevision(const ScenePublication& a_publication, std::uint32_t a_frame)
 	{
 		const auto& request = a_publication.revision;
-		ZoneScopedN("CS.DCLF.MakeRevisionShapes");
+		DCLF_ZONE("CS.DCLF.MakeRevisionShapes");
 		// The frame's inputs as last posted (RevisionInputs): with the request, all the revision reads.
 		auto& made = producer.made;
 		auto& reuse = revisionReuse;
@@ -923,7 +924,7 @@ namespace DCLF
 		const std::uint64_t sequenceBefore = revisions.assembler.LatestSequence();
 		// The revision assembled from this make's set and shapes; once sealed, what it was made from is the key a later make compares.
 		const auto assemble = [&](bool a_shapesKept) {
-			ZoneScopedN("CS.DCLF.MakeRevisionShapes.Assemble");
+			DCLF_ZONE("CS.DCLF.MakeRevisionShapes.Assemble");
 			AssembleRevision(a_frame);
 			if (revisions.assembler.LatestSequence() == sequenceBefore) {
 				if (parity && unchanged)
@@ -945,7 +946,7 @@ namespace DCLF
 		make.lookupsWitness = key.lookups;
 		auto build = buffers.Begin();
 		{
-			ZoneScopedN("CS.DCLF.MakeRevisionShapes.Require");
+			DCLF_ZONE("CS.DCLF.MakeRevisionShapes.Require");
 			for (auto* participant : participants)
 				participant->RequireSequences(make, build);
 			for (auto* participant : participants)
@@ -955,7 +956,7 @@ namespace DCLF
 		// The set: sealed once it holds every requirement; else a growth batch is in flight and the builder makes the revision again when
 		// it settles (it wakes the builder). The same set (its serial, its fragment) while nothing changed.
 		auto seal = [&] {
-			ZoneScopedN("CS.DCLF.MakeRevisionShapes.Seal");
+			DCLF_ZONE("CS.DCLF.MakeRevisionShapes.Seal");
 			return buffers.Seal(std::move(build));
 		}();
 		if (!seal) {
@@ -981,7 +982,7 @@ namespace DCLF
 		for (auto* participant : participants)
 			participant->NoteSealed(make);
 		const auto shapesKey = [&] {
-			ZoneScopedN("CS.DCLF.MakeRevisionShapes.ShapesKey");
+			DCLF_ZONE("CS.DCLF.MakeRevisionShapes.ShapesKey");
 			return RevisionShapesKey(sealed, make, request.pipelines);
 		}();
 		if (shapesKey == revisionShapesKey) {
@@ -1002,7 +1003,7 @@ namespace DCLF
 		revisionShapesKey = shapesKey;
 		++shapesMade;
 		{
-			ZoneScopedN("CS.DCLF.MakeRevisionShapes.Shapes");
+			DCLF_ZONE("CS.DCLF.MakeRevisionShapes.Shapes");
 			for (auto* participant : participants)
 				participant->MakeShapes(make, sealed, mainLayout);
 		}

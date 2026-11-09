@@ -3,6 +3,7 @@
 // register into (Accumulators), and the skeleton's cull hidden source (CullHiddenSkeleton). Render thread.
 
 #include "Features/DrawcallLimitFix/Features/FirstPerson/FirstPersonView.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
@@ -104,7 +105,7 @@ namespace DCLF::Features::FirstPerson
 
 	void BeginFrame(const Api::ViewPointContext& a_context)
 	{
-		ZoneScopedN("CS.DCLF.BeginFirstPersonFrame");
+		DCLF_ZONE("CS.DCLF.BeginFirstPersonFrame");
 		auto& draws = IndirectDraws::Get();
 		const auto* formats = draws.MainTargetFormats();
 		if (!formats)

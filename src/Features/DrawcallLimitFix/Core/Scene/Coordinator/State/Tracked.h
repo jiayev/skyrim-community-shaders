@@ -160,6 +160,7 @@ namespace DCLF::Scene
 			const void* listedProperty = nullptr;
 			const void* listedAlpha = nullptr;
 			const void* listedEmittance = nullptr;  // external emittance's shared colour (emittanceEvents)
+			const void* listedFadeNode = nullptr;   // its property's fade node: a blended fade starting or ending (BlendFading)
 			const RE::NiAVObject* listedRoot = nullptr;
 			std::uint32_t fullWalk = 0;  // the walk that must write it in full (an event, not the per-frame set)
 			std::uint8_t bucket = kNoBucket;

@@ -5,6 +5,7 @@
 // Self-contained (features include it); Internal.h includes it in its order.
 
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameData.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/OwnedRows.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/ContentOwners.h"
 #include "Features/DrawcallLimitFix/Core/Render/Payload/Latched.h"
@@ -57,7 +58,7 @@ namespace DCLF::Draws
 	inline std::shared_ptr<org::runtime::StagedUploadBatch> AcquireStagedBatch(std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool,
 		std::size_t a_pageSize = std::size_t{ 4 } << 20)
 	{
-		ZoneScopedN("CS.DCLF.Stage.AcquireBatch");
+		DCLF_ZONE("CS.DCLF.Stage.AcquireBatch");
 		std::shared_ptr<org::runtime::StagedUploadBatch> batch;
 		for (const auto& candidate : a_pool) {
 			if (candidate.use_count() == 1) {

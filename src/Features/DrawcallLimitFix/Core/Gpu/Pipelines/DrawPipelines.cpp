@@ -4,6 +4,7 @@
 
 // volk must precede every Vulkan header in this translation unit.
 #include <rhi_interop_vulkan.h>
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
@@ -355,7 +356,7 @@ namespace DCLF
 
 	void DrawPipelines::Impl::DrainLane()
 	{
-		ZoneScopedN("CS.DCLF.PipelineLane");
+		DCLF_ZONE("CS.DCLF.PipelineLane");
 		auto& l = lane;
 		auto& s = l.shadow;
 		auto& f = l.forward;

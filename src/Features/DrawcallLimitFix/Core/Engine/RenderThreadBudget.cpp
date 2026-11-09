@@ -61,9 +61,13 @@ namespace DCLF
 		const auto& epochs = RenderGraphRuntime::Get().RenderThreadEpochTotals();
 		const double submit = epochs.submitUs - b.epochSubmitStart;
 		const double overhead = epochs.overheadUs - b.epochOverheadStart;
+		const double other = (std::max)(0.0, us - b.hookPartsUs - submit - overhead);
 		b.bucketUs[static_cast<std::size_t>(Bucket::Submit)] += submit;
 		b.bucketUs[static_cast<std::size_t>(Bucket::OrgOverhead)] += overhead;
-		b.bucketUs[static_cast<std::size_t>(Bucket::Other)] += (std::max)(0.0, us - b.hookPartsUs - submit - overhead);
+		b.bucketUs[static_cast<std::size_t>(Bucket::Other)] += other;
+		b.frameBucketUs[static_cast<std::size_t>(Bucket::Submit)] += submit;
+		b.frameBucketUs[static_cast<std::size_t>(Bucket::OrgOverhead)] += overhead;
+		b.frameBucketUs[static_cast<std::size_t>(Bucket::Other)] += other;
 		b.siteUs[static_cast<std::size_t>(b.site)] += us;
 		++b.siteCalls[static_cast<std::size_t>(b.site)];
 		b.frameUs += us;
@@ -86,6 +90,7 @@ namespace DCLF
 		auto& b = Get();
 		const double us = Microseconds(std::chrono::steady_clock::now() - start);
 		b.bucketUs[static_cast<std::size_t>(bucket)] += us;
+		b.frameBucketUs[static_cast<std::size_t>(bucket)] += us;
 		if (b.depth) {
 			b.hookPartsUs += us;
 			return;
@@ -100,8 +105,16 @@ namespace DCLF
 		if (!OnRenderThread())
 			return;
 		frameMaxUs = (std::max)(frameMaxUs, frameUs);
+		lastFrame = { frameUs, frameBucketUs };
 		frameUs = 0.0;
+		frameBucketUs = {};
 		++frames;
+	}
+
+	const char* RenderThreadBudget::BucketName(Bucket a_bucket)
+	{
+		const auto i = static_cast<std::size_t>(a_bucket);
+		return i < std::size(kBucketNames) ? kBucketNames[i] : "?";
 	}
 
 	std::string RenderThreadBudget::Report()

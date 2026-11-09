@@ -17,8 +17,12 @@
 #include "Features/DrawcallLimitFix/Core/Shading/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
 #include "Globals.h"
+#include "Utils/D3D.h"
 
 #include <atomic>
+#include <bit>
+#include <mutex>
+#include <unordered_map>
 #include <chrono>
 #include <cstring>
 
@@ -262,7 +266,9 @@ namespace DCLF::SceneCapture
 			boneCount = a_o.boneCount;
 			partitions = a_o.partitions;
 		}
-		if (a_f & kDismember)
+		// The shown flags are the skin instance's: a new instance (kSkin) brings its own. RaceMenu relinks an overlay onto its base's
+		// new skin instance after an armor change; with the old flags it drew only the partitions the armor had left shown.
+		if (a_f & (kSkin | kDismember))
 			shown = a_o.shown;
 		if (a_f & kProperty)
 			property = a_o.property;
@@ -458,6 +464,81 @@ namespace DCLF::SceneCapture
 		return r;
 	}
 
+	namespace
+	{
+		/**
+		 * @brief DCLF's own copy of a RaceMenu-morphed skin partition's vertices, or null.
+		 *
+		 * RaceMenu's body morphs (skee64's NIOVTaskUpdateSkinPartition, with its default bBodyMorphRebind) leave a partition on a DYNAMIC
+		 * vertex buffer, which DXVK cannot import (a discard map renames it), so the body went native. RaceMenu writes every morph into a
+		 * new partition (a deep copy, its vertices in the partition's CPU data, then the store into the skin), and marks the shape with
+		 * its "SHAPEDATA" extra data. A partition's vertices are therefore fixed once it is in the skin: a DEFAULT-usage copy of its CPU
+		 * data draws it as the engine's buffer would. Only such shapes are copied: a writer that maps its buffer in place stays native.
+		 * Copies are shared by the shapes on one partition (RaceMenu's overlays) and dropped once no record holds them.
+		 */
+		ID3D11Buffer* MorphedPartitionCopy(const RE::BSGeometry& a_geometry, const RE::NiSkinPartition& a_partition, std::uint32_t a_index,
+			ID3D11Buffer* a_engine)
+		{
+			const auto* shape = a_partition.partitions[a_index].buffData;
+			if (!a_engine || !shape || !shape->rawVertexData)
+				return nullptr;
+			D3D11_BUFFER_DESC desc{};
+			a_engine->GetDesc(&desc);
+			if (desc.Usage != D3D11_USAGE_DYNAMIC && !desc.CPUAccessFlags)
+				return nullptr;
+			static const RE::BSFixedString marker{ "SHAPEDATA" };
+			if (!const_cast<RE::BSGeometry&>(a_geometry).GetExtraData(marker))
+				return nullptr;
+			const std::uint32_t stride = (std::bit_cast<std::uint64_t>(shape->vertexDesc) & 0xFu) * 4u;
+			const std::uint64_t bytes = std::uint64_t(a_partition.vertexCount) * stride;
+			if (!stride || !bytes || bytes > desc.ByteWidth)
+				return nullptr;
+
+			struct Key
+			{
+				const void* partition;
+				std::uint32_t index;
+				const void* engine;
+				const void* raw;
+				bool operator==(const Key&) const = default;
+			};
+			struct KeyHash
+			{
+				std::size_t operator()(const Key& a_key) const
+				{
+					return std::hash<const void*>{}(a_key.partition) ^ (std::hash<const void*>{}(a_key.raw) << 1) ^ a_key.index;
+				}
+			};
+			static std::mutex lock;
+			static std::unordered_map<Key, winrt::com_ptr<ID3D11Buffer>, KeyHash> copies;
+			const Key key{ &a_partition, a_index, a_engine, shape->rawVertexData };
+			std::scoped_lock guard(lock);
+			if (const auto it = copies.find(key); it != copies.end())
+				return it->second.get();
+			// The copies no record holds any more (the cache's reference alone), before a new one.
+			std::erase_if(copies, [](auto& a_entry) {
+				a_entry.second->AddRef();
+				return a_entry.second->Release() == 1;
+			});
+			D3D11_BUFFER_DESC copyDesc = desc;
+			copyDesc.Usage = D3D11_USAGE_DEFAULT;
+			copyDesc.CPUAccessFlags = 0;
+			std::vector<std::uint8_t> data(desc.ByteWidth, 0);
+			std::memcpy(data.data(), shape->rawVertexData, bytes);
+			D3D11_SUBRESOURCE_DATA initial{ data.data(), desc.ByteWidth, 0 };
+			winrt::com_ptr<ID3D11Buffer> copy;
+			if (!globals::d3d::device || FAILED(globals::d3d::device->CreateBuffer(&copyDesc, &initial, copy.put())))
+				return nullptr;
+			Util::SetResourceName(copy.get(), "DCLF::MorphedSkinPartition");
+			// The first few in the log (a RaceMenu slider drag makes one per step).
+			static std::uint32_t logged = 0;
+			if (logged++ < 4)
+				logger::info("[DCLF] {}: a RaceMenu-morphed skin partition ({} bytes) draws from DCLF's copy of its vertices ({} copies kept)",
+					a_geometry.name.c_str(), desc.ByteWidth, copies.size() + 1);
+			return copies.emplace(key, std::move(copy)).first->second.get();
+		}
+	}
+
 	GeometryRecord CaptureGeometry(const RE::BSGeometry& a_geometry)
 	{
 		EngineReadWindow::Touch("SceneCapture::CaptureGeometry");
@@ -514,6 +595,9 @@ namespace DCLF::SceneCapture
 					if (p.buffData) {
 						out.rendererData = p.buffData;
 						out.vertexBuffer = reinterpret_cast<ID3D11Buffer*>(p.buffData->vertexBuffer);
+						// A RaceMenu-morphed partition draws from DCLF's copy of its vertices (MorphedPartitionCopy).
+						if (auto* copy = MorphedPartitionCopy(a_geometry, *partition, i, out.vertexBuffer))
+							out.vertexBuffer = copy;
 						out.indexBuffer = reinterpret_cast<ID3D11Buffer*>(p.buffData->indexBuffer);
 						out.buffersHeld[0].copy_from(out.vertexBuffer);
 						out.buffersHeld[1].copy_from(out.indexBuffer);

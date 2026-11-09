@@ -129,7 +129,7 @@ namespace DCLF::Scene
 			DropResidentSlot(static_cast<std::uint32_t>(o), false);
 			object.flags = (object.flags & ~(kObjectMember | kObjectSunTest)) | kObjectNoBindings;
 			object.geometryIndex = object.pipelineIndex = object.materialIndex = 0;
-			tables.NoteChange(static_cast<std::uint32_t>(o), kChangeBindings | kChangeGeometry | kChangeStructure);
+			tables.NoteChange(static_cast<std::uint32_t>(o), kChangeBindings | kChangeGeometry);
 		}
 	}
 
@@ -382,6 +382,7 @@ namespace DCLF::Scene
 				--(veto == Api::kVetoHold ? vetoHeld : vetoObserved);
 			sceneIdentity.Detach(a_geometry);
 			entryRanges.erase(a_geometry);
+			NoteEngineCaster(a_geometry, Ineligible::None);
 			HandBack(std::move(it->second.geometry));
 			HandBack(std::move(it->second.property));
 			HandBack(std::move(it->second.layerProperty));

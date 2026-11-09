@@ -3,6 +3,7 @@
 // the frame blocks taken from the capture.
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ExecutionOwners.h"
@@ -170,7 +171,7 @@ namespace DCLF
 	void IndirectDraws::RunEpoch(bool a_depthOnly)
 	{
 		const auto segment = a_depthOnly ? RenderGraphRuntime::Segment::ZPrepass : RenderGraphRuntime::Segment::MainOpaque;
-		ZoneScopedN("CS.DCLF.RunEpoch");
+		DCLF_ZONE("CS.DCLF.RunEpoch");
 		RenderGraphRuntime::EpochBodyScope body(segment);
 		ScopedPerfEvent event(segment == RenderGraphRuntime::Segment::ZPrepass ? "CS DCLF: Z-prepass (CPU)" : "CS DCLF: main opaque (CPU)");
 		const auto start = std::chrono::steady_clock::now();

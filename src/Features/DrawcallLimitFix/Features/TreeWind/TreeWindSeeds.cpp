@@ -3,6 +3,7 @@
 // through the depth commit's frame row.
 
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameValuePools.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
@@ -98,7 +99,7 @@ namespace DCLF::Features::TreeWind
 		// Render thread, at Kick: every seed read since the last kick, for the frame's producer.
 		Api::FrameValueInput Kick(const Api::FrameValuePoolKick&)
 		{
-			ZoneScopedN("CS.DCLF.FV.Kick.TreeSeeds");
+			DCLF_ZONE("CS.DCLF.FV.Kick.TreeSeeds");
 			if (!unsent.empty())
 				return { std::make_shared<const SeedInput>(SeedInput{ std::exchange(unsent, {}), seedRows }), seedRows };
 			if (!idle || idle->rows != seedRows)

@@ -47,6 +47,6 @@ namespace DCLF::Features::Grass
 	struct GrassMissed
 	{
 		std::uint32_t frame;
-		std::uint64_t instanceSlots, bufferInstances, bucketSlots, bufferBuckets;
+		std::uint64_t instanceSlots, bufferInstances, bucketSlots, bufferBuckets, shapeSlots, bufferShapes, meshSlots, bufferMeshes;
 	};
 }

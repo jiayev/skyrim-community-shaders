@@ -2,6 +2,7 @@
 // their change logs. Run by MakeStreamViews, one caller at a time (the snapshot builder).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF::Draws
@@ -25,7 +26,7 @@ namespace DCLF::Draws
 
 	void UpdateExtras(ExtrasStore* a_store, std::uint64_t a_oldestContentEpoch, const SceneTables& a_tables, std::uint32_t a_generation, ExtrasOut& a_out)
 	{
-		ZoneScopedN("CS.DCLF.Build.UpdateExtras");
+		DCLF_ZONE("CS.DCLF.Build.UpdateExtras");
 		a_out = {};
 		a_out.extraRows = static_cast<std::uint32_t>(a_tables.extraRows.size() / 4);
 		a_out.extras = a_tables.extraRows.data();
@@ -52,7 +53,7 @@ namespace DCLF::Draws
 	void UpdateObjectRecords(ObjectRecordStore* a_store, std::uint64_t a_oldestContentEpoch, const SceneTables& a_tables, std::uint32_t a_generation,
 		std::uint32_t a_frame, ObjectRecordsOut& a_out)
 	{
-		ZoneScopedN("CS.DCLF.Build.UpdateObjectRecords");
+		DCLF_ZONE("CS.DCLF.Build.UpdateObjectRecords");
 		const std::size_t count = a_tables.objects.size();
 		if (!a_store) {
 			auto records = std::make_shared<std::vector<BindlessObject>>(count);
@@ -75,7 +76,7 @@ namespace DCLF::Draws
 			if (count >= kRecordsFanoutMin && !Policy::SerialFanout()) {
 				PrepareKeptWrites(s.records, 0, count);
 				SceneScheduler::Executor().ParallelFor("CS.DCLF.Build.Objects.Resync", count, kRecordsGrain, [&](std::size_t a_begin, std::size_t a_end) {
-					ZoneScopedN("CS.DCLF.Build.Objects.ResyncShards");
+					DCLF_ZONE("CS.DCLF.Build.Objects.ResyncShards");
 					for (std::size_t r = a_begin; r < a_end; ++r)
 						BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), GeometryPort::kMainPassRenderFlags, records[r]);
 				});
@@ -121,7 +122,7 @@ namespace DCLF::Draws
 		TracyCZoneEnd(updateRecordsZone);
 		Diagnostics::Notify(Diagnostics::StoreUpdated<ObjectRecordStore>{ s, a_tables, a_frame });
 		{
-			ZoneScopedN("CS.DCLF.Build.Objects.Snapshot");
+			DCLF_ZONE("CS.DCLF.Build.Objects.Snapshot");
 			a_out = s.records.View();
 		}
 		s.busy.store(0, std::memory_order_release);
@@ -141,7 +142,7 @@ namespace DCLF::Draws
 	void UpdateGeometryDraws(GeometryStore* a_store, std::uint64_t a_oldestContentEpoch, const SceneTables& a_tables, std::uint32_t a_generation,
 		std::uint32_t a_frame, GeometryDrawsOut& a_out)
 	{
-		ZoneScopedN("CS.DCLF.Build.UpdateGeometryDraws");
+		DCLF_ZONE("CS.DCLF.Build.UpdateGeometryDraws");
 		a_out = {};
 		const std::size_t count = a_tables.geometries.size();
 		auto pack = [&](std::size_t a_slot) { return PackGeometryDraw(a_tables, static_cast<std::uint32_t>(a_slot), count); };

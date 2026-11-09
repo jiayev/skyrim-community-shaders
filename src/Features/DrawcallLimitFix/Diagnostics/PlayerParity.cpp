@@ -231,17 +231,21 @@ namespace DCLF::Diagnostics::PlayerParity
 		clearPending.store(true, std::memory_order_release);
 	}
 
-	std::string WriteReport()
+	std::string WriteReport(const std::filesystem::path& a_path)
 	{
-		const auto directory = logger::log_directory();
-		if (!directory)
-			return "no log directory";
-		const auto now = std::time(nullptr);
-		std::tm local{};
-		localtime_s(&local, &now);
-		char stamp[32]{};
-		std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local);
-		const auto path = *directory / fmt::format("CommunityShaders-DCLF-Compat-{}.txt", stamp);
+		// No path given: a stamped file beside the log.
+		auto path = a_path;
+		if (path.empty()) {
+			const auto directory = logger::log_directory();
+			if (!directory)
+				return "no log directory";
+			const auto now = std::time(nullptr);
+			std::tm local{};
+			localtime_s(&local, &now);
+			char stamp[32]{};
+			std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local);
+			path = *directory / fmt::format("CommunityShaders-DCLF-Compat-{}.txt", stamp);
+		}
 		std::ofstream out(path);
 		if (!out)
 			return fmt::format("could not write {}", path.string());
@@ -291,14 +295,9 @@ namespace DCLF::Diagnostics::PlayerParity
 			ImGui::TextUnformatted("Each frame compares a slice of the scene with what DCLF holds; a difference no hook explains is an offender. Turning it on starts a fresh list.");
 		const auto offenders = Current();
 		ImGui::Text("%llu checks, %zu offenders", static_cast<unsigned long long>(offenders->probes), offenders->entries.size());
-		static std::string reportStatus;
-		if (ImGui::Button("Write report"))
-			reportStatus = WriteReport();
-		ImGui::SameLine();
+		// The report goes into the diagnostic capture (the Advanced section's button).
 		if (ImGui::Button("Clear"))
 			Clear();
-		if (!reportStatus.empty())
-			ImGui::TextWrapped("Report: %s", reportStatus.c_str());
 		constexpr std::size_t kRows = 200;
 		if (!offenders->entries.empty() && ImGui::BeginTable("##dclfOffenders", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
 											   ImVec2(0.0f, 300.0f))) {

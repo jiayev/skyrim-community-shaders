@@ -80,7 +80,7 @@ namespace DCLF
 		};
 		/**
 		 * @brief Entries [first, first + count) across the chunks (indices from the first chunk's start). It reads the log's chunk list,
-		 * not its storage: a reader may append to the log it iterates (RevokeUndrawnClaims' NoteChange), and a Push that opens a chunk
+		 * not its storage: a reader may append to the log it iterates (a NoteChange), and a Push that opens a chunk
 		 * reallocates the list. What it appends is past the range; a Trim or an Invalidate while iterating is not allowed.
 		 */
 		struct LogRange

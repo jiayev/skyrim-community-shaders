@@ -61,10 +61,6 @@ namespace DCLF
 
 		// The shadow views are drawn by the render graph.
 		bool shadows = false;
-		// (Features/Shadows/Sun's "skip sun accumulation" and "exclude sun entries" follow the shadows' in the table.)
-		// The main camera's cull skips the references DCLF draws entirely (PrimaryCull; needs Features/Shadows/Sun's "exclude sun
-		// entries", by name).
-		bool excludePrimaryEntries = false;
 
 		// The features' toggles (RegisterToggle), bit by Api::ToggleId: an object class a feature ports (Features/Skins: the skinned and
 		// skins of several partitions; Features/TreeWind: trees;

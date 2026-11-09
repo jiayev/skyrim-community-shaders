@@ -550,7 +550,9 @@ DCLFPixelObjectRow DCLFPixelObjectRowOf(StructuredBuffer<DCLFObjectRecord> a_obj
 	row.MaterialData.w = shading.MaterialData.w;
 	row.EmitColorSSR = float4(shading.EmitColor.xyz, (fades & (1u << 4)) ? ((fades & (1u << 6)) ? specular : 0) : shading.EmitColor.w);
 	row.CopyAlpha = shading.MaterialData.z * DCLFAlphaFadeFrom(a_objects, a_roots, a_states, a_seeds, a_object, true);
-	row.AlphaTestRef = a_objects[a_object].AlphaTestRef;
+	// The engine's reference is the threshold times the property's alpha, which carries the fade (FUN_14150bae0: int(threshold * alpha)
+	// / 255), so a fading cut-out keeps its shape while its alpha drops.
+	row.AlphaTestRef = floor(round(a_objects[a_object].AlphaTestRef * 255.0) * row.MaterialData.z) / 255.0;
 	row.Padding = 0;
 	return row;
 }

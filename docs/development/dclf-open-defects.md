@@ -33,18 +33,17 @@ The fixes below are in the code. No recorded run has yet shown the check that co
 
 ## Visible lighting defects
 
--   **Statics have no room for the first report after a load (`light data parity MISMATCH`, `DCLF room -1`).** Every run's first
-    window (up to frame 300) has 80-920 draws of statics with DCLF room -1 against the engine's room (`WRIntCastleFreePillar01:4`,
-    `WRCastleRugBEndL:1`): Light Limit Fix's first room map is posted after those objects joined. With room -1 a portal-strict light
-    is not gated for them, so it can light them through walls for those frames. **Next:** check whether the first map's post
-    (`FrameView::PostAncestorMap`) can precede the first joins, or whether `RefreshAncestorValues` misses objects joined before it.
--   **Subsurface Scattering's pass does not run while DCLF draws the faces (suspected; seen in timings only).** In Dragonsreach
-    (2026-10-27, GpuEvents windows of one launch) `SubsurfaceScattering::Burley` took 0.03 ms a frame natively and did not appear
-    at all with DCLF on. The pass runs only when `validMaterials` is set. Its `BSLightingShader_SetupSkin` hook sets it from the
-    engine's setup of a face pass (kFace, kFaceGenRGBTint). The engine never sets up a face DCLF draws, and
-    `Integrations/SubsurfaceScattering` gives such faces only their IsBeastRace flag. So skin may lose its scattering, and DCLF's
-    timings leave out the pass's cost. **Check:** compare an NPC's face with DCLF on and off. **Next:** set `validMaterials` from the
-    integration while a DCLF-drawn face is in the frame's lists.
+-   **Statics have no room for a few frames after a load (`light data parity MISMATCH`, `DCLF room -1`).** The first report after
+    each load into Dragonsreach or Bleak Falls Barrow has 400-3,000 draws with DCLF room -1 against the engine's room; the next
+    report is clean. The keys are right (persistent parity's ancestor key check: 0 stale). The cause is the map's latency: DCLF
+    copies Light Limit Fix's room map at EarlyPrepass, before Light Limit Fix rebuilds it in Prepass, and the scene lane takes the
+    copy on its next pass, so a room that gains a light reaches DCLF's draws one to three frames late. With room -1 a portal-strict
+    light is not gated for those objects, so it can light them through walls for those frames. The same lag runs the other way
+    when a room loses its last light (once, DCLF room 35 against the engine's -1). Light Limit Fix now keeps a room's number while
+    a light reaches it (`LightLimitFix::UpdateLights`); it used to renumber every room whenever the lit set changed, which gated
+    DCLF's objects as another room until the next map arrived. Runs `rooms` and `roomswalk` (cs-ab). **Next:** removing the
+    remaining frames needs the room resolved on the GPU in the frame: each object's record holds a stable room slot, and a table
+    from slot to Light Limit Fix's number is written after its Prepass.
 
 ## Open crashes
 
@@ -66,6 +65,9 @@ The fixes below are in the code. No recorded run has yet shown the check that co
     One loss with this signature was the index pool's unfilled grown `pool-firsts`, now fixed. **Next:** a soak of launches with
     `DXVK_AFTERMATH_SHADER_DEBUG_INFO=1` (the decoder then maps the shader; `extern/dxvk`'s adapter warns that the heavier
     diagnostics configuration itself produced load-time faults on this driver, so add the flags one at a time).
+    **Shelved:** not reproduced on 2026-11-06 in 11 launches with two loads each (`vsoak.env`: shader debug info, 5 launches;
+    `vsoak-errors.env`: with shader error reporting too, under which the faults came most often, 6 launches). Pick it up on a repeat,
+    with `vsoak-errors.env`.
 -   **Use-after-free in actor teardown on a save load.** It happened when a save was loaded after going through a door. A job
     thread in `Actor::Predestroy` -> `FUN_140720830` (middle-high process data, `+0x278`) -> `FUN_14021ca60`/`FUN_14021d140`
     destroyed a pool entry's object (keyed by a `BSLightingShaderProperty`) that was already freed. DCLF holds property and
@@ -102,15 +104,36 @@ The fixes below are in the code. No recorded run has yet shown the check that co
        engine once it draws".
 
     Other runs of the same route and build passed. Logs: `run18_cs.log` and `p1on5_cs.log`, both in the session
-    scratch folder. **Next:** set aside unless it blocks another run. If it does, find which synchronous admission is still open
-    when the scene revision records: the build point's admission, or one an on-demand pipeline build holds across the load. Then
-    check why the next admission is refused rather than queued.
+    scratch folder. Both came about a second after a rebuild into "interior cell, two-pass occlusion, CPU pipeline", at about
+    12 fps, 100-250 ms after `cs.dclf.z.bucket-counts ... grown ... as graph work`.
+
+    Not reproduced on 2026-11-06 (RTX 5080, about 120 fps): 17 interior/exterior changes (`tools/cs-ab/scenarios/cellflip.env`),
+    and 36 changes and rebuilds with `CS_DCLF_TABLE_START=small`, 223 growths as graph work (`rebuildstress.env`). The error now
+    names the pending admission: the thread that prepared it, whether at a ticket's submission or for an immediate execution, and
+    how long ago (`SynchronousAdmission::PendingOwners`, extern/OpenRenderGraph). **Next:** on a repeat, compare that thread with
+    the log's: the ORG host thread, the render thread, or DXVK's CS thread.
+
+-   **NVIDIA's driver faults while a shadow view's pass begins.** Six identical crashes on 2026-11-01 between 21:07 and 23:08:
+    `nvoglv64.dll+0xE5A9FD` (`mov r9d, [rax+0x1F0]`), called from `DCLF::Draws::ShadowViewPass::Record`
+    (`ShadowEpochPasses.cpp:303` at the time, `commands.BeginPass(begins[i])`) under ORG's prepared-batch recording. The driver
+    read a bad attachment: probably a shadow map view that was stale or freed when the pass began. Two more driver crashes on
+    2026-11-05 at 05:04 (`nvoglv64.dll+0xF63D9`, a null read, 32 s after launch) have no stack. The shadow views' buffers and draw
+    data were reworked on 2026-11-03, and none of the 47 runs since 2026-11-04 crashed. **Next:** on a repeat, check that each
+    view's target is the one the frame's shadow maps hold (a rebuilt or resized shadow map between preparation and recording).
 
 ### Crashes probably unrelated to DCLF
 
 These crashes have no DCLF or Community Shaders frames on the stack and match known engine instability. They are recorded so
 that a repeat is recognised. They are not chased unless one recurs with a DCLF or CS frame on the stack.
 
+-   **A corrupt heap in Engine Fixes' tbbmalloc under a fast flight, with or without DCLF** (2026-11-06, `motionsoak.env`: `tcl`
+    out of Whiterun at 24 units a frame for about 15,000 frames). The faults are in tbbmalloc's large-object cache
+    (`getFromLLOCache`, `putToLLOCache`, `CacheBinFunctor`, `freeOwnObject`), or downstream of it on engine job threads: Havok under
+    `MagicCaster::UpdateImpl` (`SkyrimSE+0xADE85B`) and the Papyrus VM. The flight crashed 2 of 4 runs with DCLF on, 3 of 4 with
+    DCLF switched off from frame 1000 (`motionsoak-off.env`), 2 of 4 with texture streaming off (`CS_DCLF_TEX_STREAM=0`), and 3 of
+    4 without the Skyrim Engine Telemetry plugin. One fault came while texture streaming read a file through
+    `BSResourceNiBinaryStream`, but streaming off did not change the rate. This speed is past what the engine streams safely, so it
+    is no test of DCLF's crashes. Hunt those at walking or riding speed (a few units a frame), where these faults should be rare.
 -   **tbbmalloc read in an NPC's behaviour graph update** (uGridsToLoad 5, moving near Riverwood): `EXCEPTION_ACCESS_VIOLATION` in
     `rml::internal::MemoryPool::getFromLLOCache` (EngineFixes' tbbmalloc) under `BSSpeedSamplerModifier` / `hkbBehaviorGraph`
     "0_Master.hkb". This is a known engine bug.
@@ -145,7 +168,11 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
     The build includes the shadow slot sizing change, which that path does not touch, but one occurrence cannot clear it. **Next:**
     if it recurs, keep the log and take a dump with procdump to see what the load is waiting on, and why the set commits so many
     times a frame with no scene. That run wrote 900 MB of log, so the line is now capped at 8 per 600 scene frames, and the next line
-    logged counts the ones skipped. `setStats.resyncs` still counts every resync.
+    logged counts the ones skipped. `setStats.resyncs` still counts every resync. The line itself is a load's: while a load screen
+    is up, each scene pass resets the slot tables (`BuildScenePhase`), which moves the tables' generation, so the next commit
+    resyncs. So the flood says only that passes kept running through a load that never ended. Not reproduced since: about 105
+    launches up to 2026-11-06 (70 of them that night) loaded normally. The test build notes now ask testers for a Task Manager dump
+    of a hung game.
 
 ## Frames with DCLF's objects missing under standing claims
 
@@ -165,7 +192,10 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
 
 ## Memory retention
 
--   **About 2.5 GB more dedicated VRAM after leaving an exterior, outside D3D11.** On the short retention tour (save, `coc Whiterun`,
+-   **VRAM retention after leaving an exterior: mostly fixed, about 0.9 GB outside DXVK left.** The 2.5 GB that DCLF held after
+    leaving an exterior was DXVK chunks that defragmentation could not move (every import locked). Pinless imports fixed it on
+    2026-10-29: dedicated VRAM at the end is now 10,997 MiB with DCLF against 11,308 MiB without (the table below). What is left
+    is listed under "Still open". The history: on the short retention tour (save, `coc Whiterun`,
     `coc RiverwoodSleepingGiantInn`, `pcb`, 45 s in the inn; `tour.sh` in the session scratch folder, runs p1onT3 and p1offT3 on
     2026-10-28), Task Manager's dedicated usage ends at 13,854 MiB with DCLF and 11,308 MiB without. With DCLF it does not drop
     after `pcb`. The DXVK allocation trace (`DXVK_ALLOC_TRACE=10`) finds no D3D11 difference:
@@ -236,12 +266,6 @@ that a repeat is recognised. They are not chased unless one recurs with a DCLF o
 -   **No readback check of the material row bytes.** BuildDraws parity checks the rows' addresses only. Nothing reads back a
     backing's material rows and compares them with the kept rows, which would catch a part that the four-part journal
     (`kMaterialRowParts`) failed to send. The extras have this check per backing; the rows do not.
--   **The builder stalls if the coordinator's pump fails for good.** A payload is published only after the scene pass of the frame
-    that took the last snapshot has ended (`IndirectDraws::NoteScenePassDone`). If the pump stops for good (a thrown pass that never
-    runs again), the builder never publishes again, every frame keeps the last installed snapshot, and nothing reports it.
--   **Material transform moves: nothing drains the queue without the kept shadow build.** `TransformMoves`
-    (`Core/Shading/MaterialWrites.cpp`, drained by `Extensions::DrainTransformMoves`) has one consumer, the kept shadow build's
-    `WatchTransformMoves`. In a configuration that never runs the kept build, the EventQueue spills when it fills.
 -   **Texture transforms reach epochs before the Z-prepass a frame late.** `cs.dclf.z.texture-transforms` runs first in the
     Z-prepass epoch. An epoch that reads the main material rows before it (the reflection, Skylighting's occlusion) draws with the
     previous frame's `TexcoordOffset`, effect falloff and base colour. No GPU readback checks the patched bytes. Comments in
@@ -427,6 +451,28 @@ loaded, and the menu explains why:
 The cache's per-light `LocalShadow` flag, its `FirstPerson` / `WorldEyePosition` StrictLightData words and its
 `LocalShadowData` buffer are untested under DCLF. DCLF's own StrictLightData supplies only `RoomIndex` and `ShadowBitMask`.
 
+## Shadow lights past the light mask's 32 are culled whole by the engine
+
+A frame's shadow-casting point and spot lights are numbered as their `Accumulate` runs (`LocalLightCull`'s `TakeOrdinal`). DCLF
+tracks a light's bits in a 32-bit mask, so a light past the 32nd gets no ordinal: no empty cull, no engine-only subset, and the
+engine culls the whole scene for it (`EngineOnlyCull::WholeCull::PointPastMask` / `SpotPastMask`, counted in the primary cull's
+report as `<- WHOLE ENGINE CULL`). It is the last light case without coverage. None was counted in the 2026-11-08 runs (Riverwood,
+Dragonsreach, Whiterun); the point lights' line counts them as "past the mask's 32", which only showed before DCLF ran.
+**Next:** a scene with more than 32 shadow lights in one frame (heavily lit interiors, light mods); then either widen the mask
+(the bits' consumers: `NoteMainRegistration`, `SphereBits`, the accumulators' light bit) or give such a light DCLF's views and
+an empty cull without a bit of its own.
+
+## Engine-only shadow casters cost the light culls about as much as a whole cull
+
+Measured 2026-11-08 in Dragonsreach (Dev-Fast, two point and two spot lights), with every actor's skins left to the engine
+(`dclf:skin partitions=0`). Point lights' `Accumulate` was 42-47 ms per 600 calls with the engine-only subset, 45-54 with the
+whole engine cull, under 1 with empty culls; spot lights 37-45, 36-46 and under 1. The subset walk itself is cheap; nearly all
+of it is the engine registering the engine-only casters into each light. In normal play no caster was engine-only in those
+scenes, so the cost only appears where something is: a skin over DCLF's limits, a buffer DXVK cannot import, or another lasting
+refusal (`Eligibility::EngineCasterReason`). **Next:** find which shapes are engine-only in users' load orders (the log's first
+16 `'...' stays the engine's (<reason>, ...)` lines, and `skin shape left to the engine` for skins), and fix the reason DCLF
+refuses each, so they join instead of being registered by the engine every frame.
+
 ## Outside DCLF
 
 -   **SE 1.5.97: legacy FullScreenBlur adapters are not installed.** Every SE 1.5.97 run logs "Legacy FullScreenBlur stage-count
@@ -449,12 +495,14 @@ The cache's per-light `LocalShadow` flag, its `FirstPerson` / `WorldEyePosition`
     sampled frames, so the hazard is not ruled out. **Next:** watch the inn in motion before calling it clear. The hazard's cause is also unproven. The workaround stays
     until one of these resolves it: Streamline without `VK_EXT_descriptor_heap`, the graph's last command buffer resetting the
     descriptor-heap state, a capture with a tool that supports descriptor heaps, or a standalone reproduction for NVIDIA.
--   **Streamline's depth subresource on D32S8 (AMD).** The RX580 backs the game's D24S8 depth with `D32_SFLOAT_S8_UINT` (DXVK's
-    fallback). `cs_ImageAspect` (`Features/Upscaling/Streamline.cpp`) gives Streamline a depth-only subresource for that image.
-    Streamline's FSR path then barriers it with the depth aspect alone (`VUID-VkImageMemoryBarrier-image-03320`) and views it as
-    `D32_SFLOAT` (`VUID-VkImageViewCreateInfo-image-12397`). FSR's `rw_luma_history` storage view mismatches its format too.
-    **Check:** a `cpuv` run on the RX580 (validation layer) with FSR on. **Next:** give barriers both aspects on depth-stencil
-    formats; keep the view's depth-only aspect.
+-   **AMD: FidelityFX writes `rw_luma_history` with an Rgba8 storage format over an R16G16B16A16 view.** Seen 2026-11-06 under
+    the validation layer (Radeon integrated GPU, FSR): `Undefined-Value-StorageImage-FormatMismatch-ImageView`. It is inside the
+    pinned `amd_fidelityfx_vk.dll`, so not ours to change. **Next:** check a newer FidelityFX runtime.
+-   **AMD: the main target sampled in COLOR_ATTACHMENT_OPTIMAL for a few frames at the first graph build.** On 2026-11-06 (Radeon
+    integrated GPU, driver 2.0.353, no duplicate limit), ten `VUID-vkCmdDraw-None-09600` on `kMAIN` all came in the window of the
+    first graph build after the save loaded, then none in five minutes, including an interior change and its rebuild. It is the
+    import's window: DXVK moves the main target into its attachment layout before `LockImage` pins it to GENERAL.
+    **Next:** pin the main targets when they are first described rather than when the graph imports them.
 -   **BasicRHI's `frontCCW` under Vulkan.** `frontCCW` has D3D's meaning on both backends. SARP and BasicRenderer set it true for
     glTF content. Their D3D12 behaviour is unchanged, but they have not been run under Vulkan since the mapping changed.
 

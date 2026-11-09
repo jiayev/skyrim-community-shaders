@@ -1,6 +1,7 @@
 // GpuResources: the buffer registries' resolution and leases, each instance on its owner's thread (see the header).
 
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuResources.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 #include <chrono>
 #include <exception>
@@ -279,7 +280,7 @@ namespace DCLF
 		// The job holds the batch, so its answers outlive whatever the owner drops meanwhile. A refused job is left to Finish.
 		SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "DCLF buffer prefetch",
 			[batch](const auto&) {
-				ZoneScopedN("CS.DCLF.Scene.PrefetchBuffers.Describe");
+				DCLF_ZONE("CS.DCLF.Scene.PrefetchBuffers.Describe");
 				if (batch->claimed.exchange(true, std::memory_order_acq_rel))
 					return;
 				batch->Describe();
@@ -299,7 +300,7 @@ namespace DCLF
 				Bump(counters.prefetchRunByOwner, 1);
 			} else {
 				// Running on a worker (synchronizing with DXVK's worker): waited for, as ParallelFor waits for a claimed chunk.
-				ZoneScopedN("CS.DCLF.Scene.PrefetchBuffers.Wait");
+				DCLF_ZONE("CS.DCLF.Scene.PrefetchBuffers.Wait");
 				a_batch.done.wait(false, std::memory_order_acquire);
 				Bump(counters.prefetchWaited, 1);
 				Bump(counters.prefetchWaitMs, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());

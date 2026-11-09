@@ -83,7 +83,7 @@ namespace DCLF
 			{ Cull, "CS_DCLF_CULL", F, Reduced::Cull, false, "off|frustum|occlusion (default): GPU culling, the live toggle's seed" },
 			// The CPU-driven pipeline (an experiment; dclf-architecture.md, "The CPU-driven pipeline"): the live toggles' seeds.
 			{ CpuPipeline, "CS_DCLF_PIPELINE", F, N, false, "auto (default: exteriors GPU-driven, interiors CPU-driven)|manual|gpu|cpu: the draws culled and recorded on the GPU, or culled on the CPU and recorded as direct draws into DXVK's command buffer; gpu and cpu are manual with both kinds of cell (live toggle's seed)" },
-			{ CpuRecord, "CS_DCLF_CPU_RECORD", F, N, false, "indirect (default)|serial|parallel: the CPU pipeline's per-frame views as indirect draws the cull jobs write, recorded by DXVK's CS thread, or into a secondary list per batch on the pool (live toggle's seed)" },
+			{ CpuRecord, "CS_DCLF_CPU_RECORD", F, N, false, "indirect|serial|parallel (default: serial on NVIDIA, indirect elsewhere): the CPU pipeline's per-frame views as indirect draws the cull jobs write, recorded by DXVK's CS thread, or into a secondary list per batch on the pool (live toggle's seed)" },
 			{ CpuCadence, "CS_DCLF_CPU_CADENCE", F, N, false,
 				"frame|snapshot, or <view>=frame|snapshot,...: the CPU pipeline's views culled and recorded every frame (default) or once per snapshot (main is always per frame; live toggles' seeds)" },
 			{ CpuBatch, "CS_DCLF_CPU_BATCH", F, N, false, "the CPU pipeline's batch lanes (default 4096, rounded up to a multiple of 8; the live setting's seed: dclf:cpu-batch, the menu)" },
@@ -97,10 +97,8 @@ namespace DCLF
 			// (Features/Lod's CS_DCLF_LOD_OBJECTS and CS_DCLF_LOD_TERRAIN, then Features/TreeLod's CS_DCLF_LOD_TREES, then Features/Lod's
 			// CS_DCLF_LOD_GATES, are listed here, before CS_DCLF_SHADOWS.)
 			{ Shadows, "CS_DCLF_SHADOWS", F, Reduced::UnlessOne, false, "0: DCLF does not draw the shadow views (live toggle's seed)" },
-			// (Features/Shadows/Sun's CS_DCLF_SUN_SKIP, then its CS_DCLF_SUN_EXCLUDE, are listed here, after CS_DCLF_SHADOWS.)
-			{ PrimaryExclude, "CS_DCLF_PRIMARY_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the main camera's cull (live toggle's seed)" },
 			// (Features/TreeWind's CS_DCLF_TREE_LIST_ALL, then Features/Effects' CS_DCLF_OPAQUE_EFFECTS, are listed here, after
-			// CS_DCLF_PRIMARY_EXCLUDE: Features/OcclusionMaps' CS_DCLF_SKYLIGHT and CS_DCLF_PRECIPITATION, Features/Reflection's and
+			// CS_DCLF_SHADOWS: Features/OcclusionMaps' CS_DCLF_SKYLIGHT and CS_DCLF_PRECIPITATION, Features/Reflection's and
 			// Features/FirstPerson's switches before CS_DCLF_OPAQUE_EFFECTS, Features/Billboards' CS_DCLF_BILLBOARD_PARTICLES after it.)
 			// (Features/Fades' CS_DCLF_EMPTY_FADE_NODE is listed here, before CS_ORG_EPOCHS.)
 			{ OrgEpochs, "CS_ORG_EPOCHS", F, Reduced::Zero, true, "0: the render graph runs without epochs, and DCLF does not install" },
@@ -162,6 +160,8 @@ namespace DCLF
 			{ TestTurn, "CS_DCLF_TEST_TURN", T, N, false, "<start>:<end>:<degrees per frame>;...: turns the player" },
 			{ TestToggle, "CS_DCLF_TEST_TOGGLE", T, N, false, "<off frame>:<on frame>...: switches DCLF off and on" },
 			{ TestExit, "CS_DCLF_TEST_EXIT", T, N, false, "<frame>: the game exits at once after that many frames (startup loops)" },
+			{ TestRefuse, "CS_DCLF_TEST_REFUSE", T, N, false,
+				"<name>,...: geometry whose node name contains one is refused as an unstable buffer (a RaceMenu morph on test2): the engine-only subset's paths" },
 
 			{ UpscaleSubmit, "CS_UPSCALE_SUBMIT", O, N, false, "direct: upscaling's ring submissions wait for DXVK's command stream" },
 			{ StreamlineReflex, "CS_STREAMLINE_REFLEX", O, N, false, "0: Streamline does not load Reflex, PCL or DLSS-G (for Nsight captures)" },

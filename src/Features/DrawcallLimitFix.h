@@ -37,6 +37,8 @@ struct DrawcallLimitFix : Feature
 	virtual void SetupResources() override;
 	virtual bool AppliesBootToggleLive() const override { return true; }
 	virtual void Reset() override;
+	/** @brief The Present hook, before the present: FrameDriver::BeforePresent, once installed. */
+	void BeforePresent();
 	virtual void Prepass() override;
 	virtual void EarlyPrepass() override;
 	virtual void DrawSettings() override;
@@ -118,6 +120,19 @@ struct DrawcallLimitFix : Feature
 	 * before the map is cleared for DCLF's.
 	 */
 	bool OcclusionReferenceFrame(OcclusionMap a_map);
+	/**
+	 * @brief DCLF draws the map (OcclusionReady): the engine's Precipitation::SetupMask culls and registers the frame's engine-only occluders
+	 * alone (the engine-only subset's casters, DCLF/Core/Scene/EngineCasters.h), so what DCLF cannot draw still occludes; the members
+	 * under their roots are withheld (the occlusion phase). False when there are none: the caller sets the projection and camera alone.
+	 */
+	bool OcclusionEngineOnlyMask(RE::Precipitation* a_precip);
+	/**
+	 * @brief Whether the CS overlay draws the screen black this frame: the session's first DCLF frames, held until DCLF covers its views
+	 * (DrawcallLimitFix/Core/Render/StartupHold.h).
+	 */
+	bool StartupBlackout() const;
+	/** @brief After OcclusionNeedsEngine: the map is held by the startup hold, rendered without the engine's cull (SetupMask skipped). */
+	bool OcclusionHeld(OcclusionMap a_map) const;
 	void OcclusionReferenceRendered(OcclusionMap a_map);
 	/**
 	 * @brief The precipitation occlusion mask's render (Precipitation::SetupMask, then RenderMask), Skylighting's at its two points and
@@ -161,6 +176,15 @@ struct DrawcallLimitFix : Feature
 	static void TargetDumpPoint(const char* a_label, ID3D11Texture2D* a_extra = nullptr);
 	/** @brief Every render graph submission up to a_submissions completed on the GPU (GraphHost's retired callback): DCLF's retirement clock. */
 	static void OnGraphSubmissionsRetired(std::uint64_t a_submissions);
+
+	/** @brief What the diagnostic capture records of the feature's state (Diagnostics/Capture). */
+	struct CaptureInfo
+	{
+		bool installed = false, switchedOn = false, running = false, faulted = false, pumpLagging = false;
+		std::string unavailableReason;
+	};
+	/** @brief Render thread: the feature's state, for the diagnostic capture. */
+	CaptureInfo GetCaptureInfo() const { return { installed, switchedOn, Running(), faulted, pumpLagging, unavailableReason }; }
 
 private:
 	struct Hooks

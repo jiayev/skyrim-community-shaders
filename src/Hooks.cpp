@@ -1,6 +1,7 @@
 #include "Hooks.h"
 
 #include "GpuEventTimers.h"
+#include "HangWatchdog.h"
 #include "GpuIdleTrace.h"
 #include "ShaderTools/BSShaderHooks.h"
 #include "ShaderTools/LegacyGraphicsCompatibility.h"
@@ -25,7 +26,6 @@
 
 #include "CSEditor/SceneManager/WeatherTransition.h"
 #include "Features/DrawcallLimitFix.h"
-#include "Features/DrawcallLimitFix/Diagnostics/FadeProbe.h"
 #include "Features/Effects11.h"
 #include "Features/GrassOptimizations.h"
 #include "Features/HDRDisplay.h"
@@ -195,23 +195,6 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		return false;
 	if (EnvironmentProbe::IsRendering())
 		skipPixelShader = false;
-
-	// TEMP (fade-in investigation): CS_FADE_PROBE=1.
-	if (static const bool probe = [] { const char* v = std::getenv("CS_FADE_PROBE"); return v && v[0] == '1'; }(); probe) {
-		namespace P = DCLF::Diagnostics::FadeProbe;
-		static uint lastLogged = 0;
-		if (shader->shaderType.get() == RE::BSShader::Type::Lighting) {
-			P::counters.lightingTechniques.fetch_add(1, std::memory_order_relaxed);
-			if (pixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AdditionalAlphaMask))
-				P::counters.stippleTechniques.fetch_add(1, std::memory_order_relaxed);
-		}
-		if (state->frameCount >= lastLogged + 300) {
-			lastLogged = state->frameCount;
-			logger::info("[FadeProbe] frame {}: {} lighting techniques, {} with the stipple fade; fades stepped {} ({} with no screen door), snapped in {}",
-				state->frameCount, P::counters.lightingTechniques.exchange(0), P::counters.stippleTechniques.exchange(0), P::counters.stepped.exchange(0),
-				P::counters.steppedNoDoor.exchange(0), P::counters.snappedIn.exchange(0));
-		}
-	}
 
 	// Landscape Seams: draw the vanilla terrain permutation while the seams one is compiling or failed.
 	constexpr auto landscapeSeamsFlag = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
@@ -535,6 +518,7 @@ struct IDXGISwapChain_Present
 		{
 			ZoneScopedN("CS.Present.Begin");
 			GpuIdleTrace::OnPresent();
+			HangWatchdog::OnPresent();
 			GpuEventTimers::OnPresent();
 		}
 
@@ -559,6 +543,11 @@ struct IDXGISwapChain_Present
 		streamline->SetPCLMarker(Streamline::PclMarker::RenderSubmitEnd);
 		streamline->SetPCLMarker(Streamline::PclMarker::TriggerFlash);
 		streamline->SetPCLMarker(Streamline::PclMarker::PresentStart);
+
+		// What DCLF puts in DXVK's stream for the frame (its CPU frame signal), before the present sends the stream on; its features'
+		// Reset (EndFrame) runs after the present.
+		if (globals::features::drawcallLimitFix.loaded)
+			globals::features::drawcallLimitFix.BeforePresent();
 
 		// The render thread's pacing point (RenderGraphRuntime::SignalFramePace): the frame's end in DXVK's stream, unless frame
 		// generation paces the present itself.
@@ -598,6 +587,9 @@ struct IDXGISwapChain_Present
 			streamline->CaptureDLSSGPresentState();
 		}
 
+		// What the graph submitted before the present is on its way to the device: the points a mid-frame producer may wait for.
+		if (presentSucceeded)
+			RenderGraphRuntime::Get().SealPresented();
 		{
 			ZoneScopedN("CS.Present.FramePace");
 			RenderGraphRuntime::Get().WaitFramePace();

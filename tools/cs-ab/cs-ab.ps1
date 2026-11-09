@@ -81,7 +81,7 @@ function Unstash([string]$variant) {
 }
 function Set-EnabledMod([string]$mod) {
     $lines = Get-Content $modList
-    $isCs = { param($l) $l -match '^[+-](CS AB .+|CommunityShaders_AIO|Community Shaders DXVK ORG)$' }
+    $isCs = { param($l) $l -match '^[+-](CS AB .+|CommunityShaders_AIO|Community Shaders DXVK ORG|CS ORG DXVK Optimized)$' }
     $slot = -1
     for ($i = 0; $i -lt $lines.Count; ++$i) {
         if (& $isCs $lines[$i]) {
@@ -99,7 +99,7 @@ function Set-EnabledMod([string]$mod) {
     Set-Content $modList $lines -Encoding utf8
 }
 function Enabled-CsMod {
-    Get-Content $modList | Where-Object { $_ -match '^\+(CS AB .+|CommunityShaders_AIO|Community Shaders DXVK ORG)$' } | ForEach-Object { $_.Substring(1) } | Select-Object -First 1
+    Get-Content $modList | Where-Object { $_ -match '^\+(CS AB .+|CommunityShaders_AIO|Community Shaders DXVK ORG|CS ORG DXVK Optimized)$' } | ForEach-Object { $_.Substring(1) } | Select-Object -First 1
 }
 function Use-Variant([string]$variant) {
     Assert-NotRunning

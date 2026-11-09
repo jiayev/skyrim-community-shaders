@@ -95,8 +95,6 @@ namespace DCLF::Features::Lod::Gates
 		std::uint64_t rootsDetached = 0, taggedIncoming = 0, taggedOutgoing = 0, heldOut = 0, emptyIncoming = 0;
 		// Kept notices (ApplyGateKept): taken, geometries released from hold-out, outgoing tags dropped before a flip.
 		std::uint64_t keptNotices = 0, keptCleared = 0, keptUntagged = 0;
-		// Flips deferred for an incoming record the next publication claims first.
-		std::uint64_t structureDeferred = 0;
 		std::vector<double> requestToFlipMs;
 		std::vector<std::uint32_t> requestToFlipFrames;
 	};

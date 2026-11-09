@@ -17,6 +17,9 @@ namespace DCLF::MaterialWrites
 	/** @brief A material's fields were written (any thread, lock-free): Core's hooks, and the sink's writes (Api::NoteMaterialWritten). */
 	void NoteWritten(const RE::BSShaderMaterial* a_material);
 
+	/** @brief A property's per-object shading moved (its emissive, its material's alpha or colours): its dependents are resampled. Any thread. */
+	void NoteShading(const RE::BSShaderProperty* a_property);
+
 	/** @brief NoteWritten when the scope ends: for an in-place rewrite with early returns (CS's use the shell's MaterialWriteScope). */
 	struct NoteWrittenOnExit
 	{

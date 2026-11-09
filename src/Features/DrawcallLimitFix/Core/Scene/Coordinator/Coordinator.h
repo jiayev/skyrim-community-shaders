@@ -75,6 +75,7 @@ namespace DCLF
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/State/Dependents.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/State/Categories.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/State/Attach.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/State/Candidates.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/State/Placements.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/State/Hidden.h"
@@ -267,6 +268,23 @@ namespace DCLF
 		bool ScenePumpFailed() const;
 		/** @brief The test harness's (dclf:kill-scene-pump): the next scene pass throws past its handler, so the pump stops for good. */
 		void ThrowNextScenePass();
+		/**
+		 * @brief Any thread (dclf:actor-probe, CS_DCLF_ACTOR_PROBE): the next scene pass logs, per actor in the tables, how DCLF binds
+		 * its geometry (records, fade state against the binding's hint, forward or deferred descriptors, verdicts), naming what looks wrong.
+		 */
+		void RequestActorProbe(std::string a_label);
+		/**
+		 * @brief Scene lane only (the diagnostic capture, at a pass's end): the fade census as JSON, from the registrations at
+		 * Api::ReportPoint::CaptureCensus (Features/Fades' "fade roots": roots and totals), with the scene frame. Any other
+		 * registration's document goes under "other". Without the fade roots' registration: {"skipped": reason, "frame": n}.
+		 * FadeCensus.cpp.
+		 */
+		json FadeCensus();
+		/**
+		 * @brief Scene lane only: the sizes of the coordinator's growable containers, one "<name> <value>" line each, then the
+		 * registrations' at Api::ReportPoint::CaptureGrowth. FadeCensus.cpp.
+		 */
+		std::vector<std::string> SceneGrowthLines();
 
 		// Scene members (dclf-architecture.md, "Eligibility and classification"): a member's accumulated half is patched once from its membership pass and kept across
 		// frames until a rewrite breaks its binding, a release or a failed patch.
@@ -413,10 +431,8 @@ namespace DCLF
 		 * (PublicationNeeded).
 		 */
 		void RunSceneWork(bool a_task);
-		/** @brief Claims revoked mid-frame since the last call (RevokeUndrawnClaims): geometries, and main phases taken back. */
-		std::pair<std::uint64_t, std::uint64_t> TakeRevokedClaims() { return { std::exchange(revokedGeometries, 0), std::exchange(revokedMain, 0) }; }
-		/** @brief Of them, those revoked for a structural change after the selected revision's join. */
-		std::uint64_t TakeStructureRevocations() { return std::exchange(revokedStructureGeometries, 0); }
+		/** @brief Claims published that their tables do not draw, since the last call (CheckClaimsDrawable): the count and the first. */
+		std::pair<std::uint64_t, std::string> TakeUndrawnClaims() { return { std::exchange(undrawnClaims, 0), std::exchange(undrawnFirst, {}) }; }
 		struct SetStats
 		{
 			std::uint64_t commits = 0, evaluated = 0, joined = 0, left = 0, readinessEvents = 0, resyncs = 0;
@@ -1229,6 +1245,16 @@ namespace DCLF
 			bool a_perFrameBefore, std::uint32_t a_traitsBefore, Ineligible a_reasonBefore);
 		/** @brief WriteObject's merge half: the Tracked delta, then the face, geometry slots and record. */
 		bool MergeWrite(RE::BSGeometry* a_geometry, Tracked& a_tracked, EvalResult& a_result, PartTimer& a_timer, Ineligible& a_bucket);
+		/**
+		 * @brief A geometry's verdict as EngineCasters.h counts it: a_reason its classification's, None once it has a record or is untracked.
+		 * Listed while the reason is an engine caster's (Eligibility::EngineCasterReason) and the engine would draw its shadow.
+		 */
+		void NoteEngineCaster(RE::BSGeometry* a_geometry, Ineligible a_reason);
+		/**
+		 * @brief The engine-only casters' roots for a publication (null: none): each one's light entry (an actor's root) or sun entry, while
+		 * the coordinator owns it (rootOwners), so it lives while the publication does; a caster with neither counts as untargeted.
+		 */
+		std::shared_ptr<const EngineOnlySubset> PublishEngineCasters();
 		/** @brief MergeWrite's geometry slots (a skin's partitions linked, or a LOD chain's ranges); Tables::kSlotFree: unstable, rebucketed. */
 		std::uint32_t ResolveWriteGeometry(RE::BSGeometry* a_geometry, const SceneCapture::GeometryRecord& a_record, const EvalResult& a_result, PartTimer& a_timer,
 			Ineligible& a_bucket);
@@ -1260,6 +1286,8 @@ namespace DCLF
 		struct JoinFrame;
 		struct JoinBinding;
 		void RunJoins(JoinFrame& a_frame);
+		/** @brief The scene pass's end: the actor probe RequestActorProbe asked for (ActorProbe.cpp). */
+		void RunActorProbeIfAsked();
 		void MergeJoin(const OrderEntry& a_entry, JoinResult& a_result, JoinFrame& a_frame);
 		std::uint32_t BindJoinPipeline(const JoinResult& a_result, const LightingDescriptors& a_descriptors, bool a_layer, PartTimer& a_timer);
 		std::uint32_t MakeJoinPipeline(const JoinResult& a_result, const LightingDescriptors& a_descriptors, bool a_layer);
@@ -1419,13 +1447,8 @@ namespace DCLF
 		void EmitShadowSets(bool a_rebuild, std::uint32_t a_moved);
 
 		// The DCLF set and the claims: State/Set.h (CoordinatorSet).
-		/** @brief The structural changes revokeCursor has not read, into structureChanged. */
-		void NoteStructureChanges();
-		/**
-		 * @brief After ApplySet: revokes claimed phases whose record the work stopped drawing (from the change log), so the engine draws
-		 * them.
-		 */
-		void RevokeUndrawnClaims();
+		/** @brief After PublishClaims: counts claimed phases the publication's records do not draw (from the change log). A defect, reported. */
+		void CheckClaimsDrawable();
 		/** @brief The readiness source that releases a waiting reason (SetStats::waitingBy's index). */
 		static constexpr std::uint8_t WaitCauseOf(std::uint32_t a_why)
 		{
@@ -1453,11 +1476,9 @@ namespace DCLF
 		std::size_t TakeClaimsEntry();
 		/** @brief PublishScene, after ApplySet: publicationClaims brought up to setBuilding (or the last shared when it did not change). */
 		void PublishClaims();
-		/** @brief The end of RevokeUndrawnClaims: claimsRevoked out of publicationClaims (a copy first when they were shared). */
-		void RevokeFromClaims();
 		void QueueSet(std::uint32_t a_slot);
 		/**
-		 * @brief Takes a slot out of the applied set's phases after its commit (rebound by the joins, a claim revoked): out of the commit's
+		 * @brief Takes a slot out of the applied set's phases after its commit (rebound by the joins): out of the commit's
 		 * decision and the claims snapshot, queued for the next commit and marked for ApplySet. Otherwise the commit's copy keeps the
 		 * phases and nobody draws the record. A base and its layer leave the main phases together.
 		 */
@@ -1491,8 +1512,6 @@ namespace DCLF
 		std::uint8_t VetoedPhases(std::uint32_t a_slot, std::uint8_t a_phases, bool a_wait, std::uint32_t a_drawn, bool a_live);
 		/** @brief Whether a_slot's entry is vetoed (VetoedPhases' withholding alone: the set parity's). */
 		bool EntryVetoed(std::uint32_t a_slot) const;
-		/** @brief Whether a_slot's structure changed since the last publication's revocation (revokeCursor's unread changes), once a commit. */
-		bool RestructuredSincePublication(std::uint32_t a_slot);
 		/** @brief Whether everything the main phase draws with is ready; a_why: waitingBy's index when not. */
 		bool MainReady(std::uint32_t a_slot, std::uint32_t& a_why) const;
 		/** @brief The CategoryRoot view whose entry a slot's geometry is (a first-person entry's), EngineView::Count for none. */
@@ -1518,7 +1537,7 @@ namespace DCLF
 			a_references.clear();
 		}
 		/**
-		 * @brief The pass's publication: ApplySet, PublishClaims, RevokeUndrawnClaims, PublishTables, then the deltas onto the log before the publication
+		 * @brief The pass's publication: ApplySet, PublishClaims, CheckClaimsDrawable, PublishTables, then the deltas onto the log before the publication
 		 * goes to the snapshot builder, so whoever adopts it finds its node.
 		 */
 		void PublishScene();

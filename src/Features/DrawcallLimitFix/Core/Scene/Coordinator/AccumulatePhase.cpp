@@ -3,6 +3,7 @@
 // shadow dependency index refreshed.
 
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/AncestorValues.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/LightVolumes.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MaterialPorts.h"
@@ -258,7 +259,7 @@ namespace DCLF::Scene
 
 	void Coordinator::BuildAccumulatePhase()
 	{
-		ZoneScopedN("CS.DCLF.Accumulate.Tables");
+		DCLF_ZONE("CS.DCLF.Accumulate.Tables");
 		if (!sceneBuilt)
 			return;  // a load screen, or the feature installed mid-frame: nothing to patch
 		ShardScope passScope(*this, false);
@@ -771,7 +772,7 @@ namespace DCLF::Scene
 
 	void Coordinator::BindByMembership()
 	{
-		ZoneScopedN("CS.DCLF.Accumulate.BindByMembership");
+		DCLF_ZONE("CS.DCLF.Accumulate.BindByMembership");
 		// A record being rebound first leaves the set's main phases (a join never patches a member). The commit later in this pass
 		// readmits it if ready, keeping its claim (the frame draws the old record until the new publication); otherwise it leaves there.
 		auto leaveMain = [&](std::uint32_t a_slot) {
@@ -1039,7 +1040,9 @@ namespace DCLF::Scene
 		const auto* material = record ? static_cast<const RE::BSShaderMaterial*>(record->material) : nullptr;
 		const bool alphaBelowOne = record && record->materialAlpha < 1.0f;
 		const std::uint32_t alphaState = layer ? 0u : leaf.AlphaState();
-		return derived.valid && derived.alphaState == alphaState && derived.generation == tablesGeneration && derived.geometrySlot == tables.objects[a_slot].geometryIndex &&
+		// A blended fade starting or ending changes the synthetic pass's hint (BlendFading): the binding goes with it.
+		const bool fading = !layer && BlendFading(leaf, record) && Extensions::ObjectClassOn(ActiveToggles(), Api::ObjectClass::Forward);
+		return derived.valid && (derived.hint == kFadingHint) == fading && derived.alphaState == alphaState && derived.generation == tablesGeneration && derived.geometrySlot == tables.objects[a_slot].geometryIndex &&
 		       derived.property == property && derived.material == material && derived.fadeState == FadeStateOf(record) &&
 		       derived.alphaBelowOne == alphaBelowOne && derived.interior == frameInterior && derived.pipelineSlot == tables.objects[a_slot].pipelineIndex &&
 		       derived.materialSlot == tables.objects[a_slot].materialIndex;
@@ -1063,7 +1066,7 @@ namespace DCLF::Scene
 
 	void Coordinator::RefreshShadowSets(bool a_forceRebuild)
 	{
-		ZoneScopedN("CS.DCLF.Capture.ShadowSets");
+		DCLF_ZONE("CS.DCLF.Capture.ShadowSets");
 		// ClearFrame rebuilds the public lists every walk; the dependency index holds membership across frames. Each index keeps its keys
 		// ordered by their lowest member (the order the sets are emitted in), and the textures that appear or go are noted as they do.
 		shadowTextureNet.clear();
@@ -1113,7 +1116,7 @@ namespace DCLF::Scene
 
 	void Coordinator::ResetShadowIndex(std::vector<std::uint32_t>& a_changed)
 	{
-		ZoneScopedN("CS.DCLF.Capture.ShadowSets.Rebuild");
+		DCLF_ZONE("CS.DCLF.Capture.ShadowSets.Rebuild");
 		auto& net = shadowTextureNet;
 		auto& changed = a_changed;
 		++shadowSetStats.rebuilds;

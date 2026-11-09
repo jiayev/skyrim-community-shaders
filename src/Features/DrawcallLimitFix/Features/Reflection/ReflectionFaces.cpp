@@ -7,6 +7,8 @@
 #include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Core/Handoff/PassCapture.h"
+#include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 
 #include <array>
 #include <utility>
@@ -67,14 +69,29 @@ namespace DCLF::Features::Reflection::ReflectionFaces
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		/** @brief The add-root (FUN_1405275e0(camera, root)) at one of the LOD call sites: skipped when DCLF draws that root. */
+		/**
+		 * @brief The add-root (FUN_1405275e0(camera, root)) at one of the LOD call sites: skipped when DCLF draws that root, all but the
+		 * engine-only subset's colour roots under it (Scene/EngineCasters.h: the LOD shapes DCLF cannot draw), which the engine draws in
+		 * the faces as it would (the members under them withheld, PassCapture).
+		 */
 		template <std::uint32_t Bit, std::uint32_t Site>
 		struct AddLodRoot
 		{
 			static void thunk(void* a_camera, void* a_root)
 			{
-				if (!(skipRoots & Bit))
+				if (!(skipRoots & Bit)) {
 					func(a_camera, a_root);
+					return;
+				}
+				const auto& subset = Scene::FrameView::Get().GetEngineCasters();
+				if (!subset)
+					return;
+				const auto& colour = subset->Of(Scene::EngineOnlySubset::kColour);
+				for (std::size_t r = 0; r < colour.roots.size(); ++r)
+					if (colour.category[r] == a_root) {
+						func(a_camera, const_cast<RE::NiAVObject*>(colour.roots[r]));
+						++rootStats.engineOnlyRoots;
+					}
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};

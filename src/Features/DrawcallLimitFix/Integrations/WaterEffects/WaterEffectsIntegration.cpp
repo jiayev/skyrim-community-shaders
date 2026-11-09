@@ -1,6 +1,7 @@
 // Water Effects: its caustics texture (t65), a frame texture. The render thread's callback reads the feature live.
 
 #include "Features/DrawcallLimitFix/Integrations/WaterEffects/WaterEffects.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
 
 #include "Features/WaterEffects.h"
 
@@ -25,6 +26,6 @@ namespace DCLF::Integrations::WaterEffects
 
 	Api::Feature Integration()
 	{
-		return { "water effects", &Install };
+		return { .name = "water effects", .install = &Install, .status = [] { return FeatureStatus(globals::features::waterEffects); } };
 	}
 }

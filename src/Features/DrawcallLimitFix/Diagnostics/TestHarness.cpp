@@ -1,5 +1,6 @@
 // The test harness: the CS_DCLF_TEST_* switches' scripted commands, toggles, turns, moves and exit, run every Present on the render
 // (main) thread, DCLF installed or not.
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "TestHarness.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
@@ -9,14 +10,17 @@
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatches.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Capture/Capture.h"
 #include "Features/DrawcallLimitFix/Diagnostics/PlayerParity.h"
 #include "Features/DrawcallLimitFix/Diagnostics/TelemetryProfile.h"
 #include "Features/PostProcessing.h"
 #include "Features/RemoteControl/NvPerf.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/Upscaling.h"
 #include "Globals.h"
 #include "GpuEventTimers.h"
 #include "Rendering/EnvironmentProbe/CameraPass.h"
@@ -172,6 +176,30 @@ namespace DCLF
 			return true;
 		}
 
+		/** @brief dclf:cast (TestCast, below): false when the command was it. */
+		bool TestCastCommand(const std::string& a_command);
+
+		/**
+		 * @brief The a_index-th nearest living female actor among the high-process ones (any cell: an exterior's stand in the cells around
+		 * the player's), or null. Main thread.
+		 */
+		RE::Actor* NearestFemale(std::size_t a_index)
+		{
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			auto* lists = RE::ProcessLists::GetSingleton();
+			if (!player || !lists)
+				return nullptr;
+			std::vector<std::pair<float, RE::Actor*>> actors;
+			for (auto& handle : lists->highActorHandles) {
+				auto actor = handle.get();
+				auto* base = actor ? actor->GetActorBase() : nullptr;
+				if (base && actor.get() != player && !actor->IsDead() && base->IsFemale())
+					actors.emplace_back(actor->GetPosition().GetDistance(player->GetPosition()), actor.get());
+			}
+			std::sort(actors.begin(), actors.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+			return a_index < actors.size() ? actors[a_index].second : nullptr;
+		}
+
 		/**
 		 * @brief Test switch CS_DCLF_TEST_COMMANDS="<frame>:<console command>;...": runs each console command
 		 * once the main pass has run that many frames (loading screens do not count), on the main thread.
@@ -261,8 +289,10 @@ namespace DCLF
 					logger::info("[DCLF] test command at frame {}: {}", a_frame, command);
 					if (Vram::SpillLab::Command(command))
 						return;
+					if (!TestCastCommand(command))
+						return;
 					// The command in a capture too: a timing run's phases are found in its Tracy capture by these zones.
-					ZoneScopedN("CS.DCLF.TestCommand");
+					DCLF_ZONE("CS.DCLF.TestCommand");
 					ZoneText(command.data(), command.size());
 					// "dclf:<toggle name>=<0|1>": a live toggle (Toggles.h, ToggleInfo::name), as the menu sets it, so one run can
 					// compare a class drawn by DCLF and by the engine from the same camera.
@@ -287,6 +317,156 @@ namespace DCLF
 								if (auto* player = RE::PlayerCharacter::GetSingleton())
 									player->DrawWeaponMagicHands(draw);
 							});
+						return;
+					}
+					// "dclf:face-npc=<n>": the player placed 110 units in front of the n-th nearest loaded actor (0 the nearest), facing it,
+					// on the main thread, so a scripted run sees an NPC's face wherever a coc lands.
+					if (command.rfind("dclf:face-npc=", 0) == 0) {
+						// "=<n>,<distance>,<side>": that far in front, and that far to the NPC's right (a third-person camera sees past the player).
+						const std::string args = command.substr(14);
+						const auto index = static_cast<std::size_t>(std::strtoul(args.c_str(), nullptr, 10));
+						float distance = 110.0f, side = 0.0f;
+						if (const auto comma = args.find(','); comma != std::string::npos) {
+							distance = std::strtof(args.c_str() + comma + 1, nullptr);
+							if (const auto second = args.find(',', comma + 1); second != std::string::npos)
+								side = std::strtof(args.c_str() + second + 1, nullptr);
+						}
+						if (auto* tasks = SKSE::GetTaskInterface())
+							tasks->AddTask([index, distance, side] {
+								auto* player = RE::PlayerCharacter::GetSingleton();
+								auto* lists = RE::ProcessLists::GetSingleton();
+								if (!player || !lists)
+									return;
+								std::vector<std::pair<float, RE::Actor*>> actors;
+								for (auto& handle : lists->highActorHandles) {
+									auto actor = handle.get();
+									if (actor && actor.get() != player && !actor->IsDead() && actor->GetParentCell() == player->GetParentCell())
+										actors.emplace_back(actor->GetPosition().GetDistance(player->GetPosition()), actor.get());
+								}
+								std::sort(actors.begin(), actors.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+								if (index >= actors.size()) {
+									logger::info("[DCLF] face-npc: {} actors loaded, none at {}", actors.size(), index);
+									return;
+								}
+								auto* actor = actors[index].second;
+								const float heading = actor->GetAngleZ();
+								auto position = actor->GetPosition();
+								position.x += std::sin(heading) * distance + std::cos(heading) * side;
+								position.y += std::cos(heading) * distance - std::sin(heading) * side;
+								player->SetPosition(position, true);
+								player->SetHeading(heading + RE::NI_PI);
+								logger::info("[DCLF] face-npc: {} ({:08X}) at {} units, player placed at ({:.0f} {:.0f} {:.0f})", actor->GetDisplayFullName(), actor->GetFormID(),
+									actors[index].first, position.x, position.y, position.z);
+							});
+						return;
+					}
+					// "dclf:face-female=<n>,<distance>,<side>[,strip]": as face-npc, among the female actors only; "strip" unequips her worn
+					// armor too, so her body mesh (a replacer's, such as 3BA's, weighted to physics bones) is what draws and casts.
+					if (command.rfind("dclf:face-female=", 0) == 0) {
+						const std::string args = command.substr(17);
+						std::size_t index = 0;
+						float distance = 110.0f, side = 0.0f;
+						char flag[16]{};
+						std::sscanf(args.c_str(), "%zu,%f,%f,%15s", &index, &distance, &side, flag);
+						const bool strip = std::strcmp(flag, "strip") == 0;
+						if (auto* tasks = SKSE::GetTaskInterface())
+							tasks->AddTask([index, distance, side, strip] {
+								auto* player = RE::PlayerCharacter::GetSingleton();
+								auto* actor = NearestFemale(index);
+								if (!player || !actor) {
+									logger::info("[DCLF] face-female: no female actor at {}", index);
+									return;
+								}
+								std::uint32_t stripped = 0;
+								// UnequipObject queues the change and returns false, so this counts the worn pieces asked off.
+								if (strip) {
+									auto* equip = RE::ActorEquipManager::GetSingleton();
+									for (auto& [object, entry] : actor->GetInventory([](RE::TESBoundObject& a_object) { return a_object.IsArmor(); }))
+										if (entry.second && entry.second->IsWorn()) {
+											equip->UnequipObject(actor, object);
+											++stripped;
+										}
+								}
+								const float heading = actor->GetAngleZ();
+								auto position = actor->GetPosition();
+								position.x += std::sin(heading) * distance + std::cos(heading) * side;
+								position.y += std::cos(heading) * distance - std::sin(heading) * side;
+								player->SetPosition(position, true);
+								player->SetHeading(heading + RE::NI_PI);
+								logger::info("[DCLF] face-female: {} ({:08X}) at {} units, {} armor pieces unequipped, player placed at ({:.0f} {:.0f} {:.0f})",
+									actor->GetDisplayFullName(), actor->GetFormID(), actor->GetPosition().GetDistance(player->GetPosition()), stripped, position.x, position.y, position.z);
+							});
+						return;
+					}
+					// "dclf:morph-female=<n>,<morph>,<value>": a RaceMenu body morph on the n-th nearest female actor, as BodyGen or OBody sets
+					// one: NiOverride.SetBodyMorph(actor, morph, "DCLFTest", value), then NiOverride.UpdateModelWeight(actor), through the
+					// Papyrus VM (skee's own functions; nothing happens without RaceMenu). skee then morphs her body and every worn piece built
+					// with morphs (BODYTRI), each by a new skin partition.
+					if (command.rfind("dclf:morph-female=", 0) == 0) {
+						std::size_t index = 0;
+						char morph[64]{};
+						float value = 1.0f;
+						if (std::sscanf(command.c_str() + 18, "%zu,%63[^,],%f", &index, morph, &value) < 2) {
+							logger::warn("[DCLF] dclf:morph-female: '{}' is not <n>,<morph>[,<value>]", command);
+							return;
+						}
+						if (auto* tasks = SKSE::GetTaskInterface())
+							tasks->AddTask([index, morphName = std::string(morph), value] {
+								auto* actor = NearestFemale(index);
+								auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+								if (!actor || !vm) {
+									logger::info("[DCLF] morph-female: no female actor at {}", index);
+									return;
+								}
+								RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> none;
+								RE::TESObjectREFR* reference = actor;
+								const bool set = vm->DispatchStaticCall("NiOverride", "SetBodyMorph",
+									RE::MakeFunctionArguments(std::move(reference), RE::BSFixedString(morphName), RE::BSFixedString("DCLFTest"), float(value)), none);
+								reference = actor;
+								const bool update = vm->DispatchStaticCall("NiOverride", "UpdateModelWeight", RE::MakeFunctionArguments(std::move(reference)), none);
+								logger::info("[DCLF] morph-female: {} ({:08X}) {} = {}: SetBodyMorph {}, UpdateModelWeight {}", actor->GetDisplayFullName(), actor->GetFormID(),
+									morphName, value, set ? "queued" : "not found", update ? "queued" : "not found");
+							});
+						return;
+					}
+					// "dclf:npc-alpha=<n>,<alpha>": Actor::SetAlpha on the n-th nearest loaded actor (a fade, as an invisibility effect makes one).
+					if (command.rfind("dclf:npc-alpha=", 0) == 0) {
+						const std::string args = command.substr(15);
+						const auto index = static_cast<std::size_t>(std::strtoul(args.c_str(), nullptr, 10));
+						const auto comma = args.find(',');
+						const float alpha = comma == std::string::npos ? 1.0f : std::strtof(args.c_str() + comma + 1, nullptr);
+						if (auto* tasks = SKSE::GetTaskInterface())
+							tasks->AddTask([index, alpha] {
+								auto* player = RE::PlayerCharacter::GetSingleton();
+								auto* lists = RE::ProcessLists::GetSingleton();
+								if (!player || !lists)
+									return;
+								std::vector<std::pair<float, RE::Actor*>> actors;
+								for (auto& handle : lists->highActorHandles)
+									if (auto actor = handle.get(); actor && actor.get() != player && actor->GetParentCell() == player->GetParentCell())
+										actors.emplace_back(actor->GetPosition().GetDistance(player->GetPosition()), actor.get());
+								std::sort(actors.begin(), actors.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+								if (index < actors.size()) {
+									actors[index].second->SetAlpha(alpha);
+									logger::info("[DCLF] npc-alpha: {} ({:08X}) set to {}", actors[index].second->GetDisplayFullName(), actors[index].second->GetFormID(), alpha);
+								}
+							});
+						return;
+					}
+					// "dclf:menu=<menu name>=show|hide": a menu opened or closed through the UI message queue (e.g. "Journal Menu", the
+					// system menu Escape opens), so a scripted run pauses the game as a player does.
+					if (command.rfind("dclf:menu=", 0) == 0) {
+						const auto rest = command.substr(10);
+						const auto equals = rest.rfind('=');
+						if (equals != std::string::npos)
+							if (auto* queue = RE::UIMessageQueue::GetSingleton())
+								queue->AddMessage(RE::BSFixedString(rest.substr(0, equals)),
+									rest.substr(equals + 1) == "show" ? RE::UI_MESSAGE_TYPE::kShow : RE::UI_MESSAGE_TYPE::kHide, nullptr);
+						return;
+					}
+					// "dclf:actor-probe=<label>": the next scene pass logs how DCLF binds each actor's geometry (Coordinator::RequestActorProbe).
+					if (command.rfind("dclf:actor-probe", 0) == 0) {
+						Scene::Coordinator::Get().RequestActorProbe(command.size() > 17 ? command.substr(17) : std::string{});
 						return;
 					}
 					// "dclf:kill-scene-pump": the scene pump stopped for good, as a pass throwing past its handler stops it, for the watchdog
@@ -374,6 +554,12 @@ namespace DCLF
 						MemProbe::Mark(command.size() > 10 ? std::string_view(command).substr(10) : std::string_view{}, a_frame);
 						return;
 					}
+					// "dclf:capture[=<seconds>]": the menu's diagnostic capture, started at the next Present (Diagnostics/Capture/Capture.h). Its
+					// telemetry phase replaces a running dclf:telemetry one.
+					if (command == "dclf:capture" || command.rfind("dclf:capture=", 0) == 0) {
+						Capture::Request(command.size() > 13 ? std::strtof(command.c_str() + 13, nullptr) : 10.0f, true);
+						return;
+					}
 					// "dclf:telemetry=<label>": a BasicTelemetry session for this phase, in place of the running one, whose files it writes. "=off": none.
 					if (command.rfind("dclf:telemetry=", 0) == 0) {
 						Diagnostics::TelemetryPhase(std::string_view(command).substr(15));
@@ -405,6 +591,15 @@ namespace DCLF
 							save(::EnvironmentProbe::Shadows::Map(), "sun-depth");
 						const bool saved = save(probe.Radiance(), "radiance") && save(probe.Depth(), "distance") && save(probe.Normals(), "normals");
 						logger::info("[DCLF] probe dump {}: {}", prefix, saved ? "saved" : "failed");
+						return;
+					}
+					// "dclf:fg=off|fsr|dlss": frame generation switched as the Upscaling menu's method stepper does (Upscaling::RequestFrameGenTest).
+					if (command.rfind("dclf:fg=", 0) == 0) {
+						const auto method = command.substr(8);
+						if (method == "off" || method == "fsr" || method == "dlss")
+							Upscaling::RequestFrameGenTest(method == "off" ? 0 : method == "fsr" ? 1 : 2);
+						else
+							logger::warn("[DCLF] dclf:fg: '{}' is not off, fsr or dlss", method);
 						return;
 					}
 					// "dclf:vram-json": VRAM attribution's snapshot (the menu's Memory dump) written to the log directory.
@@ -858,6 +1053,122 @@ namespace DCLF
 			std::vector<Range> moves;  // CS_DCLF_TEST_MOVE="start:end:units per frame;..."
 			std::uint32_t frame = 0;
 		};
+
+		/**
+		 * @brief "dclf:cast=<spell form ID>,<left|right>,<hold seconds>": the player casts a spell from a hand as a player does. The spell
+		 * is equipped to the hand and the hands drawn. A second and a half later (the draw animation) the hand's attack button is pressed,
+		 * held for that long and released, sent through the input device manager as the mouse's events. So the hand's charge, its casting
+		 * art and light and the release all run, which player.cast (an instant caster, no hand) skips. One cast at a time; a new one
+		 * replaces it.
+		 */
+		class TestCast
+		{
+		public:
+			static bool Command(const std::string& a_command)
+			{
+				if (a_command.rfind("dclf:cast=", 0) != 0)
+					return true;
+				char hand[16]{};
+				unsigned formId = 0;
+				float hold = 1.0f;
+				if (std::sscanf(a_command.c_str() + 10, "%x,%15[a-z],%f", &formId, hand, &hold) < 2 || (std::strcmp(hand, "left") && std::strcmp(hand, "right"))) {
+					logger::warn("[DCLF] dclf:cast: '{}' is not <spell form ID>,<left|right>[,<hold seconds>]", a_command);
+					return false;
+				}
+				auto& cast = State();
+				cast = { formId, std::strcmp(hand, "left") == 0, hold, std::chrono::steady_clock::now(), Phase::Equip };
+				return false;
+			}
+
+			static void OnFrame()
+			{
+				auto& cast = State();
+				if (cast.phase == Phase::Idle)
+					return;
+				auto* tasks = SKSE::GetTaskInterface();
+				if (!tasks)
+					return;
+				const float since = std::chrono::duration<float>(std::chrono::steady_clock::now() - cast.start).count();
+				switch (cast.phase) {
+				case Phase::Equip:
+					tasks->AddTask([formId = cast.formId, left = cast.left] {
+						auto* player = RE::PlayerCharacter::GetSingleton();
+						auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(formId);
+						// Skyrim.esm's LeftHand and RightHand equip slots.
+						const auto* slot = RE::TESForm::LookupByID<RE::BGSEquipSlot>(left ? 0x13F43 : 0x13F42);
+						if (!player || !spell || !slot) {
+							logger::warn("[DCLF] dclf:cast: no spell {:08X}", formId);
+							return;
+						}
+						RE::ActorEquipManager::GetSingleton()->EquipSpell(player, spell, slot);
+						player->DrawWeaponMagicHands(true);
+					});
+					cast.phase = Phase::Draw;
+					return;
+				case Phase::Draw:
+					if (since < kDrawSeconds)
+						return;
+					Send(cast.left, 1.0f, 0.0f);
+					cast.phase = Phase::Hold;
+					return;
+				case Phase::Hold:
+					{
+						const float held = since - kDrawSeconds;
+						if (held < cast.hold) {
+							Send(cast.left, 1.0f, held);
+							return;
+						}
+						Send(cast.left, 0.0f, held);
+						logger::info("[DCLF] dclf:cast: {:08X} released after {:.2f} s", cast.formId, held);
+						cast.phase = Phase::Idle;
+						return;
+					}
+				default:
+					return;
+				}
+			}
+
+		private:
+			enum class Phase
+			{
+				Idle,
+				Equip,
+				Draw,
+				Hold
+			};
+			struct Cast
+			{
+				std::uint32_t formId = 0;
+				bool left = false;
+				float hold = 0.0f;
+				std::chrono::steady_clock::time_point start;
+				Phase phase = Phase::Idle;
+			};
+			static constexpr float kDrawSeconds = 1.5f;
+
+			static Cast& State()
+			{
+				static Cast cast;
+				return cast;
+			}
+
+			/** @brief One mouse button event for the hand's attack (the left button is the left hand's), on the main thread. */
+			static void Send(bool a_left, float a_value, float a_held)
+			{
+				SKSE::GetTaskInterface()->AddTask([a_left, a_value, a_held] {
+					auto* events = RE::UserEvents::GetSingleton();
+					auto* devices = RE::BSInputDeviceManager::GetSingleton();
+					if (!events || !devices)
+						return;
+					// The engine's event memory: the input queue owns its events and reuses them, so this one is left to the heap.
+					RE::InputEvent* event = RE::ButtonEvent::Create(RE::INPUT_DEVICE::kMouse, a_left ? events->leftAttack : events->rightAttack, a_left ? 0u : 1u, a_value, a_held);
+					if (event)
+						devices->SendEvent(&event);
+				});
+			}
+		};
+
+		bool TestCastCommand(const std::string& a_command) { return TestCast::Command(a_command); }
 	}
 
 	namespace
@@ -897,6 +1208,8 @@ namespace DCLF
 		static std::uint32_t exitCount = 0;
 		if (exitFrame && !DCLF::Scene::FrameView::IsLoadingScreenUp() && ++exitCount >= exitFrame) {
 			logger::info("[DCLF] test exit at frame {}", exitCount);
+			const auto moves = DCLF::Extensions::TransformMoveStats();
+			logger::info("[DCLF] transform moves at exit: {} spilled (allocated past the queue), {} dropped while no build drained", moves.spilled, moves.dropped);
 			spdlog::apply_all([](const std::shared_ptr<spdlog::logger>& a_logger) { a_logger->flush(); });
 			::TerminateProcess(::GetCurrentProcess(), 0);
 		}
@@ -906,6 +1219,7 @@ namespace DCLF
 		testToggle.OnFrame(std::string(a_feature));
 		static TestTurn testTurn;
 		testTurn.OnFrame();
+		TestCast::OnFrame();
 	}
 
 	TestHarnessProgress TestHarnessStatus()

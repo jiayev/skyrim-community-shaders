@@ -11,6 +11,7 @@
 #include <atomic>
 #include <bit>
 #include <cmath>
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 namespace DCLF::Features::Billboards
 {
@@ -121,7 +122,7 @@ namespace DCLF::Features::Billboards
 			const auto* node = const_cast<RE::NiAVObject&>(a_object).AsNode();
 			if (!node || a_depth > 64)
 				return;
-			for (const auto& child : node->GetChildren())
+			for (const auto& child : Engine::Children(*node))
 				if (child)
 					CheckSubtree(*child, a_node, a_camera, a_depth + 1);
 		}
@@ -148,7 +149,7 @@ namespace DCLF::Features::Billboards
 				camera.eye[1] = world.translate.y;
 				camera.eye[2] = world.translate.z;
 				// The leaves below, now that the node's OnVisible has updated them (its children's UpdateDownwardPass, before it culled them).
-				for (const auto& child : a_node->GetChildren())
+				for (const auto& child : Engine::Children(*a_node))
 					if (child)
 						CheckSubtree(*child, *a_node, camera, 0);
 			}

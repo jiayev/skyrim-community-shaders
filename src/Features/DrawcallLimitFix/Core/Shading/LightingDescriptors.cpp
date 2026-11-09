@@ -141,6 +141,23 @@ namespace DCLF
 		return (shadowDir ? 0x2000u : 0u) | (defShadow ? 0x4000u : 0u) | (defShadow && !shadowDir ? 0x40u : 0u);
 	}
 
+	bool BlendFading(const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord* a_property)
+	{
+		const auto* lighting = SceneCapture::LeafView::Lighting(a_property);
+		if (!lighting)
+			return false;
+		const std::uint64_t flags = lighting->flags;
+		// Decals (hints 2 and 3), refraction (hint 4) and bit 19 (hint 10, the stencil dither) take other passes.
+		if (flags & (0xc000000ull | 0x8004ull | (1ull << 19)))
+			return false;
+		const auto* fadeNode = lighting->fadeNode ? a_leaf.FadeNodeOf(lighting) : nullptr;
+		if (!fadeNode || !(fadeNode->currentFade < 1.0f))
+			return false;
+		// A screen-door fade without blending stays opaque (AdditionalAlphaMask).
+		const bool screenDoor = FrameGlobals::Current().screenDoorFades && fadeNode->fadeDoor;
+		return !screenDoor || a_leaf.AlphaBlending();
+	}
+
 	LodFadeFrame SampleLodFadeFrame()
 	{
 		const auto& g = FrameGlobals::Current();
@@ -334,8 +351,8 @@ namespace DCLF
 		}
 
 		// Refraction and the forward epoch's blended draws (a_out.refraction, a_out.forward and their state).
-		Ineligible DeriveForward(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf, LightingDescriptors& a_out, bool a_layer,
-			std::uint64_t f, bool blending)
+		Ineligible DeriveForward(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf, const AccumulatedPass* a_accumulated,
+			LightingDescriptors& a_out, bool a_layer, std::uint64_t f, bool blending)
 		{
 			const auto* alpha = a_leaf.alpha;
 			// Refraction (GetRenderPasses, AE 0x1414adfb0): kRefraction / kTempRefraction has one main pass, a Utility RENDER_NORMAL pass
@@ -363,7 +380,13 @@ namespace DCLF
 			// property applied (render flag 4: FUN_14150bc80's mode; none for alpha below one without blending, whose property alpha is
 			// the fade's), write mode 11, SetupGeometry's depth mode from kZBufferTest / kZBufferWrite, the forward pixel stage. A pair
 			// FUN_14150bc80 leaves as it finds it (stale state) stays native, as does anything a held group takes.
-			const bool translucent = blending || a_property.materialAlpha < 1.0f;
+			// A fading pass (hint 9, the synthetic pass's BlendFading) is drawn the same way: group 7 (FUN_1414b3390) blends with the
+			// alpha property's mode, else mode 1. The engine tests depth and never writes it (depth mode 1; SetupGeometry only lowers
+			// it), so its faded actors depend on its draw order to hide their own back parts. DCLF sorts a fading root's parts as one
+			// group (FrameValues' StoreForwardSort), but no fixed order hides both the hair behind a head and the mouth inside it, so
+			// a fading part writes depth as its opaque pass would (kZBufferWrite): the actor hides its own back parts in any order.
+			const bool fading = a_accumulated && a_accumulated->hint == kFadingHint && !a_layer;
+			const bool translucent = blending || a_property.materialAlpha < 1.0f || fading;
 			if (a_out.refraction) {
 				// The refraction draw's forward state (above): alpha property not applied.
 			} else if (translucent && a_out.decalGroup == 0 && !a_layer && a_out.terrainGroup == 0 &&
@@ -458,7 +481,7 @@ namespace DCLF
 		if (const Ineligible reason = DeriveHeldGroup(a_out, f); reason != Ineligible::None)
 			return reason;
 		// Refraction, then blended geometry (DeriveForward).
-		if (const Ineligible reason = DeriveForward(a_property, a_leaf, a_out, a_layer, f, blending); reason != Ineligible::None)
+		if (const Ineligible reason = DeriveForward(a_property, a_leaf, a_accumulated, a_out, a_layer, f, blending); reason != Ineligible::None)
 			return reason;
 
 		// The descriptor as GetRenderPasses builds it for an opaque object whose specular and envmap LOD fades have not run out

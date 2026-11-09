@@ -45,7 +45,7 @@ namespace DCLF
 	 * to the sun's full-frustum cull, then queues one list job per list and waits (JobList::Finish); the registration jobs walk
 	 * the output afterwards. Between the full-frustum cull and that Finish only the list jobs read the lists.
 	 *
-	 * The stand-in (toggle `excludePrimaryEntries`, CS_DCLF_PRIMARY_EXCLUDE) hooks the list processes' Process1 (vtable slot 0x16,
+	 * The stand-in (always on: no switch or toggle hands DCLF's objects back to the engine's cull) hooks the list processes' Process1 (vtable slot 0x16,
 	 * shared with every other list process, so filtered by process) on the job's thread. For an admitted entry in view it leaves
 	 * the root's OnVisible update to FadeStateCS (fade, leaf LOD step, tree LOD fix-up; written back) and tests a tree's height,
 	 * skips its geometries in the frame's set (the GPU draws them), and hands every other geometry in view to the registration in

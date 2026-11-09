@@ -134,9 +134,9 @@ namespace DCLF::SceneCapture
 		enum Field : std::uint32_t
 		{
 			kType = 1u << 0,
-			kRenderer = 1u << 1,   // renderer data, its buffers and vertex layout, the counts
-			kSkin = 1u << 2,       // instance, type, partition, data, bone count, partitions' buffers, layouts, counts, LOD bytes
-			kDismember = 1u << 3,  // the dismember partitions' shown flags
+			kRenderer = 1u << 1,    // renderer data, its buffers and vertex layout, the counts
+			kSkin = 1u << 2,        // instance, type, partition, data, bone count, partitions' buffers, layouts, counts, LOD bytes, shown flags
+			kDismember = 1u << 3,   // the dismember partitions' shown flags
 			kProperty = 1u << 4,
 			kAlpha = 1u << 5,
 			kLayer = 1u << 6,        // the additional property, the alt index buffer and its count

@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 namespace DCLF::Features::TreeLod
 {
@@ -169,7 +170,7 @@ namespace DCLF::Features::TreeLod
 				stack.pop_back();
 				const bool self = object->GetFlags().any(RE::NiAVObject::Flag::kHidden);
 				if (auto* node = object->AsNode()) {
-					for (const auto& child : node->GetChildren())
+					for (const auto& child : Engine::Children(*node))
 						if (child)
 							stack.push_back({ child.get(), parentHidden || self });
 					continue;

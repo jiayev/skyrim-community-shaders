@@ -13,6 +13,9 @@
 #include "NativeMenu/NativeMenu.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Utils/LogTee.h"
+#include "CrashDump.h"
+#include "HangWatchdog.h"
 
 #include <cstdlib>
 
@@ -21,136 +24,6 @@
 std::list<std::string> errors;
 
 bool Load();
-
-// Diagnostic crash capture. The frame-generation interop can take the process down during a
-// load with no Windows Error Reporting record and no .dmp, which leaves nothing to analyse.
-// A vectored handler runs before any SEH frame swallows the fault, so it sees the exception
-// even when something downstream would otherwise turn it into a silent exit.
-//
-// The dump is written out of process, by CommunityShadersCrashDump.exe beside this DLL
-// (tools/crash-dump-helper), started once at load. MiniDumpWriteDump suspends every other
-// thread and then allocates from the process heap and takes loader locks: called in here, a
-// thread suspended while holding the heap's lock hung the game in the dump (2026-10-11). The
-// handler now only writes the faulting thread and its exception pointers into a shared
-// section, signals the helper and waits for it: no allocation, no lock.
-namespace
-{
-	// The section's layout, read by the helper (tools/crash-dump-helper/main.cpp, Shared).
-	struct CrashDumpShared
-	{
-		std::uint32_t threadId;
-		std::uint32_t pad;
-		std::uint64_t exceptionPointers;
-	};
-
-	struct CrashDumpHelper
-	{
-		HANDLE crash = nullptr;
-		HANDLE done = nullptr;
-		CrashDumpShared* shared = nullptr;
-	};
-	CrashDumpHelper crashDumpHelper;
-
-	// How long the faulting thread waits for the helper's dump before the exception goes on.
-	constexpr DWORD kCrashDumpWaitMs = 120000;
-
-	void StartCrashDumpHelper()
-	{
-		HMODULE module = nullptr;
-		GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-			reinterpret_cast<LPCWSTR>(&StartCrashDumpHelper), &module);
-		wchar_t modulePath[MAX_PATH]{};
-		GetModuleFileNameW(module, modulePath, MAX_PATH);
-		const auto helper = std::filesystem::path{ modulePath }.parent_path() / L"CommunityShadersCrashDump.exe";
-		wchar_t gamePath[MAX_PATH]{};
-		GetModuleFileNameW(nullptr, gamePath, MAX_PATH);
-		const auto dump = std::filesystem::path{ gamePath }.parent_path() / L"CommunityShaders.dmp";
-		if (!std::filesystem::exists(helper)) {
-			logger::warn("[CRASH] {} is missing: crashes write no dump", helper.string());
-			return;
-		}
-
-		SECURITY_ATTRIBUTES inherit{ sizeof(inherit), nullptr, TRUE };
-		HANDLE process = nullptr;
-		DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &process,
-			PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_DUP_HANDLE | SYNCHRONIZE, TRUE, 0);
-		const HANDLE crash = CreateEventW(&inherit, TRUE, FALSE, nullptr);
-		const HANDLE done = CreateEventW(&inherit, TRUE, FALSE, nullptr);
-		const HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, &inherit, PAGE_READWRITE, 0, sizeof(CrashDumpShared), nullptr);
-		auto* shared = section ? static_cast<CrashDumpShared*>(MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, sizeof(CrashDumpShared))) : nullptr;
-		if (!process || !crash || !done || !shared) {
-			logger::warn("[CRASH] the crash dump helper's handles could not be made (error {}): crashes write no dump", GetLastError());
-			return;
-		}
-
-		// The helper inherits these four handles only, not every inheritable handle of the game.
-		HANDLE inherited[4]{ process, crash, done, section };
-		SIZE_T attributeBytes = 0;
-		InitializeProcThreadAttributeList(nullptr, 1, 0, &attributeBytes);
-		std::vector<std::byte> attributeStorage(attributeBytes);
-		auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributeStorage.data());
-		InitializeProcThreadAttributeList(attributes, 1, 0, &attributeBytes);
-		UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited), nullptr, nullptr);
-		STARTUPINFOEXW startup{};
-		startup.StartupInfo.cb = sizeof(startup);
-		startup.lpAttributeList = attributes;
-		std::wstring command = std::format(L"\"{}\" {} {} {} {} \"{}\"", helper.wstring(),
-			reinterpret_cast<std::uintptr_t>(process), reinterpret_cast<std::uintptr_t>(crash), reinterpret_cast<std::uintptr_t>(done),
-			reinterpret_cast<std::uintptr_t>(section), dump.wstring());
-		PROCESS_INFORMATION info{};
-		const BOOL started = CreateProcessW(helper.c_str(), command.data(), nullptr, nullptr, TRUE,
-			CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, &startup.StartupInfo, &info);
-		DeleteProcThreadAttributeList(attributes);
-		if (!started) {
-			logger::warn("[CRASH] {} could not be started (error {}): crashes write no dump", helper.string(), GetLastError());
-			return;
-		}
-		CloseHandle(info.hThread);
-		CloseHandle(info.hProcess);
-		crashDumpHelper = { crash, done, shared };
-		logger::info("[CRASH] crash dumps are written by {} (pid {}) to {}", helper.filename().string(), info.dwProcessId, dump.string());
-
-		// CS_TEST_CRASH=<seconds> (a development switch): a worker thread faults that long after load, to exercise the
-		// handler and the helper end to end.
-		if (const char* test = std::getenv("CS_TEST_CRASH"); test && *test) {
-			const int seconds = std::max(1, std::atoi(test));
-			logger::warn("[CRASH] CS_TEST_CRASH: a deliberate access violation in {} s", seconds);
-			std::thread([seconds] {
-				std::this_thread::sleep_for(std::chrono::seconds(seconds));
-				*static_cast<volatile int*>(nullptr) = 0;
-			}).detach();
-		}
-	}
-}
-
-static LONG CALLBACK CommunityShadersCrashDump(EXCEPTION_POINTERS* a_exception)
-{
-	if (!a_exception || !a_exception->ExceptionRecord)
-		return EXCEPTION_CONTINUE_SEARCH;
-
-	const DWORD code = a_exception->ExceptionRecord->ExceptionCode;
-	// Ignore the benign ones the game raises constantly (C++ EH, debugger notifications).
-	if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
-		code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_INT_DIVIDE_BY_ZERO &&
-		code != 0xC0000409 /* fast-fail / stack cookie */)
-		return EXCEPTION_CONTINUE_SEARCH;
-
-	static std::atomic<bool> written{ false };
-	if (written.exchange(true))
-		return EXCEPTION_CONTINUE_SEARCH;
-
-	logger::critical("[CRASH] exception {:#x} at {} - writing CommunityShaders.dmp", code,
-		fmt::ptr(a_exception->ExceptionRecord->ExceptionAddress));
-	spdlog::default_logger()->flush();
-
-	if (crashDumpHelper.shared) {
-		crashDumpHelper.shared->threadId = GetCurrentThreadId();
-		crashDumpHelper.shared->exceptionPointers = reinterpret_cast<std::uintptr_t>(a_exception);
-		SetEvent(crashDumpHelper.crash);
-		WaitForSingleObject(crashDumpHelper.done, kCrashDumpWaitMs);
-	}
-	return EXCEPTION_CONTINUE_SEARCH;
-}
 
 void InitializeLog([[maybe_unused]] spdlog::level::level_enum a_level = spdlog::level::info)
 {
@@ -226,8 +99,7 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	while (!REX::W32::IsDebuggerPresent()) {};
 #endif
 	InitializeLog();
-	StartCrashDumpHelper();
-	AddVectoredExceptionHandler(1, &CommunityShadersCrashDump);
+	CrashDump::Start();
 	logger::info("Community Shaders {} | branch: {} | describe: {} | hash: {}{}",
 		Util::GetFormattedVersion(Plugin::VERSION),
 		Plugin::BUILD_BRANCH.empty() ? "(detached)" : Plugin::BUILD_BRANCH,
@@ -236,6 +108,8 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 		Plugin::BUILD_DIRTY ? " (dirty)" : "");
 	ApplyDevEnvironmentFile();
 	SKSE::Init(a_skse);
+	// SKSE::Init replaced the log with CommonLib's; install the diagnostic capture's fan-out sink afterward.
+	Util::LogTee::Install();
 	// Every write_call/write_branch stub (14 bytes) comes from this block; 1 KiB ran out at about 73 hooks. DCLF's
 	// switch events take about 400 bytes of it for their patched stores' stubs.
 	SKSE::AllocTrampoline(1 << 12);
@@ -310,6 +184,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// Catch d3dx9 math importers that loaded after our plugin-load sweep.
 				D3DX9MathUpgrade::Sweep("data loaded");
 				globals::OnDataLoaded();
+				// The render thread's watchdog, from the first Present after the data loaded (HangWatchdog.h).
+				HangWatchdog::Start();
 				EngineFix::InstallOnDataLoadedFixes();
 				FrameAnnotations::OnDataLoaded();
 

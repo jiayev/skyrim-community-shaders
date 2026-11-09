@@ -620,6 +620,13 @@ bool Upscaling::IsFrameGenerationActive() const
 
 void Upscaling::BeginRenderFrame()
 {
+	// A test run's frame generation switch (RequestFrameGenTest), as the menu's stepper makes it.
+	if (const int request = s_frameGenTestRequest.exchange(-1, std::memory_order_relaxed); request >= 0) {
+		settings.frameGeneration = request != 0;
+		if (request != 0)
+			settings.frameGenMethod = static_cast<uint>(request == 2 ? FrameGenMethod::kDLSSG : FrameGenMethod::kFSR);
+		logger::info("[FGTEST] switch: frame generation {}", request == 0 ? "off" : request == 2 ? "DLSS-G" : "FSR-FG");
+	}
 	{  // TEMP-FG-TEST
 		static uint64_t secondTick = 0, lastTick = 0;
 		static uint32_t frames = 0, worst = 0, stalls = 0;
@@ -1648,6 +1655,11 @@ bool Upscaling::IsWindowMinimized()
 			s_window = desc.OutputWindow;
 	}
 	return s_window && IsIconic(s_window);
+}
+
+void Upscaling::RequestFrameGenTest(int a_method)
+{
+	s_frameGenTestRequest.store(a_method, std::memory_order_relaxed);
 }
 
 void Upscaling::NotifyWindowFocus(bool a_focused)

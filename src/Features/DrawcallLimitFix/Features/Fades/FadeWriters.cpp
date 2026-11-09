@@ -3,6 +3,7 @@
 // and installs; and the root test's fade-out distance.
 
 #include "Features/DrawcallLimitFix/Features/Fades/FadeScene.h"  // the write-back's WriteFadeStores
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeWriters.h"
 #include "Features/DrawcallLimitFix/Core/Engine/HookSites.h"
 #include "Features/DrawcallLimitFix/Features/Fades/FadeRoots.h"
@@ -295,6 +296,17 @@ namespace DCLF::Features::Fades
 		return c;
 	}
 
+	FadeWriterCounts PeekFadeWriterCounts()
+	{
+		FadeWriterCounts c;
+		c.onVisibleSkipped = onVisibleFadeSkipped.load(std::memory_order_relaxed);
+		c.gateSkipped = gateFadeSkipped.load(std::memory_order_relaxed);
+		if (const auto* tables = fadeWriterTables.load(std::memory_order_acquire))
+			if (const auto* roots = RootsOf(tables))
+				c.roots = roots->fadeRootIndex.size();
+		return c;
+	}
+
 	// DrainAnimatedFades without the wait: the producer's, which holds the hand-off.
 	std::size_t DrainAnimatedFadesNow();
 
@@ -302,7 +314,7 @@ namespace DCLF::Features::Fades
 	{
 		if (!animatedDrainHanded.load(std::memory_order_acquire))
 			return;
-		ZoneScopedN("CS.DCLF.Fade.WaitAnimatedDrain");
+		DCLF_ZONE("CS.DCLF.Fade.WaitAnimatedDrain");
 		while (animatedDrainHanded.load(std::memory_order_acquire))
 			animatedDrainHanded.wait(true, std::memory_order_acquire);
 	}

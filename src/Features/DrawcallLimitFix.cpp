@@ -1,6 +1,7 @@
 // The feature shell: install, the engine hook thunks and their installation, the menu toggle and the settings UI. The lifecycle
 // points forward to Draws/FrameDriver on the render thread. The one file that decides whether DCLF is built (CS_HAS_DCLF).
 #include "DrawcallLimitFix.h"
+#include "DrawcallLimitFix/Diagnostics/Capture/Capture.h"
 
 #if defined(CS_HAS_DCLF)
 
@@ -21,6 +22,7 @@
 #	include "DrawcallLimitFix/Core/Engine/Capture/SceneWriter.h"
 #	include "DrawcallLimitFix/Diagnostics/Hooks.h"
 #	include "DrawcallLimitFix/Diagnostics/PlayerParity.h"
+#	include "DrawcallLimitFix/Diagnostics/Reports/FrameSummary.h"
 #	include "DrawcallLimitFix/Diagnostics/Policy.h"
 #	include "DrawcallLimitFix/Core/Shading/MaterialWrites.h"
 #	include "DrawcallLimitFix/Core/Shading/MaterialSources.h"
@@ -44,6 +46,9 @@
 #	include "DrawcallLimitFix/Core/Shading/FrameGlobals.h"
 #	include "DrawcallLimitFix/Core/Scene/Coordinator/Coordinator.h"
 #	include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
+#	include "Features/DrawcallLimitFix/Core/Handoff/EngineOnlyCull.h"
+#	include "Features/DrawcallLimitFix/Core/Render/StartupHold.h"
+#	include "Features/DrawcallLimitFix/Core/Scene/EngineCasters.h"
 #	include "DrawcallLimitFix/Core/Shading/LightingDescriptors.h"
 #	include "DrawcallLimitFix/Core/Engine/Capture/SceneTracker.h"
 #	include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -250,11 +255,19 @@ void DrawcallLimitFix::ForceOff()
 	logger::warn("[DCLF] Forced off: {}; the game renders natively", unavailableReason);
 }
 
+void DrawcallLimitFix::BeforePresent()
+{
+	if (installed)
+		DCLF::FrameDriver::Get().BeforePresent();
+}
+
 void DrawcallLimitFix::Reset()
 {
 	// The test commands run before the installed check, so a CS_DCLF=0 baseline reaches the same place at
 	// the same in-game hour as the run it is compared against.
 	DCLF::RunTestHarness(GetShortName());
+	// The diagnostic capture's steps (with DCLF on or off: a capture of a session it could not start is the most useful one).
+	DCLF::Capture::OnPresent();
 	// The frame's last target point, then Present's observers (with DCLF on or off).
 	DCLF::Diagnostics::Notify(DCLF::Diagnostics::TargetPoint{ "present" });
 	DCLF::Diagnostics::Notify<DCLF::Diagnostics::FramePoint::Present>();
@@ -380,6 +393,25 @@ bool DrawcallLimitFix::OcclusionReady(OcclusionMap a_map)
 	return DCLF::FrameDriver::Get().OcclusionReady(a_map, Running());
 }
 
+bool DrawcallLimitFix::OcclusionHeld(OcclusionMap a_map) const
+{
+	return installed && DCLF::FrameDriver::Get().OcclusionHeld(a_map);
+}
+
+bool DrawcallLimitFix::StartupBlackout() const
+{
+	return installed && Running() && DCLF::StartupHold::Active() && !DCLF::Scene::FrameView::IsLoadingScreenUp();
+}
+
+bool DrawcallLimitFix::OcclusionEngineOnlyMask(RE::Precipitation* a_precip)
+{
+	const auto& subset = DCLF::Scene::FrameView::Get().GetEngineCasters();
+	if (!a_precip || !Running() || !subset || subset->Of(DCLF::Scene::EngineOnlySubset::kCaster).roots.empty())
+		return false;
+	DCLF::EngineOnlyCull::RunInline(subset.get(), DCLF::Scene::EngineOnlySubset::kCaster, [a_precip] { a_precip->SetupMask(); });
+	return true;
+}
+
 void DrawcallLimitFix::OcclusionView(OcclusionMap a_map)
 {
 	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Occlusion);
@@ -434,9 +466,11 @@ void DrawcallLimitFix::RenderPrecipitationMask(RE::Precipitation* a_precip, RE::
 	// shadow epoch, so the engine's cull and registration (SetupMask) are skipped and RenderMask only sets the camera and clears the mask.
 	// Otherwise, or on a frame DCLF did not draw it, the engine does.
 	const bool reference = a_dclf && OcclusionReferenceFrame(kPrecipitationOcclusion);
-	if (!a_dclf || reference) {
+	// Held by the startup hold: the engine's point renders it without its cull, as DCLF's own variant does.
+	const bool held = !a_dclf && OcclusionHeld(kPrecipitationOcclusion);
+	if ((!a_dclf && !held) || reference) {
 		a_precip->SetupMask();
-	} else {
+	} else if (!OcclusionEngineOnlyMask(a_precip)) {
 		// What SetupMask sets: the projection, and the accumulator's camera.
 		static REL::Relocation<void(RE::Precipitation*, RE::NiPointer<RE::NiCamera>)> computeProjection{ REL::RelocationID(25643, 26185) };
 		computeProjection(a_precip, a_precip->occlusionData.camera);
@@ -682,17 +716,18 @@ void DrawcallLimitFix::AfterOpaquePass()
 
 void DrawcallLimitFix::DrawSettings()
 {
-	const auto& stats = DCLF::Scene::Coordinator::Get().GetStats();
 	if (!unavailableReason.empty()) {
 		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.55f, 0.3f, 1.0f));
 		ImGui::TextUnformatted("Unavailable this session: everything renders natively.");
 		ImGui::PopStyleColor();
 		ImGui::TextWrapped("Reason: %s", unavailableReason.c_str());
+		DCLF::Capture::DrawControls();
 		DrawSceneWriterPanel();
 		return;
 	}
 	if (!installed) {
 		ImGui::TextUnformatted("Not installed (CS_DCLF=0).");
+		DCLF::Capture::DrawControls();
 		return;
 	}
 	// The developer's tools, under a header a player can leave closed.
@@ -721,17 +756,19 @@ void DrawcallLimitFix::DrawSettings()
 	};
 	if (!switchedOn) {
 		ImGui::TextWrapped("Switched off with the feature's toggle: the game renders natively and DCLF does no frame work. Switch it back on to resume; no restart needed.");
+		DCLF::Capture::DrawControls();
 		if (ImGui::TreeNodeEx("Advanced")) {
 			drawTools();
 			ImGui::TreePop();
 		}
 		return;
 	}
+	// The player's capture to send back, first: it is what a report of a problem needs.
+	DCLF::Capture::DrawControls();
 	DCLF::Diagnostics::PlayerParity::DrawPanel();
 	DrawSceneWriterPanel();
 	// The live toggles, for A/B comparisons without a restart. They are the REQUESTED set; the render thread applies them at the start of the next frame (Toggles.h).
 	auto& toggles = DCLF::Toggles::Get().Requested();
-	const auto active = DCLF::ActiveToggles();
 	if (ImGui::TreeNodeEx("What DCLF draws", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::TextWrapped("Each takes effect at the next frame, and Save Settings keeps it. What DCLF does not draw, the game draws as it would without DCLF.");
 		int cull = toggles.cullMode;
@@ -816,32 +853,13 @@ void DrawcallLimitFix::DrawSettings()
 		return;
 	drawTools();
 	if (ImGui::TreeNodeEx("This frame", ImGuiTreeNodeFlags_DefaultOpen)) {
-		const auto pipelineOf = [&](bool a_interior) { return DCLF::CpuPipelineFor(active, a_interior) ? (active.cpuRecord == 2 ? "cpu indirect" : active.cpuRecord == 1 ? "cpu parallel" : "cpu serial") : "gpu"; };
-		std::string flags = fmt::format("Active: cull {}, pipeline {} (interiors {}, exteriors {})", active.cullMode,
-			active.pipelineMode == DCLF::PipelineMode::Manual ? "manual" : "auto", pipelineOf(true), pipelineOf(false));
-		for (const auto& toggle : DCLF::ToggleTable())
-			flags += fmt::format(", {} {}", toggle.name, DCLF::ToggleValue(active, toggle) ? 1 : 0);
-		ImGui::TextWrapped("%s", flags.c_str());
-		ImGui::Text("Tracked geometry: %u (under %u category nodes)", stats.tracked, stats.categoryNodes);
-		ImGui::Text("Objects this frame: %u, geometries: %u, pipelines: %u", stats.objects, stats.geometries, stats.pipelines);
-		for (std::size_t i = 1; i < stats.ineligible.size(); ++i) {
-			if (stats.ineligible[i])
-				ImGui::Text("Left native (%s): %u", DCLF::kIneligibleNames[i].data(), stats.ineligible[i]);
-		}
-		const auto& draws = DCLF::IndirectDraws::Get().GetStats();
-		ImGui::Text("Indirect draws: %u drawn from %u records, %u epochs; culling tested %u, rejected %u",
-			draws.drawn, draws.records, draws.epochs, draws.cullTested, draws.cullRejected);
-		if (const auto& gpu = RenderGraphRuntime::Get().GpuTimingSummary(); !gpu.empty())
-			ImGui::TextUnformatted(("GPU (ORG pass timestamps, last report):\n" + gpu).c_str());
-		const auto& capture = DCLF::PassCapture::Get().GetStats();
-		const auto set = DCLF::Scene::FrameView::Get().FrameClaims();
-		ImGui::Text("DCLF set: %u members; main-view passes withheld %u", set ? static_cast<std::uint32_t>(set->phases.size()) : 0u, capture.mainWithheld);
-		if (active.shadows) {
-			const auto& shadow = DCLF::IndirectDraws::Get().GetShadowStats();
-			ImGui::Text("Shadow views (since the last report): %u offered, %u drawn, %u not ready; last view %u inputs, %u records; sampled culling: %u tested, %u rejected",
-				shadow.views, shadow.viewsDrawn, shadow.notReady, shadow.inputs, shadow.records, shadow.cullTested, shadow.cullRejected);
-			ImGui::Text("Shadow views: withheld %u / %u / %u passes (plain / clamped / paraboloid); the set's casters %u / %u / %u",
-				capture.shadowWithheld[0], capture.shadowWithheld[1], capture.shadowWithheld[2], shadow.casters[0], shadow.casters[1], shadow.casters[2]);
+		// The first line (the active toggles) is long, so it wraps; the rest are short.
+		const auto lines = DCLF::Reports::FrameSummary();
+		for (std::size_t i = 0; i < lines.size(); ++i) {
+			if (i == 0)
+				ImGui::TextWrapped("%s", lines[i].c_str());
+			else
+				ImGui::TextUnformatted(lines[i].c_str());
 		}
 		ImGui::TreePop();
 	}
@@ -1021,6 +1039,7 @@ void DrawcallLimitFix::PostPostLoad()
 }
 void DrawcallLimitFix::SetupResources() {}
 void DrawcallLimitFix::Reset() {}
+void DrawcallLimitFix::BeforePresent() {}
 void DrawcallLimitFix::Prepass() {}
 void DrawcallLimitFix::EarlyPrepass() {}
 void DrawcallLimitFix::DrawSettings()
@@ -1045,6 +1064,9 @@ bool DrawcallLimitFix::OcclusionReady(OcclusionMap) { return false; }
 bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap) { return true; }
 void DrawcallLimitFix::OcclusionView(OcclusionMap) {}
 bool DrawcallLimitFix::OcclusionReferenceFrame(OcclusionMap) { return false; }
+bool DrawcallLimitFix::OcclusionEngineOnlyMask(RE::Precipitation*) { return false; }
+bool DrawcallLimitFix::StartupBlackout() const { return false; }
+bool DrawcallLimitFix::OcclusionHeld(OcclusionMap) const { return false; }
 void DrawcallLimitFix::OcclusionReferenceRendered(OcclusionMap) {}
 void DrawcallLimitFix::RenderPrecipitationMask(RE::Precipitation* a_precip, RE::BSGeometry* a_precipObject, bool)
 {

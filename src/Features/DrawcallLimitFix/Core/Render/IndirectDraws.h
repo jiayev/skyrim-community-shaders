@@ -520,6 +520,8 @@ namespace DCLF
 		void ResetShadowStats() { shadowStats = {}; }
 
 		const Stats& GetStats() const { return stats; }
+		/** @brief Render thread: how long this frame's start waited in AdoptCurrentSnapshot for a current snapshot, in microseconds (0: no wait). */
+		std::uint32_t LastAdoptWaitUs() const { return lastAdoptWaitUs; }
 
 		~IndirectDraws();
 
@@ -533,6 +535,7 @@ namespace DCLF
 		struct Impl;
 		std::unique_ptr<Impl> impl;
 		Stats stats;
+		std::uint32_t lastAdoptWaitUs = 0;  // AdoptCurrentSnapshot's wait this frame (LastAdoptWaitUs)
 		ShadowStats shadowStats;
 		// Set once by the render thread, read by the scene lane too: atomic.
 		std::atomic<bool> failed{ false };

@@ -216,6 +216,12 @@ public:
 	 */
 	void SignalFramePace(bool a_active);
 	void WaitFramePace();
+	/**
+	 * @brief Render thread, after a present that succeeded: everything the host submitted before it is in DXVK's queue to the
+	 * device, which submits it with nothing more from the frame (the present flushed it). Seals it (GraphHost::SealSubmitted): the
+	 * points a mid-frame producer may wait for.
+	 */
+	void SealPresented();
 
 	/** @brief Render thread: the segments submitted since the last call, one bit per Segment. */
 	std::uint32_t TakeSubmittedSegments();
