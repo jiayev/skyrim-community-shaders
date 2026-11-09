@@ -113,15 +113,17 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief The record mode with no CS_DCLF_CPU_RECORD: serial on NVIDIA, indirect elsewhere.
+		 * @brief The record mode with no CS_DCLF_CPU_RECORD: serial.
 		 *
-		 * Indirect colour needs the pulled pipelines, and on an RTX 5080 their record lookup takes 0.21 ms of a frame's GPU time, with the same
-		 * instructions and pixels. Recording each draw there costs the CS thread about 0.4 ms in Dev-Fast. On an RX 6600 the driver's recording
-		 * costs far more than that, so it keeps indirect.
+		 * Indirect colour needs the pulled pipelines, whose stages find their draw through a chain of dependent loads (the draw's record, its
+		 * sequence, its rows), each a vector memory load: AMD's driver never makes a buffer-device-address load scalar, uniform or not. On an
+		 * RTX 5080 that took 0.21 ms of a frame's GPU time; on an RX 6600 (driver 26.10.1, 1080p) serial's colour pass is 0.5 ms faster, and the
+		 * frame 0.34 ms at the newest save and 0.26 ms in Whiterun, where the CPU matters more, so serial's per-draw recording on the CS thread
+		 * is the cheaper side there too (rx6600-dxvk-overhead.md).
 		 */
 		Direct::RecordMode DefaultRecordMode()
 		{
-			return LargestAdapterVendor() == 0x10DE ? Direct::RecordMode::Serial : Direct::RecordMode::Indirect;
+			return Direct::RecordMode::Serial;
 		}
 
 		/**
