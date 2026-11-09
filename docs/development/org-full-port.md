@@ -5,6 +5,40 @@ D3D12 and DXVK is not needed. RE results live in [engine-d3d11-surface.md](./eng
 mod API will need is collected in [org-extension-api-notes.md](./org-extension-api-notes.md). A task moves out of this
 file when it is built.
 
+## Status
+
+Work happens on `org-port/*` branches, never on `org_integration` itself (only docs land there directly). Validated work
+collects on the CS branch `org-port/integration`, which also carries the submodule bumps. Nothing is pushed yet; several
+pinned submodule commits exist only locally, so a fresh clone cannot fetch them.
+
+| Task                                                                                                           | State                                                                  | Where                                                                   |
+| -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Phase R                                                                                                        | Done                                                                   | `engine-d3d11-surface.md`                                               |
+| P0.1-P0.4 (stencil, blend constants, dual source, logic op, sample mask, depth clip, dynamic viewport/scissor) | Done, D3D12 and Vulkan smokes                                          | BasicRHI `org-port/p0-pipeline-state`                                   |
+| P0.5-P0.6 (input layouts, keyed pipelines at record time, generate mips, MSAA resolve)                         | Done, ORG tests 32/32                                                  | ORG `org-port/p0-pipelines`                                             |
+| P0.7, P0.11 (memory budget, native crash markers) and the AMD device-creation fix                              | Done                                                                   | BasicRHI `org-port/p0-device-diagnostics`                               |
+| P0.8-P0.10 (present without a host wait, HDR colour spaces and metadata, frame latency, tearing)               | Done; HDR and present_wait not run (no HDR display, no driver support) | BasicRHI `org-port/p0-present`                                          |
+| P0.12-P0.13 (on-disk pipeline cache, allocator owners and spillable memory)                                    | Done; defragmentation not built                                        | BasicRHI `org-port/p0-cache-alloc`                                      |
+| All of Phase 0 merged                                                                                          | Done, every smoke passes on both backends                              | BasicRHI `org-port/p0-integration`; CS builds against it                |
+| P2.2, P2.4 (frame anchors, raster programs)                                                                    | Done, checked in game (self-test on and off)                           | CS `org-port/p2-anchors`                                                |
+| P1 (inversion), P2.1, P2.3                                                                                     | In progress                                                            | `org-port/p1-inversion`, `org-port/p2-resources`, `org-port/p2-shaders` |
+
+**Root cause worth knowing:** a BasicRHI-created Vulkan device failed on AMD because the driver rejects acceleration
+structures in a mutable descriptor list at any count. DXVK never enables acceleration structures, so the adopted device
+never hit it. Acceleration-structure SRVs are now dropped from the descriptor-buffer model where this happens.
+
+**Follow-ups found while building Phase 0:**
+
+- BasicRHI's Vulkan backend ignores `ResourceDesc::castableFormats`, so sRGB mip generation cannot get its UNORM view.
+- ORG's `PixelBuffer` and `ExternalTextureResource` always report one sample, and no `Texture2DMS` SRVs are made, so
+  the MSAA resolve pass is untested on the GPU.
+- Vulkan feature info reports UMA whenever a host-visible device-local memory type exists (resizable BAR).
+- Vulkan `SetResidencyPriority` does nothing, so the spill pool's low priority has no effect there.
+- BasicRHI has no top-level `enable_testing()`, so its smokes are not registered with ctest.
+- `EvaluateBindingModels` still reports acceleration structures as usable before a device exists.
+- ORG's `GraphHost` fixes its epoch order at creation, so frame anchors must be reserved before `Initialize`.
+- ORG's `PersistentVulkanHostTests.Pipelines` hung once in a full ctest run and passed on two reruns.
+
 ## Context
 
 CS on `org_integration` runs Skyrim's D3D11 under a forked DXVK (`extern/dxvk`), and OpenRenderGraph adopts DXVK's
