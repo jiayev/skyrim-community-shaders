@@ -19,6 +19,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatches.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
 #include <ORGModuleServices/BackingPool.h>
@@ -39,6 +40,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <deque>
 #include <string_view>
 #include <thread>
@@ -729,6 +731,21 @@ namespace DCLF::Direct::detail
 			primary.SetDescriptorHeaps(resourceHeap, samplerHeap);
 	}
 
+	namespace
+	{
+		/** @brief CS_DCLF_SHADOW_ORDER: the shadow views' depth slabs (RecordSortedBatches; 1: by distance alone, 0: the lists' order). */
+		std::uint32_t ShadowOrderSlabs()
+		{
+			static const std::uint32_t slabs = [] {
+				const auto& text = SwitchValue(Switch::ShadowOrder);
+				if (text.empty())
+					return 8u;
+				return static_cast<std::uint32_t>((std::min)(std::strtoul(text.c_str(), nullptr, 10), 256ul));
+			}();
+			return slabs;
+		}
+	}
+
 	std::vector<const CulledBatch*> RecordViewPass(SiteOut& a_out, SiteRun& a_run, SiteView& a_view, rhi::PassBeginInfo a_begin, const RecordBindings& a_bindings)
 	{
 		auto& slot = *a_run.slot;
@@ -775,11 +792,19 @@ namespace DCLF::Direct::detail
 		if (DrawsIndirect(a_run, a_view))
 			context.indirect = &slot.indirect;
 		const bool valid = BeginList(context);
-		for (std::size_t i = 0; i < a_view.list->size(); ++i) {
-			const auto& batch = Await(a_run, a_view, i);
-			batches.push_back(&batch);
-			if (valid && batch.count)
-				RecordBatch(context, batch);
+		// A shadow view's casters nearest the light first: fewer of their depth writes survive, and HiZ rejects more of their tiles.
+		const std::uint32_t slabs = ShadowOrderSlabs();
+		if (a_run.site == Site::Shadow && slabs && !context.indirect) {
+			batches = AwaitAll(a_run, a_view);
+			if (valid)
+				RecordSortedBatches(context, batches, a_view.view.clipPlanes[4], slabs == 1 ? 0u : slabs);
+		} else {
+			for (std::size_t i = 0; i < a_view.list->size(); ++i) {
+				const auto& batch = Await(a_run, a_view, i);
+				batches.push_back(&batch);
+				if (valid && batch.count)
+					RecordBatch(context, batch);
+			}
 		}
 		list.EndPass();
 		return batches;

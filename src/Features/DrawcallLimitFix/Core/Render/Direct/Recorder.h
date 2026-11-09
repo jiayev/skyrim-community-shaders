@@ -190,6 +190,13 @@ namespace DCLF::Direct
 	void RecordBatch(RecordContext& a_context, const CulledBatch& a_batch);
 
 	/**
+	 * @brief A_batches' draws nearest a_plane first (a view's near plane: world space, inward), by the nearest point of each lane's
+	 * sphere: in a_slabs equal slabs of their depth range, by pipeline bucket within each (few more binds than list order), or by
+	 * distance alone (a_slabs 0). The shadow views' (CS_DCLF_SHADOW_ORDER): a depth-only draw's result does not depend on its order.
+	 */
+	void RecordSortedBatches(RecordContext& a_context, std::span<const CulledBatch* const> a_batches, const std::array<float, 4>& a_plane, std::uint32_t a_slabs);
+
+	/**
 	 * @brief A terrain group's colour draws (a_group 1 or 2: main's lanes with kLaneTerrainGroup1 or 2) from main's culled colour batches,
 	 * in list order: the site calls it at the group's main range position in the second pass (Extensions::MainRanges' order), as the GPU
 	 * path draws CS_DCLF_TERRAIN_PLAIN's buckets. Main's depth pass draws them with the rest (RecordBatch).

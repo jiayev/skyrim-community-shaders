@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -551,6 +552,51 @@ namespace DCLF::Direct
 			const std::uint32_t lane = a_batch.lanes[k];
 			if (!skipTerrain || !(FlagsOf(batch, lane) & kTerrainLanes))
 				DrawLane(a_context, batch, lane, a_batch.objectWords[k], MaskOf(a_batch, k));
+		}
+		CountDrawn(a_context, a_context.drawn - before);
+	}
+
+	void RecordSortedBatches(RecordContext& a_context, std::span<const CulledBatch* const> a_batches, const std::array<float, 4>& a_plane, std::uint32_t a_slabs)
+	{
+		struct Item
+		{
+			float distance;
+			std::uint32_t slab;
+			std::uint32_t bucket;
+			const CulledBatch* batch;
+			std::uint32_t kept;
+		};
+		thread_local std::vector<Item> items;
+		items.clear();
+		float nearest = std::numeric_limits<float>::max(), farthest = std::numeric_limits<float>::lowest();
+		for (const CulledBatch* culled : a_batches) {
+			if (!culled || !culled->batch || !culled->count)
+				continue;
+			const ViewBatch& batch = *culled->batch;
+			for (std::uint32_t k = 0; k < culled->count; ++k) {
+				const std::uint32_t lane = culled->lanes[k];
+				// The sphere's nearest point to the plane: the casters nearest the light first.
+				const float distance = batch.cx ? a_plane[0] * batch.cx[lane] + a_plane[1] * batch.cy[lane] + a_plane[2] * batch.cz[lane] + a_plane[3] - batch.r[lane] : 0.0f;
+				nearest = (std::min)(nearest, distance);
+				farthest = (std::max)(farthest, distance);
+				items.push_back({ distance, 0u, batch.pipelineBucket ? batch.pipelineBucket[lane] : 0u, culled, k });
+			}
+		}
+		// Slabs of the depth range, each drawn by pipeline (fewer binds), nearest slab first; one slab a draw (a_slabs 0): by distance alone.
+		if (a_slabs && farthest > nearest) {
+			const float scale = static_cast<float>(a_slabs) / (farthest - nearest);
+			for (auto& item : items)
+				item.slab = (std::min)(a_slabs - 1, static_cast<std::uint32_t>((item.distance - nearest) * scale));
+			std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+				return a.slab != b.slab ? a.slab < b.slab : a.bucket != b.bucket ? a.bucket < b.bucket : a.distance < b.distance;
+			});
+		} else {
+			std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.distance < b.distance; });
+		}
+		const std::uint32_t before = a_context.drawn;
+		for (const Item& item : items) {
+			const CulledBatch& culled = *item.batch;
+			DrawLane(a_context, *culled.batch, culled.lanes[item.kept], culled.objectWords[item.kept], MaskOf(culled, item.kept));
 		}
 		CountDrawn(a_context, a_context.drawn - before);
 	}
