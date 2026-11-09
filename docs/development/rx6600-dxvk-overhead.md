@@ -236,9 +236,26 @@ The fix is to make the draw's identity uniform before the loads: the vertex stag
 SGPR) or a `WaveReadLaneFirst` of it, and the pixel stage's object word made scalar before its row reads (pixel waves do not mix
 draws on this driver), with the row pointers read-only so the compiler can use scalar loads.
 
+#### What the fix attempts found
+
+-   **AMD's driver never makes a buffer-device-address load scalar.** A uniform draw identity (the vertex stage keyed on the
+    `BaseInstance` builtin, the pixel stage on `WaveReadLaneFirst` of its flat instance) made the chain's addresses uniform, but
+    the loads stayed `global_load`s into vector registers, then `v_readfirstlane`. A standalone test (`C:\Modding\CS-AB\isatool`:
+    a compute pipeline's ISA from a SPIR-V file) gives the same for a push-constant address, GLSL `readonly` and
+    `readonly restrict` buffer references alike. Timed, it was no faster (21.21 against 21.07 ms) and was reverted. Scalar loads
+    of the draw's rows need them read through descriptors (`ByteAddressBuffer` at an offset, which the driver loads with
+    `s_buffer_load`), not addresses.
+-   **Serial record mode is faster on this card.** The CPU pipeline's Indirect mode draws the pulled stages, which find each
+    draw through its record and sequence; Serial pushes each draw's words. Serial's main opaque pass is 0.5 ms shorter, and the
+    frame 0.34 ms at the newest save (21.05 to 20.71 ms) and 0.26 ms in Whiterun (14.67 to 14.41 ms), so the driver's per-draw
+    recording costs less than the lookups save, even where the CPU matters more. It is now the default on every vendor
+    (`CS_DCLF_CPU_RECORD=indirect` keeps the old mode). Screenshots of the same frame in both modes differ only in the wolf's pose
+    and wind-moved foliage.
+
 ## Next
 
--   DCLF's draw data through scalar loads (above): about 2 ms at the newest save.
+-   DCLF's draw data through descriptors so the driver can load it scalar (above): the rest of the colour pass's pixel cost
+    (+0.8 ms) and the depth and shadow vertex stages' (+0.3 and +0.65 ms).
 -   Pass boundaries: keep render targets in their attachment layout until something reads them, instead of returning each to
     its resting layout after every render pass.
 -   The HZB on AMD (dclf-open-defects.md), which would also bring GPU-driven DCLF under the CPU-driven pipeline's cost.
