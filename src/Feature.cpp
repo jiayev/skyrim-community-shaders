@@ -26,6 +26,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
+#include "Features/ProceduralSun.h"
 #include "Features/PseudoSunBounce.h"
 #include "Features/RainRefraction.h"
 #include "Features/ScreenSpaceGI.h"
@@ -274,6 +275,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::lodBlending,
 		&globals::features::hairSpecular,
 		&globals::features::interiorSun,
+		&globals::features::proceduralSun,
 		&globals::features::terrainVariation,
 		&globals::features::ibl,
 		&globals::features::extendedTranslucency,

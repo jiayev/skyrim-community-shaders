@@ -120,7 +120,8 @@ float3 MicrofacetSpecular(DirectContext context, float3 F0, float roughness)
 	return D * G * F * NdotL;
 }
 
-void EvaluateLighting(DirectContext context, MaterialProperties material, float3x3 tbnTr, float2 uv, float2 uv_ddx, float2 uv_ddy, out DirectLightingOutput lightingOutput)
+void EvaluateLighting(DirectContext context, MaterialProperties material,
+	float3x3 tbnTr, float2 uv, float2 uv_ddx, float2 uv_ddy, out DirectLightingOutput lightingOutput)
 {
 	lightingOutput = (DirectLightingOutput)0;
 #if defined(TRUE_PBR)
@@ -179,7 +180,8 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 #endif
 }
 
-void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext context, MaterialProperties material, float2 uv)
+void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext context, MaterialProperties material,
+	float2 uv)
 {
 	lobeWeights = (IndirectLobeWeights)0;
 #if defined(TRUE_PBR)

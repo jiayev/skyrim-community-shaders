@@ -561,13 +561,16 @@ void PostProcessing::CopyToRenderTarget(
 	targetRT.texture->GetDesc(&targetDesc);
 
 	if (!convert && srcDesc.Format == targetDesc.Format) {
+		globals::profiler->BeginPass("PostProcessing::CopyToTarget");
 		context->CopySubresourceRegion(targetRT.texture, 0, 0, 0, 0, srcTex, 0, nullptr);
+		globals::profiler->EndPass();
 		return;
 	}
 
 	if (!copyPS || !fullscreenVS || !convertTex || !convertTex->rtv || !convertTex->resource)
 		return;
 
+	globals::profiler->BeginPass("PostProcessing::ConvertToTarget");
 	{
 		PostProcessingRaster::RasterPass pass(context);
 
@@ -587,6 +590,7 @@ void PostProcessing::CopyToRenderTarget(
 	}
 
 	context->CopySubresourceRegion(targetRT.texture, 0, 0, 0, 0, convertTex->resource.get(), 0, nullptr);
+	globals::profiler->EndPass();
 }
 
 void PostProcessing::BeginLinearProcessing(PostProcessFeature::TextureInfo& texture)
@@ -595,6 +599,7 @@ void PostProcessing::BeginLinearProcessing(PostProcessFeature::TextureInfo& text
 	if (ll.IsLinearLightingActive())
 		return;
 	auto* context = globals::d3d::context;
+	globals::profiler->BeginPass("PostProcessing::BeginLinear");
 	PostProcessingRaster::RasterPass pass(context);
 	copyCB->Update(CopyCB{ .gamma = Util::ColorSpace::GAME_GAMMA });
 	ID3D11Buffer* cb = copyCB->CB();
@@ -609,6 +614,7 @@ void PostProcessing::BeginLinearProcessing(PostProcessFeature::TextureInfo& text
 	context->PSSetShaderResources(0, 1, &srv);
 	cb = nullptr;
 	context->PSSetConstantBuffers(1, 1, &cb);
+	globals::profiler->EndPass();
 	texture = { texInput->resource.get(), texInput->srv.get() };
 }
 

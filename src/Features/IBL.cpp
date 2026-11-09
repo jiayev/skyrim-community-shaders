@@ -253,7 +253,7 @@ void IBL::Prepass()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(GetDiffuseIBLCS(), nullptr, 0);
-		globals::profiler->BeginPass("IBL::EnvDiffuseIBL");
+		globals::profiler->BeginPass("ImageBasedLighting::EnvDiffuseIBL");
 		context->Dispatch(1, 1, 1);
 		globals::profiler->EndPass();
 	} else {
@@ -271,7 +271,7 @@ void IBL::Prepass()
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		globals::profiler->BeginPass("IBL::SkyDiffuseIBL");
+		globals::profiler->BeginPass("ImageBasedLighting::SkyDiffuseIBL");
 		context->Dispatch(1, 1, 1);
 		globals::profiler->EndPass();
 	}
