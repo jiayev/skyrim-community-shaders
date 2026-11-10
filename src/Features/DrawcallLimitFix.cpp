@@ -400,7 +400,10 @@ bool DrawcallLimitFix::OcclusionHeld(OcclusionMap a_map) const
 
 bool DrawcallLimitFix::StartupBlackout() const
 {
-	return installed && Running() && DCLF::StartupHold::Active() && !DCLF::Scene::FrameView::IsLoadingScreenUp();
+	// The hold advances only on world frames; covering the main menu would keep it black indefinitely.
+	return installed && Running() && DCLF::StartupHold::Active() &&
+	       DCLF::Scene::FrameView::Get().GetFrame() != 0 &&
+	       !globals::state->IsMainOrLoadingMenuOpen(RE::UI::GetSingleton());
 }
 
 bool DrawcallLimitFix::OcclusionEngineOnlyMask(RE::Precipitation* a_precip)
@@ -819,8 +822,9 @@ void DrawcallLimitFix::DrawSettings()
 					"parallel recording, into each secondary command list; fewer spread a view's culls over more jobs. Takes effect from the next "
 					"scene snapshot; CS_DCLF_CPU_BATCH seeds it.");
 			if (ImGui::TreeNodeEx("Views culled once per snapshot")) {
-				ImGui::TextWrapped("A view checked here is culled and recorded once per scene snapshot and replayed until the next; unchecked, every frame. "
-								   "The main view is always culled every frame. CS_DCLF_CPU_CADENCE seeds them.");
+				ImGui::TextWrapped(
+					"A view checked here is culled and recorded once per scene snapshot and replayed until the next; unchecked, every frame. "
+					"The main view is always culled every frame. CS_DCLF_CPU_CADENCE seeds them.");
 				for (std::size_t v = 1; !DCLF::CpuViewName(v).empty(); ++v) {
 					const auto bit = static_cast<std::uint16_t>(1u << v);
 					bool snapshot = (toggles.cpuCadence & bit) != 0;
