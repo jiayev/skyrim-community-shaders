@@ -30,6 +30,11 @@ pinned submodule commits exist only locally, so a fresh clone cannot fetch them.
 | P3 W2: Dynamic Cubemaps, Cloud Shadows                                                                         | Merged; A/B within noise, DCLF reads both through the graph                               | CS `org-port/integration`                                |
 | P3 W4: UnifiedWater flowmap (built on the CPU, no GPU pass)                                                    | Merged; same file hash on both paths                                                      | CS `org-port/integration`                                |
 | P3 W5: FX runtime parser and lowering                                                                          | Merged; execution not written yet                                                         | CS `org-port/integration`                                |
+| P3 W3: HDR Display output, Screenshot readback, Upscaling's own passes                                         | Merged; A/B within noise, graph screenshots byte-identical to D3D11 copies                | CS `org-port/integration`                                |
+| P3 W3: Post Processing framework (Vignette, Color Grading, LUT, Border)                                        | Merged; falls back correctly, graph chain not yet seen (scene presets re-enable effects)  | CS `org-port/integration`                                |
+| P3 W4: Terrain Blending, TruePBR glints, Effects11 sun and volumetric rays                                     | Merged; A/B within noise, glints noise reads back equal                                   | CS `org-port/integration`                                |
+| P3 W5: FX runtime execution                                                                                    | Merged behind CS_ORG_FX; never runs yet (parse error, input target, UAV); being fixed     | CS `org-port/integration`                                |
+| DCLF reads fog, IBL, Skylighting, Terrain/Volumetric Shadows as published resources                            | Merged; A/B within noise                                                                  | CS `org-port/integration`                                |
 
 **Root cause worth knowing:** a BasicRHI-created Vulkan device failed on AMD because the driver rejects acceleration
 structures in a mutable descriptor list at any count. DXVK never enables acceleration structures, so the adopted device
@@ -49,7 +54,9 @@ never hit it. Acceleration-structure SRVs are now dropped from the descriptor-bu
   main-viewport data. Both fixed.
 - DCLF imported a ported feature's D3D11 export as a resource of its own, so nothing ordered its reads after the graph's
   writes: Cloud Shadows came out wrong. DCLF now reads it as a published resource. Fog, IBL, Skylighting, Terrain and
-  Volumetric Shadows still import their exports and are being moved the same way.
+  Volumetric Shadows now do the same.
+- A client registered during an anchor's run is not in that run's epoch. Glints marked its one-shot fill done from the
+  commit and the noise stayed zero; Screenshot lost its first capture. Both now count only work their pass prepared.
 - The fog fell back to D3D11 in every interior because Cloud Shadows binds nothing there; the shader does not read it
   without the sky, so the input is now left unbound.
 
