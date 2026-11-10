@@ -24,21 +24,33 @@ pinned submodule commits exist only locally, so a fresh clone cannot fetch them.
 | P2.6-P2.7 (shared constants, deferred composite)                                                               | Done; composite registers once, A/B within noise                                          | CS `org-port/integration`                                |
 | P1 (ownership inversion) and its fix (graph in the owned frame, HDR without a copy)                            | Merged; **open:** with DCLF on the owned frame stops presenting                           | CS `org-port/integration`                                |
 | P1.6 (ImGui on BasicRHI, Overlay anchor)                                                                       | Done; menu A/B matches D3D11                                                              | CS `org-port/integration`                                |
-| P3 W1: IBL, Screen Space/Terrain/Volumetric Shadows, Skylighting, Grass Collision, LLF remainder               | Merged; all-on batch A/B within noise; Grass Collision and LLF local shadows still to A/B | CS `org-port/integration`                                |
+| P3 W1: IBL, Screen Space/Terrain/Volumetric Shadows, Skylighting, Grass Collision, LLF remainder               | Merged; A/B within noise, Grass Collision and LLF local shadows included                  | CS `org-port/integration`                                |
 | P3 W2: SSGI, Subsurface Scattering, Exponential Height Fog                                                     | Merged; fog and Subsurface A/B within noise (fog volumes read back equal)                 | CS `org-port/integration`                                |
 | DCLF graph textures (publish API, t30 proof)                                                                   | Merged; **open:** switching path mid-scene loses the device                               | CS `org-port/integration`                                |
 | P3 W2: Dynamic Cubemaps, Cloud Shadows                                                                         | Merged; A/B within noise, DCLF reads both through the graph                               | CS `org-port/integration`                                |
 | P3 W4: UnifiedWater flowmap (built on the CPU, no GPU pass)                                                    | Merged; same file hash on both paths                                                      | CS `org-port/integration`                                |
 | P3 W5: FX runtime parser and lowering                                                                          | Merged; execution not written yet                                                         | CS `org-port/integration`                                |
 | P3 W3: HDR Display output, Screenshot readback, Upscaling's own passes                                         | Merged; A/B within noise, graph screenshots byte-identical to D3D11 copies                | CS `org-port/integration`                                |
-| P3 W3: Post Processing framework (Vignette, Color Grading, LUT, Border)                                        | Merged; falls back correctly, graph chain not yet seen (scene presets re-enable effects)  | CS `org-port/integration`                                |
+| P3 W3: Post Processing framework and its effects                                                               | Merged; six effect scenarios (bloom, DoF, exposure, flares, glare) A/B within noise       | CS `org-port/integration`                                |
 | P3 W4: Terrain Blending, TruePBR glints, Effects11 sun and volumetric rays                                     | Merged; A/B within noise, glints noise reads back equal                                   | CS `org-port/integration`                                |
-| P3 W5: FX runtime execution                                                                                    | Merged behind CS_ORG_FX; never runs yet (parse error, input target, UAV); being fixed     | CS `org-port/integration`                                |
+| P3 W5: FX runtime execution                                                                                    | Merged behind CS_ORG_FX; matches FX11 in both cells with recording reuse on               | CS `org-port/integration`                                |
 | DCLF reads fog, IBL, Skylighting, Terrain/Volumetric Shadows as published resources                            | Merged; A/B within noise                                                                  | CS `org-port/integration`                                |
+| DCLF reads Terrain Blending's depths, Cloud Shadows' self shadow and the faces' inputs as published resources  | Merged; A/B within noise, no D3D11 export reads left                                      | CS `org-port/integration`                                |
+| DXVK: placeholder binds after external commands, interop layout order, relocation copies                       | Done; validation clean apart from a known kMAIN GENERAL layout                            | DXVK `org-port/p3-kept-layouts`, bumped on integration   |
 
 **Root cause worth knowing:** a BasicRHI-created Vulkan device failed on AMD because the driver rejects acceleration
 structures in a mutable descriptor list at any count. DXVK never enables acceleration structures, so the adopted device
 never hit it. Acceleration-structure SRVs are now dropped from the descriptor-buffer model where this happens.
+
+**Phase 3 is done.** Phase 4 has not started.
+
+**Second root cause worth knowing:** after `vkCmdExecuteCommands`, AMD's Windows driver keeps the vertex and index
+buffers the primary bound before it. When DXVK re-binds the same index buffer after the graph's secondaries, the driver
+drops the bind as redundant and the next indexed draw reads the graph's index buffer. That made the frames after the
+Tonemap epoch black (depth of field read garbage) in the FX and Post Processing chains. Validation saw nothing, since
+the API use is correct; an RGP capture found it. DXVK now binds placeholder buffers after any external commands, so its
+own binds always reach the driver. Details: "Hazard: bindings the driver keeps across an in-stream epoch" in
+`render-graph.md`.
 
 **Bugs found by in-game testing (fixed on `org-port/integration`):**
 
@@ -57,6 +69,12 @@ never hit it. Acceleration-structure SRVs are now dropped from the descriptor-bu
   Volumetric Shadows now do the same.
 - A client registered during an anchor's run is not in that run's epoch. Glints marked its one-shot fill done from the
   commit and the noise stayed zero; Screenshot lost its first capture. Both now count only work their pass prepared.
+- DXVK moved a render target's layout change into the barriers at the start of its command list, ahead of the graph's
+  earlier use of the image in its resting layout (undefined on AMD). It now keeps those changes in order for interop
+  images. It also copied relocated interop images from their resting layout; the copy now uses the transfer layout.
+- DCLF decided a frame texture's path from the producer's current bind, but resolves textures at the epoch, after the
+  main sky has rebound t26. The decision now comes from the view the commit captured, and the passes declare a frame
+  texture whenever its resource is published.
 - The fog fell back to D3D11 in every interior because Cloud Shadows binds nothing there; the shader does not read it
   without the sky, so the input is now left unbound.
 
