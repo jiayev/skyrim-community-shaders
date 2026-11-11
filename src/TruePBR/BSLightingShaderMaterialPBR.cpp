@@ -20,6 +20,7 @@ static void DiscardMislinkedTextureSet(RE::NiPointer<RE::BSTextureSet>& textureS
 
 BSLightingShaderMaterialPBR::~BSLightingShaderMaterialPBR()
 {
+	std::lock_guard lock(AllMutex);
 	All.erase(this);
 }
 
@@ -73,6 +74,7 @@ void BSLightingShaderMaterialPBR::CopyMembers(RE::BSShaderMaterial* that)
 	featuresTexture0 = pbrThat->featuresTexture0;
 	featuresTexture1 = pbrThat->featuresTexture1;
 
+	std::lock_guard lock(AllMutex);
 	All[this] = All[pbrThat];
 }
 
@@ -114,9 +116,12 @@ std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
 	hashes.pbrFlags = pbrFlags.underlying();
 	hashes.nifThinSurfaceFlags = nifThinSurfaceFlags.underlying();
 
-	if (const auto it = All.find(this); it != All.end()) {
-		hashes.hasNifThinSurfaceParameters = it->second.nifThinSurfaceParameters.has_value();
-		hashes.hasNifFuzzParameters = it->second.nifFuzzParameters.has_value();
+	{
+		std::lock_guard lock(AllMutex);
+		if (const auto it = All.find(this); it != All.end()) {
+			hashes.hasNifThinSurfaceParameters = it->second.nifThinSurfaceParameters.has_value();
+			hashes.hasNifFuzzParameters = it->second.nifFuzzParameters.has_value();
+		}
 	}
 
 	hashes.fuzzRoughnessTexture = fuzzRoughnessTexture;
@@ -208,6 +213,7 @@ void BSLightingShaderMaterialPBR::ApplyTextureSetData(const TruePBR::PBRTextureS
 
 	glintParameters = textureSetData.glintParameters;
 
+	std::lock_guard lock(AllMutex);
 	if (const auto it = All.find(this); it != All.end() && it->second.nifThinSurfaceParameters) {
 		ApplyNifThinSurfaceParameters(*it->second.nifThinSurfaceParameters);
 	}
@@ -231,6 +237,7 @@ bool BSLightingShaderMaterialPBR::ApplyNifFuzzParameters(std::span<const float> 
 
 	fuzzRoughness = roughness < 0.f ? -1.f : std::min(roughness, 1.f);
 	fuzzRoughnessTexture = useRoughnessTexture == 1.f;
+	std::lock_guard lock(AllMutex);
 	All[this].nifFuzzParameters = std::array{ fuzzRoughness, useRoughnessTexture };
 
 	return true;
@@ -246,6 +253,7 @@ bool BSLightingShaderMaterialPBR::ApplyNifThinSurfaceParameters(std::span<const 
 	thinSurfaceParameters = { std::clamp(parameters[1], 0.f, 1.f),
 		std::clamp(parameters[2], 0.f, 1.f),
 		std::clamp(parameters[3], 0.f, 3.f) };
+	std::lock_guard lock(AllMutex);
 	All[this].nifThinSurfaceParameters = std::array{ subsurfaceBalance, thinSurfaceParameters[0], thinSurfaceParameters[1], thinSurfaceParameters[2] };
 
 	return true;
@@ -302,7 +310,9 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 				bgsTextureSet = skyrim_cast<RE::BGSTextureSet*>(inTextureSet);
 			}
 			if (bgsTextureSet) {
-				if (auto* textureSetData = globals::features::truePBR.GetPBRTextureSetData(bgsTextureSet)) {
+				auto* textureSetData = globals::features::truePBR.GetPBRTextureSetData(bgsTextureSet);
+				std::lock_guard allLock(AllMutex);
+				if (textureSetData) {
 					ApplyTextureSetData(*textureSetData);
 					All[this].textureSetData = textureSetData;
 				} else if (const auto it = All.find(this); it != All.end()) {

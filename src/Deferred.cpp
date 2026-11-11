@@ -274,6 +274,7 @@ void Deferred::PrepassPasses()
 
 	globals::features::viewAtmosphere.Prepare();
 	Feature::ForEachLoadedFeature("Prepass", [](Feature* feature) { feature->Prepass(); }, true);
+	Feature::ForEachLoadedFeature("PostPrepass", [](Feature* feature) { feature->PostPrepass(); }, true);
 	globals::features::viewAtmosphere.Render();
 }
 
