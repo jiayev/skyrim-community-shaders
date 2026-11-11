@@ -135,13 +135,18 @@ struct VolumetricCloudData
 	float2 voxelAltitude;
 	uint skipShapeNoise;
 	uint useVoxelNoise;
-	float2 noisePadding;
+	float2 noisePadding;  // previous curvature radius, weather-history refresh weight
+	float4 middleLayer;   // bottom/top (game units), extinction/metre, weather UV/game unit
+	float4 middleShape;   // edge softness, reserved, detail UV/game unit, 3D detail
 };
 
 cbuffer VolumetricCloudConstants : register(b1)
 {
 	VolumetricCloudData VolumetricCloudBuffer[1];
 	float4 CloudMsCalibration[49];
+	float4 MiddleCloudCells;      // frequency, Ac modulation, As modulation, warp
+	float4 MiddleCloudBands;      // world wave vector (cycles/game unit), bend (wavelengths), organization
+	float4 MiddleCloudBandShape;  // thickness contrast, displacement (game units), wavelength (game units), enabled
 };
 Texture2D<float4> TexTransmittance : register(t1);
 Texture3D<float4> TexAerialPerspective : register(t2);
@@ -175,7 +180,11 @@ CloudLayer GetCloudLayer(VolumetricCloudData info)
 {
 	CloudLayer cloud;
 	cloud.lowestAltitude = info.lowCloudTraceBottomAltitude;
+#ifdef NO_CLOUD_STORMS
+	cloud.highestAltitude = info.lowCloudTraceTopAltitude;
+#else
 	cloud.highestAltitude = info.shadowVolumeTop;
+#endif
 #ifdef CLOUD_MAIN_DISPATCH
 	// Share the weather support with primary and light probes, including probes
 	// inside a storm. Local modeling is not part of the weather-map reduction.
@@ -234,7 +243,11 @@ float2 LocalNdfUV(float2 worldXY, VolumetricCloudData info)
 
 bool InLocalNdf(float2 uv, VolumetricCloudData info)
 {
+#ifdef NO_LOCAL_NDF
+	return false;
+#else
 	return info.localNdfAltitude.z > 0.0 && all(uv >= 0.0) && all(uv <= 1.0);
+#endif
 }
 
 struct LocalNdfModelSample
@@ -324,6 +337,9 @@ float LocalNdfMotionWeight(float2 worldXY, float height, VolumetricCloudData inf
 
 bool LocalNdfIntersectsRay(float2 origin, float2 direction, VolumetricCloudData info)
 {
+#ifdef NO_LOCAL_NDF
+	return false;
+#endif
 	if (info.localNdfAltitude.z <= 0.0)
 		return false;
 	const float2 uv = LocalNdfUV(origin, info);
@@ -889,6 +905,8 @@ float sampleWeatherCloudDensity(
 #endif
 #include "PhysicalSky/CloudVoxel.hlsli"
 
+#include "PhysicalSky/MidCloud.hlsli"
+
 float3 sampleExternalSunTransmittance(float3 pos, float3 sun_dir)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
@@ -898,6 +916,8 @@ float3 sampleExternalSunTransmittance(float3 pos, float3 sun_dir)
 	return SampleAtmosphereLightTr(TexTransmittance, TransmittanceSampler, pos_planet, sun_dir);
 }
 
+float3 CirrusBoundaryRadiance(float3 position, float3 direction, float3 incoming);
+float3 MiddleBoundaryRadiance(float3 position, float3 direction, float2 opticalDepth);
 #include "PhysicalSky/CloudAmbient.hlsli"
 #include "PhysicalSky/CloudLighting.hlsli"
 
@@ -1184,17 +1204,13 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 		result.cloud_depth = min(result.cloud_depth, stormInterval.x);
 	float cirrusDistance = sceneDistance;
 	bool cirrusPending = false;
-	if (info.cirrusEnabled != 0u) {
-		const float3 cirrusEye = cloudEye + float3(0.0, 0.0, info.cloudCurvatureRadius);
-		const float2 shell = IntersectSpherePair(cirrusEye, direction, info.cloudCurvatureRadius + info.cirrusAltitude);
-		cirrusDistance = shell.x >= 0.0 ? shell.x : shell.y;
-		if (cirrusDistance >= 0.0)
-			result.cloud_depth = bounds.length > 0.0 || hasBoundaryDepth ? min(result.cloud_depth, cirrusDistance) : cirrusDistance;
-		cirrusPending = cirrusDistance >= 0.0 && (!sceneLimited || cirrusDistance < sceneDistance);
-#ifdef CLOUD_REFLECTION
-		cirrusPending = cirrusPending && cirrusDistance >= raySegment.x && cirrusDistance < raySegment.y;
+
+#if defined(CLOUD_MAIN_DISPATCH) && defined(NO_CLOUD_STORMS) && !defined(CLOUD_VOXELS)
+	// No weather support intersects this ray. Keep the boundary/depth metadata
+	// above, but avoid walking the empty shell and setting up its lighting.
+	if (info.localNdfAltitude.z <= 0.0 && weatherCandidate.length <= 0.0)
+		return result;
 #endif
-	}
 	if (low.length <= 0.0 && !cirrusPending)
 		return result;
 
@@ -1476,11 +1492,14 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 	return result;
 }
 
+// clang-format off
+#include "PhysicalSky/UpperCloud.hlsli"
 #include "PhysicalSky/CloudBlur.hlsli"
 #include "PhysicalSky/CloudBounds.hlsli"
 #include "PhysicalSky/CloudTemporal.hlsli"
 #include "PhysicalSky/CloudVoxelView.hlsli"
 #include "PhysicalSky/LightningView.hlsli"
+// clang-format on
 
 // Match the largest shadow-volume dimension (kShadowVolW/H in PhysicalSky.h).
 #define NTHREADS 256
@@ -1550,6 +1569,9 @@ groupshared uint g_density_segment[NTHREADS];
 		// cloud shell outside the represented domain.
 		CloudDensityContext densityContext;
 		localExtinction = sampleCloudDensity(pos, GetCloudLayer(info), 2.0, 2000.0, 0.0, densityContext);
+		float4 middleModel;
+		float2 middleDepth;
+		localExtinction += MiddleCloudDensity(pos, middleModel, middleDepth, info.shadowVolumeRange / min(dims.x, dims.y));
 		density = localExtinction * length(ray_uv_increment * scale);
 
 		accumulated_density = density;
@@ -1587,8 +1609,62 @@ groupshared uint g_density_segment[NTHREADS];
 	}
 }
 
-	[numthreads(8, 8, 4)] void resampleShadowVolume(uint3 pixel : SV_DispatchThreadID)
+	// Each lane integrates one light ray; neighbouring lanes sample neighbouring
+	// columns. Keep the slanted sampling grid, wrap resets and half-voxel integral,
+	// without a group-wide prefix scan or shared-memory barriers at every voxel.
+	[numthreads(8, 8, 1)] void renderShadowColumns(uint2 ray : SV_DispatchThreadID)
 {
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	uint3 dims;
+	RWShadowVolume.GetDimensions(dims.x, dims.y, dims.z);
+	const float3 rcpDims = 1.0 / float3(dims);
+	const float thickness = max(info.shadowVolumeTop - info.shadowVolumeBottom, 1.0);
+	const float3 scale = float3(info.shadowVolumeRange.xx, thickness);
+	float3 increment = -info.dirlightDir * (1.0 / scale) * dims;
+	const float maximum = max(max(abs(increment.x), abs(increment.y)), abs(increment.z));
+	const uint axis = abs(increment.x) == maximum ? 0u : (abs(increment.y) == maximum ? 1u : 2u);
+	const uint2 columns = axis == 0u ? dims.yz : (axis == 1u ? dims.xz : dims.xy);
+	if (any(ray >= columns))
+		return;
+	uint3 start;
+	if (axis == 0u)
+		start = uint3(increment.x > 0.0 ? 0u : dims.x - 1u, ray);
+	else if (axis == 1u)
+		start = uint3(ray.x, increment.y > 0.0 ? 0u : dims.y - 1u, ray.y);
+	else
+		start = uint3(ray, increment.z > 0.0 ? 0u : dims.z - 1u);
+	increment /= maximum;
+	const float3 uvIncrement = increment * rcpDims;
+	const float3 startUv = (start + 0.5) * rcpDims;
+	const float stepLength = length(uvIncrement * scale);
+	const float2 center = CloudShadowVolume::GridCenter(FrameBuffer::CameraPosAdjust.xy, info.shadowVolumeRange, dims.xy);
+	const CloudLayer layer = GetCloudLayer(info);
+	float accumulated = 0.0;
+	uint previousSegment = 0u;
+	[loop] for (uint step = 0u; step < dims[axis]; ++step)
+	{
+		const float3 rawUv = startUv + step * uvIncrement;
+		const float3 uv = rawUv - floor(rawUv);
+		const uint3 pixel = uv * dims;
+		const uint3 wrap = asuint(int3(floor(rawUv))) & 255u;
+		const uint segment = wrap.x | (wrap.y << 8u) | (wrap.z << 16u);
+		// Crossing a side of the finite volume starts a new light column.
+		if (step == 0u || segment != previousSegment)
+			accumulated = 0.0;
+		previousSegment = segment;
+		const float3 position = float3(center + (uv.xy - 0.5) * info.shadowVolumeRange, info.shadowVolumeBottom + thickness * uv.z);
+		CloudDensityContext densityContext;
+		float extinction = sampleCloudDensity(position, layer, 2.0, 2000.0, 0.0, densityContext);
+		float4 middleModel;
+		float2 middleDepth;
+		extinction += MiddleCloudDensity(position, middleModel, middleDepth, info.shadowVolumeRange / min(dims.x, dims.y));
+		const float density = extinction * stepLength;
+		accumulated += density;
+		RWShadowVolume[pixel] = exp(-max(accumulated - 0.5 * density, 0.0) * info.sunExtinction * GAME_UNIT_TO_M);
+	}
+}
+
+[numthreads(8, 8, 4)] void resampleShadowVolume(uint3 pixel : SV_DispatchThreadID) {
 	uint3 dims;
 	RWShadowVolume.GetDimensions(dims.x, dims.y, dims.z);
 	if (any(pixel >= dims))
@@ -1644,12 +1720,23 @@ groupshared float ShadowMeanSamples[64];
 		} else {
 			const float stepLength = pathLength / 32.0;
 			float opticalDepth = 0.0;
-			[loop] for (uint step = 0u; step < 32u; ++step)
+			// FXC's loop analysis is expensive for storm/voxel density bodies.
+			// fastopt preserves their DXBC while avoiding speculative loop work.
+#ifdef NO_CLOUD_STORMS
+			[loop]
+#else
+			[fastopt]
+#endif
+				for (uint step = 0u; step < 32u; ++step)
 			{
 				const float distanceInCloud = (step + 0.5) * stepLength;
 				const float distanceAlongRay = distanceInCloud < nearLength ? start + distanceInCloud : farStart + distanceInCloud - nearLength;
 				CloudDensityContext densityContext;
-				const float density = sampleCloudDensity(pos + direction * distanceAlongRay, GetCloudLayer(info), 2.0, 2000.0, 0.0, densityContext);
+				float density = sampleCloudDensity(pos + direction * distanceAlongRay, GetCloudLayer(info), 2.0, 2000.0, 0.0, densityContext);
+				float4 middleModel;
+				float2 middleDepth;
+				density += MiddleCloudDensity(pos + direction * distanceAlongRay, middleModel, middleDepth,
+					max(stepLength * length(direction.xy), info.shadowVolumeRange / min(dims.x, dims.y)));
 				opticalDepth += density * stepLength * info.sunExtinction * GAME_UNIT_TO_M;
 			}
 			transmittance = exp(-max(opticalDepth, 0.0));
