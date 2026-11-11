@@ -17,26 +17,31 @@ namespace org
 }
 
 /**
- * @brief GPU hardware counters per named range through NVIDIA's Nsight Perf SDK (its range profiler).
+ * @brief GPU hardware counters per named range, through the GPU vendor's profiler library.
  *
  * A capture measures a set of metrics over the ranges State::BeginPerfEvent / EndPerfEvent open (and, on the Vulkan
- * backend, the render graph's passes and the ranges graph-recorded work pushes with PushCommandBufferRange). Each frame
+ * backends, the render graph's passes and the ranges graph-recorded work pushes with PushCommandBufferRange). Each frame
  * is one profiler pass, bracketed around the swap chain's Present (OnPresentBegin / OnPresentEnd); the metrics need as
  * many passes as the chip's counters allow per pass, so a sample takes several frames. A capture collects one or more
  * samples, then publishes a CaptureResult (and appends it to a CSV next to the log).
  *
- * One front end, two backends, chosen once by the device in use:
- * - D3D11: NVPW's D3D11 range profiler on the game's immediate context (the system D3D11 runtime).
- * - Vulkan: OpenRenderGraph's Telemetry/NvPerfCapture on DXVK's graphics queue, once the render graph adopted DXVK's
- *   Vulkan device (RegisterVulkanDevice). Under DXVK the D3D11 profiler cannot work, so it is never chosen there.
+ * One front end, four backends, chosen once by the API (system D3D11, or DXVK's Vulkan device once the render graph
+ * adopted it: RegisterVulkanDevice) and the GPU's vendor:
+ * - NVIDIA, Nsight Perf (NVPERF_ENABLED, CMake NVPERF_SUPPORT): NVPW's D3D11 range profiler on the game's immediate
+ *   context; OpenRenderGraph's Telemetry/NvPerfCapture on DXVK's graphics queue. nvperf_grfx_host.dll is delay-loaded from
+ *   Data/SKSE/Plugins/CommunityShaders/bin.
+ * - AMD, GPUPerfAPI (always built; extern/GPUPerfAPI's headers): its D3D11 library on the immediate context; its Vulkan
+ *   library on DXVK's device, samples recorded in DXVK's and the graph's command buffers. GPUPerfAPI<API>-x64.dll loads
+ *   from CommunityShaders/bin (or CS_GPA_DIR). It must be initialized before the device exists (BeforeDeviceCreation),
+ *   so it is only available when asked for at startup: CS_GPA=1, or a headless capture or trace switch.
+ * Under DXVK a D3D11 profiler cannot work, so it is never chosen there. A missing library disables profiling without
+ * failing the plugin load.
  *
  * Requests come from any thread (the Remote Control panel, the devbench tool) and, for headless runs, from the
- * CS_NVPERF_* switches; every profiler call runs on the render thread (Vulkan: also DXVK's threads). Only built with
- * NVPERF_ENABLED (CMake NVPERF_SUPPORT); otherwise every call reports that it is unavailable. The SDK's
- * nvperf_grfx_host.dll is delay-loaded from Data/SKSE/Plugins/CommunityShaders/bin, so a missing file disables
- * profiling without failing the plugin load.
+ * CS_GPU_COUNTERS_* switches (also read under their older CS_NVPERF_ names); every profiler call runs on the render
+ * thread (Vulkan: also DXVK's threads and the graph's recording threads).
  */
-namespace NvPerf
+namespace GpuCounters
 {
 	/// One metric as the metrics evaluator names it (e.g. "sm__throughput"), with the evaluator's enums.
 	struct MetricRequest
@@ -150,8 +155,12 @@ namespace NvPerf
 	bool Probe();
 	DeviceInfo GetDeviceInfo();
 
-	/// Time, throughput of the main units, the instruction mix and the warp stall reasons.
+	/// The chosen backend's defaults. Nsight Perf: time, throughput of the main units, the instruction mix and the warp stall
+	/// reasons. GPUPerfAPI: time, the stages' and units' busy shares, instruction counts, cache hit rates and stalls.
 	std::vector<MetricRequest> DefaultMetrics();
+	/// Before the game creates its D3D11 device (after DXVK loaded): prepares a profiler that must exist before the device
+	/// (GPUPerfAPI, when requested at startup).
+	void BeforeDeviceCreation();
 	/// Parses "name[:counter|ratio|throughput|active|elapsed|percycle]" (default counter).
 	bool ParseMetric(std::string_view text, MetricRequest& metric, std::string& error);
 	/// The inverse of ParseMetric.

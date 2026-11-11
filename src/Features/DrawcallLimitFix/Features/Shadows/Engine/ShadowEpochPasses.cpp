@@ -11,6 +11,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Passes/DrawHelpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Readback/Readbacks.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/GpuLayouts.h"
@@ -23,7 +24,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Features/Shadows/Engine/Engine.h"
 
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include <OpenRenderGraph/GraphHost.h>
 #include <Render/LatchBlock.h>
@@ -376,7 +377,7 @@ namespace DCLF::Draws
 			};
 			const rhi::IndexBufferView pool{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt };  // the whole buffer
 			// nvperf ranges around each view's pass, when a capture selects them.
-			void* const nvCommands = NvPerf::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(commands) : nullptr;
+			void* const nvCommands = GpuCounters::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(commands) : nullptr;
 			std::uint32_t recordedDraws = 0;
 			static constexpr const char* kViewRanges[] = { "cs.dclf.shadow.view-0", "cs.dclf.shadow.view-1", "cs.dclf.shadow.view-2", "cs.dclf.shadow.view-3",
 				"cs.dclf.shadow.view-4", "cs.dclf.shadow.view-5", "cs.dclf.shadow.view-6", "cs.dclf.shadow.view-7+" };
@@ -384,7 +385,7 @@ namespace DCLF::Draws
 				const auto& view = frame.views[a_prepared.views[i].index];
 				const char* range = view.target == kProbeSunTarget ? "cs.dclf.shadow.probe-sun" : IsOcclusionTarget(view.target) ? "cs.dclf.shadow.occlusion-map" :
 				                                                                                                                   kViewRanges[std::min<std::size_t>(i, std::size(kViewRanges) - 1)];
-				const bool viewRange = nvCommands && NvPerf::PushCommandBufferRange(nvCommands, range);
+				const bool viewRange = nvCommands && GpuCounters::PushCommandBufferRange(nvCommands, range);
 				commands.BeginPass(begins[i]);
 				commands.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
 				commands.BindLayout(frame.indirect.layout);
@@ -410,7 +411,7 @@ namespace DCLF::Draws
 				}
 				commands.EndPass();
 				if (nvCommands)
-					NvPerf::PopCommandBufferRange(nvCommands, viewRange);
+					GpuCounters::PopCommandBufferRange(nvCommands, viewRange);
 			}
 			// A recording is replayed until its shape changes: a few of them say how many indirect draws the views cost.
 			static std::atomic<std::uint32_t> logged{ 0 };
@@ -429,10 +430,17 @@ namespace DCLF::Features::Shadows::Engine
 {
 	namespace
 	{
-		/** @brief What the views' latched copies write: the blocks, the counters, the commit's values in the constants. */
+		/**
+		 * @brief What the views' latched copies write: the blocks, the commit's values in the constants, and the GPU culls' counters, which
+		 * they zero. A CPU pipeline's graph copies no zeroed lists (LatchedSource::zeros), so it declares no counter: declared, each would be
+		 * a barrier in every execution for nothing.
+		 */
 		std::vector<Draws::LatchedTarget> LatchedTargets(const Draws::ShadowResources& a_shadow)
 		{
-			std::vector<Draws::LatchedTarget> out{ { nullptr, a_shadow.viewBlocks.buffer }, { a_shadow.constants, nullptr }, { a_shadow.casterRowsUsed, nullptr } };
+			std::vector<Draws::LatchedTarget> out{ { nullptr, a_shadow.viewBlocks.buffer }, { a_shadow.constants, nullptr } };
+			if (Draws::CurrentGraphConditions().cpuPipeline)
+				return out;
+			out.push_back({ a_shadow.casterRowsUsed, nullptr });
 			for (std::size_t s = 0; s < a_shadow.count.size(); ++s) {
 				out.push_back({ a_shadow.count[s], nullptr });
 				out.push_back({ nullptr, a_shadow.bucketCounts[s] });

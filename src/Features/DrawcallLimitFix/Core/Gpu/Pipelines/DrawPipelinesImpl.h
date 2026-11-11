@@ -593,6 +593,7 @@ namespace DCLF
 		rhi::CommandSignaturePtr shadowViewDrawSignature;
 		bool supported = false;
 		bool deviceGenerated = false;  // DrawPipelines::DeviceGenerated: the classes' execution sets and signatures are made
+		bool gpuDriven = false;        // DrawPipelines::GpuDriven: counted indirect draws, so the GPU path's buckets draw
 		bool attempted = false;
 		org::services::PipelineService service;
 		/**

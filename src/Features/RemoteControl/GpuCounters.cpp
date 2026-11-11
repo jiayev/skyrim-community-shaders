@@ -1,12 +1,11 @@
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
 
 #include "Features/RemoteControl/GpuTimestamps.h"
-#include "Features/RemoteControl/NvPerfBackend.h"
-#include "Features/RemoteControl/NvPerfTrace.h"
+#include "Features/RemoteControl/GpuCountersBackend.h"
+#include "Features/RemoteControl/GpuCountersTrace.h"
 
 #include "DxvkLoader.h"
-#include "Globals.h"
-#include "State.h"
+#include "Features/RemoteControl/GpuCountersHost.h"
 #include "Utils/FileSystem.h"
 
 #include <algorithm>
@@ -29,9 +28,9 @@
 #	include <Render/Runtime/IStatisticsService.h>
 #endif
 
-// NvPerf's front end: requests, status, results, the CS_NVPERF_* switches, and the choice of backend
-// (NvPerfBackend.h). Every profiler call is the backend's.
-namespace NvPerf
+// The hardware counter front end: requests, status, results, the CS_GPU_COUNTERS_* switches (CS_NVPERF_* still read), and
+// the choice of backend by API and GPU vendor (GpuCountersBackend.h). Every profiler call is the backend's.
+namespace GpuCounters
 {
 	using namespace detail;
 
@@ -65,7 +64,7 @@ namespace NvPerf
 		} };
 	}
 
-	std::vector<MetricRequest> DefaultMetrics()
+	std::vector<MetricRequest> detail::NvPerfDefaultMetrics()
 	{
 		const auto metric = [](const char* a_name, std::string_view a_kind) {
 			MetricRequest request;
@@ -131,6 +130,8 @@ namespace NvPerf
 
 	std::string MetricLabel(const MetricRequest& a_metric)
 	{
+		if (a_metric.metricType == kPlainSummed || a_metric.metricType == kPlainAveraged)
+			return a_metric.name;
 		std::string label = a_metric.name;
 		if (a_metric.metricType != kRatio && a_metric.rollupOp < kRollupNames.size())
 			label += std::format(".{}", kRollupNames[a_metric.rollupOp]);
@@ -148,7 +149,12 @@ namespace NvPerf
 	{
 		bool IsSummed(const MetricRequest& a_metric)
 		{
-			return a_metric.metricType == kCounter && a_metric.rollupOp == kRollupSum;
+			return a_metric.metricType == kPlainSummed || (a_metric.metricType == kCounter && a_metric.rollupOp == kRollupSum);
+		}
+
+		bool IsTimeMetric(const MetricRequest& a_metric)
+		{
+			return a_metric.name == "gpu__time_duration" || a_metric.name == "GPUTime";
 		}
 
 		bool NameMatches(std::string_view a_filter, std::string_view a_name)
@@ -181,7 +187,7 @@ namespace NvPerf
 			if (::GetModuleHandleW(L"nvperf_grfx_host.dll") || ::LoadLibraryW(a_device.libraryPath.c_str()))
 				return true;
 			a_device.error = std::format("could not load {}", Util::PathHelpers::ToUtf8(a_device.libraryPath));
-			logger::info("[NvPerf] {}", a_device.error);
+			logger::info("[GpuCounters] {}", a_device.error);
 			return false;
 		}
 	}
@@ -210,7 +216,7 @@ namespace NvPerf
 			const std::size_t sampleCount = a_result.samples;
 			std::size_t timeMetric = metrics.size();
 			for (std::size_t m = 0; m < metrics.size(); ++m)
-				if (metrics[m].name == "gpu__time_duration")
+				if (IsTimeMetric(metrics[m]))
 					timeMetric = m;
 			struct Totals
 			{
@@ -296,23 +302,23 @@ namespace NvPerf
 		void LogResult(const CaptureResult& a_result)
 		{
 			if (!a_result.success && a_result.rangeResults.empty()) {
-				logger::warn("[NvPerf] capture {} failed: {}", a_result.id, a_result.error);
+				logger::warn("[GpuCounters] capture {} failed: {}", a_result.id, a_result.error);
 				return;
 			}
-			logger::info("[NvPerf] capture {} (frames {}-{}, {} samples x {} passes, chip {}): {} ranges{}", a_result.id, a_result.startFrame,
+			logger::info("[GpuCounters] capture {} (frames {}-{}, {} samples x {} passes, chip {}): {} ranges{}", a_result.id, a_result.startFrame,
 				a_result.endFrame, a_result.samples, a_result.passesPerSample, a_result.chipName, a_result.rangeResults.size(),
 				a_result.success ? "" : std::format(" ({})", a_result.error));
 			if (!a_result.otherQueueRanges.empty()) {
 				std::string names;
 				for (const auto& name : a_result.otherQueueRanges)
 					names += std::format("{}{}", names.empty() ? "" : ", ", name);
-				logger::warn("[NvPerf]   {} selected passes ran on another queue and were not measured: {}", a_result.otherQueueRanges.size(), names);
+				logger::warn("[GpuCounters]   {} selected passes ran on another queue and were not measured: {}", a_result.otherQueueRanges.size(), names);
 			}
 			for (const auto& entry : a_result.summary) {
 				std::string text;
 				for (std::size_t m = 0; m < a_result.metrics.size() && m < entry.values.size(); ++m)
 					text += std::format("{}{}={:.4g}", text.empty() ? "" : ", ", MetricLabel(a_result.metrics[m]), entry.values[m]);
-				logger::info("[NvPerf]   {} (x{:.3g}/frame{}): {}", entry.name, entry.occurrencesPerFrame,
+				logger::info("[GpuCounters]   {} (x{:.3g}/frame{}): {}", entry.name, entry.occurrencesPerFrame,
 					entry.incomplete ? std::format(", {} incomplete", entry.incomplete) : "", text);
 			}
 		}
@@ -326,7 +332,7 @@ namespace NvPerf
 			const bool header = !std::filesystem::exists(a_result.csvPath, ec) || std::filesystem::file_size(a_result.csvPath, ec) == 0;
 			std::ofstream csv(a_result.csvPath, std::ios::app);
 			if (!csv) {
-				logger::warn("[NvPerf] could not write {}", Util::PathHelpers::ToUtf8(a_result.csvPath));
+				logger::warn("[GpuCounters] could not write {}", Util::PathHelpers::ToUtf8(a_result.csvPath));
 				return;
 			}
 			// Metric columns change between captures, so each capture repeats its header when it differs from a new file's.
@@ -345,12 +351,9 @@ namespace NvPerf
 			}
 		}
 
-#ifdef NVPERF_ENABLED
+		// GPUPerfAPI needs no SDK at build time (its headers are vendored, its DLLs load at run time), so a backend always
+		// exists; only Nsight Perf's are optional (NVPERF_ENABLED).
 		constexpr bool kBuilt = true;
-#else
-		constexpr bool kBuilt = false;
-#endif
-		constexpr const char* kNotBuilt = "built without Nsight Perf (configure with -DNVPERF_SUPPORT=ON)";
 
 		// The Win32 environment: the switches file is applied with SetEnvironmentVariable after the CRT copied its own.
 		std::string Env(const char* a_name)
@@ -358,6 +361,31 @@ namespace NvPerf
 			char value[4096]{};
 			const DWORD length = ::GetEnvironmentVariableA(a_name, value, sizeof(value));
 			return length && length < sizeof(value) ? std::string(value, length) : std::string{};
+		}
+
+		// A switch by its suffix: CS_GPU_COUNTERS_<suffix>, else the older CS_NVPERF_<suffix>.
+		std::string Switch(std::string_view a_suffix)
+		{
+			const std::string suffix(a_suffix);
+			if (auto value = Env(("CS_GPU_COUNTERS_" + suffix).c_str()); !value.empty())
+				return value;
+			return Env(("CS_NVPERF_" + suffix).c_str());
+		}
+
+		constexpr std::uint32_t kVendorAmd = 0x1002, kVendorNvidia = 0x10DE;
+
+		// The D3D11 device's adapter vendor (0: unknown).
+		std::uint32_t D3D11Vendor()
+		{
+			auto* device = Host::Device();
+			if (!device)
+				return 0;
+			winrt::com_ptr<IDXGIDevice> dxgi;
+			winrt::com_ptr<IDXGIAdapter> adapter;
+			DXGI_ADAPTER_DESC desc{};
+			if (FAILED(device->QueryInterface(IID_PPV_ARGS(dxgi.put()))) || FAILED(dxgi->GetAdapter(adapter.put())) || FAILED(adapter->GetDesc(&desc)))
+				return 0;
+			return desc.VendorId;
 		}
 
 		std::vector<std::string> Split(const std::string& a_text)
@@ -390,7 +418,7 @@ namespace NvPerf
 			// Render thread only.
 			std::optional<Capture> capture;
 			std::uint64_t presents = 0;
-			bool environmentHandled = false;  // the CS_NVPERF_RANGES capture was queued (or could not be)
+			bool environmentHandled = false;  // the CS_GPU_COUNTERS_RANGES capture was queued (or could not be)
 		};
 
 		Profiler& Get()
@@ -414,11 +442,20 @@ namespace NvPerf
 				a_profiler.device.error = "DXVK is in use and the render graph has not adopted its Vulkan device (the D3D11 profiler cannot run under DXVK)";
 				return nullptr;
 			}
-			if (!backend)
-				backend = MakeD3D11Backend().release();
-			if (!backend)
-				return nullptr;
-			a_profiler.device.backend = backend->Name();
+			if (!backend) {
+				// The system D3D11 runtime: Nsight Perf on NVIDIA, GPUPerfAPI on AMD.
+				const std::uint32_t vendor = D3D11Vendor();
+				if (vendor == kVendorAmd)
+					backend = MakeGpaD3D11Backend().release();
+				else if (vendor == kVendorNvidia)
+					backend = MakeNvPerfD3D11Backend().release();
+				if (!backend) {
+					a_profiler.device.error = vendor == kVendorNvidia ? std::format("built without Nsight Perf ({})", Host::BuildHint()) :
+					                                                    std::format("no counter profiler for this GPU (vendor {:#06x})", vendor);
+					return nullptr;
+				}
+			}
+			a_profiler.device.backend = std::format("{} {}", backend->Profiler(), backend->Name());
 			g_backend.store(backend, std::memory_order_release);
 			return backend;
 		}
@@ -429,10 +466,6 @@ namespace NvPerf
 			auto& device = a_profiler.device;
 			if (device.probed)
 				return device.gpuSupported;
-			if (!kBuilt) {
-				device.error = kNotBuilt;
-				return false;
-			}
 			auto* backend = SelectLocked(a_profiler);
 			return backend && backend->Probe(device);
 		}
@@ -504,10 +537,10 @@ namespace NvPerf
 					if (PerfEventSelected(capture.configuration.ranges, name))
 						capture.result.otherQueueRanges.push_back(std::move(name));
 			}
-			globals::state->frameAnnotations = capture.previousFrameAnnotations;
+			Host::SetFrameAnnotations(capture.previousFrameAnnotations);
 
 			auto& result = capture.result;
-			result.endFrame = globals::state->frameCount;
+			result.endFrame = Host::FrameCount();
 			result.samples = capture.sample;
 			result.passesPerSample = capture.passesPerSample;
 			if (a_error.empty() && (result.droppedRanges || result.droppedTraceBytes))
@@ -546,14 +579,14 @@ namespace NvPerf
 			if (capture.configuration.metrics.empty())
 				capture.configuration.metrics = DefaultMetrics();
 			capture.delayFrames = capture.configuration.delayFrames;
-			capture.previousFrameAnnotations = globals::state->frameAnnotations;
+			capture.previousFrameAnnotations = Host::FrameAnnotations();
 			// Perf events are the ranges, and most are only emitted with annotations on.
-			globals::state->frameAnnotations = true;
+			Host::SetFrameAnnotations(true);
 
 			auto& result = capture.result;
 			result.id = a_id;
 			result.ranges = capture.configuration.ranges;
-			result.startFrame = globals::state->frameCount;
+			result.startFrame = Host::FrameCount();
 			result.csvPath = CsvPath();
 
 			std::string chipName;
@@ -562,7 +595,7 @@ namespace NvPerf
 			{
 				std::lock_guard lock(a_profiler.mutex);
 				if (!ProbeLocked(a_profiler))
-					error = a_profiler.device.error.empty() ? "Nsight Perf is unavailable" : a_profiler.device.error;
+					error = a_profiler.device.error.empty() ? "no counter profiler is available" : a_profiler.device.error;
 				chipName = a_profiler.device.chipName;
 				backend = g_backend.load(std::memory_order_acquire);
 			}
@@ -591,14 +624,15 @@ namespace NvPerf
 				SetStatus(a_profiler, capture, step.state);
 		}
 
-		// CS_NVPERF_RANGES: a headless run's capture, queued as a RequestCapture once the backend is ready. Its result is
-		// logged per range filter like every capture's. CS_NVPERF_START_FRAME (default 1200) is the present it starts at,
-		// CS_NVPERF_SAMPLES (default 3) its samples, CS_NVPERF_METRICS its metrics (ParseMetric's form, comma-separated;
-		// default DefaultMetrics()), CS_NVPERF_CSV overrides CsvPath().
+		// CS_GPU_COUNTERS_RANGES: a headless run's capture, queued as a RequestCapture once the backend is ready. Its result is
+		// logged per range filter like every capture's. CS_GPU_COUNTERS_START_FRAME (default 1200) is the present it starts at,
+		// CS_GPU_COUNTERS_SAMPLES (default 3) its samples, CS_GPU_COUNTERS_METRICS its metrics (ParseMetric's form,
+		// comma-separated; default DefaultMetrics()), CS_GPU_COUNTERS_CSV overrides CsvPath(). Each is also read under its older
+		// CS_NVPERF_ name.
 		void QueueEnvironmentCapture(Profiler& a_profiler)
 		{
-			// CS_NVPERF_RANGES alone: EnvironmentRequested also answers for CS_NVPERF_TEMPLATE, whose trace queues its own captures.
-			static const bool requested = !Split(Env("CS_NVPERF_RANGES")).empty();
+			// CS_GPU_COUNTERS_RANGES alone: EnvironmentRequested also answers for CS_NVPERF_TEMPLATE, whose trace queues its own captures.
+			static const bool requested = !Split(Switch("RANGES")).empty();
 			if (a_profiler.environmentHandled || !requested)
 				return;
 			{
@@ -607,46 +641,59 @@ namespace NvPerf
 					// Under DXVK the render graph may not have registered yet: try again next frame.
 					if (a_profiler.device.probed || !kBuilt) {
 						a_profiler.environmentHandled = true;
-						logger::warn("[NvPerf] CS_NVPERF_RANGES: no capture: {}", a_profiler.device.error);
+						logger::warn("[GpuCounters] CS_GPU_COUNTERS_RANGES: no capture: {}", a_profiler.device.error);
 					}
 					return;
 				}
 			}
 			a_profiler.environmentHandled = true;
 			CaptureConfiguration configuration;
-			configuration.ranges = Split(Env("CS_NVPERF_RANGES"));
-			for (const auto& entry : Split(Env("CS_NVPERF_METRICS"))) {
+			configuration.ranges = Split(Switch("RANGES"));
+			for (const auto& entry : Split(Switch("METRICS"))) {
 				MetricRequest metric;
 				std::string error;
 				if (ParseMetric(entry, metric, error))
 					configuration.metrics.push_back(std::move(metric));
 				else
-					logger::warn("[NvPerf] CS_NVPERF_METRICS: '{}' skipped: {}", entry, error);
+					logger::warn("[GpuCounters] CS_GPU_COUNTERS_METRICS: '{}' skipped: {}", entry, error);
 			}
 			std::uint64_t startFrame = 1200;
-			if (const auto start = Env("CS_NVPERF_START_FRAME"); !start.empty())
+			if (const auto start = Switch("START_FRAME"); !start.empty())
 				startFrame = std::strtoull(start.c_str(), nullptr, 10);
 			configuration.samples = 3;
-			if (const auto samples = Env("CS_NVPERF_SAMPLES"); !samples.empty())
+			if (const auto samples = Switch("SAMPLES"); !samples.empty())
 				configuration.samples = static_cast<std::uint32_t>(std::strtoul(samples.c_str(), nullptr, 10));
 			const std::uint64_t delay = startFrame > a_profiler.presents ? startFrame - a_profiler.presents : 0;
 			configuration.delayFrames = static_cast<std::uint32_t>(std::min<std::uint64_t>(delay, std::numeric_limits<std::uint32_t>::max()));
 			std::uint64_t captureId = 0;
 			std::string error;
 			if (!Validate(configuration, false, error) || !Queue(a_profiler, configuration, captureId, error)) {
-				logger::warn("[NvPerf] CS_NVPERF_RANGES: no capture: {}", error);
+				logger::warn("[GpuCounters] CS_GPU_COUNTERS_RANGES: no capture: {}", error);
 				return;
 			}
-			logger::info("[NvPerf] CS_NVPERF_RANGES: capture {} of {} range filters from frame {}, {} samples, rows to {}", captureId, configuration.ranges.size(),
+			logger::info("[GpuCounters] CS_GPU_COUNTERS_RANGES: capture {} of {} range filters from frame {}, {} samples, rows to {}", captureId, configuration.ranges.size(),
 				startFrame, configuration.samples, Util::PathHelpers::ToUtf8(CsvPath()));
 		}
 	}
 
+	std::vector<MetricRequest> DefaultMetrics()
+	{
+		Probe();
+		if (const auto* backend = g_backend.load(std::memory_order_acquire))
+			return backend->DefaultMetrics();
+		return NvPerfDefaultMetrics();
+	}
+
+	void BeforeDeviceCreation()
+	{
+		GpaBeforeDeviceCreation(DxvkLoader::IsLoaded() ? ::GetModuleHandleW(L"dxvk_d3d11.dll") : nullptr);
+	}
+
 	std::filesystem::path CsvPath()
 	{
-		if (const auto csv = Env("CS_NVPERF_CSV"); !csv.empty())
+		if (const auto csv = Switch("CSV"); !csv.empty())
 			return std::filesystem::path(csv);
-		return Util::PathHelpers::GetLogPath().parent_path() / "CommunityShaders-NvPerf.csv";
+		return Host::LogDirectory() / "CommunityShaders-GpuCounters.csv";
 	}
 
 	bool Probe()
@@ -662,14 +709,14 @@ namespace NvPerf
 		std::lock_guard lock(profiler.mutex);
 		DeviceInfo info = profiler.device;
 		info.built = kBuilt;
-		if (!kBuilt)
-			info.error = kNotBuilt;
 		return info;
 	}
 
 	void RegisterVulkanDevice(const DxvkOrgInteropDeviceInfo& a_info, void* a_dxvkModule, org::GraphHost& a_host)
 	{
-		auto backend = MakeVulkanBackend(a_info, a_dxvkModule, a_host);
+		// Nsight Perf on NVIDIA, GPUPerfAPI on AMD, by DXVK's physical device.
+		const std::uint32_t vendor = VulkanVendor(a_info);
+		auto backend = vendor == kVendorAmd ? MakeGpaVulkanBackend(a_info, a_dxvkModule, a_host) : MakeNvPerfVulkanBackend(a_info, a_dxvkModule, a_host);
 		if (!backend)
 			return;
 		auto& profiler = Get();
@@ -677,7 +724,7 @@ namespace NvPerf
 		// Its callbacks are installed: it lives on whether or not it is chosen.
 		Backend* registered = backend.release();
 		if (const auto* chosen = g_backend.load(std::memory_order_acquire)) {
-			logger::warn("[NvPerf] the {} backend was chosen before the render graph adopted DXVK's device; the Vulkan backend is not used", chosen->Name());
+			logger::warn("[GpuCounters] the {} backend was chosen before the render graph adopted DXVK's device; the Vulkan backend is not used", chosen->Name());
 			return;
 		}
 		profiler.vulkan = registered;
@@ -685,16 +732,12 @@ namespace NvPerf
 
 	bool EnvironmentRequested()
 	{
-		static const bool requested = !Split(Env("CS_NVPERF_RANGES")).empty() || Trace::EnvironmentRequested();
+		static const bool requested = !Split(Switch("RANGES")).empty() || Trace::EnvironmentRequested();
 		return requested;
 	}
 
 	bool RequestCapture(const CaptureConfiguration& a_configuration, std::uint64_t& a_captureId, std::string& a_error)
 	{
-		if (!kBuilt) {
-			a_error = kNotBuilt;
-			return false;
-		}
 		return Validate(a_configuration, true, a_error) && Queue(Get(), a_configuration, a_captureId, a_error);
 	}
 

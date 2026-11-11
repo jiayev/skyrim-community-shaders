@@ -1,7 +1,7 @@
 #include "D3DX9MathUpgrade.h"
 #include "Deferred.h"
 #include "Features/DrawcallLimitFix.h"
-#include "Features/RemoteControl/NvPerfTrace.h"
+#include "Features/RemoteControl/GpuCountersTrace.h"
 #include "Features/RenderDoc.h"
 #include "Features/Upscaling.h"
 #include "FrameAnnotations.h"
@@ -212,7 +212,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		{
 			if (errors.empty())
 				Feature::ForEachLoadedFeature("GameLoaded", [](Feature* feature) { feature->GameLoaded(); });
-			NvPerf::Trace::OnGameLoaded();
+			GpuCounters::Trace::OnGameLoaded();
 			break;
 		}
 	}

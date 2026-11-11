@@ -20,8 +20,8 @@ namespace DCLF::Reports
 		for (std::size_t v = 0; v < Direct::kViewTypes; ++v) {
 			if (!w.sum.batches[v])
 				continue;
-			views += fmt::format("{}{} {:.0f} us, {:.1f} batches, {:.0f} drawn", views.empty() ? "" : "; ", CpuViewName(v), w.sum.cullUs[v] / n, w.sum.batches[v] / n,
-				w.sum.drawn[v] / n);
+			views += fmt::format("{}{} {:.0f} us, {:.1f} batches, {:.0f} drawn, {:.3f}M triangles", views.empty() ? "" : "; ", CpuViewName(v), w.sum.cullUs[v] / n,
+				w.sum.batches[v] / n, w.sum.drawn[v] / n, w.sum.viewIndices[v] / n / 3.0e6);
 		}
 		for (std::size_t v = 0; v < Direct::kViewTypes; ++v)
 			if (mode.cadence[v] == Direct::Cadence::PerSnapshot)
@@ -31,8 +31,8 @@ namespace DCLF::Reports
 		for (std::size_t site = 0; site < std::size(kSiteNames); ++site) {
 			if (!w.siteRuns[site])
 				continue;
-			sites += fmt::format("{}{} {:.0f} us ({} callbacks, {} drew nothing)", sites.empty() ? "" : ", ", kSiteNames[site], w.sum.recordUs[site] / n, w.siteRuns[site],
-				w.siteEmpty[site]);
+			sites += fmt::format("{}{} {:.0f} us ({} callbacks, {} drew nothing, {:.3f}M triangles a frame)", sites.empty() ? "" : ", ", kSiteNames[site],
+				w.sum.recordUs[site] / n, w.siteRuns[site], w.siteEmpty[site], w.sum.indices[site] / n / 3.0e6);
 			if (w.siteEmpty[site] == w.siteRuns[site])
 				empty += fmt::format(" <- {} DREW NOTHING", kSiteNames[site]);
 		}

@@ -38,6 +38,7 @@ namespace DCLF
 		CpuRecord,
 		CpuCadence,
 		CpuBatch,
+		ShadowOrder,
 		ProjectedUv,
 		PlainSnowSparkle,
 		Shadows,

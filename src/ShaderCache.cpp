@@ -1787,6 +1787,8 @@ namespace SIE
 				{ "BSImagespaceShaderVolumetricLightingGenerateCS", 257 },
 				{ "BSImagespaceShaderVolumetricLightingBlurHCS", RE::ImageSpaceManager::GetCurrentIndex(ISVolumetricLightingBlurHCS) },
 				{ "BSImagespaceShaderVolumetricLightingBlurVCS", RE::ImageSpaceManager::GetCurrentIndex(ISVolumetricLightingBlurVCS) },
+				{ "BSImagespaceShaderReflectionBlurHCS", RE::ImageSpaceManager::GetCurrentIndex(ISReflectionBlurHCS) },
+				{ "BSImagespaceShaderReflectionBlurVCS", RE::ImageSpaceManager::GetCurrentIndex(ISReflectionBlurVCS) },
 
 				{ "BSImagespaceShaderISDownsampleHierarchicalDepthBufferCS", RE::ImageSpaceManager::GetCurrentIndex(ISDownsampleHierarchicalDepthBufferCS) },
 				{ "BSImagespaceShaderISDiffScaleDownsampleDepthBufferCS", RE::ImageSpaceManager::GetCurrentIndex(ISDiffScaleDownsampleDepthBufferCS) },

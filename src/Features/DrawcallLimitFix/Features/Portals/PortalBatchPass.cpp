@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Main/Resources.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/Helpers.h"
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
+#include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalBatch.h"
 #include "Features/DrawcallLimitFix/Features/Portals/PortalBatchLayout.h"
 
@@ -14,7 +15,8 @@ namespace DCLF::Features::Portals
 		{
 			std::uint32_t queries, results, programs, counts, offsets, ranks, indices, tasks, dispatch;
 			std::uint32_t queryCount, bucketCount, base, elements, sumsBase, parentBase;
-			std::uint32_t latchIndex, latchOffset, padding[3];  // the depth latch, whose portalProgramsIndex names the programs
+			std::uint32_t latchIndex, latchOffset, aux;  // the depth latch, whose portalProgramsIndex names the programs
+			std::uint32_t traceFrame, padding;            // CS_DCLF_PORTAL_TRACE: the scene frame the pass prepared for
 		};
 		static_assert(sizeof(Constants) == 80);
 		constexpr std::uint32_t kConstantWords = sizeof(Constants) / 4;
@@ -46,7 +48,9 @@ namespace DCLF::Features::Portals
 				bindings.results = a_builder.UnorderedAccess(*b.results).View();
 				// The programs are the frame's publication, named by the depth latch: an immutable pooled backing no pass declares.
 				if (evaluate && b.inlineEvaluation) {
-					// One Inline dispatch: the queries and the results alone.
+					// One Inline dispatch: the queries and the results alone, and the trace (into the task buffer) when asked.
+					if (b.trace)
+						bindings.tasks = a_builder.UnorderedAccess(*b.tasks).View();
 				} else if (evaluate) {
 					bindings.dispatch = a_builder.ShaderResource(b.dispatch).View();
 					bindings.indices = a_builder.ShaderResource(*b.indices).View();
@@ -78,6 +82,8 @@ namespace DCLF::Features::Portals
 				const auto& b = *prepared.batch;
 				auto& c = prepared.constants;
 				c.latchIndex = frame->latch->SrvIndex();
+				if (b.trace)
+					c.traceFrame = Scene::FrameView::Get().GetFrame();
 				c.queryCount = static_cast<std::uint32_t>(Draws::NamedUnitsOf(a_preparation, b.queries));
 				c.bucketCount = static_cast<std::uint32_t>(std::min(Draws::NamedUnitsOf(a_preparation, b.counts), Draws::NamedUnitsOf(a_preparation, b.offsets)) / 2);
 				return prepared;

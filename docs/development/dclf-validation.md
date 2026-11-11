@@ -52,7 +52,7 @@ only `0` turns it off. Parity, diagnostic and test switches are off unless set.
 | --- | --- | --- |
 | `CS_DCLF` | on (unless 0) | `0`: DCLF does not install. |
 | `CS_DCLF_PRECOMPILE` | on (unless 0) | `0`: DCLF's SPIR-V programs compile on first use instead of alongside the engine's shaders. |
-| `CS_DCLF_CULL` | `occlusion` | `off`, `frustum` or `occlusion`: GPU culling. `off` and `frustum` count as a reduced featureset. |
+| `CS_DCLF_CULL` | `occlusion` (`frustum` on AMD) | `off`, `frustum` or `occlusion`: GPU culling. `off` and `frustum` count as a reduced featureset. AMD defaults to `frustum` while its HZB reads back empty (dclf-open-defects.md). |
 | `CS_DCLF_PIPELINE` | `gpu` | `cpu`: the CPU-driven pipeline (an experiment; dclf-architecture.md, "The CPU-driven pipeline"). Live: `dclf:pipeline=gpu\|cpu`, from the next build point. |
 | `CS_DCLF_CPU_RECORD` | `serial` on NVIDIA, `indirect` elsewhere | `serial`: the CS thread records each draw. `indirect`: the cull jobs write draws (needs pulled colour, 0.21 ms of GPU time on an RTX 5080). `parallel`: the CPU pipeline's plain lists recorded into a secondary per batch on the pool. Live: `dclf:cpu-record=indirect\|serial\|parallel`. |
 | `CS_DCLF_CPU_CADENCE` | `frame` | `frame\|snapshot`, or `<view>=frame\|snapshot,...`: a CPU pipeline view culled every frame or once per snapshot (main always per frame). Live: `dclf:cpu-cadence-<view>=frame\|snapshot`, `dclf:cpu-cadence=frame\|snapshot`. Views: `main`, `decal`, `forward`, `refraction`, `sun`, `spot`, `point`, `sky`, `precipitation`, `reflection`, `first-person`. |

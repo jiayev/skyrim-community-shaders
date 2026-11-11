@@ -626,6 +626,10 @@ namespace DCLF
 			plain.targets = a_colour.targets;
 			plain.Create(a_device, a_built.*a_into, fmt::format("{} pulled {}", a_name, a_into == &Built::pulledColour ? "color" : "depth"));
 		} catch (const std::exception& e) {
+			// Without device-generated commands the plain draws are the only way the key's colour is drawn: the key fails its build and
+			// stays native (SetClassPlan's buckets need a plain pipeline for every set index with draws).
+			if (!DrawPipelines::Get().impl->deviceGenerated)
+				throw std::runtime_error(fmt::format("no plain colour pipeline, and no device-generated commands to draw it: {}", e.what()));
 			a_built.*a_into = {};
 			if (loggedFailures.fetch_add(1) < 8)
 				logger::warn("[DCLF] {}: no plain colour pipeline (its forward draws stay device-generated): {}", a_name, e.what());

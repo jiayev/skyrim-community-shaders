@@ -12,9 +12,9 @@
 #include "Features/RemoteControl.h"
 
 #include "Features/RemoteControl/DevBenchBridge.h"
-#include "Features/RemoteControl/NvPerf.h"
-#include "Features/RemoteControl/NvPerfHost.h"
-#include "Features/RemoteControl/NvPerfTrace.h"
+#include "Features/RemoteControl/GpuCounters.h"
+#include "Features/RemoteControl/GpuCountersHost.h"
+#include "Features/RemoteControl/GpuCountersTrace.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
@@ -83,9 +83,9 @@ namespace
 		return parts;
 	}
 
-	bool IsTimeMetric(const NvPerf::MetricRequest& a_metric)
+	bool IsTimeMetric(const GpuCounters::MetricRequest& a_metric)
 	{
-		return a_metric.name == "gpu__time_duration";
+		return a_metric.name == "gpu__time_duration" || a_metric.name == "GPUTime";
 	}
 }
 
@@ -217,18 +217,18 @@ void RemoteControl::DrawDevBenchPanel()
 bool RemoteControl::RequestNvPerfCapture()
 {
 	auto& panel = nvperfPanel;
-	const auto defaults = NvPerf::DefaultMetrics();
+	const auto defaults = GpuCounters::DefaultMetrics();
 	if (panel.defaultMetricEnabled.size() != defaults.size())
 		panel.defaultMetricEnabled.assign(defaults.size(), 1);
 
-	NvPerf::CaptureConfiguration configuration;
+	GpuCounters::CaptureConfiguration configuration;
 	for (std::size_t i = 0; i < defaults.size(); ++i)
 		if (panel.defaultMetricEnabled[i])
 			configuration.metrics.push_back(defaults[i]);
 	panel.requestError.clear();
 	for (const auto& text : SplitList(panel.extraMetrics)) {
-		NvPerf::MetricRequest metric;
-		if (!NvPerf::ParseMetric(text, metric, panel.requestError))
+		GpuCounters::MetricRequest metric;
+		if (!GpuCounters::ParseMetric(text, metric, panel.requestError))
 			break;
 		configuration.metrics.push_back(std::move(metric));
 	}
@@ -240,14 +240,14 @@ bool RemoteControl::RequestNvPerfCapture()
 	configuration.nestingLevels = static_cast<std::uint16_t>(panel.nestingLevels);
 	std::uint64_t id = 0;
 	if (panel.requestError.empty())
-		NvPerf::RequestCapture(configuration, id, panel.requestError);
+		GpuCounters::RequestCapture(configuration, id, panel.requestError);
 	return panel.requestError.empty();
 }
 
 void RemoteControl::UpdateNvPerfHistory()
 {
 	auto& recent = nvperfPanel.recent;
-	auto latest = NvPerf::LatestResult();
+	auto latest = GpuCounters::LatestResult();
 	if (!latest || (!recent.empty() && recent.front().result->id == latest->id))
 		return;
 	recent.insert(recent.begin(), { std::move(latest), std::filesystem::file_time_type::clock::now() });
@@ -317,17 +317,17 @@ void RemoteControl::DrawNvPerfPanel()
 	const auto& theme = Menu::GetSingleton()->GetTheme().StatusPalette;
 	auto& panel = nvperfPanel;
 
-	ImGui::TextWrapped("%s", T(TKEY("description"), "Measures NVIDIA GPU hardware counters (time, unit throughput, warp stalls) over the frame's perf events with the Nsight Perf SDK. Each frame is one profiler pass; a sample takes as many frames as its metrics need passes. Also drivable through the devbench tool communityshaders.nvperf."));
+	ImGui::TextWrapped("%s", T(TKEY("description"), "Measures GPU hardware counters over the frame's perf events: with the Nsight Perf SDK on NVIDIA (time, unit throughput, warp stalls), with GPUPerfAPI on AMD (time, stage and unit busy, cache hits, stalls; start the game with CS_GPA=1). Each frame is one profiler pass; a sample takes as many frames as its metrics need passes. Also drivable through the devbench tool communityshaders.nvperf."));
 	ImGui::Spacing();
 
-	NvPerf::Probe();
-	const auto device = NvPerf::GetDeviceInfo();
+	GpuCounters::Probe();
+	const auto device = GpuCounters::GetDeviceInfo();
 	if (!device.built) {
-		ImGui::TextColored(theme.Warning, T(TKEY("not_built"), "This build was compiled without Nsight Perf: %s."), NvPerf::Host::BuildHint());
+		ImGui::TextColored(theme.Warning, T(TKEY("not_built"), "This build was compiled without Nsight Perf: %s."), GpuCounters::Host::BuildHint());
 		return;
 	}
 	if (!device.gpuSupported) {
-		ImGui::TextColored(theme.Warning, T(TKEY("unavailable"), "Nsight Perf is unavailable: %s"), device.error.c_str());
+		ImGui::TextColored(theme.Warning, T(TKEY("unavailable"), "GPU counters are unavailable: %s"), device.error.c_str());
 		ImGui::TextDisabled(T(TKEY("library_path"), "Library: %s"), Util::PathHelpers::ToUtf8(device.libraryPath).c_str());
 		return;
 	}
@@ -342,7 +342,7 @@ void RemoteControl::DrawNvPerfPanel()
 		~TreeClose() { ImGui::TreePop(); }
 	} treeClose;
 
-	const auto defaults = NvPerf::DefaultMetrics();
+	const auto defaults = GpuCounters::DefaultMetrics();
 	if (panel.defaultMetricEnabled.size() != defaults.size())
 		panel.defaultMetricEnabled.assign(defaults.size(), 1);
 
@@ -355,7 +355,7 @@ void RemoteControl::DrawNvPerfPanel()
 	if (ImGui::TreeNode(T(TKEY("metrics"), "Metrics"))) {
 		for (std::size_t i = 0; i < defaults.size(); ++i) {
 			bool enabled = panel.defaultMetricEnabled[i] != 0;
-			if (ImGui::Checkbox(NvPerf::FormatMetric(defaults[i]).c_str(), &enabled))
+			if (ImGui::Checkbox(GpuCounters::FormatMetric(defaults[i]).c_str(), &enabled))
 				panel.defaultMetricEnabled[i] = enabled ? 1 : 0;
 		}
 		ImGui::InputTextWithHint(T(TKEY("extra_metrics"), "Extra metrics"), "sm__cycles_active:elapsed, ...", &panel.extraMetrics);
@@ -371,12 +371,12 @@ void RemoteControl::DrawNvPerfPanel()
 	}
 	ImGui::SliderInt(T(TKEY("delay"), "Delay (frames)"), &panel.delayFrames, 0, 600);
 
-	const auto status = NvPerf::GetStatus();
-	const bool busy = status.state == NvPerf::CaptureState::Waiting || status.state == NvPerf::CaptureState::Capturing ||
-	                  status.state == NvPerf::CaptureState::Decoding;
+	const auto status = GpuCounters::GetStatus();
+	const bool busy = status.state == GpuCounters::CaptureState::Waiting || status.state == GpuCounters::CaptureState::Capturing ||
+	                  status.state == GpuCounters::CaptureState::Decoding;
 	if (busy) {
 		if (Util::Button(T(TKEY("cancel"), "Cancel capture")))
-			NvPerf::CancelCapture();
+			GpuCounters::CancelCapture();
 	} else if (Util::Button(T(TKEY("capture"), "Capture"))) {
 		RequestNvPerfCapture();
 	}
@@ -384,14 +384,14 @@ void RemoteControl::DrawNvPerfPanel()
 		ImGui::TextColored(theme.Error, "%s", panel.requestError.c_str());
 
 	switch (status.state) {
-	case NvPerf::CaptureState::Waiting:
+	case GpuCounters::CaptureState::Waiting:
 		ImGui::TextColored(theme.InfoColor, T(TKEY("status_waiting"), "Capture %llu: waiting to start"), status.captureId);
 		break;
-	case NvPerf::CaptureState::Capturing:
+	case GpuCounters::CaptureState::Capturing:
 		ImGui::TextColored(theme.InfoColor, T(TKEY("status_capturing"), "Capture %llu: sample %u/%u, pass %zu/%zu"), status.captureId, status.sample + 1,
 			status.samples, status.pass + 1, status.passes);
 		break;
-	case NvPerf::CaptureState::Decoding:
+	case GpuCounters::CaptureState::Decoding:
 		ImGui::TextColored(theme.InfoColor, T(TKEY("status_decoding"), "Capture %llu: sample %u/%u, decoding"), status.captureId, status.sample + 1,
 			status.samples);
 		break;
@@ -403,7 +403,7 @@ void RemoteControl::DrawNvPerfPanel()
 	DrawRecentNvPerfCaptures(panel);
 
 	// The picked capture, else the newest
-	std::shared_ptr<const NvPerf::CaptureResult> result = panel.recent.empty() ? nullptr : panel.recent.front().result;
+	std::shared_ptr<const GpuCounters::CaptureResult> result = panel.recent.empty() ? nullptr : panel.recent.front().result;
 	for (const auto& recent : panel.recent)
 		if (recent.result->id == panel.viewedCaptureId)
 			result = recent.result;
@@ -416,7 +416,7 @@ void RemoteControl::DrawNvPerfPanel()
 	else
 		ImGui::TextColored(theme.Error, T(TKEY("result_failed"), "Capture %llu failed: %s"), result->id, result->error.c_str());
 	for (const auto& metric : result->unsupportedMetrics)
-		ImGui::TextColored(theme.Warning, T(TKEY("unsupported_metric"), "Unavailable on this GPU: %s"), NvPerf::FormatMetric(metric).c_str());
+		ImGui::TextColored(theme.Warning, T(TKEY("unsupported_metric"), "Unavailable on this GPU: %s"), GpuCounters::FormatMetric(metric).c_str());
 
 	if (!result->summary.empty()) {
 		const int columns = static_cast<int>(result->metrics.size()) + 2;
@@ -473,8 +473,8 @@ void RemoteControl::DrawNvPerfTraces()
 		~TreeClose() { ImGui::TreePop(); }
 	} treeClose;
 
-	const auto templates = NvPerf::Trace::Templates();
-	const NvPerf::Trace::Template* selected = nullptr;
+	const auto templates = GpuCounters::Trace::Templates();
+	const GpuCounters::Trace::Template* selected = nullptr;
 	for (const auto& t : templates)
 		if (t.name == panel.traceTemplate)
 			selected = &t;
@@ -491,12 +491,12 @@ void RemoteControl::DrawNvPerfTraces()
 	}
 	ImGui::SameLine();
 	if (ImGui::SmallButton(T(TKEY("trace_reload"), "Reload")))
-		panel.traceError = NvPerf::Trace::ReloadTemplates();
+		panel.traceError = GpuCounters::Trace::ReloadTemplates();
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T(TKEY("trace_reload_tooltip"), "Reads the *.json templates in %s again."), NvPerf::Trace::TemplateDirectory().string().c_str());
+		ImGui::Text(T(TKEY("trace_reload_tooltip"), "Reads the *.json templates in %s again."), GpuCounters::Trace::TemplateDirectory().string().c_str());
 	if (selected) {
 		ImGui::TextWrapped("%s", selected->description.c_str());
-		if (selected->timingSource == NvPerf::Trace::TimingSource::Timestamps) {
+		if (selected->timingSource == GpuCounters::Trace::TimingSource::Timestamps) {
 			ImGui::TextDisabled(T(TKEY("trace_shape_timestamps"), "Pass timestamps: every frame a sample after %u settling frames, %u-%u samples, +/-%.1f%% at %.0f%% confidence, %zu range filters"),
 				selected->settlingFrames, selected->minSamples, selected->maxSamples, 100.0 * selected->relativeHalfWidth, 100.0 * selected->confidence,
 				selected->ranges.size());
@@ -511,8 +511,8 @@ void RemoteControl::DrawNvPerfTraces()
 	}
 	ImGui::InputTextWithHint(T(TKEY("trace_label"), "Label"), panel.traceTemplate.c_str(), &panel.traceLabel);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T(TKEY("trace_label_tooltip"), "The report's name in %s (e.g. dclf-on, dclf-off)."), NvPerf::Trace::ReportDirectory().string().c_str());
-	const auto saved = NvPerf::Trace::SavedReports();
+		ImGui::Text(T(TKEY("trace_label_tooltip"), "The report's name in %s (e.g. dclf-on, dclf-off)."), GpuCounters::Trace::ReportDirectory().string().c_str());
+	const auto saved = GpuCounters::Trace::SavedReports();
 	const char* none = T(TKEY("trace_no_baseline"), "(none)");
 	if (ImGui::BeginCombo(T(TKEY("trace_baseline"), "Compare with"), panel.traceBaseline.empty() ? none : panel.traceBaseline.c_str())) {
 		if (ImGui::Selectable(none, panel.traceBaseline.empty()))
@@ -523,10 +523,10 @@ void RemoteControl::DrawNvPerfTraces()
 		ImGui::EndCombo();
 	}
 
-	const auto status = NvPerf::Trace::GetStatus();
-	if (status.state == NvPerf::Trace::State::Running) {
+	const auto status = GpuCounters::Trace::GetStatus();
+	if (status.state == GpuCounters::Trace::State::Running) {
 		if (ImGui::Button(T(TKEY("trace_cancel"), "Cancel trace")))
-			NvPerf::Trace::Cancel();
+			GpuCounters::Trace::Cancel();
 		ImGui::SameLine();
 		if (status.captures)
 			ImGui::TextColored(theme.InfoColor, T(TKEY("trace_running"), "Trace '%s': capture %u of %u (%s)"), status.label.c_str(), status.capture, status.captures,
@@ -549,16 +549,16 @@ void RemoteControl::DrawNvPerfTraces()
 		}
 	} else if (ImGui::Button(T(TKEY("trace_run"), "Run trace"))) {
 		panel.traceError.clear();
-		NvPerf::Trace::Start(panel.traceTemplate, panel.traceLabel, panel.traceBaseline, panel.traceError);
+		GpuCounters::Trace::Start(panel.traceTemplate, panel.traceLabel, panel.traceBaseline, panel.traceError);
 	}
 	if (!panel.traceError.empty())
 		ImGui::TextColored(theme.Error, "%s", panel.traceError.c_str());
 
-	const auto report = NvPerf::Trace::Latest();
+	const auto report = GpuCounters::Trace::Latest();
 	if (!report)
 		return;
 	ImGui::Separator();
-	if (report->success && report->timingSource == NvPerf::Trace::TimingSource::Timestamps)
+	if (report->success && report->timingSource == GpuCounters::Trace::TimingSource::Timestamps)
 		ImGui::TextColored(theme.SuccessColor, T(TKEY("trace_result_timestamps"), "Trace '%s' (%s, timestamps): %u frames, total %.1f us"), report->label.c_str(),
 			report->templateName.c_str(), report->samples, report->totalUs);
 	else if (report->success)
@@ -578,14 +578,14 @@ void RemoteControl::DrawNvPerfTraces()
 		ImGui::TextColored(theme.Warning, "%s", warning.c_str());
 	const auto* baseline = report->baseline.get();
 	// A delta's colour: worse or better only when the means differ by more than their intervals combined.
-	const auto deltaColor = [&](double a_delta, const NvPerf::Trace::SeriesStats& a_stats, const NvPerf::Trace::SeriesStats* a_base) {
+	const auto deltaColor = [&](double a_delta, const GpuCounters::Trace::SeriesStats& a_stats, const GpuCounters::Trace::SeriesStats* a_base) {
 		const bool significant = a_base && std::isfinite(a_stats.ciUs) && std::isfinite(a_base->ciUs) &&
 		                         std::abs(a_stats.meanUs - a_base->meanUs) > std::sqrt(a_stats.ciUs * a_stats.ciUs + a_base->ciUs * a_base->ciUs);
 		if (!significant && a_base && std::isfinite(a_stats.ciUs))
 			return ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
 		return a_delta > 0.0 ? theme.Warning : theme.SuccessColor;
 	};
-	const auto ciText = [](const NvPerf::Trace::SeriesStats& a_stats) { return std::isfinite(a_stats.ciUs) ? std::format("{:.2f}", a_stats.ciUs) : std::string("-"); };
+	const auto ciText = [](const GpuCounters::Trace::SeriesStats& a_stats) { return std::isfinite(a_stats.ciUs) ? std::format("{:.2f}", a_stats.ciUs) : std::string("-"); };
 	if (baseline)
 		ImGui::TextDisabled(T(TKEY("trace_compared"), "Compared with '%s': total %.1f us (%+.1f)"), baseline->label.c_str(), baseline->totalUs,
 			report->totalUs - baseline->totalUs);
@@ -689,7 +689,7 @@ void RemoteControl::DrawNvPerfTraces()
 	ImGui::TextDisabled(T(TKEY("trace_report_path"), "Report: %s"), report->textPath.string().c_str());
 	ImGui::SameLine();
 	if (ImGui::SmallButton(T(TKEY("trace_copy_report"), "Copy report")))
-		ImGui::SetClipboardText(NvPerf::Trace::FormatReport(*report).c_str());
+		ImGui::SetClipboardText(GpuCounters::Trace::FormatReport(*report).c_str());
 }
 
 #undef I18N_KEY_PREFIX

@@ -29,7 +29,7 @@
 #include "Features/PostProcessing.h"
 #include "Features/PostProcessing/HistogramAutoExposure.h"
 #include "Features/RainRefraction.h"
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
@@ -834,7 +834,7 @@ void State::LoadFromJson(nlohmann::json& settings)
 		if (advanced.contains("Frame Annotations") && advanced["Frame Annotations"].is_boolean())
 			frameAnnotations = advanced["Frame Annotations"];
 		// The GPU idle trace attributes gaps to the engine's render phases, which only the annotations mark.
-		if ((GpuIdleTrace::Requested() || GpuEventTimers::Requested() || NvPerf::EnvironmentRequested()) && !frameAnnotations) {
+		if ((GpuIdleTrace::Requested() || GpuEventTimers::Requested() || GpuCounters::EnvironmentRequested()) && !frameAnnotations) {
 			frameAnnotationsSetting = frameAnnotations;
 			frameAnnotations = true;
 		}
@@ -1480,7 +1480,8 @@ uint32_t State::GetRuntimePixelBits(const RE::BSShader& a_shader)
 
 bool State::PerfEventsConsumed() const
 {
-	if ((pPerf && pPerf->GetStatus()) || NvPerf::RangesActive())
+	// The GPU event timers read the events too. Native D3D11's GetStatus is false unless a capture tool is attached.
+	if ((pPerf && pPerf->GetStatus()) || GpuCounters::RangesActive() || GpuEventTimers::Requested())
 		return true;
 #ifdef TRACY_ENABLE
 	return TracyIsConnected;
@@ -1509,8 +1510,8 @@ void State::BeginPerfEvent(std::string_view title)
 	s_tracyPerfZones.push_back(ctx);
 #endif
 	pPerf->BeginEvent(std::wstring(title.begin(), title.end()).c_str());
-	if (NvPerf::RangesActive())
-		NvPerf::PushRange(title);
+	if (GpuCounters::RangesActive())
+		GpuCounters::PushRange(title);
 	GpuIdleTrace::BeginEvent(title);
 	GpuEventTimers::BeginEvent(title);
 }
@@ -1533,8 +1534,8 @@ void State::EndPerfEvent()
 		logger::warn("EndPerfEvent called without a matching BeginPerfEvent");
 	}
 #endif
-	if (NvPerf::RangesActive())
-		NvPerf::PopRange();
+	if (GpuCounters::RangesActive())
+		GpuCounters::PopRange();
 	pPerf->EndEvent();
 	GpuIdleTrace::EndEvent();
 	GpuEventTimers::EndEvent();

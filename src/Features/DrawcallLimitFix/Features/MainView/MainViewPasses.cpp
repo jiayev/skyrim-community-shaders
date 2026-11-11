@@ -15,7 +15,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Revision/Shapes.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Records.h"
 
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include <OpenRenderGraph/GraphHost.h>
 #include <RenderPasses/Base/TypedRenderGraphPass.h>
@@ -224,11 +224,13 @@ namespace DCLF::Draws
 
 		void PreprocessCall(rhi::CommandList& a_commands, rhi::CommandList& a_state, rhi::ResourceHandle a_sequences, const IndirectCall& a_call)
 		{
-			a_commands.PreprocessIndirect(a_state, a_call.signature, a_sequences, a_call.argumentsOffset, a_call.counts, a_call.countOffset, a_call.capacity);
+			if (CallDrawable(a_call))
+				a_commands.PreprocessIndirect(a_state, a_call.signature, a_sequences, a_call.argumentsOffset, a_call.counts, a_call.countOffset, a_call.capacity);
 		}
 		void ExecuteCall(rhi::CommandList& a_commands, rhi::ResourceHandle a_sequences, const IndirectCall& a_call)
 		{
-			a_commands.ExecuteIndirect(a_call.signature, a_sequences, a_call.argumentsOffset, a_call.counts, a_call.countOffset, a_call.capacity);
+			if (CallDrawable(a_call))
+				a_commands.ExecuteIndirect(a_call.signature, a_sequences, a_call.argumentsOffset, a_call.counts, a_call.countOffset, a_call.capacity);
 		}
 
 		/**
@@ -271,8 +273,8 @@ namespace DCLF::Draws
 			const auto sequences = a_pass.sequences;
 			auto* stats = a_pass.stats;
 			const std::uint32_t statsSlot = a_pass.statsSlot;
-			auto subRange = [&](const char* a_name) { return a_nvCommands && NvPerf::PushCommandBufferRange(a_nvCommands, a_name); };
-			auto endSubRange = [&](bool a_pushed) { if (a_nvCommands) NvPerf::PopCommandBufferRange(a_nvCommands, a_pushed); };
+			auto subRange = [&](const char* a_name) { return a_nvCommands && GpuCounters::PushCommandBufferRange(a_nvCommands, a_name); };
+			auto endSubRange = [&](bool a_pushed) { if (a_nvCommands) GpuCounters::PopCommandBufferRange(a_nvCommands, a_pushed); };
 			// Plain bucket draws (SetClassPlan's buckets): the Z-prepass's layout, frame push data and the index pool bound, then a_buckets
 			// calls a_draw(its first sequence, pipeline, count word, capacity) for each bucket it draws.
 			auto plainDraws = [&](auto&& a_buckets) {
@@ -405,7 +407,7 @@ namespace DCLF::Draws
 		{
 			const auto& frame = a_pass.frame;
 			// nvperf ranges around the colour pass's parts, when a capture selects them.
-			void* const nvCommands = NvPerf::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(a_pass.commands) : nullptr;
+			void* const nvCommands = GpuCounters::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(a_pass.commands) : nullptr;
 			// The colour passes, every target loaded.
 			ColourPasses passes{ .frame = frame, .mainBegin = a_pass.begin, .decalBegin = a_pass.begin, .decalDepthBegin = a_pass.begin, .count = a_pass.count,
 				.classCounts = a_pass.classCounts };
@@ -425,10 +427,10 @@ namespace DCLF::Draws
 				}
 
 			{
-				const bool preprocessPart = nvCommands && NvPerf::PushCommandBufferRange(nvCommands, "cs.dclf.colour.preprocess");
+				const bool preprocessPart = nvCommands && GpuCounters::PushCommandBufferRange(nvCommands, "cs.dclf.colour.preprocess");
 				RecordColourPreprocess(a_prepared, a_pass, passes);
 				if (nvCommands)
-					NvPerf::PopCommandBufferRange(nvCommands, preprocessPart);
+					GpuCounters::PopCommandBufferRange(nvCommands, preprocessPart);
 			}
 			RecordColourExecution(a_bindings, a_prepared, a_recording, a_pass, passes, nvCommands);
 		}

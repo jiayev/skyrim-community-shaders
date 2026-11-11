@@ -5,7 +5,8 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/PassContext.h"
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
+#include "RenderGraph/DxvkImageImport.h"
 
 namespace DCLF::Draws
 {
@@ -18,35 +19,12 @@ namespace DCLF::Draws
 	std::shared_ptr<org::ExternalTextureResource> ImportImage(rhi::Device a_device, const DxvkOrgInteropImageInfo& a_image, org::TextureDescription a_desc,
 		const char* a_name)
 	{
-		rhi::vulkan::ImportedImageDesc import{};
-		import.image = a_image.image;
-		import.createInfo.flags = a_image.flags;
-		import.createInfo.imageType = a_image.type;
-		import.createInfo.format = a_image.format;
-		import.createInfo.extent = a_image.extent;
-		import.createInfo.mipLevels = a_image.mipLevels;
-		import.createInfo.arrayLayers = a_image.arrayLayers;
-		import.createInfo.samples = a_image.samples;
-		import.createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-		import.createInfo.usage = a_image.usage;
-		import.createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		import.createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		import.currentLayout = a_image.layout;
-		import.simultaneousAccess = true;
-		import.debugName = a_name;
-		rhi::ResourcePtr resource;
-		if (a_image.layout != VK_IMAGE_LAYOUT_GENERAL || rhi::vulkan::import_image(a_device, import, resource) != rhi::Result::Ok)
-			return nullptr;
 		a_desc.imageDimensions.clear();
 		a_desc.imageDimensions.push_back({ a_image.extent.width, a_image.extent.height, 0, 0 });
 		// ORG builds a DSV per slice for arrays, so a shadow view attaches its own slice.
 		a_desc.isArray = a_image.arrayLayers > 1;
 		a_desc.arraySize = a_desc.isArray ? a_image.arrayLayers : 1;
-		a_desc.initialLayout = rhi::ResourceLayout::Common;
-		auto result = org::ExternalTextureResource::CreateShared(std::move(resource), a_desc, true);
-		if (result)
-			result->SetName(a_name);
-		return result;
+		return RenderGraph::ImportDxvkTexture(a_device, a_image, std::move(a_desc), a_name);
 	}
 
 	void RegisterSceneBuffers(org::RenderGraph& a_graph, const SceneBuffers& a_scene)
@@ -197,7 +175,7 @@ namespace DCLF::Draws
 		if (a_calls.empty())
 			return;
 		auto& commands = a_recording.Commands();
-		void* const nvCommands = NvPerf::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(commands) : nullptr;
+		void* const nvCommands = GpuCounters::CommandBufferRangesActive() ? rhi::vulkan::get_cmd_list(commands) : nullptr;
 		auto beginDrawPass = [&](rhi::CommandList& a_list) {
 			a_list.SetDescriptorHeaps(a_resourceHeap, a_samplerHeap);
 			a_list.BeginPass(a_begin);
@@ -205,28 +183,40 @@ namespace DCLF::Draws
 			a_list.BindLayout(a_layout);
 			a_list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_push.data());
 		};
+		if (std::ranges::none_of(a_calls, CallDrawable))
+			return;
 		// Every call preprocessed before the pass, with the execution's exact state (as MainOpaquePass), then executed in order.
 		auto& state = a_preprocess.Begin(a_recording.FrameSlot());
 		beginDrawPass(state);
-		const bool preprocessRange = nvCommands && a_preprocessRange && NvPerf::PushCommandBufferRange(nvCommands, a_preprocessRange);
+		const bool preprocessRange = nvCommands && a_preprocessRange && GpuCounters::PushCommandBufferRange(nvCommands, a_preprocessRange);
 		for (const auto& call : a_calls) {
-			const bool callRange = nvCommands && call.preprocessRange && NvPerf::PushCommandBufferRange(nvCommands, call.preprocessRange);
+			const bool callRange = nvCommands && call.preprocessRange && GpuCounters::PushCommandBufferRange(nvCommands, call.preprocessRange);
 			commands.PreprocessIndirect(state, call.signature, a_arguments, call.argumentsOffset, call.counts, call.countOffset, call.capacity);
 			if (nvCommands)
-				NvPerf::PopCommandBufferRange(nvCommands, callRange);
+				GpuCounters::PopCommandBufferRange(nvCommands, callRange);
 		}
 		if (nvCommands)
-			NvPerf::PopCommandBufferRange(nvCommands, preprocessRange);
+			GpuCounters::PopCommandBufferRange(nvCommands, preprocessRange);
 		state.EndPass();
 		state.End();
 		beginDrawPass(commands);
 		for (const auto& call : a_calls) {
-			const bool range = nvCommands && call.range && NvPerf::PushCommandBufferRange(nvCommands, call.range);
+			const bool range = nvCommands && call.range && GpuCounters::PushCommandBufferRange(nvCommands, call.range);
 			commands.ExecuteIndirect(call.signature, a_arguments, call.argumentsOffset, call.counts, call.countOffset, call.capacity);
 			if (nvCommands)
-				NvPerf::PopCommandBufferRange(nvCommands, range);
+				GpuCounters::PopCommandBufferRange(nvCommands, range);
 		}
 		commands.EndPass();
+	}
+
+	bool CallDrawable(const IndirectCall& a_call)
+	{
+		if (a_call.signature.valid())
+			return true;
+		static std::atomic<std::uint32_t> logged{ 0 };
+		if (logged.fetch_add(1) < 4)
+			logger::error("[DCLF] a device-generated call without a signature (capacity {}): skipped, its draws are not drawn", a_call.capacity);
+		return false;
 	}
 
 	void RecordPreprocessedDraw(org::PassRecordContext& a_recording, PreprocessStates& a_preprocess, const rhi::PassBeginInfo& a_begin, rhi::DescriptorHeapHandle a_resourceHeap,

@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -206,6 +207,7 @@ namespace DCLF::Direct
 				std::memcpy(pushed, reinterpret_cast<const std::byte*>(&s) + 4, sizeof(pushed));
 				list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushArgumentWords, pushed);
 				++a_context.pushes;
+				a_context.indices += args.indexCount;
 				list.DrawIndexed(args.indexCount, 1, poolFirst + args.firstIndex, 0, 0);
 				return true;
 			}
@@ -228,6 +230,7 @@ namespace DCLF::Direct
 			words[kDirectDrawPushFlags] = kDirectFlagObjectWord | kDirectFlagRelativeRows;
 			list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDirectDrawWords, words);
 			++a_context.pushes;
+			a_context.indices += args.indexCount;
 			list.DrawIndexed(args.indexCount, 1, poolFirst + args.firstIndex, 0, 0);
 			return true;
 		}
@@ -291,6 +294,11 @@ namespace DCLF::Direct
 			flush(counters.sameBinds, a_context.sameBinds, a_context.countedSameBinds);
 			flush(counters.pushes, a_context.pushes, a_context.countedPushes);
 			flush(counters.indirects, a_context.indirects, a_context.countedIndirects);
+			if (a_context.indices != a_context.countedIndices) {
+				const std::uint64_t added = a_context.indices - std::exchange(a_context.countedIndices, a_context.indices);
+				std::atomic_ref<std::uint64_t>(counters.indices[static_cast<std::size_t>(a_context.site)]).fetch_add(added, std::memory_order_relaxed);
+				std::atomic_ref<std::uint64_t>(counters.viewIndices[static_cast<std::size_t>(a_context.view)]).fetch_add(added, std::memory_order_relaxed);
+			}
 		}
 
 		/** @brief A forward draw's sort key (ForwardSortCS.hlsl, SortKey) and what records it. */
@@ -423,11 +431,12 @@ namespace DCLF::Direct
 		return true;
 	}
 
-	void WriteIndirectDraws(CulledBatch& a_batch, const ViewBatchSet& a_set, ViewType a_view, bool a_depthPass, const RecordBindings& a_bindings, const IndirectBuffer& a_buffer, CullArena& a_arena)
+	std::uint64_t WriteIndirectDraws(CulledBatch& a_batch, const ViewBatchSet& a_set, ViewType a_view, bool a_depthPass, const RecordBindings& a_bindings, const IndirectBuffer& a_buffer, CullArena& a_arena)
 	{
 		a_batch.hasRuns = false;
+		std::uint64_t indices = 0;
 		if (!a_batch.batch || !a_batch.count)
-			return;
+			return indices;
 		const ViewBatch& batch = *a_batch.batch;
 		const RecordPass pass = PassOf(a_view, a_depthPass);
 		// Main's colour pass: the terrain groups apart (RecordTerrainGroup draws them in the second pass).
@@ -456,10 +465,10 @@ namespace DCLF::Direct
 		}
 		const std::uint32_t reserve = mostDraws[0] + mostDraws[1] + mostDraws[2];
 		if (!reserve)
-			return;
+			return indices;
 		const std::uint32_t first = a_buffer.cursor->fetch_add(reserve, std::memory_order_relaxed);
 		if (first > a_buffer.capacity || reserve > a_buffer.capacity - first)
-			return;
+			return indices;
 		auto* runs = a_arena.Make<IndirectRun>(mostRuns[0] + mostRuns[1] + mostRuns[2]);
 		std::array<std::uint32_t, 3> cursor{ first, first + mostDraws[0], first + mostDraws[0] + mostDraws[1] };
 		const std::array<std::uint32_t, 3> runBase{ 0u, mostRuns[0], mostRuns[0] + mostRuns[1] };
@@ -505,6 +514,7 @@ namespace DCLF::Direct
 				// Write-combined memory: written in order, never read.
 				IndirectDraw& draw = mapped[at];
 				draw.indexCount = args->indexCount;
+				indices += args->indexCount;
 				draw.instanceCount = 1;
 				draw.firstIndex = poolFirst + args->firstIndex;
 				draw.vertexOffset = 0;
@@ -524,6 +534,7 @@ namespace DCLF::Direct
 		}
 		a_batch.runs = runs;
 		a_batch.hasRuns = true;
+		return indices;
 	}
 
 	void RecordBatch(RecordContext& a_context, const CulledBatch& a_batch)
@@ -542,6 +553,51 @@ namespace DCLF::Direct
 			const std::uint32_t lane = a_batch.lanes[k];
 			if (!skipTerrain || !(FlagsOf(batch, lane) & kTerrainLanes))
 				DrawLane(a_context, batch, lane, a_batch.objectWords[k], MaskOf(a_batch, k));
+		}
+		CountDrawn(a_context, a_context.drawn - before);
+	}
+
+	void RecordSortedBatches(RecordContext& a_context, std::span<const CulledBatch* const> a_batches, const std::array<float, 4>& a_plane, std::uint32_t a_slabs)
+	{
+		struct Item
+		{
+			float distance;
+			std::uint32_t slab;
+			std::uint32_t bucket;
+			const CulledBatch* batch;
+			std::uint32_t kept;
+		};
+		thread_local std::vector<Item> items;
+		items.clear();
+		float nearest = std::numeric_limits<float>::max(), farthest = std::numeric_limits<float>::lowest();
+		for (const CulledBatch* culled : a_batches) {
+			if (!culled || !culled->batch || !culled->count)
+				continue;
+			const ViewBatch& batch = *culled->batch;
+			for (std::uint32_t k = 0; k < culled->count; ++k) {
+				const std::uint32_t lane = culled->lanes[k];
+				// The sphere's nearest point to the plane: the casters nearest the light first.
+				const float distance = batch.cx ? a_plane[0] * batch.cx[lane] + a_plane[1] * batch.cy[lane] + a_plane[2] * batch.cz[lane] + a_plane[3] - batch.r[lane] : 0.0f;
+				nearest = (std::min)(nearest, distance);
+				farthest = (std::max)(farthest, distance);
+				items.push_back({ distance, 0u, batch.pipelineBucket ? batch.pipelineBucket[lane] : 0u, culled, k });
+			}
+		}
+		// Slabs of the depth range, each drawn by pipeline (fewer binds), nearest slab first; one slab a draw (a_slabs 0): by distance alone.
+		if (a_slabs && farthest > nearest) {
+			const float scale = static_cast<float>(a_slabs) / (farthest - nearest);
+			for (auto& item : items)
+				item.slab = (std::min)(a_slabs - 1, static_cast<std::uint32_t>((item.distance - nearest) * scale));
+			std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+				return a.slab != b.slab ? a.slab < b.slab : a.bucket != b.bucket ? a.bucket < b.bucket : a.distance < b.distance;
+			});
+		} else {
+			std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.distance < b.distance; });
+		}
+		const std::uint32_t before = a_context.drawn;
+		for (const Item& item : items) {
+			const CulledBatch& culled = *item.batch;
+			DrawLane(a_context, *culled.batch, culled.lanes[item.kept], culled.objectWords[item.kept], MaskOf(culled, item.kept));
 		}
 		CountDrawn(a_context, a_context.drawn - before);
 	}

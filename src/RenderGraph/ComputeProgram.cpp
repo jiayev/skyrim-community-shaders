@@ -54,6 +54,9 @@ namespace
 		request.debugInfo = true;
 		request.includeDirectories = { RenderGraphRuntime::kShaderDirectory };
 		request.defines.push_back({ L"BASICRHI_SHADER_API_VULKAN", L"1" });
+		// The vendor, for workarounds of its shader compiler (CS_GPU_AMD: PortalPrograms.hlsli's interpreter).
+		if (RenderGraphRuntime::VendorId() == 0x1002)
+			request.defines.push_back({ L"CS_GPU_AMD", L"1" });
 		for (const auto& [name, value] : a_desc.defines)
 			request.defines.push_back({ name, value });
 		return request;

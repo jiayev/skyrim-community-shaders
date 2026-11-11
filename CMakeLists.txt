@@ -458,6 +458,37 @@ else()
     set(ORG_ENABLE_NVPERF OFF CACHE BOOL "" FORCE)
 endif()
 
+# GPUPerfAPI (AMD's counters: the GPU counter profiler's GPA backends, src/Features/RemoteControl/Gpa*.cpp). Its MIT
+# headers are vendored in extern/GPUPerfAPI, so the backends always build; its DLLs load at run time from
+# CommunityShaders/bin (or CS_GPA_DIR), and a missing DLL only leaves AMD counters unavailable. GPA_RUNTIME_DIR: a release's
+# bin folder (https://github.com/GPUOpen-Tools/gpu_performance_api/releases, 4.4.x) whose DLLs are staged and installed there.
+target_include_directories(
+    ${PROJECT_NAME}
+    PRIVATE "${CMAKE_SOURCE_DIR}/extern/GPUPerfAPI/include"
+)
+set(GPA_RUNTIME_DIR
+    ""
+    CACHE PATH
+    "GPUPerfAPI release bin folder whose DLLs are installed beside DXVK's (optional)"
+)
+set(CS_GPA_DLLS)
+if(GPA_RUNTIME_DIR)
+    foreach(_gpa_dll IN ITEMS GPUPerfAPIDX11-x64.dll GPUPerfAPIVK-x64.dll)
+        if(NOT EXISTS "${GPA_RUNTIME_DIR}/${_gpa_dll}")
+            message(
+                FATAL_ERROR
+                "GPA_RUNTIME_DIR ('${GPA_RUNTIME_DIR}') lacks ${_gpa_dll}"
+            )
+        endif()
+        list(APPEND CS_GPA_DLLS "${GPA_RUNTIME_DIR}/${_gpa_dll}")
+    endforeach()
+    install(
+        FILES ${CS_GPA_DLLS}
+        DESTINATION SKSE/Plugins/CommunityShaders/bin
+        COMPONENT DXVK
+    )
+endif()
+
 # OpenRenderGraph on DXVK's Vulkan device; defines CS_HAS_RENDER_GRAPH.
 include(cmake/RenderGraph.cmake)
 # The persistent shader cache. Every build needs it, with or without the render graph.
@@ -1124,7 +1155,12 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     foreach(
         _runtime_file
         IN
-        LISTS _DXVK_RUNTIME_DLLS _SL_FORK_DLLS CS_DXC_RUNTIME_DLLS CS_NVPERF_DLL
+        LISTS
+            _DXVK_RUNTIME_DLLS
+            _SL_FORK_DLLS
+            CS_DXC_RUNTIME_DLLS
+            CS_NVPERF_DLL
+            CS_GPA_DLLS
     )
         get_filename_component(_runtime_name "${_runtime_file}" NAME)
         file(
@@ -1262,7 +1298,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -Dst
         "${_aio_runtime_dir}"
     )
-    foreach(_dxc IN LISTS CS_DXC_RUNTIME_DLLS CS_NVPERF_DLL)
+    foreach(_dxc IN LISTS CS_DXC_RUNTIME_DLLS CS_NVPERF_DLL CS_GPA_DLLS)
         list(
             APPEND _prepare_aio_cmds
             COMMAND
@@ -1341,6 +1377,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${_AIO_PACKAGE_FILES}
             ${CS_DXC_RUNTIME_DLLS}
             ${CS_NVPERF_DLL}
+            ${CS_GPA_DLLS}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
     )
 

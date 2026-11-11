@@ -1210,8 +1210,18 @@ latch's `drawCount` of 0 skips its view.
 
 ### Explicit DGC preprocessing and pipeline set versions
 
-DCLF's colour draws are device-generated commands (`vkCmdExecuteGeneratedCommandsEXT`); the Z-prepass, the shadow views, the views'
-depth and the draw families use plain indirect draws.
+DCLF's colour classes are device-generated commands (`vkCmdExecuteGeneratedCommandsEXT`); the Z-prepass, the shadow views, the views'
+depth and the draw families use plain indirect draws, and so do the colour ranges drawn by buckets (`CS_DCLF_*_PLAIN`).
+-   **Without pipeline sets** (`DrawPipelines::DeviceGenerated` false: AMD's RDNA2 driver 2.0.353 has DGC with no pipeline binding
+    stage, Intel none) the classes get no sets or signatures and the GPU path draws every colour range by buckets: the plain switches
+    are ignored, and a key whose pulled colour pipeline fails fails its build and stays native (`BuildPulledColour`), so every set
+    index with draws has a bucket. A class call reaching a recording is skipped and logged (`CallDrawable`). The first-person forward
+    part has no buckets and needs `CS_DCLF_FORWARD_DIRECT`. Without counted draws (`GpuDriven`, BasicRHI's
+    `IndirectCommandsFeatureInfo::countedDraws`) every cell draws CPU-driven (`CpuPipelineForced`).
+-   **The pulled colour stages index descriptors per draw without `NonUniformResourceIndex`** (the instance names the draw). On an
+    RX 6600 (driver 2.0.353) a probe that marked every pixel wave holding several draws' pixels marked none, in 171 Lighting
+    pipelines over a view of many abutting draws (2026-11-08), GPU-driven and CPU-driven alike: the driver does not pack draws into
+    one wave there.
 -   **Explicit preprocessing.** The main colour signature (pipeline index, push data - the rows, the object word and the
     geometry's two vertex buffer views, a pad and the rows' five block addresses, twenty-four words - index buffer,
     DrawIndexed; no vertex buffer arguments:
@@ -1339,7 +1349,7 @@ BuildDrawsCS and TreeLodCullCS):
 
 ### Draw outputs
 
--   **The colour segment** writes DGC sequences (`DrawSequence`, 92 bytes, `Core/Scene/Model/Records.h`: the pipeline index, the
+-   **The colour segment** writes DGC sequences (`DrawSequence`, 136 bytes, `Core/Scene/Model/Records.h`: the pipeline index, the
     five-word Constant argument, vertex buffer slots 0 and 1 - slot 1 a face shape's positions - the index buffer and
     DrawIndexed). The main buffer's ranges (phase 1 and colour, phase 2, one per decal group) travel in `BuildDrawsConstants`
     (`phaseTwoBase`, `decalBase`, `decalStride`). Each indirect draw's max count is its epoch's own draws, grown as a power of two
@@ -1770,7 +1780,8 @@ pass, so it was not kept.
     deferred variants there. An attachment the pixel stage has no output for gets write mask 0 (`SpirvReflection::outputLocations`),
     as DXVK builds the engine's pipeline.
 -   **Textures** (`Core/Gpu/GpuTextures`): one import per SRV, made stable in DXVK and imported into BasicRHI without ownership, with
-    simultaneous access (DXVK keeps images in GENERAL), with a view in ORG's shader-visible heap; a null SRV reads zero through a
+    the layout DXVK reports (`DxvkImageImport`: SHADER_READ_ONLY for a sampled colour image, DEPTH_STENCIL_READ_ONLY for depth,
+    simultaneous access only in GENERAL), with a view in ORG's shader-visible heap; a null SRV reads zero through a
     null descriptor. `Request` (any thread) never imports on the caller: the import thread answers, and a draw whose texture is
     pending is deferred (it stays the engine's), because marking an image stable is a synchronous DXVK CS chunk and view creation
     blocks in the driver (up to 20 ms measured while streaming). `ResolveBinding` imports inline only for the frame's textures. A

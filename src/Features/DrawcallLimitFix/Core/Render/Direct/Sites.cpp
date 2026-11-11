@@ -10,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/SiteFrame.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/SiteStats.h"
 #include "Features/DrawcallLimitFix/Core/Render/Direct/ViewSites.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/ScheduleExecutor.h"
@@ -20,6 +21,7 @@
 #include "Features/DrawcallLimitFix/Core/Render/Snapshot/ViewBatches.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 
 #include <ORGModuleServices/BackingPool.h>
@@ -40,6 +42,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <deque>
 #include <string_view>
 #include <thread>
@@ -315,7 +318,10 @@ namespace DCLF::Direct::detail
 		out->commands = nullptr;
 		out->hasRuns = false;
 		if (DrawsIndirect(a_run, a_view))
-			WriteIndirectDraws(*out, *a_slot.set, a_view.type, a_view.depthPass, a_bindings, a_slot.indirect, a_worker.arena);
+			if (const auto indices = WriteIndirectDraws(*out, *a_slot.set, a_view.type, a_view.depthPass, a_bindings, a_slot.indirect, a_worker.arena)) {
+				std::atomic_ref<std::uint64_t>(a_slot.counters.indices[static_cast<std::size_t>(a_run.site)]).fetch_add(indices, std::memory_order_relaxed);
+				std::atomic_ref<std::uint64_t>(a_slot.counters.viewIndices[static_cast<std::size_t>(a_view.type)]).fetch_add(indices, std::memory_order_relaxed);
+			}
 		if (a_secondary && out->count)
 			if (auto* commands = a_worker.lists.Next(a_run.device)) {
 				RecordContext context{ *commands, *a_slot.set, a_view.type, a_view.view.viewIndex, a_run.site, a_view.depthPass, a_bindings, &a_slot.counters };
@@ -728,6 +734,21 @@ namespace DCLF::Direct::detail
 			primary.SetDescriptorHeaps(resourceHeap, samplerHeap);
 	}
 
+	namespace
+	{
+		/** @brief CS_DCLF_SHADOW_ORDER: the shadow views' depth slabs (RecordSortedBatches; 1: by distance alone, 0: the lists' order). */
+		std::uint32_t ShadowOrderSlabs()
+		{
+			static const std::uint32_t slabs = [] {
+				const auto& text = SwitchValue(Switch::ShadowOrder);
+				if (text.empty())
+					return 8u;
+				return static_cast<std::uint32_t>((std::min)(std::strtoul(text.c_str(), nullptr, 10), 256ul));
+			}();
+			return slabs;
+		}
+	}
+
 	std::vector<const CulledBatch*> RecordViewPass(SiteOut& a_out, SiteRun& a_run, SiteView& a_view, rhi::PassBeginInfo a_begin, const RecordBindings& a_bindings)
 	{
 		auto& slot = *a_run.slot;
@@ -774,11 +795,19 @@ namespace DCLF::Direct::detail
 		if (DrawsIndirect(a_run, a_view))
 			context.indirect = &slot.indirect;
 		const bool valid = BeginList(context);
-		for (std::size_t i = 0; i < a_view.list->size(); ++i) {
-			const auto& batch = Await(a_run, a_view, i);
-			batches.push_back(&batch);
-			if (valid && batch.count)
-				RecordBatch(context, batch);
+		// A shadow view's casters nearest the light first: fewer of their depth writes survive, and HiZ rejects more of their tiles.
+		const std::uint32_t slabs = ShadowOrderSlabs();
+		if (a_run.site == Site::Shadow && slabs && !context.indirect) {
+			batches = AwaitAll(a_run, a_view);
+			if (valid)
+				RecordSortedBatches(context, batches, a_view.view.clipPlanes[4], slabs == 1 ? 0u : slabs);
+		} else {
+			for (std::size_t i = 0; i < a_view.list->size(); ++i) {
+				const auto& batch = Await(a_run, a_view, i);
+				batches.push_back(&batch);
+				if (valid && batch.count)
+					RecordBatch(context, batch);
+			}
 		}
 		list.EndPass();
 		return batches;
@@ -991,8 +1020,10 @@ namespace DCLF::Direct::detail
 			// The epoch's ORG execution: the commits' uploads, its CPU pipeline passes, then its late pass, which records the draws
 			// (RecordExecutingSite), with ORG's barriers, its entry and exit full (the external queue boundary).
 			executing = &run;
+			const std::uint32_t statsSlot = SiteStats::Begin(run.device, a_commandBuffer, site);
 			if (segment < run.execution->segments.size())
 				run.execution->Execute(segment, run.adopted.Get());
+			SiteStats::End(a_commandBuffer, statsSlot);
 			executing = nullptr;
 			if (lastSegment && !run.recordedDraws && !std::exchange(S().loggedNoLatePass, true))
 				logger::error("[DCLF] CPU pipeline: the {} site's epoch was executed without its late pass (no draws pass in its recording): it draws nothing", site);
@@ -1119,6 +1150,7 @@ namespace DCLF::Direct::detail
 	void Release(FrameSlot& a_slot)
 	{
 		DCLF_ZONE("CS.DCLF.Cpu.Release");
+		SiteStats::Collect();
 		// Nothing of its frame still runs on the pool (frames ago: in practice never waited for), and a continuation not started yet
 		// will do nothing.
 		a_slot.generation.fetch_add(1, std::memory_order_seq_cst);
@@ -1136,9 +1168,11 @@ namespace DCLF::Direct::detail
 			window.sum.batches[v] += c.batches[v];
 			window.sum.drawn[v] += c.drawn[v];
 			window.sum.cullUs[v] += c.cullUs[v];
+			window.sum.viewIndices[v] += c.viewIndices[v];
 		}
 		for (std::size_t site = 0; site < kSites; ++site) {
 			window.sum.recordUs[site] += c.recordUs[site];
+			window.sum.indices[site] += c.indices[site];
 			window.siteRuns[site] += a_slot.siteRuns[site];
 			window.siteEmpty[site] += a_slot.siteEmpty[site];
 		}

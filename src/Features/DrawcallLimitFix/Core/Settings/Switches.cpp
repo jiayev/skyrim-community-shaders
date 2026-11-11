@@ -87,6 +87,8 @@ namespace DCLF
 			{ CpuCadence, "CS_DCLF_CPU_CADENCE", F, N, false,
 				"frame|snapshot, or <view>=frame|snapshot,...: the CPU pipeline's views culled and recorded every frame (default) or once per snapshot (main is always per frame; live toggles' seeds)" },
 			{ CpuBatch, "CS_DCLF_CPU_BATCH", F, N, false, "the CPU pipeline's batch lanes (default 4096, rounded up to a multiple of 8; the live setting's seed: dclf:cpu-batch, the menu)" },
+			{ ShadowOrder, "CS_DCLF_SHADOW_ORDER", F, Reduced::Zero, false,
+				"the CPU pipeline's shadow views' draw order: their casters nearest the light first, in this many depth slabs, by pipeline within each (default 8; 1: by distance alone; 0: the lists' order, by pipeline)" },
 			// (Features/Skins' CS_DCLF_SKINNED, then its CS_DCLF_SKIN_PARTITIONS, are listed here, after CS_DCLF_CULL; Features/Actors',
 			// Features/TreeWind's and Features/Decals' switches after CS_DCLF_SKIN_PARTITIONS; then Features/Landscape's CS_DCLF_MTLAND and
 			// Integrations/TerrainBlending's CS_DCLF_TB_TERRAIN, before Features/Forward's CS_DCLF_FORWARD; then Features/Effects'

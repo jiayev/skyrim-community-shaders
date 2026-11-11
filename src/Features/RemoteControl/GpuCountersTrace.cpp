@@ -1,7 +1,7 @@
-#include "Features/RemoteControl/NvPerfTrace.h"
+#include "Features/RemoteControl/GpuCountersTrace.h"
 
 #include "Features/RemoteControl/GpuTimestamps.h"
-#include "Features/RemoteControl/NvPerfBackend.h"
+#include "Features/RemoteControl/GpuCountersBackend.h"
 #include "Features/RemoteControl/TraceStatistics.h"
 
 #include "Utils/FileSystem.h"
@@ -24,7 +24,7 @@
 
 // NvPerf's traces (NvPerfTrace.h): templates, the runner that drives a template's captures through RequestCapture (or, for a
 // timestamp trace, samples the render graph's pass timestamps) on the render thread, and the report.
-namespace NvPerf::Trace
+namespace GpuCounters::Trace
 {
 	namespace
 	{
@@ -1650,7 +1650,7 @@ namespace NvPerf::Trace
 			return;
 		}
 		if (runner.captureId) {
-			const auto status = NvPerf::GetStatus();
+			const auto status = GpuCounters::GetStatus();
 			if (status.captureId != runner.captureId || (status.state != CaptureState::Done && status.state != CaptureState::Failed))
 				return;
 			const auto result = LatestResult();

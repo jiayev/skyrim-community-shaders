@@ -91,40 +91,56 @@ namespace DCLF
 			return a_info.member ? SwitchValue(a_info.seed) : SwitchValue(a_info.registeredSeed);
 		}
 
-		/**
-		 * @brief The record mode with no CS_DCLF_CPU_RECORD: serial on NVIDIA, indirect elsewhere.
-		 *
-		 * Indirect colour needs the pulled pipelines, and on an RTX 5080 their record lookup takes 0.21 ms of a frame's GPU time, with the same
-		 * instructions and pixels. Recording each draw there costs the CS thread about 0.4 ms in Dev-Fast. On an RX 6600 the driver's recording
-		 * costs far more than that, so it keeps indirect. Toggles seed before the game's device exists, so this asks DXGI for the largest adapter.
-		 */
-		Direct::RecordMode DefaultRecordMode()
+		/** @brief The PCI vendor of the adapter with the most dedicated memory (DXGI: toggles seed before the game's device exists). */
+		UINT LargestAdapterVendor()
 		{
-			static const Direct::RecordMode mode = [] {
+			static const UINT vendor = [] {
 				winrt::com_ptr<IDXGIFactory1> factory;
 				if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(factory.put()))))
-					return Direct::RecordMode::Indirect;
-				UINT vendor = 0;
+					return 0u;
+				UINT largestVendor = 0;
 				SIZE_T largest = 0;
 				winrt::com_ptr<IDXGIAdapter1> adapter;
 				for (UINT i = 0; factory->EnumAdapters1(i, adapter.put()) != DXGI_ERROR_NOT_FOUND; ++i, adapter = nullptr) {
 					DXGI_ADAPTER_DESC1 desc{};
 					if (SUCCEEDED(adapter->GetDesc1(&desc)) && desc.DedicatedVideoMemory > largest) {
 						largest = desc.DedicatedVideoMemory;
-						vendor = desc.VendorId;
+						largestVendor = desc.VendorId;
 					}
 				}
-				return vendor == 0x10DE ? Direct::RecordMode::Serial : Direct::RecordMode::Indirect;
+				return largestVendor;
 			}();
-			return mode;
+			return vendor;
+		}
+
+		/**
+		 * @brief The record mode with no CS_DCLF_CPU_RECORD: serial.
+		 *
+		 * Indirect colour needs the pulled pipelines, whose stages find their draw through a chain of dependent loads (the draw's record, its
+		 * sequence, its rows), each a vector memory load: AMD's driver never makes a buffer-device-address load scalar, uniform or not. On an
+		 * RTX 5080 that took 0.21 ms of a frame's GPU time; on an RX 6600 (driver 26.10.1, 1080p) serial's colour pass is 0.5 ms faster, and the
+		 * frame 0.34 ms at the newest save and 0.26 ms in Whiterun, where the CPU matters more, so serial's per-draw recording on the CS thread
+		 * is the cheaper side there too (rx6600-dxvk-overhead.md).
+		 */
+		Direct::RecordMode DefaultRecordMode()
+		{
+			return Direct::RecordMode::Serial;
+		}
+
+		/**
+		 * @brief The cull mode with no CS_DCLF_CULL: frustum and occlusion, but frustum alone on AMD. On an RX 6600 (driver 2.0.353) the
+		 * HZB read back as 0 under nearly every footprint, so occlusion culled nearly every object in view (dclf-open-defects.md).
+		 */
+		std::uint8_t DefaultCullMode()
+		{
+			return LargestAdapterVendor() == 0x1002 ? 1 : 2;
 		}
 
 		ToggleSet FromSwitches()
 		{
 			ToggleSet set;
 			const auto& cull = SwitchValue(Switch::Cull);
-			set.cullMode = (cull.empty() || cull == "occlusion") ? 2 : cull == "frustum" ? 1 :
-			                                                                               0;
+			set.cullMode = cull.empty() ? DefaultCullMode() : cull == "occlusion" ? 2 : cull == "frustum" ? 1 : 0;
 			if (const auto& pipeline = SwitchValue(Switch::CpuPipeline); !pipeline.empty() && !ApplyPipeline(set, pipeline))
 				logger::warn("[DCLF] CS_DCLF_PIPELINE={}: not a pipeline (auto, manual, gpu, cpu); auto", pipeline);
 			const auto& record = SwitchValue(Switch::CpuRecord);

@@ -9,7 +9,7 @@
 #	include "DxvkLoader.h"
 #	include "Features/DrawcallLimitFix.h"
 #	include "Features/RemoteControl/GpuTimestamps.h"
-#	include "Features/RemoteControl/NvPerf.h"
+#	include "Features/RemoteControl/GpuCounters.h"
 #	include "Features/Upscaling/DXVKInteropInterfaces.h"
 #	include "Globals.h"
 #	include "GpuIdleTrace.h"
@@ -234,6 +234,17 @@ namespace
 				return true;
 		return false;
 	}
+}
+
+namespace
+{
+	// RenderGraphRuntime::VendorId: written once the device is described, read by shader compiles on any thread.
+	std::atomic<std::uint32_t> adoptedVendorId{ 0 };
+}
+
+std::uint32_t RenderGraphRuntime::VendorId()
+{
+	return adoptedVendorId.load(std::memory_order_relaxed);
 }
 
 struct RenderGraphRuntime::Impl
@@ -736,7 +747,7 @@ struct RenderGraphRuntime::Impl
 	// Written by the render thread when an epoch executes, read when its timestamps come back - on the host's
 	// own thread with async epochs.
 	std::array<std::atomic<Segment>, kSegmentRing> frameSegments{};
-	// The frame each host frame's epoch ran in, while a timestamp trace collects (NvPerf::Timestamps; 0: not collected).
+	// The frame each host frame's epoch ran in, while a timestamp trace collects (GpuCounters::Timestamps; 0: not collected).
 	std::array<std::atomic<std::uint64_t>, kSegmentRing> frameTimestampFrames{};
 	std::array<SegmentTime, kSegments> segmentTimes{};
 	std::uint32_t timedEpochs = 0;
@@ -761,7 +772,7 @@ struct RenderGraphRuntime::Impl
 		std::vector<CompletedPass> otherQueuePasses;
 		// While a timestamp trace collects: the frame the epoch ran in, and every range it timed (passes and barrier batches).
 		std::uint64_t timestampFrame = 0;
-		std::vector<NvPerf::Timestamps::Range> ranges;
+		std::vector<GpuCounters::Timestamps::Range> ranges;
 	};
 	bool asyncEpochs = false;
 	std::vector<CompletedEpoch> hostPending;  // the host's thread only
@@ -771,7 +782,7 @@ struct RenderGraphRuntime::Impl
 	{
 		++completedFrames;
 		if (a_epoch.timestampFrame)
-			NvPerf::Timestamps::Completed(a_epoch.timestampFrame, std::move(a_epoch.ranges));
+			GpuCounters::Timestamps::Completed(a_epoch.timestampFrame, std::move(a_epoch.ranges));
 		if (globals::profiler && a_epoch.segment < kSegments)
 			for (const auto& completed : a_epoch.otherQueuePasses)
 				if (completed.inclusiveMs >= kProfilerMinPassMs)
@@ -861,11 +872,11 @@ struct RenderGraphRuntime::Impl
 		if (a_out.timestampFrame) {
 			a_out.ranges.reserve(timestamps.size());
 			for (const auto& timestamp : timestamps) {
-				NvPerf::Timestamps::Range range;
+				GpuCounters::Timestamps::Range range;
 				range.name = std::string(timestamp.name);
-				range.queue = timestamp.queueKind == rhi::QueueKind::Graphics ? NvPerf::Timestamps::Queue::Graphics :
-				              timestamp.queueKind == rhi::QueueKind::Compute  ? NvPerf::Timestamps::Queue::Compute :
-				                                                                NvPerf::Timestamps::Queue::Copy;
+				range.queue = timestamp.queueKind == rhi::QueueKind::Graphics ? GpuCounters::Timestamps::Queue::Graphics :
+				              timestamp.queueKind == rhi::QueueKind::Compute  ? GpuCounters::Timestamps::Queue::Compute :
+				                                                                GpuCounters::Timestamps::Queue::Copy;
 				range.barrier = timestamp.kind == org::runtime::TimestampRangeKind::Barrier;
 				range.nested = timestamp.kind == org::runtime::TimestampRangeKind::Sub;
 				range.replayed = timestamp.replayed;
@@ -942,11 +953,11 @@ struct RenderGraphRuntime::Impl
 	// Render thread, for the epoch a host frame runs: its segment, and while a timestamp trace collects, the frame it runs in.
 	void MarkEpoch(std::uint64_t a_hostFrame, Segment a_segment)
 	{
-		const std::uint64_t timestampFrame = NvPerf::Timestamps::Collecting() ? NvPerf::Timestamps::CurrentFrame() + 1 : 0;
+		const std::uint64_t timestampFrame = GpuCounters::Timestamps::Collecting() ? GpuCounters::Timestamps::CurrentFrame() + 1 : 0;
 		frameTimestampFrames[a_hostFrame % kSegmentRing].store(timestampFrame, std::memory_order_release);
 		frameSegments[a_hostFrame % kSegmentRing].store(a_segment, std::memory_order_release);
 		if (timestampFrame)
-			NvPerf::Timestamps::Submitted(timestampFrame);
+			GpuCounters::Timestamps::Submitted(timestampFrame);
 	}
 
 	void RecordEpoch(Segment a_segment, std::chrono::steady_clock::duration a_elapsed)
@@ -1534,6 +1545,17 @@ bool RenderGraphRuntime::Initialize()
 	if (!d3dDevice || FAILED(d3dDevice->QueryInterface(__uuidof(IDXGIVkInteropDevice), state->interop.put_void())))
 		return disable("IDXGIVkInteropDevice is unavailable");
 
+	// Resting layouts (RenderGraph/DxvkImageImport.h): imported images stay in DXVK's own layouts instead of GENERAL, which keeps
+	// their compression on AMD's Windows driver. The graph gives each one back in that layout through external home states, so
+	// both must be on. CS_ORG_RESTING_LAYOUTS=0 keeps DXVK pinning them in GENERAL.
+	if (!EnvEquals("CS_ORG_RESTING_LAYOUTS", "0") && !EnvEquals("CS_ORG_EXTERNAL_HOME", "0")) {
+		const auto setOptions = ResolveExport<PFN_dxvkSetInteropOptions>(d3d11, "dxvkSetInteropOptions");
+		const bool resting = setOptions && SUCCEEDED(setOptions(d3dDevice, DXVK_ORG_INTEROP_RESTING_LAYOUTS));
+		logger::info("[ORG] imported images {}", resting ? "rest in DXVK's layouts" : "rest in GENERAL (this DXVK build has no dxvkSetInteropOptions)");
+	} else {
+		logger::info("[ORG] imported images rest in GENERAL (CS_ORG_RESTING_LAYOUTS=0 or CS_ORG_EXTERNAL_HOME=0)");
+	}
+
 	DxvkOrgInteropDeviceInfo info{};
 	info.version = DXVK_ORG_INTEROP_VERSION;
 	if (FAILED(getInfo(d3dDevice, &info)))
@@ -1542,6 +1564,7 @@ bool RenderGraphRuntime::Initialize()
 	if (const auto getProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(info.getInstanceProcAddr(info.instance, "vkGetPhysicalDeviceProperties"))) {
 		VkPhysicalDeviceProperties properties{};
 		getProperties(info.physicalDevice, &properties);
+		adoptedVendorId.store(properties.vendorID, std::memory_order_relaxed);
 		const auto driver = properties.driverVersion;
 		// NVIDIA packs its driver version 10.8.8.6; the others use Vulkan's packing.
 		const auto driverText = properties.vendorID == 0x10DE ? fmt::format("{}.{:02}", driver >> 22, (driver >> 14) & 0xFF) :
@@ -1807,7 +1830,7 @@ bool RenderGraphRuntime::Initialize()
 	impl = std::move(state);
 	disabledReason.clear();
 	// Nsight Perf's Vulkan backend: its captures run on DXVK's graphics queue, with the graph's passes as ranges.
-	NvPerf::RegisterVulkanDevice(info, d3d11, *impl->host);
+	GpuCounters::RegisterVulkanDevice(info, d3d11, *impl->host);
 	logger::info("[ORG] Render graph adopted DXVK's Vulkan device (queue family {}, index {}); submissions {}",
 		info.graphicsQueueFamily, info.graphicsQueueIndex,
 		impl->enqueueSubmission ? "go through DXVK's command stream" : "flush DXVK each epoch");
@@ -2662,6 +2685,7 @@ bool RenderGraphRuntime::EmitExternalCommands(void (*)(void*, VkCommandBuffer), 
 	std::span<const ExternalCommandsWait>, bool, const char*, bool) { return false; }
 RenderGraphRuntime::ExternalCommandsWait RenderGraphRuntime::NativeTimelinePoint(const rhi::TimelinePoint&) { return {}; }
 std::vector<std::uint32_t> RenderGraphRuntime::InStreamEpochs() const { return {}; }
+std::uint32_t RenderGraphRuntime::VendorId() { return 0; }
 org::services::ShaderCompiler* RenderGraphRuntime::ShaderCompiler() { return nullptr; }
 const std::vector<std::filesystem::path>& RenderGraphRuntime::ShaderSourceFiles()
 {

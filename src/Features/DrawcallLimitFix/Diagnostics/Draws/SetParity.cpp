@@ -3,7 +3,9 @@
 // set, the depth and colour segments disagreeing, the registration hooks' claims against the set, and the gaps.
 
 #include "DrawsState.h"
+#include "Features/DrawcallLimitFix/Core/Extensions/CullInputs.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/RootStates.h"
+#include "Features/DrawcallLimitFix/Features/Portals/Portals.h"
 #include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Events.h"
@@ -177,6 +179,42 @@ namespace DCLF::Diagnostics
 						}
 						const bool skinned = alive && geometry->GetGeometryRuntimeData().skinInstance;
 						counts.skinnedInView += skinned;
+						// A frustum rejection judged again on the CPU: the root's program judged now (the room the walk puts the root node
+						// in) and run on the frame's words, as PreparePortalQueries does on the GPU (the member's bound, the root's program
+						// and node flags). The program also culls an object behind an occluder or outside the portals; in view there, the
+						// GPU's cull was wrong.
+						int cpuVerdict = -2;
+						std::uint32_t cpuProgram = ~0u;
+						std::string cpuWhy;
+						if (!fadeHidden) {
+							const std::uint32_t root = roots.RootOf(static_cast<std::uint32_t>(o));
+							const auto* rootNode = static_cast<const RE::NiAVObject*>(roots.NodeOf(root));
+							const auto* input = Extensions::MainCullInput();
+							if (alive && rootNode && input && input->contribution.test && !snapshot.programWords.empty()) {
+								cpuProgram = input->contribution.noProgram;
+								if (input->contribution.judge && root < roots.Size()) {
+									std::vector<std::uint32_t> one{ root }, asked{ 0u }, answer{ cpuProgram };
+									Api::RootProgramsJudge judge;
+									judge.nodes = roots.nodes;
+									judge.roots = one;
+									judge.asked = asked;
+									judge.programs = answer;
+									input->contribution.judge(judge);
+									cpuProgram = answer[0];
+								}
+								const auto& b = snapshot.bound[o];
+								const float centre[3]{ b[0], b[1], b[2] };
+								cpuVerdict = input->contribution.test(snapshot.programWords, cpuProgram, centre, b[3], rootNode->GetFlags().underlying(), cpuWhy);
+							}
+							if (cpuVerdict == 0)
+								++counts.programCulled;
+							else if (cpuVerdict == -2)
+								++counts.programUnjudged;
+							else if (cpuWhy == "preprocessed")
+								++counts.programPreprocessed;
+							else
+								++counts.programInView;  // in view by the program, or no program and in view (the frustum alone)
+						}
 						if (alive && (fadeHidden ? counts.fadeSamples++ < 24 : counts.inViewSamples++ < 24)) {
 							const RE::TESObjectREFR* owner = nullptr;
 							for (const RE::NiAVObject* node = geometry; node && !owner; node = node->parent)
@@ -197,6 +235,12 @@ namespace DCLF::Diagnostics
 								rootNode && rootNode->name.c_str() ? rootNode->name.c_str() : "", root < roots.Size() ? roots.rows[root].bits : 0u,
 								fadeNode ? fadeNode->GetRuntimeData().currentFade : -1.0f,
 								stateName(o < snapshot.colourState.size() ? snapshot.colourState[o] : kObjectStateAbsent));
+							if (!fadeHidden && cpuVerdict != -2) {
+								const auto* input = Extensions::MainCullInput();
+								logger::info("[DCLF] set parity, frame {}:   the CPU's program verdict: {} (program {}{}){}", snapshot.frame,
+									cpuVerdict == 1 ? "in view" : cpuVerdict == 0 ? "culled" : "no program", cpuProgram == ~0u ? -1 : static_cast<std::int64_t>(cpuProgram),
+									input && cpuProgram == input->contribution.noProgram ? ", none" : "", cpuWhy.empty() ? "" : "; " + cpuWhy);
+							}
 							// The centre FadeStateCS tests the root at: its chosen member's placement row 8 (LodFadeNodeOf: the member's
 							// property's fade node), against the root node's own bound.
 							if (fadeHidden && root < roots.Size()) {
@@ -336,12 +380,16 @@ namespace DCLF::Diagnostics
 					counts.colourUnpublished, counts.withheldUndrawn, counts.alphaWithheldUndrawn, counts.withheldCulled, counts.outsideDrawn, counts.recordDisagrees,
 					double(counts.depthDrawnTotal) / counts.frames, double(counts.colourDrawnTotal) / counts.frames,
 					counts.depthOnly || counts.colourOnly || counts.withheldUndrawn || counts.outsideDrawn || counts.recordDisagrees ? " <- SET PARITY" : " <- OK");
-				// Counted, not flagged: the frustum's few are a bound at the view's edge or a far LOD block's, the fade test's a far root's
-				// fade. Flagged: a fade rejection the engine's own node, where its cull still runs, contradicts.
-				logger::info("[DCLF] set parity over {} frames: members rejected with their live bound in view: {} by the frustum, {} by the fade test (roots faded "
-							 "out), {} of all of them skinned; {} fade rejections the engine's node contradicts (the last at frame {}){}{}",
-					counts.frames, counts.rejectedInView, counts.fadeHiddenInView, counts.skinnedInView, counts.fadeContradicted, counts.fadeContradictedLast,
-					counts.fadeContradicted ? " <- FADE" : " <- OK",
+				// Counted, not flagged: the fade test's are a far root's fade, and the frustum's an occluder's or a portal's (the CPU's
+				// program culls them too) or a decision on the preprocessed flags the CPU reads later than the GPU. Flagged: a frustum
+				// rejection the CPU's program has in view (a wrong cull: the GPU's evaluation disagrees), and a fade rejection the
+				// engine's own node, where its cull still runs, contradicts.
+				logger::info("[DCLF] set parity over {} frames: members rejected with their live bound in view: {} by the frustum (the CPU's program: {} culled "
+							 "too, {} in view{}, {} in view by the preprocessed flags, {} not judged), {} by the fade test (roots faded out), {} of all of them skinned; "
+							 "{} fade rejections the engine's node contradicts (the last at frame {}){}{}",
+					counts.frames, counts.rejectedInView, counts.programCulled, counts.programInView, counts.programInView ? " <- WRONG CULLS" : "",
+					counts.programPreprocessed, counts.programUnjudged, counts.fadeHiddenInView, counts.skinnedInView, counts.fadeContradicted,
+					counts.fadeContradictedLast, counts.fadeContradicted ? " <- FADE" : counts.programInView ? "" : " <- OK",
 					counts.fadeContradictedFirst.empty() ? "" : "; first: " + counts.fadeContradictedFirst);
 				logger::info("[DCLF] set parity over {} frames: the registration hooks' main claims against the set: {} claimed outside it (drawn by nobody), {} members "
 							 "not claimed (drawn twice){}",
@@ -467,6 +515,10 @@ namespace DCLF::Diagnostics
 		if (a_depth.culled) {
 			const auto& m = a_depth.cullViewProj;
 			snapshot.inView.assign(objects, 0);
+			if (const auto* cull = Extensions::MainCullInput(); cull && cull->contribution.programWords) {
+				const auto words = cull->contribution.programWords();
+				snapshot.programWords.assign(words.begin(), words.end());
+			}
 			snapshot.bound.assign(objects, {});
 			for (std::size_t o = 0; o < objects; ++o) {
 				const auto* geometry = snapshot.geometry[o];

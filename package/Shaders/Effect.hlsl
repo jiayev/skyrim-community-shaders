@@ -542,7 +542,7 @@ VS_INPUT DCLFPulledInput(uint a_index, DCLFStream a_first, DCLFStream a_second)
 {
 	DCLFStreamsAt(a_index, a_first, a_second);
 	VS_INPUT input;
-	input.Position = DCLFPullFloat4(0, a_first, a_second);
+	input.Position = DCLFPullPosition(a_first, a_second);
 #		if defined(TEXCOORD)
 #			if defined(STRIP_PARTICLES)
 	// R16G16_FLOAT read as three components: the input assembler fills z with 0.

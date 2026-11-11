@@ -1,8 +1,8 @@
-#include "Features/RemoteControl/NvPerfBackend.h"
+#include "Features/RemoteControl/GpuCountersBackend.h"
 
 #ifdef NVPERF_ENABLED
 
-#	include "Features/RemoteControl/NvPerfHost.h"
+#	include "Features/RemoteControl/GpuCountersHost.h"
 
 #	include <nvperf_d3d11_host.h>
 #	include <nvperf_d3d11_target.h>
@@ -19,7 +19,7 @@
  * is one in-app replay pass, ended before Present and begun after it; the perf events' ranges are pushed on the
  * immediate context; the counters are decoded after Present once the GPU finished every pass of the sample.
  */
-namespace NvPerf::detail
+namespace GpuCounters::detail
 {
 	namespace
 	{
@@ -463,6 +463,8 @@ namespace NvPerf::detail
 		{
 		public:
 			const char* Name() const noexcept override { return "D3D11"; }
+			const char* Profiler() const noexcept override { return "Nsight Perf"; }
+			std::vector<MetricRequest> DefaultMetrics() const override { return NvPerfDefaultMetrics(); }
 
 			// Loads and initializes the library and identifies the device.
 			bool Probe(DeviceInfo& a_device) override
@@ -649,7 +651,7 @@ namespace NvPerf::detail
 		};
 	}
 
-	std::unique_ptr<Backend> MakeD3D11Backend()
+	std::unique_ptr<Backend> MakeNvPerfD3D11Backend()
 	{
 		return std::make_unique<D3D11Backend>();
 	}
@@ -657,9 +659,9 @@ namespace NvPerf::detail
 
 #else
 
-namespace NvPerf::detail
+namespace GpuCounters::detail
 {
-	std::unique_ptr<Backend> MakeD3D11Backend()
+	std::unique_ptr<Backend> MakeNvPerfD3D11Backend()
 	{
 		return nullptr;
 	}

@@ -177,6 +177,9 @@ namespace DCLF::Diagnostics
 			winrt::com_ptr<ID3D11Buffer> frustumStaging;
 			std::vector<std::uint8_t> inView;
 			std::vector<std::array<float, 4>> bound;
+			// The frame's portal programs as the walk encoded them (the main cull input's programWords): a rejection in view is judged
+			// again on the CPU (PortalTest) on the words the GPU read.
+			std::vector<std::uint32_t> programWords;
 			// Per object, its phases in the registration hooks' claims (PassCapture::CurrentSet): the main claim must equal the set,
 			// or an object is drawn by nobody or twice.
 			std::vector<std::uint8_t> claims;
@@ -202,6 +205,10 @@ namespace DCLF::Diagnostics
 			// Members rejected with their live bound in view: by the frustum (culling read a stale bound), by the fade test, and
 			// how many were skinned.
 			std::uint32_t rejectedInView = 0, fadeHiddenInView = 0, skinnedInView = 0, inViewSamples = 0, fadeSamples = 0;
+			// The frustum's in-view rejections judged again on the CPU (the root's program on the frame's words): culled there too (an
+			// occluder or portal, as the engine's compound frustum), in view there (a wrong cull, flagged), in view by the preprocessed
+			// flags (read now; the GPU's are the query's, from an earlier point of the frame), or not judged (no program words).
+			std::uint32_t programCulled = 0, programInView = 0, programPreprocessed = 0, programUnjudged = 0;
 			// Fade-rejected in view while the engine (still culling the root) has its node fully faded in.
 			std::uint32_t fadeContradicted = 0, fadeContradictedLast = 0;
 			std::string fadeContradictedFirst;

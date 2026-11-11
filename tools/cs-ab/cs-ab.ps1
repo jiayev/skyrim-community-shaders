@@ -81,7 +81,7 @@ function Unstash([string]$variant) {
 }
 function Set-EnabledMod([string]$mod) {
     $lines = Get-Content $modList
-    $isCs = { param($l) $l -match '^[+-](CS AB .+|CommunityShaders_AIO|Community Shaders DXVK ORG|CS ORG DXVK Optimized)$' }
+    $isCs = { param($l) $l -match '^[+-](CS AB .+|CommunityShaders_AIO|CommunityShaders_AIO_native|CommunityShaders_ORG_Staging|Community Shaders DXVK ORG|CS ORG DXVK Optimized)$' }
     $slot = -1
     for ($i = 0; $i -lt $lines.Count; ++$i) {
         if (& $isCs $lines[$i]) {
@@ -99,11 +99,13 @@ function Set-EnabledMod([string]$mod) {
     Set-Content $modList $lines -Encoding utf8
 }
 function Enabled-CsMod {
-    Get-Content $modList | Where-Object { $_ -match '^\+(CS AB .+|CommunityShaders_AIO|Community Shaders DXVK ORG|CS ORG DXVK Optimized)$' } | ForEach-Object { $_.Substring(1) } | Select-Object -First 1
+    Get-Content $modList | Where-Object { $_ -match '^\+(CS AB .+|CommunityShaders_AIO|CommunityShaders_AIO_native|CommunityShaders_ORG_Staging|Community Shaders DXVK ORG|CS ORG DXVK Optimized)$' } | ForEach-Object { $_.Substring(1) } | Select-Object -First 1
 }
 function Use-Variant([string]$variant) {
     Assert-NotRunning
+    # A staged variant ("CS AB <name>"), or an installed CS mod named in full (CommunityShaders_AIO_native).
     $mod = "CS AB $variant"
+    if (-not (Test-Path (Join-Path $Mo2 "mods\$mod")) -and (Test-Path (Join-Path $Mo2 "mods\$variant"))) { $mod = $variant }
     if (-not (Test-Path (Join-Path $Mo2 "mods\$mod"))) { throw "No variant '$variant': stage it first" }
     $state = Get-State
     if (-not $state.originalMod) {

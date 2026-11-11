@@ -35,7 +35,7 @@
 #include "Features/PostProcessing.h"
 #include "Features/RainRefraction.h"
 #include "Features/RemoteControl/FrameRecorder.h"
-#include "Features/RemoteControl/NvPerf.h"
+#include "Features/RemoteControl/GpuCounters.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
@@ -513,7 +513,7 @@ struct IDXGISwapChain_Present
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
 		// Nsight Perf passes span one frame's rendering: ended before the overlay and Present, begun after.
-		NvPerf::OnPresentBegin();
+		GpuCounters::OnPresentBegin();
 
 		ZoneScopedN("CS.Present");
 		{
@@ -642,7 +642,7 @@ struct IDXGISwapChain_Present
 
 		FrameRecorder::OnPresentEnd();
 
-		NvPerf::OnPresentEnd();
+		GpuCounters::OnPresentEnd();
 
 		TracyD3D11Collect(globals::state->tracyCtx);
 
@@ -1558,6 +1558,9 @@ namespace Hooks
 				"Community Shaders could not load its bundled DXVK renderer (dxvk_d3d11.dll / dxvk_dxgi.dll) "
 				"from Data/SKSE/Plugins/CommunityShaders/bin. Reinstall Community Shaders or verify the files exist."sv);
 		}
+		// AMD's counter library must exist before the device (D3D11) or its queues (Vulkan), and DXVK's device must enable its
+		// driver extensions: both happen here or not at all (only when a capture is asked for at startup).
+		GpuCounters::BeforeDeviceCreation();
 		if (nativeMode) {
 			globals::features::upscaling.loaded = false;
 			logger::info("[Native] CS_NATIVE_D3D11=1: DXVK + upscaling disabled, using system d3d11/dxgi");

@@ -17,8 +17,8 @@
 #	include "Features/DeveloperTools.h"
 #	include "Features/RemoteControl/DevFlags.h"
 #	include "Features/RemoteControl/FrameRecorder.h"
-#	include "Features/RemoteControl/NvPerf.h"
-#	include "Features/RemoteControl/NvPerfTrace.h"
+#	include "Features/RemoteControl/GpuCounters.h"
+#	include "Features/RemoteControl/GpuCountersTrace.h"
 #	include "Features/RenderDoc.h"
 #	include "Features/ScreenshotFeature.h"
 #	include "Features/Upscaling.h"
@@ -585,33 +585,33 @@ namespace
 
 	// ---- nvperf: status / metrics / capture / cancel / result ---------------------------
 
-	const char* CaptureStateName(NvPerf::CaptureState a_state)
+	const char* CaptureStateName(GpuCounters::CaptureState a_state)
 	{
 		switch (a_state) {
-		case NvPerf::CaptureState::Waiting:
+		case GpuCounters::CaptureState::Waiting:
 			return "waiting";
-		case NvPerf::CaptureState::Capturing:
+		case GpuCounters::CaptureState::Capturing:
 			return "capturing";
-		case NvPerf::CaptureState::Decoding:
+		case GpuCounters::CaptureState::Decoding:
 			return "decoding";
-		case NvPerf::CaptureState::Done:
+		case GpuCounters::CaptureState::Done:
 			return "done";
-		case NvPerf::CaptureState::Failed:
+		case GpuCounters::CaptureState::Failed:
 			return "failed";
 		default:
 			return "idle";
 		}
 	}
 
-	json StatusJson(const NvPerf::Status& a_status)
+	json StatusJson(const GpuCounters::Status& a_status)
 	{
 		return json{ { "state", CaptureStateName(a_status.state) }, { "captureId", a_status.captureId }, { "sample", a_status.sample },
 			{ "samples", a_status.samples }, { "pass", a_status.pass }, { "passes", a_status.passes }, { "error", a_status.error } };
 	}
 
-	json MetricJson(const NvPerf::MetricRequest& a_metric)
+	json MetricJson(const GpuCounters::MetricRequest& a_metric)
 	{
-		return json{ { "metric", NvPerf::FormatMetric(a_metric) }, { "label", NvPerf::MetricLabel(a_metric) } };
+		return json{ { "metric", GpuCounters::FormatMetric(a_metric) }, { "label", GpuCounters::MetricLabel(a_metric) } };
 	}
 
 	/**
@@ -619,13 +619,13 @@ namespace
 	 *
 	 * Summary values are per frame and keyed by metric label, perSample holds them per sample; a value no replay pass completed is null.
 	 */
-	json CaptureResultJson(const NvPerf::CaptureResult& a_result, bool a_detail)
+	json CaptureResultJson(const GpuCounters::CaptureResult& a_result, bool a_detail)
 	{
 		json metrics = json::array();
 		std::vector<std::string> labels;
 		for (const auto& metric : a_result.metrics) {
 			metrics.push_back(MetricJson(metric));
-			labels.push_back(NvPerf::MetricLabel(metric));
+			labels.push_back(GpuCounters::MetricLabel(metric));
 		}
 		json unsupported = json::array();
 		for (const auto& metric : a_result.unsupportedMetrics)
@@ -680,32 +680,32 @@ namespace
 			return json{ { "error", "missing required parameter 'action'" } };
 
 		if (action == "status") {
-			NvPerf::Probe();
-			const auto device = NvPerf::GetDeviceInfo();
+			GpuCounters::Probe();
+			const auto device = GpuCounters::GetDeviceInfo();
 			return json{ { "built", device.built }, { "available", device.available }, { "gpuSupported", device.gpuSupported },
 				{ "backend", device.backend }, { "device", device.deviceName }, { "chip", device.chipName }, { "deviceError", device.error },
-				{ "library", Util::PathHelpers::ToUtf8(device.libraryPath) }, { "capture", StatusJson(NvPerf::GetStatus()) } };
+				{ "library", Util::PathHelpers::ToUtf8(device.libraryPath) }, { "capture", StatusJson(GpuCounters::GetStatus()) } };
 		}
 
 		if (action == "metrics") {
 			json metrics = json::array();
-			for (const auto& metric : NvPerf::DefaultMetrics())
+			for (const auto& metric : GpuCounters::DefaultMetrics())
 				metrics.push_back(MetricJson(metric));
 			return json{ { "defaults", std::move(metrics) },
 				{ "kinds", json::array({ "counter", "ratio", "throughput", "active", "elapsed", "percycle" }) } };
 		}
 
 		if (action == "capture") {
-			NvPerf::CaptureConfiguration configuration;
+			GpuCounters::CaptureConfiguration configuration;
 			if (a_args.contains("metrics")) {
 				if (!a_args["metrics"].is_array())
 					return json{ { "error", "metrics must be an array of \"name[:kind]\" strings" } };
 				for (const auto& entry : a_args["metrics"]) {
 					if (!entry.is_string())
 						return json{ { "error", "metrics must be an array of \"name[:kind]\" strings" } };
-					NvPerf::MetricRequest metric;
+					GpuCounters::MetricRequest metric;
 					std::string error;
-					if (!NvPerf::ParseMetric(entry.get<std::string>(), metric, error))
+					if (!GpuCounters::ParseMetric(entry.get<std::string>(), metric, error))
 						return json{ { "error", error } };
 					configuration.metrics.push_back(std::move(metric));
 				}
@@ -724,19 +724,19 @@ namespace
 			configuration.nestingLevels = static_cast<std::uint16_t>(std::clamp(a_args.value("nestingLevels", 1u), 0u, 0xFFFFu));
 			std::uint64_t captureId = 0;
 			std::string error;
-			if (!NvPerf::RequestCapture(configuration, captureId, error))
+			if (!GpuCounters::RequestCapture(configuration, captureId, error))
 				return json{ { "error", error } };
 			return json{ { "queued", true }, { "captureId", captureId }, { "enqueued_at_frame", EnqueuedFrame() } };
 		}
 
 		if (action == "cancel") {
-			NvPerf::CancelCapture();
-			return json{ { "cancelRequested", true }, { "capture", StatusJson(NvPerf::GetStatus()) } };
+			GpuCounters::CancelCapture();
+			return json{ { "cancelRequested", true }, { "capture", StatusJson(GpuCounters::GetStatus()) } };
 		}
 
 		if (action == "result") {
-			const auto status = NvPerf::GetStatus();
-			const auto result = NvPerf::LatestResult();
+			const auto status = GpuCounters::GetStatus();
+			const auto result = GpuCounters::LatestResult();
 			const std::uint64_t wanted = a_args.value("captureId", result ? result->id : status.captureId);
 			if (result && result->id == wanted)
 				return CaptureResultJson(*result, a_args.value("detail", false));
@@ -753,14 +753,14 @@ namespace
 		RunHandler("communityshaders.nvperf", &BuildNvPerfResult, a_argsJson, a_sink, a_write);
 	}
 
-	const char* TraceStateName(NvPerf::Trace::State a_state)
+	const char* TraceStateName(GpuCounters::Trace::State a_state)
 	{
 		switch (a_state) {
-		case NvPerf::Trace::State::Running:
+		case GpuCounters::Trace::State::Running:
 			return "running";
-		case NvPerf::Trace::State::Done:
+		case GpuCounters::Trace::State::Done:
 			return "done";
-		case NvPerf::Trace::State::Failed:
+		case GpuCounters::Trace::State::Failed:
 			return "failed";
 		default:
 			return "idle";
@@ -775,7 +775,7 @@ namespace
 	 */
 	json BuildTraceResult(const json& a_args)
 	{
-		namespace T = NvPerf::Trace;
+		namespace T = GpuCounters::Trace;
 		const std::string action = a_args.value("action", std::string{});
 		if (action == "templates") {
 			json out = json::array();
@@ -1176,7 +1176,7 @@ namespace DevBenchBridge
 		static constexpr const char* nvperfDesc =
 			R"({"description":"NVIDIA Nsight Perf GPU hardware counters per render pass (D3D11; builds with NVPERF_SUPPORT, NVIDIA GPUs only). Ranges are the perf events Community Shaders emits (engine passes need Frame Annotations enabled at startup). Action-dispatched. status -> {built,available,gpuSupported,device,chip,deviceError,library,capture:{state,captureId,sample,samples,pass,passes,error}}. metrics -> {defaults:[{metric,label}],kinds}. capture: optional metrics (array of name[:counter|ratio|throughput|active|elapsed|percycle] strings, default the defaults), ranges (array of names, trailing * = prefix; default every outermost range), samples (1-64, default 1), delayFrames (default 0), nestingLevels (1-8, default 1; each level multiplies the passes) -> {queued,captureId}; runs over the next frames, one profiler pass per frame. cancel: stop the running capture. result: optional captureId (default latest), detail (boolean: include every range of every sample) -> {pending,capture} while running, else {captureId,success,error,chip,startFrame,endFrame,samples,passesPerSample,metrics:[{metric,label}],unsupportedMetrics,summary:[{range,perFrame,incomplete,values:{label:value},perSample:{label:[one value per sample]}}],csvPath}. Summary values are per frame: counters summed (gpu__time_duration in ns), rates weighted by range time. perSample: the same per sample (counters 0 in a sample without the range, rates null). Event communityshaders.nvperf.completed {captureId,success,error} fires when a capture ends.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","metrics","capture","cancel","result"]},"metrics":{"type":"array","items":{"type":"string"}},"ranges":{"type":"array","items":{"type":"string"}},"samples":{"type":"number"},"delayFrames":{"type":"number"},"nestingLevels":{"type":"number"},"captureId":{"type":"number"},"detail":{"type":"boolean"}},"required":["action"]}})";
 		dvb->RegisterTool("communityshaders.nvperf", nvperfDesc, &NvPerfToolHandler, nullptr);
-		NvPerf::SetCompletionCallback([](const NvPerf::CaptureResult& a_result) {
+		GpuCounters::SetCompletionCallback([](const GpuCounters::CaptureResult& a_result) {
 			if (auto* host = DevBenchAPI::GetDevBenchInterface001()) {
 				const std::string payload = DumpForDevBench(json{ { "captureId", a_result.id }, { "success", a_result.success }, { "error", a_result.error } });
 				host->EmitEvent("communityshaders.nvperf.completed", payload.c_str());

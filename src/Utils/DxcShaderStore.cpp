@@ -255,9 +255,13 @@ namespace Util
 	bool UseDxc(const std::filesystem::path& a_root, std::string_view a_target, uint32_t a_descriptor)
 	{
 		static const std::optional<std::regex> pattern = []() -> std::optional<std::regex> {
+			// Without CS_SHADER_DXC, only the shaders measured faster through DXC on DXVK build with it: the image-space blurs.
+			// An empty CS_SHADER_DXC builds everything with FXC.
 			char value[1024];
 			const DWORD length = GetEnvironmentVariableA("CS_SHADER_DXC", value, sizeof(value));
-			if (!length || length >= sizeof(value))
+			if (!length && GetLastError() == ERROR_ENVVAR_NOT_FOUND)
+				strcpy_s(value, R"(/(ISBlurCS|ISVolumetricLightingBlur[HV]CS)\.hlsl:)");
+			else if (!length || length >= sizeof(value))
 				return std::nullopt;
 			try {
 				return std::regex(value, std::regex::icase | std::regex::optimize);
