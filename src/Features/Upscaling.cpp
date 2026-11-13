@@ -626,7 +626,8 @@ void Upscaling::BeginRenderFrame()
 		settings.frameGeneration = request != 0;
 		if (request != 0)
 			settings.frameGenMethod = static_cast<uint>(request == 2 ? FrameGenMethod::kDLSSG : FrameGenMethod::kFSR);
-		logger::info("[FGTEST] switch: frame generation {}", request == 0 ? "off" : request == 2 ? "DLSS-G" : "FSR-FG");
+		logger::info("[FGTEST] switch: frame generation {}", request == 0 ? "off" : request == 2 ? "DLSS-G" :
+																								   "FSR-FG");
 	}
 	{  // TEMP-FG-TEST
 		static uint64_t secondTick = 0, lastTick = 0;

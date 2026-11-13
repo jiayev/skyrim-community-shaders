@@ -1,8 +1,8 @@
 #include "Hooks.h"
 
 #include "GpuEventTimers.h"
-#include "HangWatchdog.h"
 #include "GpuIdleTrace.h"
+#include "HangWatchdog.h"
 #include "ShaderTools/BSShaderHooks.h"
 #include "ShaderTools/LegacyGraphicsCompatibility.h"
 #include "Utils/ExternalEmittance.h"
@@ -45,11 +45,11 @@
 #include "Features/Upscaling/Streamline.h"
 #include "Features/VolumetricLighting.h"
 #include "RenderGraph/RenderGraphRuntime.h"
+#include "TextureStreaming/Census.h"
+#include "TextureStreaming/Streamer.h"
 #include "Utils/ImportCallSites.h"
 #include "Vram/Debug.h"
 #include "Vram/VramLedger.h"
-#include "TextureStreaming/Census.h"
-#include "TextureStreaming/Streamer.h"
 
 #include <unordered_map>
 #include <xmmintrin.h>
@@ -824,6 +824,20 @@ struct BSShaderRenderTargets_Create
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
+/** @brief Whether the input event chain holds a mouse wheel button event. */
+static bool HasMouseWheelEvent(const RE::InputEvent* a_event)
+{
+	for (; a_event; a_event = a_event->next) {
+		const auto* button = a_event->AsButtonEvent();
+		if (button && button->GetDevice() == RE::INPUT_DEVICE::kMouse) {
+			const auto code = button->GetIDCode();
+			if (code == RE::BSWin32MouseDevice::Key::kWheelUp || code == RE::BSWin32MouseDevice::Key::kWheelDown)
+				return true;
+		}
+	}
+	return false;
+}
+
 struct BSInputDeviceManager_PollInputDevices
 {
 	static void thunk(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events)
@@ -860,7 +874,7 @@ struct BSInputDeviceManager_PollInputDevices
 
 		if (a_events) {
 			if (auto* inputManager = RE::BSInputDeviceManager::GetSingleton()) {
-				if (const auto* mouse = inputManager->GetMouse())
+				if (const auto* mouse = inputManager->GetMouse(); mouse && HasMouseWheelEvent(*a_events))
 					menu->RecordDirectInputWheelDelta(mouse->GetRuntimeData().dInputNextState.z);
 			}
 			menu->ProcessInputEvents(a_events);
