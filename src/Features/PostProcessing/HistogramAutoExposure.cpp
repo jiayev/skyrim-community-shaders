@@ -1,6 +1,7 @@
 #include "HistogramAutoExposure.h"
 
 #include "Features/LinearLighting.h"
+#include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "I18n/I18n.h"
 #include "ShaderCache.h"
@@ -52,20 +53,29 @@ HistogramAutoExposure::ExposureParameters HistogramAutoExposure::GetExposurePara
 		.CompensationEV = settings.ExposureCompensation,
 	};
 	if (const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr) {
-		// With K = 12.5, a correctly metered scene has L = 0.125 * 2^EV100.
-		// Saturation-based exposure maps it to 0.125 / 1.2, not to 18% reflectance.
-		parameters.ExposureTarget = 0.125f / CinematicCamera::kExposureCalibration;
-		parameters.ExposureAtISO100 = cam->ShutterTimeS / (cam->FNumber * cam->FNumber * CinematicCamera::kExposureCalibration);
+		// Photometric calibration needs Physical Sky's units; otherwise exposure stays relative to the reference camera.
+		const bool photometric = globals::features::physicalSky.IsRendering();
+		if (photometric) {
+			// With K = 12.5, a correctly metered scene has L = 0.125 * 2^EV100.
+			// Saturation-based exposure maps it to 0.125 / 1.2, not to 18% reflectance.
+			parameters.ExposureTarget = 0.125f / CinematicCamera::kExposureCalibration;
+			parameters.ExposureAtISO100 = cam->ShutterTimeS / (cam->FNumber * cam->FNumber * CinematicCamera::kExposureCalibration);
+		} else {
+			parameters.ExposureAtISO100 = exp2(cam->ExposureDeltaEV) * 100.0f / cam->ISO;
+		}
 		if (cam->Exposure == CinematicCamera::ExposureMode::AutoISO) {
 			parameters.CompensationEV = cam->ExposureCompensationEV;
 			const float targetLuminance = parameters.ExposureTarget * exp2(parameters.CompensationEV);
 			const float minExposure = parameters.ExposureAtISO100 * cam->MinISO / 100.0f;
 			const float maxExposure = parameters.ExposureAtISO100 * cam->MaxISO / 100.0f;
 			parameters.LuminanceRange = { targetLuminance / maxExposure, targetLuminance / minExposure };
-		} else {
+		} else if (photometric) {
 			parameters.CompensationEV = 0.0f;
 			const float meteredLuminance = exp2(cam->EV100 - 3.0f);
 			parameters.LuminanceRange = { meteredLuminance, meteredLuminance };
+		} else {
+			parameters.CompensationEV = cam->ExposureDeltaEV;
+			parameters.LuminanceRange = { parameters.ExposureTarget, parameters.ExposureTarget };
 		}
 	}
 	return parameters;
@@ -448,7 +458,7 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 
 	// Readback histogram and adaptation data when the histogram panel is open.
 	// Queue metering for a later frame. GetPreExposure never waits for the GPU.
-	if (globals::features::linearLighting.IsLinearLightingActive()) {
+	if (globals::features::linearLighting.IsLinearLightingActive() && globals::features::physicalSky.IsRendering()) {
 		for (size_t i = 0; i < preExposureReadback.size(); ++i) {
 			if (preExposureReadbackPending[i])
 				continue;

@@ -23,6 +23,7 @@
 #include "Features/InteriorSun.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/PostProcessing/HistogramAutoExposure.h"
 #include "Features/RainRefraction.h"
@@ -1519,7 +1520,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		preExposureFrame = frameCount;
 		previousPreExposure = preExposure;
 		preExposure = 1.0f;
-		if (globals::shaderCache->IsEnabled() && globals::features::linearLighting.IsLinearLightingActive() && !IsMainOrLoadingMenuOpen()) {
+		if (globals::shaderCache->IsEnabled() && globals::features::linearLighting.IsLinearLightingActive() && globals::features::physicalSky.IsRendering() && !IsMainOrLoadingMenuOpen()) {
 			auto& post = globals::features::postProcessing;
 			if (auto* exposure = post.GetPipelineFeature<HistogramAutoExposure>(PostProcessing::FeaturePipelineIndex::AutoExposure); exposure && post.IsPipelineRunning())
 				preExposure = exposure->GetPreExposure();
