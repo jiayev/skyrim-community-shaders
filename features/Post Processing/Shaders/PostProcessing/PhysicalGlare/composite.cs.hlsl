@@ -161,10 +161,9 @@ float3 LoadGlare(int2 position)
 	}
 	glare = max(0, glare);
 
-	// Sanitize extreme values
-#if !defined(ENABLE_LL)
-	glare = min(glare, 65000.0);
-#endif
+	// Sanitize extreme values; pre-exposed glare may exceed the FP16 range until Composite resolves it
+	if (PreExposure::Scale == 1.0)
+		glare = min(glare, 65000.0);
 
 	// Energy-conserving glare contribution:
 	// Subtract the thresholded bright component and output the convolved
