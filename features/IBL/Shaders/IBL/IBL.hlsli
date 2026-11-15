@@ -78,6 +78,12 @@ namespace ImageBasedLighting
 	// Ratio / settings helpers
 	// ============================================================================
 
+	/// Smallest env irradiance, relative to DALC luminance, that the ratio normalises; caps the ratio at its inverse.
+	const static float MinEnvToDALCRatio = 1e-3;
+
+	/// Max env IBL chroma, (max - min) / max, in Luminance Ratio mode.
+	const static float MaxEnvIBLChroma = 0.5;
+
 	/// Compute ratio between DALC and IBL for brightness/color matching.
 	float3 GetIBLRatio()
 	{
@@ -92,15 +98,35 @@ namespace ImageBasedLighting
 		float colorB = SphericalHarmonics::SHHallucinateZH3Irradiance(iblSHB, float3(0, 0, 0));
 		float3 ibl0 = float3(colorR, colorG, colorB) / Math::PI;
 
+		float dalcLum = Color::RGBToLuminance(dalc0);
+		// Night env irradiance sits near any absolute floor; a relative one keeps the ratio continuous instead of snapping.
+		float iblFloor = max(dalcLum * MinEnvToDALCRatio, EPSILON_DIVISION);
 		if (SharedData::iblSettings.DALCMode == 1) {
-			float3 ratio = dalc0 / max(ibl0, 0.001);
+			float3 ratio = dalc0 / max(ibl0, iblFloor);
 			return lerp(1.0, ratio, SharedData::iblSettings.DALCAmount);
 		} else {
-			float dalcLum = Color::RGBToLuminance(dalc0);
-			float iblLum = Color::RGBToLuminance(ibl0);
-			float ratio = (iblLum > 0.001) ? (dalcLum / iblLum) : 1.0;
+			float ratio = dalcLum / max(Color::RGBToLuminance(ibl0), iblFloor);
 			return lerp(1.0, ratio, SharedData::iblSettings.DALCAmount);
 		}
+	}
+
+	/** @brief Desaturates toward luminance so chroma, (max - min) / max, does not exceed MaxEnvIBLChroma. */
+	float3 LimitEnvIBLChroma(float3 color)
+	{
+		float maxChannel = max(color.r, max(color.g, color.b));
+		float range = maxChannel - min(color.r, min(color.g, color.b));
+		if (range <= MaxEnvIBLChroma * maxChannel)
+			return color;
+		float grey = Color::RGBToLuminance(color);
+		// Solves (s * range) / (grey + s * (maxChannel - grey)) == MaxEnvIBLChroma for the blend s.
+		return lerp(grey, color, MaxEnvIBLChroma * grey / (range - MaxEnvIBLChroma * (maxChannel - grey)));
+	}
+
+	/** @brief Applies Env IBL saturation, scale and DALC ratio; Luminance Ratio also caps chroma, as its per-frame renormalisation never lets fed-back tints fade. */
+	float3 ApplyEnvIBLSettings(float3 envColor)
+	{
+		envColor = Color::Saturation(envColor, SharedData::iblSettings.EnvIBLSaturation) * SharedData::iblSettings.EnvIBLScale * GetIBLRatio();
+		return SharedData::iblSettings.DALCMode == 0 ? LimitEnvIBLChroma(envColor) : envColor;
 	}
 
 	// ============================================================================
@@ -109,8 +135,7 @@ namespace ImageBasedLighting
 
 	float3 GetEnvIBLColor(float3 rayDir)
 	{
-		float3 ratio = GetIBLRatio();
-		return Color::Saturation(GetEnvIBL(rayDir), SharedData::iblSettings.EnvIBLSaturation) * SharedData::iblSettings.EnvIBLScale * ratio;
+		return ApplyEnvIBLSettings(GetEnvIBL(rayDir));
 	}
 
 	float3 GetSkyIBLColor(float3 rayDir)
@@ -176,7 +201,7 @@ namespace ImageBasedLighting
 									   dot(EnvIBLTexture.Load(int3(0, 0, 0)), phase),
 									   dot(EnvIBLTexture.Load(int3(1, 0, 0)), phase),
 									   dot(EnvIBLTexture.Load(int3(2, 0, 0)), phase)));
-		envColor = Color::Saturation(envColor, SharedData::iblSettings.EnvIBLSaturation) * SharedData::iblSettings.EnvIBLScale * GetIBLRatio();
+		envColor = ApplyEnvIBLSettings(envColor);
 		float3 skyColor = 0.0;
 		if (!SharedData::InInterior) {
 			skyColor = max(0.0, float3(
