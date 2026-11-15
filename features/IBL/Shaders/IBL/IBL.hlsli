@@ -129,13 +129,21 @@ namespace ImageBasedLighting
 		return SharedData::iblSettings.DALCMode == 0 ? LimitEnvIBLChroma(envColor) : envColor;
 	}
 
+	/** @brief DALC luminance through an SH lobe (DALC's own direction convention), relative to its average. */
+	float GetDALCDirectionality(sh2 lobe)
+	{
+		float3 dalc = max(0, float3(dot(SharedData::AmbientSHR, lobe), dot(SharedData::AmbientSHG, lobe), dot(SharedData::AmbientSHB, lobe)));
+		return Color::RGBToLuminance(dalc) / max(Color::RGBToLuminance(SharedData::GetAmbient(0.f)), EPSILON_DIVISION);
+	}
+
 	// ============================================================================
 	// Mid-level: individual components with user settings applied
 	// ============================================================================
 
 	float3 GetEnvIBLColor(float3 rayDir)
 	{
-		return ApplyEnvIBLSettings(GetEnvIBL(rayDir));
+		// The env cubemap only holds what has been on screen, so its own directionality follows the camera; take it from DALC.
+		return ApplyEnvIBLSettings(GetEnvIBL(0.f) * GetDALCDirectionality(SphericalHarmonics::Evaluate(-rayDir)));
 	}
 
 	float3 GetSkyIBLColor(float3 rayDir)
