@@ -1954,6 +1954,7 @@
     "feature.physical_sky.cloud_high_wind_velocity": "Middle / Cirrus Velocity (X/Y)",
     "feature.physical_sky.cloud_history": "Cloud History",
     "feature.physical_sky.cloud_layer_fade_hint": "Set density to zero to hide this layer in a scene. Density blends smoothly between weathers; keep the layer enabled in the global settings.",
+    "feature.physical_sky.cloud_light_disc_radius": "Cloud Light Disc Radius: %.2f deg",
     "feature.physical_sky.cloud_lighting": "Cloud Lighting",
     "feature.physical_sky.cloud_lighting_ambient": "Sky & Ground Light",
     "feature.physical_sky.cloud_lighting_intensity": "Intensity & Transmission",

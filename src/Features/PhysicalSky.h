@@ -533,6 +533,7 @@ struct PhysicalSky final : public Feature
 	bool volHistoryUnifiedMedium = false;
 	float2 volHistoryFrameDim = {};
 	float volHistoryCurvatureRadius = 0.f;
+	float cloudLightDiscRadius = 0.f;  ///< Angular radius (radians) of the moon disc the cloud light comes from; 0 for a point light.
 	struct CloudWindState
 	{
 		std::array<double, 2> lowOffset = {};

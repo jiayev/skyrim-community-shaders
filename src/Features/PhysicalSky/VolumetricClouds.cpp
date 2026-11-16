@@ -111,7 +111,36 @@ namespace
 			                      (1.0 + alpha * (1.0 + 2.0 * g * g) / 3.0);
 			return std::lerp(hg(coefficients.x), draine, static_cast<double>(coefficients.w));
 		}
+
+		/**
+		 * @brief Coefficients with the narrow HG lobe widened to approximate the phase averaged over a light disc.
+		 * @param a_discRadius Angular radius of the light disc in radians.
+		 */
+		float4 OverDisc(float a_discRadius) const
+		{
+			// The lobe width is ~(1 - g); matching a disc-flat plateau's peak gives width R / sqrt(2), added in quadrature.
+			const float width = 1.f - coefficients.x;
+			return { std::max(1.f - std::sqrt(width * width + 0.5f * a_discRadius * a_discRadius), 0.f), coefficients.y, coefficients.z, coefficients.w };
+		}
 	};
+
+	/** @brief Angular radius in radians of the visible moon disc a_lightDir points into; 0 when the light is not from a moon. */
+	float GetMoonDiscRadius(const RE::Sky* a_sky, const float3& a_lightDir)
+	{
+		if (!a_sky || !a_sky->root)
+			return 0.f;
+		const auto& viewer = a_sky->root->world.translate;
+		for (const RE::Moon* moon : { a_sky->masser, a_sky->secunda }) {
+			if (!moon || !moon->root || !moon->moonMesh || moon->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
+				continue;
+			// Test against the drawn billboard so direction and size come from the same bound
+			const float radius = std::atan(Util::GetBillboardHalfTan(moon->moonMesh.get(), viewer, 0.f));
+			auto direction = moon->moonMesh->worldBound.center - viewer;
+			if (radius > 0.f && direction.Unitize() > 0.f && direction.x * a_lightDir.x + direction.y * a_lightDir.y + direction.z * a_lightDir.z >= std::cos(radius))
+				return radius;
+		}
+		return 0.f;
+	}
 
 	const std::array<float4, PhysicalSky::kCloudMsCalibrationSize>& CloudMsCoefficients(float albedo, const CloudMiePhase& phase)
 	{
@@ -1171,6 +1200,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const auto cirrusTextures = cirrusMapManager.GetTextures();
 	const bool renderCirrus = cirrus.enabled && bool(cirrusTextures);
 	const CloudMiePhase lowCloudPhase(lighting.dropletDiameter);
+	cloudLightDiscRadius = GetMoonDiscRadius(globals::game::sky, cloudLightDir);
 	auto* ndfVoxelNoise = settings.cloudNoise.useVoxelNoise ? voxelCloudManager.Noise() : nullptr;
 
 	VolumetricCloudCB cloudData = {
@@ -1246,7 +1276,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.localNdfRect = localRect,
 		.localNdfAltitude = localAltitude,
 		.localNdfAuxiliary = ndfManager.GetHeightAuxiliaryRange(),
-		.lowCloudPhase = lowCloudPhase.coefficients,
+		.lowCloudPhase = lowCloudPhase.OverDisc(cloudLightDiscRadius),
 		.stormCount = cloudStormManager.Count(),
 		.voxelCount = voxelCloudManager.Count(),
 		.voxelAltitude = voxelCloudManager.Altitude(),

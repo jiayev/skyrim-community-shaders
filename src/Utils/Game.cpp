@@ -402,6 +402,20 @@ namespace Util
 		return property ? std::clamp(property->kBlendColor.alpha, 0.0f, 1.0f) : 0.0f;
 	}
 
+	float GetBillboardHalfTan(const RE::NiAVObject* a_billboard, const RE::NiPoint3& a_viewer, float a_fallback)
+	{
+		if (!a_billboard)
+			return a_fallback;
+
+		const auto& bound = a_billboard->worldBound;
+		const float distance = bound.center.GetDistance(a_viewer);
+		if (bound.radius <= 0.0f || distance <= bound.radius)
+			return a_fallback;
+
+		// The bound sphere encloses the square billboard, so its half-width is radius / sqrt(2)
+		return bound.radius * 0.70710678f / distance;
+	}
+
 	bool IsInterior()
 	{
 		auto tes = RE::TES::GetSingleton();

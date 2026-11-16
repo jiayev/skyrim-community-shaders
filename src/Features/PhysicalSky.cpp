@@ -1483,6 +1483,7 @@ void PhysicalSky::DrawDebugSection()
 		ImGui::InputFloat3(T(TKEY("sun_direction"), "Sun Direction"), &cbData.sunDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
 		ImGui::InputFloat3(T(TKEY("masser_direction"), "Masser Direction"), &cbData.masserDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
 		ImGui::InputFloat3(T(TKEY("secunda_direction"), "Secunda Direction"), &cbData.secundaDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+		ImGui::Text(T(TKEY("cloud_light_disc_radius"), "Cloud Light Disc Radius: %.2f deg"), DirectX::XMConvertToDegrees(cloudLightDiscRadius));
 	}
 
 	ImGui::SeparatorText(T(TKEY("textures"), "Textures"));
