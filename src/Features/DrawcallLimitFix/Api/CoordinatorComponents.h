@@ -60,11 +60,13 @@ namespace DCLF::Api
 
 	/**
 	 * @brief The mirrored node kind bits a component may test (CoordinatorComponentContext::MirroredFadeNode's a_kind, the mirror's capture
-	 * kind as is; Core checks they match it). Tree: a BSTreeNode. Captured: a node capture contribution's class (Api/EngineEvents.h,
+	 * kind as is; Core checks they match it). Tree: a BSTreeNode. LeafAnim: a BSLeafAnimNode, including BSTreeNode.
+	 * Captured: a node capture contribution's class (Api/EngineEvents.h,
 	 * NodeCaptureContribution), its list in MirroredNode::captured.
 	 */
 	inline constexpr std::uint32_t kMirroredKindTree = 1u << 8;
 	inline constexpr std::uint32_t kMirroredKindCaptured = 1u << 9;
+	inline constexpr std::uint32_t kMirroredKindLeafAnim = 1u << 10;
 
 	/**
 	 * @brief A node as the mirror holds it (CoordinatorComponentContext::MirroredNodeOf; known false: no record), viewed in place: valid
@@ -73,9 +75,9 @@ namespace DCLF::Api
 	struct MirroredNode
 	{
 		bool known = false;
-		const void* parent = nullptr;  // null: a root
-		const void* rtti = nullptr;    // its RTTI exactly
-		std::uint32_t kind = 0;        // its capture kind as is (kMirroredKind*)
+		const void* parent = nullptr;           // null: a root
+		const void* rtti = nullptr;             // its RTTI exactly
+		std::uint32_t kind = 0;                 // its capture kind as is (kMirroredKind*)
 		std::span<const void* const> children;  // by engine slot (stable; null slots kept): what OnVisible visits, in order
 		std::span<const void* const> captured;  // kMirroredKindCaptured: its contribution's list, in its order (else empty)
 	};
@@ -84,14 +86,14 @@ namespace DCLF::Api
 	struct TrackedState
 	{
 		bool tracked = false;
-		bool classified = false;   // a pass took its verdict (and it has not been asked again)
-		bool leafWaiting = false;  // written while the mirror held no record of it
+		bool classified = false;                    // a pass took its verdict (and it has not been asked again)
+		bool leafWaiting = false;                   // written while the mirror held no record of it
 		std::uint32_t slot = ~0u, layerSlot = ~0u;  // its object slots (~0u: none)
-		std::uint8_t reason = 0;     // its candidate verdict (Ineligible)
-		std::uint8_t veto = 0;       // kVetoHold, kVetoObserve or 0
-		std::uint8_t waitCause = 0;  // its slot's: what the commit's wait waits on (0: not waiting)
-		std::uint8_t waitWhy = 0;    // its slot's first reason of its last wait
-		bool resident = false;       // its slot resident
+		std::uint8_t reason = 0;                    // its candidate verdict (Ineligible)
+		std::uint8_t veto = 0;                      // kVetoHold, kVetoObserve or 0
+		std::uint8_t waitCause = 0;                 // its slot's: what the commit's wait waits on (0: not waiting)
+		std::uint8_t waitWhy = 0;                   // its slot's first reason of its last wait
+		bool resident = false;                      // its slot resident
 	};
 
 	/** @brief What the commit recorded of an observed slot (CoordinatorComponentContext::ObservedSlot): its entry, phases, readiness. */

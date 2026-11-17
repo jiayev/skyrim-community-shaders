@@ -39,7 +39,8 @@ namespace DCLF::SceneCapture
 		kKindFadeNode = 1u << 6,
 		kKindFaceGen = 1u << 7,
 		kKindTree = 1u << 8,
-		kKindCaptured = 1u << 9,  // a node capture contribution's class (its RTTI exactly: Extensions::NodeCaptureOf): its list captured
+		kKindCaptured = 1u << 9,   // a node capture contribution's class (its RTTI exactly: Extensions::NodeCaptureOf): its list captured
+		kKindLeafAnim = 1u << 10,  // BSLeafAnimNode, including BSTreeNode
 		// With kKindBillboard: the face mode (NiBillboardNode::userFlags & 7, +0x128, what OnVisible turns it by) in bits 13-15.
 		kKindBillboardModeShift = 13,
 	};
@@ -134,9 +135,9 @@ namespace DCLF::SceneCapture
 		enum Field : std::uint32_t
 		{
 			kType = 1u << 0,
-			kRenderer = 1u << 1,    // renderer data, its buffers and vertex layout, the counts
-			kSkin = 1u << 2,        // instance, type, partition, data, bone count, partitions' buffers, layouts, counts, LOD bytes, shown flags
-			kDismember = 1u << 3,   // the dismember partitions' shown flags
+			kRenderer = 1u << 1,   // renderer data, its buffers and vertex layout, the counts
+			kSkin = 1u << 2,       // instance, type, partition, data, bone count, partitions' buffers, layouts, counts, LOD bytes, shown flags
+			kDismember = 1u << 3,  // the dismember partitions' shown flags
 			kProperty = 1u << 4,
 			kAlpha = 1u << 5,
 			kLayer = 1u << 6,        // the additional property, the alt index buffer and its count

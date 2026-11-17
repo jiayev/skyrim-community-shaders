@@ -21,10 +21,10 @@
 
 #include <atomic>
 #include <bit>
-#include <mutex>
-#include <unordered_map>
 #include <chrono>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
 
 namespace DCLF::SceneCapture
 {
@@ -453,6 +453,7 @@ namespace DCLF::SceneCapture
 		if (node->AsFadeNode()) {
 			r.kind |= kKindFadeNode;
 			r.kind |= netimmerse_cast<RE::BSTreeNode*>(node) ? kKindTree : 0u;
+			r.kind |= netimmerse_cast<RE::BSLeafAnimNode*>(node) ? kKindLeafAnim : 0u;
 			r.fadeNear = At<float>(node, 0x128);
 			r.fadeFar = At<float>(node, 0x12C);
 			r.fade109 = At<std::uint8_t>(node, 0x109) & ~kFade109FrameBits;

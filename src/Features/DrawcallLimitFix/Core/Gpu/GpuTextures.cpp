@@ -3,18 +3,18 @@
 // volk must precede every Vulkan header in this translation unit.
 #include <rhi_interop_vulkan.h>
 
-#include "RenderGraph/DxvkImageImport.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
+#include "RenderGraph/DxvkImageImport.h"
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
+#include "Features/DrawcallLimitFix/Core/Gpu/TextureFeedback.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "RenderGraph/DxvkOrgInterop.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "TextureStreaming/Census.h"
-#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
-#include "Features/DrawcallLimitFix/Core/Gpu/TextureFeedback.h"
 #include "TextureStreaming/Streamer.h"
 
 #include <OpenRenderGraph/GraphHost.h>
@@ -126,6 +126,12 @@ namespace DCLF
 		{
 			a_out.formatOverride = rhi::helpers::ToRHI(a_view.Format);
 			switch (a_view.ViewDimension) {
+			case D3D11_SRV_DIMENSION_BUFFER:
+				a_out.dimension = rhi::SrvDim::Buffer;
+				a_out.buffer.kind = rhi::BufferViewKind::Typed;
+				a_out.buffer.firstElement = a_view.Buffer.FirstElement;
+				a_out.buffer.numElements = a_view.Buffer.NumElements;
+				break;
 			case D3D11_SRV_DIMENSION_TEXTURE2D:
 				a_out.dimension = rhi::SrvDim::Texture2D;
 				a_out.tex2D.mostDetailedMip = a_view.Texture2D.MostDetailedMip;
@@ -156,7 +162,7 @@ namespace DCLF
 				a_out.tex3D.mipLevels = a_view.Texture3D.MipLevels;
 				break;
 			default:
-				return false;  // buffers, 1D and multisampled views: not used by the eligible Lighting draws
+				return false;  // 1D and multisampled views are not used by the eligible Lighting draws.
 			}
 			return a_out.formatOverride != rhi::Format::Unknown;
 		}
@@ -237,7 +243,7 @@ namespace DCLF
 			// the old storage once superseded).
 			std::uint64_t cookie = 0, storageSerial = 0;
 			bool pinned = false;
-			const void* window = nullptr;  // a streamed texture's: the window imported (an identity)
+			const void* window = nullptr;   // a streamed texture's: the window imported (an identity)
 			std::uint32_t sourceTag = ~0u;  // who first asked for it (ResolveBinding's tags), for DescribeSuperseded
 			std::weak_ptr<ImportedBacking> backing;
 			// The fields above are the importing thread's until it stores the state (release); a lookup reads it first.
@@ -500,6 +506,7 @@ namespace DCLF
 			view->GetDesc(&viewDesc);
 			rhi::SrvDesc srv{};
 			winrt::com_ptr<ID3D11Resource> bufferResource;
+			const bool bufferView = viewDesc.ViewDimension == D3D11_SRV_DIMENSION_BUFFER;
 			const bool structured = viewDesc.ViewDimension == D3D11_SRV_DIMENSION_BUFFER && viewDesc.Format == DXGI_FORMAT_UNKNOWN;
 			if (structured) {
 				view->GetResource(bufferResource.put());
@@ -521,6 +528,11 @@ namespace DCLF
 					logger::info("[DCLF] Game texture view not supported: format {}, dimension {}", static_cast<int>(viewDesc.Format), static_cast<int>(viewDesc.ViewDimension));
 				return Reject::View;
 			}
+			if (bufferView && !structured)
+				view->GetResource(bufferResource.put());
+			const std::uint32_t elementBytes = bufferView && !structured ? rhi::FormatByteSize(srv.formatOverride) : 4u;
+			if (!elementBytes)
+				return Reject::View;
 
 			DxvkOrgInteropResourceInfo info{};
 			// Pinless: the import is tracked, ended by its backing once made, else here.
@@ -537,7 +549,7 @@ namespace DCLF
 				DCLF_ZONE("CS.DCLF.Texture.Import.DescribeResource");
 				auto& runtime = RenderGraphRuntime::Get();
 				// DXVK accepts image views, but buffer imports must name the underlying resource.
-				IUnknown* object = structured ? static_cast<IUnknown*>(bufferResource.get()) : view;
+				IUnknown* object = bufferView ? static_cast<IUnknown*>(bufferResource.get()) : view;
 				if (runtime.PinlessImports()) {
 					DxvkOrgInteropTrackedResource tracked{};
 					HRESULT result = E_FAIL;
@@ -551,21 +563,21 @@ namespace DCLF
 				} else if (!runtime.DescribeResource(object, info)) {
 					return Reject::NotImage;
 				}
-				if (info.kind != (structured ? DXVK_ORG_INTEROP_RESOURCE_BUFFER : DXVK_ORG_INTEROP_RESOURCE_IMAGE))
+				if (info.kind != (bufferView ? DXVK_ORG_INTEROP_RESOURCE_BUFFER : DXVK_ORG_INTEROP_RESOURCE_IMAGE))
 					return Reject::NotImage;
 			}
-			if (structured) {
+			if (bufferView) {
 				const auto& buffer = info.buffer;
-				if (buffer.offset % 4 || !(buffer.usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT))
+				if (buffer.offset % elementBytes || !(buffer.usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT))
 					return Reject::Import;
 				rhi::vulkan::ImportedBufferDesc import{};
 				import.buffer = buffer.buffer;
 				import.size = buffer.offset + buffer.size;
 				import.usage = buffer.usage;
-				import.debugName = "DCLF imported structured buffer";
+				import.debugName = structured ? "DCLF imported structured buffer" : "DCLF imported typed buffer";
 				if (rhi::vulkan::import_buffer(a_context.device, import, a_entry.image) != rhi::Result::Ok || !a_entry.image)
 					return Reject::Import;
-				srv.buffer.firstElement += buffer.offset / 4;
+				srv.buffer.firstElement += buffer.offset / elementBytes;
 			} else {
 				const auto& image = info.image;
 				// Imported in the layout DXVK rests it in (RenderGraph::ImportDxvkImage); the graph never moves these, and the
@@ -602,7 +614,7 @@ namespace DCLF
 			if (!a_entry.binding)
 				return Reject::View;
 			a_entry.index = a_entry.binding.Index();
-			NoteImported(view, a_sourceTag, structured ? nullptr : reinterpret_cast<const void*>(info.image.image));
+			NoteImported(view, a_sourceTag, bufferView ? nullptr : reinterpret_cast<const void*>(info.image.image));
 			return Reject::None;
 		}
 

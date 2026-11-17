@@ -2,14 +2,14 @@
 // MergeTreeSeed), read on the render thread at the frame's start, written and sent by FrameValues' producer, read by TreeWindCS
 // through the depth commit's frame row.
 
-#include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameValuePools.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Core/Shading/FrameGlobals.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
+#include "Features/DrawcallLimitFix/Features/TreeWind/TreeWind.h"
 
 #include <cstring>
 #include <utility>
@@ -39,7 +39,7 @@ namespace DCLF::Features::TreeWind
 			return second && *reinterpret_cast<const std::int32_t*>(second + 0x10) == 1;
 		}
 
-		/** @brief A BSTreeNode's static row into a_out (the render thread's tree seeds). */
+		/** @brief A BSLeafAnimNode's static row into a_out (the render thread's tree seeds). */
 		void TreeStaticOfNode(const void* a_node, TreeStatic& a_out)
 		{
 			a_out = {};
@@ -50,13 +50,14 @@ namespace DCLF::Features::TreeWind
 			a_out.timer = TreeNodeFloat(node, 0x164);
 			a_out.previousTimer = TreeNodeFloat(node, 0x168);
 			a_out.amplitude = TreeNodeFloat(node, 0x15c);
-			// The manager advances a node only in its near loop (FUN_1404381e0's loop 2 over FUN_140437e50's near list): one the list
-			// selects whose model (+0xF8, its +0x40) has bones (+0xB8), scaling the gust by the model's +0xB0. Other nodes keep their
-			// clock and amplitude; their +0xB0 is never read (can be garbage like 2.3e36). Not replicated: the near list's count cap.
+			// QueuedTree registers TREE references with the manager. Static and activator meshes may also have
+			// BSLeafAnimNode roots, but their base forms have no tree amplitude at +0xB0.
 			const auto* holder = *reinterpret_cast<const std::byte* const*>(bytes + 0xF8);
 			const auto* model = holder ? *reinterpret_cast<const std::byte* const*>(holder + 0x40) : nullptr;
-			const bool bones = model && *reinterpret_cast<const void* const*>(model + 0xB8);
-			a_out.animated = bones && NearListSelectable(node) ? 1u : 0u;
+			const bool treeForm = model && reinterpret_cast<const RE::TESForm*>(model)->Is(RE::FormType::Tree);
+			const bool tree = netimmerse_cast<const RE::BSTreeNode*>(static_cast<const RE::BSLeafAnimNode*>(a_node)) != nullptr;
+			const bool animated = treeForm && (!tree || (*reinterpret_cast<const void* const*>(model + 0xB8) && NearListSelectable(node)));
+			a_out.animated = animated ? 1u : 0u;
 			a_out.modelAmplitude = a_out.animated ? *reinterpret_cast<const float*>(model + 0xB0) : 0.0f;
 		}
 
@@ -138,8 +139,7 @@ namespace DCLF::Features::TreeWind
 
 	void RegisterSeeds(Api::InstallContext& a_context)
 	{
-		pool = a_context.RegisterFrameValuePool({ .name = "tree-seeds", .stride = sizeof(TreeStatic), .frameStart = &FrameStart, .kick = &Kick, .sample = &Sample,
-			.send = &Send });
+		pool = a_context.RegisterFrameValuePool({ .name = "tree-seeds", .stride = sizeof(TreeStatic), .frameStart = &FrameStart, .kick = &Kick, .sample = &Sample, .send = &Send });
 	}
 
 	std::uint32_t SeedsIndex()

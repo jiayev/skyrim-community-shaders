@@ -2,12 +2,12 @@
 // with their owned engine nodes and seed requests, and the members TreeWindCS writes the wind of.
 
 // TreeWindScene.h first: volk must precede every Vulkan header of the translation unit (the tables, the seeds' items).
-#include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
 #include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindTables.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/CoordinatorComponents.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/TableFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Publication.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/Tables.h"
+#include "Features/DrawcallLimitFix/Features/TreeWind/TreeWindScene.h"
 
 #include <algorithm>
 #include <cstring>
@@ -17,7 +17,7 @@ namespace DCLF::Features::TreeWind
 {
 	namespace
 	{
-		Api::TableFamilyId treeFamily;         // install
+		Api::TableFamilyId treeFamily;          // install
 		Api::CoordinatorComponentId component;  // install
 
 		/** @brief Resident slots, each listed at most once: swap-removed, the first kept. */
@@ -149,13 +149,13 @@ namespace DCLF::Features::TreeWind
 			auto& owners = a_context.State<TreeComponent>().owners;
 			const bool tree = a_slot < tables.objects.size() && (tables.objects[a_slot].flags & kObjectTreeAnim);
 			const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
-			// The tree node from the mirror (its property's fade node, a BSTreeNode); its values are the seed's, which the render thread takes
+			// The leaf-animation node from the mirror (including BSTreeNode); its values are the seed's, which the render thread takes
 			// at the frame's start (the scene work reads no engine memory, and runs no engine code).
 			TreeStatic row;
 			const void* node = nullptr;
 			if (tree && geometry) {
 				std::uint32_t kind = 0;
-				if (const void* fadeNode = a_context.MirroredFadeNode(a_slot, kind); fadeNode && (kind & Api::kMirroredKindTree))
+				if (const void* fadeNode = a_context.MirroredFadeNode(a_slot, kind); fadeNode && (kind & Api::kMirroredKindLeafAnim))
 					node = fadeNode;
 			}
 			// A node not listed yet is owned from the entry's reference (pins), never from the key; without one, nodeless.
@@ -167,7 +167,8 @@ namespace DCLF::Features::TreeWind
 				family.objectRow.resize(std::size_t(a_slot) + 1, kNoTree);
 			}
 			auto& current = family.objectRow[a_slot];
-			const std::uint32_t wanted = !tree ? kNoTree : !node ? kNodelessTree : kNoTree;
+			const std::uint32_t wanted = !tree ? kNoTree : !node ? kNodelessTree :
+			                                                       kNoTree;
 			// Already under this node (a patch that changed something else), or nodeless and staying so.
 			if (node && current < trees.treeNode.size() && trees.treeNode[current] == node)
 				return;
@@ -295,8 +296,7 @@ namespace DCLF::Features::TreeWind
 
 	void RegisterTables(Api::InstallContext& a_context)
 	{
-		treeFamily = a_context.RegisterTableFamily({ .name = "trees", .make = &MakeTrees, .assign = &AssignTrees, .same = &SameTrees, .clear = &ClearTrees,
-			.recycle = &RecycleTree, .rowsEnd = kNodelessTree, .recordWord = kTreeRecordWord, .rows = &TreeRows });
+		treeFamily = a_context.RegisterTableFamily({ .name = "trees", .make = &MakeTrees, .assign = &AssignTrees, .same = &SameTrees, .clear = &ClearTrees, .recycle = &RecycleTree, .rowsEnd = kNodelessTree, .recordWord = kTreeRecordWord, .rows = &TreeRows });
 		component = a_context.RegisterCoordinatorComponent(
 			{ .name = "tree-wind",
 				.make = &MakeComponent,

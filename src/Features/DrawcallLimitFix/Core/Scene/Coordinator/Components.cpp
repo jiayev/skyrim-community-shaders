@@ -9,6 +9,7 @@ namespace DCLF::Api
 {
 	static_assert(kMirroredKindTree == SceneCapture::kKindTree, "the Api's mirrored kind bits are the capture's");
 	static_assert(kMirroredKindCaptured == SceneCapture::kKindCaptured, "the Api's mirrored kind bits are the capture's");
+	static_assert(kMirroredKindLeafAnim == SceneCapture::kKindLeafAnim, "the Api's mirrored kind bits are the capture's");
 
 	bool CoordinatorComponentContext::DenseWalk() const
 	{
@@ -248,7 +249,8 @@ namespace DCLF::Api
 
 	std::uint32_t CoordinatorComponentContext::VetoCount(std::uint8_t a_veto) const
 	{
-		return a_veto == kVetoHold ? coordinator.vetoHeld : a_veto == kVetoObserve ? coordinator.vetoObserved : 0u;
+		return a_veto == kVetoHold ? coordinator.vetoHeld : a_veto == kVetoObserve ? coordinator.vetoObserved :
+		                                                                             0u;
 	}
 
 	void CoordinatorComponentContext::SetCommitLive(bool a_live) const
