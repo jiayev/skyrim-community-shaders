@@ -14,6 +14,8 @@ namespace DCLF::Integrations::Skylighting
 {
 	// t50 and t53: the probe array and the shadow visibility, frame textures (Features/Manifest.cpp).
 	inline constexpr std::uint32_t kProbeArrayRegister = 50;
+	inline constexpr std::uint32_t kProbeCoverageRegister = 51;
+	inline constexpr std::uint32_t kZenithDepthRegister = 52;
 	inline constexpr std::uint32_t kShadowVisibilityRegister = 53;
 
 	// SkylightingIntegration.cpp: the integration's entry (Integrations/IntegrationList.cpp).

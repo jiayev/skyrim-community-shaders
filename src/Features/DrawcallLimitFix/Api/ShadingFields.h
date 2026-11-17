@@ -25,6 +25,7 @@ namespace DCLF::Api
 		SkinPerGeometry,  // Advanced Skin's SkinPerGeometry (PS b7): float4
 		SkinMaterial,     // Per-mesh flags, profile, three texture descriptors and detail sampler.
 		LandscapeSeams,   // Per-quad weight, data and borrowed layer descriptors (index + 1; zero: inactive).
+		LodTreeWind,      // Per-mesh bend-data descriptor index + 1; zero disables tree LOD sway.
 		Count,
 	};
 

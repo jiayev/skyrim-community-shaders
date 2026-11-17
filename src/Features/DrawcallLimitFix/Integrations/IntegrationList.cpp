@@ -16,6 +16,7 @@
 #include "Features/DrawcallLimitFix/Integrations/SubsurfaceScattering/SubsurfaceScattering.h"
 #include "Features/DrawcallLimitFix/Integrations/TerrainBlending/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Integrations/TerrainShadows/TerrainShadows.h"
+#include "Features/DrawcallLimitFix/Integrations/TreeWind/TreeWind.h"
 #include "Features/DrawcallLimitFix/Integrations/TruePBR/TruePBRIntegration.h"
 #include "Features/DrawcallLimitFix/Integrations/VanillaFresnel/VanillaFresnel.h"
 #include "Features/DrawcallLimitFix/Integrations/VolumetricShadows/VolumetricShadows.h"
@@ -56,6 +57,7 @@ namespace DCLF::Integrations
 			PhysicalSky::Integration(),
 			DynamicCubemaps::Integration(),
 			Skylighting::Integration(),
+			TreeWind::Integration(),
 			TerrainShadows::Integration(),
 			WaterEffects::Integration(),
 			IBL::Integration(),

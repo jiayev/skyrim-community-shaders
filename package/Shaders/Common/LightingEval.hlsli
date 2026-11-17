@@ -219,6 +219,8 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float roughness, inout DirectLightingOutput lightingOutput)
 {
 #	if defined(TRUE_PBR)
+	const float3 viewDir = context.coatViewDir;
+	const float3 lightDir = context.coatLightDir;
 	const float3 lightColor = context.coatLightColor;
 	const float specularScale = 1.0;
 #	else

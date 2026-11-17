@@ -51,10 +51,14 @@ void Skin::ReloadResources()
 	editor.thumbnailKey.clear();
 	// Files may have been edited outside the game. Drafts without unsaved changes follow the files.
 	if (!editor.draftKey.empty() && !MaterialDirty())
-		LoadMaterialDraft(editor.draftKey);
+		LoadMaterialDraft(editor.draftKey, false);
 	if (editor.draftTarget && !CharacterDirty()) {
 		const auto* saved = SkinCharacters::Find(*SkinCharacters::Get(), editor.draftTarget.key);
 		editor.character = editor.characterBaseline = saved ? saved->customization : SkinCharacters::Customization{};
+		for (auto& draft : editor.undo)
+			draft.character = editor.character;
+		for (auto& draft : editor.redo)
+			draft.character = editor.character;
 	}
 }
 
@@ -282,7 +286,7 @@ Skin::GeometrySnapshot Skin::CaptureGeometry(RE::BSGeometry* a_geometry, RE::BSS
 	auto& data = snapshot.data;
 	if (a_geometry)
 		data.skinPerGeometry = GetWetness(a_geometry);
-	if (!a_geometry || !SkinMaterials::IsCompatible(a_property)) {
+	if (!a_geometry || !SkinMaterials::IsCompatible(a_property) || SkinSurfaces::IsRaceMenuOverlay(a_geometry, a_property)) {
 		data.profile = MakeData(Resolve({}, settings.DefaultProfile), false);
 		data.profile.skinParams.w = 0;
 		return snapshot;

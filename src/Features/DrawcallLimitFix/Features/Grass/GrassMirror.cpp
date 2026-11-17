@@ -328,7 +328,7 @@ namespace DCLF::Features::Grass
 		// bucket table's content owners).
 		for (const void* mesh : bucket.meshes)
 			RemoveMeshUser(mesh);
-		if (auto* record = static_cast<::GrassMeshLibrary::MeshRecord*>(bucket.lodMesh))
+		if (auto* record = static_cast<::GrassMeshLibrary::RegisteredMesh*>(bucket.lodMesh))
 			::GrassMeshLibrary::ReleaseMesh(*record);
 		if (bucket.lodPending)
 			--lodPending;
@@ -341,7 +341,7 @@ namespace DCLF::Features::Grass
 	{
 		// Held while the bucket lives, so the library keeps the record's LOD meshes (CommitLoadedLODMeshes drops a load no bucket holds,
 		// ReleaseMesh evicts them at zero), as Grass Optimizations' buckets hold it.
-		++static_cast<::GrassMeshLibrary::MeshRecord*>(a_lodMesh)->activeBuckets;
+		++static_cast<::GrassMeshLibrary::RegisteredMesh*>(a_lodMesh)->activeBuckets;
 		a_bucket.lodMesh = a_lodMesh;
 		a_bucket.lodPending = true;
 		++lodPending;
@@ -361,7 +361,7 @@ namespace DCLF::Features::Grass
 		for (auto& bucket : buckets) {
 			if (!bucket.live || !bucket.lodPending)
 				continue;
-			auto& record = *static_cast<::GrassMeshLibrary::MeshRecord*>(bucket.lodMesh);
+			auto& record = *static_cast<::GrassMeshLibrary::RegisteredMesh*>(bucket.lodMesh);
 			library.EnsureLODMeshes(record);
 			const bool settled = std::ranges::all_of(record.lodMeshes, [](const ::GrassMeshLibrary::LODMesh& a_lod) {
 				return a_lod.state == LoadState::kReady || a_lod.state == LoadState::kUnavailable;
@@ -372,7 +372,7 @@ namespace DCLF::Features::Grass
 				const auto* lod = ::GrassMeshLibrary::GetLODMesh(record, tier == 1 ? Tier::kMiddle : Tier::kFar);
 				if (!lod)
 					continue;
-				MeshSource source{ .key = lod, .vertexDesc = lod->descVal, .indexCount = lod->indexCount, .canopyHeight = lod->canopyHeight };
+				MeshSource source{ .key = lod, .vertexDesc = lod->vertexDesc, .indexCount = lod->indexCount, .canopyHeight = lod->canopyHeight };
 				source.vertexBuffer.copy_from(lod->vertexBuffer);
 				source.indexBuffer.copy_from(lod->indexBuffer);
 				bucket.meshes[tier] = AddMeshUser(std::move(source));

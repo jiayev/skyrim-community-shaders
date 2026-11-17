@@ -322,6 +322,8 @@ public:
 
 	/** @brief Draws the ImGui settings UI for light limit fix configuration and debug visualization. */
 	virtual void DrawSettings() override;
+	virtual bool HasDebugSection() const override { return true; }
+	virtual void DrawDebugSection() override;
 	/** @brief Draws the debug overlay warning when light visualization is enabled. */
 	virtual void DrawOverlay() override;
 	/** @brief Returns whether the debug overlay should be displayed. */
@@ -535,7 +537,7 @@ public:
 	static constexpr std::size_t kRoomNumbers = 128;
 	/** @brief A reached room's number before UpdateLights gives it one. */
 	static constexpr uint8_t kNoRoomNumber = 0xFF;
-	eastl::hash_map<RE::NiNode*, uint8_t> roomNodes;  // each room a light reaches, by its number (kept while a light reaches it)
+	eastl::hash_map<RE::NiNode*, uint8_t> roomNodes;      // each room a light reaches, by its number (kept while a light reaches it)
 	eastl::hash_map<RE::NiNode*, uint8_t> nextRoomNodes;  // reused scratch; never invalidates the published mapping
 	std::uint64_t roomMapGeneration = 0;
 

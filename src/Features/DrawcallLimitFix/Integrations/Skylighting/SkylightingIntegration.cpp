@@ -1,7 +1,7 @@
 // Skylighting: its probe array (t50) and shadow visibility (t53), frame textures. The render thread's callbacks read the feature live.
 
-#include "Features/DrawcallLimitFix/Integrations/Skylighting/Skylighting.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/IntegrationStatus.h"
+#include "Features/DrawcallLimitFix/Integrations/Skylighting/Skylighting.h"
 
 #include "State.h"
 
@@ -34,12 +34,24 @@ namespace DCLF::Integrations::Skylighting
 			return visibility && Binds() ? visibility->srv.get() : nullptr;
 		}
 
+		void* ProbeCoverageView()
+		{
+			const auto* coverage = globals::features::skylighting.texProbeCoverage;
+			return coverage && Binds() ? coverage->srv.get() : nullptr;
+		}
+
+		void* ZenithDepthView()
+		{
+			const auto* depth = globals::features::skylighting.texZenithOcclusion;
+			return depth && Binds() ? depth->srv.get() : nullptr;
+		}
+
 		void Install(Api::InstallContext& a_context)
 		{
-			a_context.RegisterFrameTexture({ .name = "skylighting probes", .textureRegister = kProbeArrayRegister, .view = &ProbeArrayView,
-				.capturedWhenNull = true });
-			a_context.RegisterFrameTexture({ .name = "skylighting shadow visibility", .textureRegister = kShadowVisibilityRegister,
-				.view = &ShadowVisibilityView, .capturedWhenNull = true });
+			a_context.RegisterFrameTexture({ .name = "skylighting probes", .textureRegister = kProbeArrayRegister, .view = &ProbeArrayView, .capturedWhenNull = true });
+			a_context.RegisterFrameTexture({ .name = "skylighting probe coverage", .textureRegister = kProbeCoverageRegister, .view = &ProbeCoverageView, .capturedWhenNull = true });
+			a_context.RegisterFrameTexture({ .name = "skylighting zenith depth", .textureRegister = kZenithDepthRegister, .view = &ZenithDepthView, .capturedWhenNull = true });
+			a_context.RegisterFrameTexture({ .name = "skylighting shadow visibility", .textureRegister = kShadowVisibilityRegister, .view = &ShadowVisibilityView, .capturedWhenNull = true });
 		}
 	}
 

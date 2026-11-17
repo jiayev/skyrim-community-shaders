@@ -138,8 +138,6 @@ namespace DCLF::Features::Grass
 			cull.midLodPx = settings.MidLODPixelSize;
 			cull.farLodPx = settings.EnableMidLOD ? std::min(settings.FarLODPixelSize, settings.MidLODPixelSize) : settings.FarLODPixelSize;
 			cull.lodBandPx = std::max(0.0f, settings.MeshLODBandPixels);
-			// The thinning's distance ramp spans the INI distance whatever the override (Grass Optimizations' densityDistanceRcp).
-			cull.densityDistanceRcp = 1.0f / std::max(vanillaMax, 1e-4f);
 			cull.flags = (settings.EnableMeshLOD && settings.EnableMidLOD ? kCullMidLod : 0u) | (settings.EnableMeshLOD && settings.EnableFarLOD ? kCullFarLod : 0u) |
 			             (settings.EnableOcclusionCulling ? kCullOcclusion : 0u);
 			return true;
@@ -312,8 +310,7 @@ namespace DCLF::Features::Grass
 			const auto& inputs = a_requirements.inputs;
 			auto& set = Draws::SceneBufferSet::Get();
 			const auto floor = [&](std::uint32_t a_input, std::uint32_t a_initial) { return std::max<std::uint64_t>(inputs[a_input], tables.smallStart ? 0u : a_initial); };
-			Draws::UnitGroup{}.Add(tables.instances).Add(tables.owners).Add(tables.frame).Add(tables.visible).Require(a_requirements.build,
-				floor(kInstanceSlotsInput, kInitialInstances));
+			Draws::UnitGroup{}.Add(tables.instances).Add(tables.owners).Add(tables.frame).Add(tables.visible).Require(a_requirements.build, floor(kInstanceSlotsInput, kInitialInstances));
 			set.Require(a_requirements.build, tables.shapes, floor(kShapeSlotsInput, kInitialShapes));
 			set.Require(a_requirements.build, tables.buckets, kMaxBuckets);
 			set.Require(a_requirements.build, tables.meshes, floor(kMeshSlotsInput, kInitialMeshes));

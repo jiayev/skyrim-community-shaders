@@ -96,22 +96,22 @@ namespace
 	// The scene writer framework's provider, its families and the integrity check's findings (the menu).
 	void DrawSceneWriterPanel()
 	{
-		if (!ImGui::TreeNodeEx("Scene writer framework"))
+		if (!ImGui::TreeNodeEx(T("feature.drawcall_limit_fix.scene_writer_framework", "Scene writer framework")))
 			return;
-		ImGui::TextWrapped("Provider: %s", DCLF::SceneWriter::ProviderLine().c_str());
-		ImGui::TextWrapped("Hook families: %s", DCLF::SceneWriter::CapsLine().c_str());
+		ImGui::TextWrapped(T("feature.drawcall_limit_fix.provider_s", "Provider: %s"), DCLF::SceneWriter::ProviderLine().c_str());
+		ImGui::TextWrapped(T("feature.drawcall_limit_fix.hook_families_s", "Hook families: %s"), DCLF::SceneWriter::CapsLine().c_str());
 		const auto& changes = DCLF::SceneWriter::IntegrityChanges();
 		if (!DCLF::SceneWriter::IntegrityChecked())
-			ImGui::TextUnformatted("Integrity: not checked yet (it runs once the game's data has loaded).");
+			ImGui::TextUnformatted(T("feature.drawcall_limit_fix.integrity_not_checked_yet_it_runs_once_the_game_s", "Integrity: not checked yet (it runs once the game's data has loaded)."));
 		else if (changes.empty())
-			ImGui::TextUnformatted("Integrity: every patch is as installed.");
+			ImGui::TextUnformatted(T("feature.drawcall_limit_fix.integrity_every_patch_is_as_installed", "Integrity: every patch is as installed."));
 		else {
-			ImGui::TextWrapped(
-				"Integrity: %zu patch(es) rewritten by another plugin after install. A later hook that calls on still reaches SWF's; "
-				"one that does not hides those writes from DCLF.",
+			ImGui::TextWrapped(T("feature.drawcall_limit_fix.integrity_zu_patch_es_rewritten_by_another_plugin_after_install",
+								   "Integrity: %zu patch(es) rewritten by another plugin after install. A later hook that calls on still reaches SWF's; "
+								   "one that does not hides those writes from DCLF."),
 				changes.size());
 			for (const auto& change : changes)
-				ImGui::BulletText("%s +0x%x: now leads to %s", change.family.c_str(), change.offset, change.module.empty() ? "no module" : change.module.c_str());
+				ImGui::BulletText(T("feature.drawcall_limit_fix.s_0x_x_now_leads_to_s", "%s +0x%x: now leads to %s"), change.family.c_str(), change.offset, change.module.empty() ? "no module" : change.module.c_str());
 		}
 		ImGui::TreePop();
 	}
@@ -721,46 +721,46 @@ void DrawcallLimitFix::DrawSettings()
 {
 	if (!unavailableReason.empty()) {
 		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.55f, 0.3f, 1.0f));
-		ImGui::TextUnformatted("Unavailable this session: everything renders natively.");
+		ImGui::TextUnformatted(T("feature.drawcall_limit_fix.unavailable_this_session_everything_renders_natively", "Unavailable this session: everything renders natively."));
 		ImGui::PopStyleColor();
-		ImGui::TextWrapped("Reason: %s", unavailableReason.c_str());
+		ImGui::TextWrapped(T("feature.drawcall_limit_fix.reason_s", "Reason: %s"), unavailableReason.c_str());
 		DCLF::Capture::DrawControls();
 		DrawSceneWriterPanel();
 		return;
 	}
 	if (!installed) {
-		ImGui::TextUnformatted("Not installed (CS_DCLF=0).");
+		ImGui::TextUnformatted(T("feature.drawcall_limit_fix.not_installed_cs_dclf_0", "Not installed (CS_DCLF=0)."));
 		DCLF::Capture::DrawControls();
 		return;
 	}
 	// The developer's tools, under a header a player can leave closed.
 	const auto drawTools = [] {
-		if (ImGui::Button("Reload shaders"))
+		if (ImGui::Button(T("feature.drawcall_limit_fix.reload_shaders", "Reload shaders")))
 			RenderGraphRuntime::RequestShaderReload();
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(
+			ImGui::TextUnformatted(T("feature.drawcall_limit_fix.builds_every_live_render_graph_pipeline_dclf_s_graphics_pipelines",
 				"Builds every live render graph pipeline (DCLF's graphics pipelines, every compute program) again from Data/Shaders as it is now. The "
 				"current pipelines draw until the new ones are swapped in at the graph's next build; one that fails to compile keeps its previous "
-				"pipeline (the log names the error).");
+				"pipeline (the log names the error)."));
 		ImGui::SameLine();
-		if (ImGui::Button("Render graph schedule"))
+		if (ImGui::Button(T("feature.drawcall_limit_fix.render_graph_schedule", "Render graph schedule")))
 			RenderGraphSchedule::OpenWindow();
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(
+			ImGui::TextUnformatted(T("feature.drawcall_limit_fix.opens_the_persistent_schedule_inspector_each_executable_s_batches_per",
 				"Opens the persistent schedule inspector: each executable's batches per queue, their passes, the barriers before each pass and "
-				"every cross-queue wait with its cause. The graph traces its schedule while the window is open.");
+				"every cross-queue wait with its cause. The graph traces its schedule while the window is open."));
 		ImGui::SameLine();
-		if (ImGui::Button("VRAM attribution"))
+		if (ImGui::Button(T("feature.drawcall_limit_fix.vram_attribution", "VRAM attribution")))
 			RenderGraphMemory::OpenWindow();
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(
+			ImGui::TextUnformatted(T("feature.drawcall_limit_fix.opens_vram_attribution_every_d3d11_resource_dxvk_s_and_render",
 				"Opens VRAM attribution: every D3D11 resource (DXVK's) and render graph resource (DCLF's tables, pools and targets among them) "
-				"with its owner and the size of its allocation, reconciled against the driver's heap usage.");
+				"with its owner and the size of its allocation, reconciled against the driver's heap usage."));
 	};
 	if (!switchedOn) {
-		ImGui::TextWrapped("Switched off with the feature's toggle: the game renders natively and DCLF does no frame work. Switch it back on to resume; no restart needed.");
+		ImGui::TextWrapped(T("feature.drawcall_limit_fix.switched_off_with_the_feature_s_toggle_the_game_renders", "Switched off with the feature's toggle: the game renders natively and DCLF does no frame work. Switch it back on to resume; no restart needed."));
 		DCLF::Capture::DrawControls();
-		if (ImGui::TreeNodeEx("Advanced")) {
+		if (ImGui::TreeNodeEx(T("feature.drawcall_limit_fix.advanced", "Advanced"))) {
 			drawTools();
 			ImGui::TreePop();
 		}
@@ -772,59 +772,59 @@ void DrawcallLimitFix::DrawSettings()
 	DrawSceneWriterPanel();
 	// The live toggles, for A/B comparisons without a restart. They are the REQUESTED set; the render thread applies them at the start of the next frame (Toggles.h).
 	auto& toggles = DCLF::Toggles::Get().Requested();
-	if (ImGui::TreeNodeEx("What DCLF draws", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextWrapped("Each takes effect at the next frame, and Save Settings keeps it. What DCLF does not draw, the game draws as it would without DCLF.");
+	if (ImGui::TreeNodeEx(T("feature.drawcall_limit_fix.what_dclf_draws", "What DCLF draws"), ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::TextWrapped(T("feature.drawcall_limit_fix.each_takes_effect_at_the_next_frame_and_save_settings", "Each takes effect at the next frame, and Save Settings keeps it. What DCLF does not draw, the game draws as it would without DCLF."));
 		int cull = toggles.cullMode;
-		if (ImGui::Combo("GPU culling", &cull, "off\0frustum\0frustum + occlusion\0"))
+		if (ImGui::Combo(T("feature.drawcall_limit_fix.gpu_culling", "GPU culling"), &cull, "off\0frustum\0frustum + occlusion\0"))
 			toggles.cullMode = static_cast<std::uint8_t>(cull);
 		// The pipeline (Core/Render/Direct/Direct.h for the CPU-driven one): auto or manual (per kind of cell), the CPU-driven one's record
 		// mode and per-view cadences; the test harness's dclf:pipeline, dclf:pipeline-interior/-exterior, dclf:cpu-record and
 		// dclf:cpu-cadence-<view>. Save Settings keeps the pipeline choice; the CPU-driven one's options are seeded by their switches alone.
 		int pipelineMode = toggles.pipelineMode == DCLF::PipelineMode::Manual ? 1 : 0;
-		if (ImGui::Combo("Pipeline", &pipelineMode, "Auto\0Manual\0"))
+		if (ImGui::Combo(T("feature.drawcall_limit_fix.pipeline", "Pipeline"), &pipelineMode, "Auto\0Manual\0"))
 			toggles.pipelineMode = pipelineMode == 1 ? DCLF::PipelineMode::Manual : DCLF::PipelineMode::Auto;
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(
+			ImGui::TextUnformatted(T("feature.drawcall_limit_fix.gpu_driven_the_draws_culled_and_recorded_on_the_gpu",
 				"GPU-driven: the draws culled and recorded on the GPU. CPU-driven: culled on DCLF's worker threads and drawn with direct draws "
 				"recorded into DXVK's command buffer. Auto draws exteriors GPU-driven and interiors CPU-driven; Manual chooses for each. Takes "
-				"effect at the next graph build (entering or leaving an interior builds it); Save Settings keeps it (CS_DCLF_PIPELINE seeds it).");
+				"effect at the next graph build (entering or leaving an interior builds it); Save Settings keeps it (CS_DCLF_PIPELINE seeds it)."));
 		if (toggles.pipelineMode == DCLF::PipelineMode::Manual) {
 			ImGui::Indent();
 			int interior = toggles.interiorCpu ? 1 : 0, exterior = toggles.exteriorCpu ? 1 : 0;
-			if (ImGui::Combo("Interiors", &interior, "GPU-driven\0CPU-driven\0"))
+			if (ImGui::Combo(T("feature.drawcall_limit_fix.interiors", "Interiors"), &interior, "GPU-driven\0CPU-driven\0"))
 				toggles.interiorCpu = interior == 1;
-			if (ImGui::Combo("Exteriors", &exterior, "GPU-driven\0CPU-driven\0"))
+			if (ImGui::Combo(T("feature.drawcall_limit_fix.exteriors", "Exteriors"), &exterior, "GPU-driven\0CPU-driven\0"))
 				toggles.exteriorCpu = exterior == 1;
 			ImGui::Unindent();
 		}
-		ImGui::Text("Now: %s-driven (%s)", DCLF::Draws::CurrentGraphConditions().cpuPipeline ? "CPU" : "GPU", DCLF::Draws::CurrentGraphConditions().interior ? "interior" : "exterior");
+		ImGui::Text(T("feature.drawcall_limit_fix.now_s_driven_s", "Now: %s-driven (%s)"), DCLF::Draws::CurrentGraphConditions().cpuPipeline ? "CPU" : "GPU", DCLF::Draws::CurrentGraphConditions().interior ? "interior" : "exterior");
 		if (DCLF::Draws::CpuPipelineForced())
-			ImGui::TextWrapped("This GPU or driver has no counted indirect draws: every cell draws CPU-driven.");
+			ImGui::TextWrapped(T("feature.drawcall_limit_fix.this_gpu_or_driver_has_no_counted_indirect_draws_every", "This GPU or driver has no counted indirect draws: every cell draws CPU-driven."));
 		// The CPU-driven pipeline's options, while it draws some kind of cell.
 		if (toggles.pipelineMode == DCLF::PipelineMode::Auto || toggles.interiorCpu || toggles.exteriorCpu) {
 			ImGui::Indent();
 			int record = toggles.cpuRecord;
-			if (ImGui::Combo("CPU recording", &record, "serial\0parallel\0indirect\0"))
+			if (ImGui::Combo(T("feature.drawcall_limit_fix.cpu_recording", "CPU recording"), &record, "serial\0parallel\0indirect\0"))
 				toggles.cpuRecord = static_cast<std::uint8_t>(record);
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted(
+				ImGui::TextUnformatted(T("feature.drawcall_limit_fix.indirect_default_the_workers_cull_and_write_each_batch_s",
 					"Indirect (default): the workers cull and write each batch's draws into a buffer, and DXVK's CS thread records one indirect draw per pipeline run. "
 					"Serial: the workers cull, and DXVK's CS thread records every batch's draws. Parallel: the workers also record each batch into "
 					"a secondary command list, which the CS thread only executes (decals, forward and refraction stay direct on the CS thread: one ordered stream). "
-					"CS_DCLF_CPU_RECORD seeds it.");
+					"CS_DCLF_CPU_RECORD seeds it."));
 			// Applied when entered (or stepped), from the next snapshot: each change makes the view batches again.
 			int lanes = static_cast<int>(DCLF::Draws::BatchLanes());
-			if (ImGui::InputInt("Batch lanes", &lanes, 256, 1024, ImGuiInputTextFlags_EnterReturnsTrue))
+			if (ImGui::InputInt(T("feature.drawcall_limit_fix.batch_lanes", "Batch lanes"), &lanes, 256, 1024, ImGuiInputTextFlags_EnterReturnsTrue))
 				DCLF::Draws::SetBatchLanes(static_cast<std::uint32_t>(std::max(lanes, 8)));
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted(
+				ImGui::TextUnformatted(T("feature.drawcall_limit_fix.the_draws_a_culled_batch_holds_a_multiple_of_8",
 					"The draws a culled batch holds (a multiple of 8, 8 to 65528; default 4096). More coalesce more draws into each batch and, in "
 					"parallel recording, into each secondary command list; fewer spread a view's culls over more jobs. Takes effect from the next "
-					"scene snapshot; CS_DCLF_CPU_BATCH seeds it.");
-			if (ImGui::TreeNodeEx("Views culled once per snapshot")) {
-				ImGui::TextWrapped(
+					"scene snapshot; CS_DCLF_CPU_BATCH seeds it."));
+			if (ImGui::TreeNodeEx(T("feature.drawcall_limit_fix.views_culled_once_per_snapshot", "Views culled once per snapshot"))) {
+				ImGui::TextWrapped(T("feature.drawcall_limit_fix.a_view_checked_here_is_culled_and_recorded_once_per",
 					"A view checked here is culled and recorded once per scene snapshot and replayed until the next; unchecked, every frame. "
-					"The main view is always culled every frame. CS_DCLF_CPU_CADENCE seeds them.");
+					"The main view is always culled every frame. CS_DCLF_CPU_CADENCE seeds them."));
 				for (std::size_t v = 1; !DCLF::CpuViewName(v).empty(); ++v) {
 					const auto bit = static_cast<std::uint16_t>(1u << v);
 					bool snapshot = (toggles.cpuCadence & bit) != 0;
@@ -853,10 +853,10 @@ void DrawcallLimitFix::DrawSettings()
 		}
 		ImGui::TreePop();
 	}
-	if (!ImGui::TreeNodeEx("Advanced"))
+	if (!ImGui::TreeNodeEx(T("feature.drawcall_limit_fix.advanced", "Advanced")))
 		return;
 	drawTools();
-	if (ImGui::TreeNodeEx("This frame", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx(T("feature.drawcall_limit_fix.this_frame", "This frame"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		// The first line (the active toggles) is long, so it wraps; the rest are short.
 		const auto lines = DCLF::Reports::FrameSummary();
 		for (std::size_t i = 0; i < lines.size(); ++i) {
@@ -1048,7 +1048,7 @@ void DrawcallLimitFix::Prepass() {}
 void DrawcallLimitFix::EarlyPrepass() {}
 void DrawcallLimitFix::DrawSettings()
 {
-	ImGui::TextWrapped("Unavailable: %s", unavailableReason.c_str());
+	ImGui::TextWrapped(T("feature.drawcall_limit_fix.unavailable_s", "Unavailable: %s"), unavailableReason.c_str());
 }
 void DrawcallLimitFix::SaveSettings(json& o_json) { o_json = savedSettings; }
 void DrawcallLimitFix::LoadSettings(json& o_json) { savedSettings = o_json; }

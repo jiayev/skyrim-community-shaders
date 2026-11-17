@@ -23,7 +23,7 @@ namespace RenderGraphSchedule
 	{
 		std::atomic<bool> g_windowWants{ false };
 		std::atomic<bool> g_devBenchWants{ false };
-		bool g_windowOpen = false;  // UI thread
+		bool g_windowOpen = false;                         // UI thread
 		org::debugui::ScheduleInspectorState g_inspector;  // UI thread
 
 		// A resource as a pass left it (the inspector's capture). The readback completes on the render thread.
@@ -106,19 +106,19 @@ namespace RenderGraphSchedule
 		void DrawCaptureContents(Capture& capture)
 		{
 			std::scoped_lock lock(g_captureMutex);
-			ImGui::Text("%s after %s", capture.resource.c_str(), capture.pass.c_str());
+			ImGui::Text(T("render_graph.schedule.s_after_s", "%s after %s"), capture.resource.c_str(), capture.pass.c_str());
 			if (!capture.result) {
-				ImGui::TextDisabled("Waiting for the readback (the pass's next frame).");
+				ImGui::TextDisabled(T("render_graph.schedule.waiting_for_the_readback_the_pass_s_next_frame", "Waiting for the readback (the pass's next frame)."));
 				return;
 			}
 			const auto& result = *capture.result;
-			ImGui::Text("%zu bytes", result.data.size());
+			ImGui::Text(T("render_graph.schedule.zu_bytes", "%zu bytes"), result.data.size());
 			if (result.desc.kind == org::ReadbackResourceKind::Texture) {
 				ImGui::SameLine();
-				ImGui::Text("texture %ux%u, format %u, %zu subresources (row pitch %u)", result.width, result.height,
+				ImGui::Text(T("render_graph.schedule.texture_ux_u_format_u_zu_subresources_row_pitch_u", "texture %ux%u, format %u, %zu subresources (row pitch %u)"), result.width, result.height,
 					static_cast<uint32_t>(result.format), result.layouts.size(), result.layouts.empty() ? 0u : result.layouts.front().rowPitch);
 			}
-			ImGui::RadioButton("bytes", &g_captureView, 0);
+			ImGui::RadioButton(T("render_graph.schedule.bytes", "bytes"), &g_captureView, 0);
 			ImGui::SameLine();
 			ImGui::RadioButton("u32", &g_captureView, 1);
 			ImGui::SameLine();
@@ -190,9 +190,9 @@ namespace RenderGraphSchedule
 			if (const auto snapshot = Snapshot())
 				org::debugui::ShowScheduleInspector(*snapshot, g_inspector, &RequestCapture);
 			else if (!Graph())
-				ImGui::TextWrapped("The render graph is not running: %s", RenderGraphRuntime::Get().GetDisabledReason().c_str());
+				ImGui::TextWrapped(T("render_graph.schedule.the_render_graph_is_not_running_s", "The render graph is not running: %s"), RenderGraphRuntime::Get().GetDisabledReason().c_str());
 			else
-				ImGui::TextWrapped("No schedule yet: the graph traces its executables from the next frame it compiles or runs.");
+				ImGui::TextWrapped(T("render_graph.schedule.no_schedule_yet_the_graph_traces_its_executables_from_the", "No schedule yet: the graph traces its executables from the next frame it compiles or runs."));
 		}
 		ImGui::End();
 		DrawCapture();

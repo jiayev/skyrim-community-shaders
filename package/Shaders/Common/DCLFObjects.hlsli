@@ -57,6 +57,7 @@ struct DCLFShadingRow
 	float4 SkinMaterialFlags;
 	float4 SkinProfile[7];
 	uint4 SkinTextures;               // Controls, wetness, detail normal, detail sampler.
+	uint4 LodTreeWind;                // Bend-data descriptor index + 1, zero for other objects.
 	uint4 LandscapeSeamsTextures[2];  // Weight/data views and six borrowed layer views, each descriptor index + 1.
 };
 

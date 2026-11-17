@@ -53,7 +53,6 @@ namespace GrassShared
 		float EdgeFadeStart = 1.0f;
 		bool EnableOcclusionCulling = true;
 		float SimpleShadingPixelSize = 0.0f;
-		float OcclusionBias = 0.001f;
 		float CollisionDistance = 2048.0f;
 		bool EnableMeshLOD = false;
 		bool EnableMidLOD = true;

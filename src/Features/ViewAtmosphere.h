@@ -17,6 +17,8 @@ public:
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 	/** @brief Draws shared quality controls and volume previews. */
 	void DrawSettings() override;
+	bool HasDebugSection() const override { return true; }
+	void DrawDebugSection() override;
 	/** @brief Loads global volume quality settings. */
 	void LoadSettings(json& value) override;
 	/** @brief Saves global volume quality settings. */

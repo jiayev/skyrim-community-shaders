@@ -14,9 +14,9 @@ namespace GrassShared
 	::GrassMeshLibrary& MeshLibrary();
 
 	/** @brief A grass shape's mesh record, from LoadGrassType; null before it, for a shape it never named, or once the shape is destroyed. Any thread. */
-	::GrassMeshLibrary::MeshRecord* MeshOf(const RE::BSMultiStreamInstanceTriShape* shape);
+	::GrassMeshLibrary::RegisteredMesh* MeshOf(const RE::BSMultiStreamInstanceTriShape* shape);
 
 	/** @brief The capture's: a shape's mesh record (LoadGrassType; true when it is new for the shape), and its end (the shape's destructor, before the address can be reused). */
-	bool RecordMesh(const RE::BSMultiStreamInstanceTriShape* shape, ::GrassMeshLibrary::MeshRecord* mesh);
+	bool RecordMesh(const RE::BSMultiStreamInstanceTriShape* shape, ::GrassMeshLibrary::RegisteredMesh* mesh);
 	void ForgetMesh(const RE::BSMultiStreamInstanceTriShape* shape);
 }

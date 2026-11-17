@@ -1,9 +1,9 @@
 #include "Common/Color.hlsli"
+#include "Common/DCLFObjects.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/LodLandscape.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
-#include "Common/DCLFObjects.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 #if defined(RENDER_SHADOWMASK) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB) || defined(RENDER_SHADOWMASKDPB)
@@ -16,7 +16,7 @@
 #endif
 // Drawcall Limit Fix's depth-only draws of a technique without an alpha test: the pixel stage is compiled empty (main, below), so
 // the vertex stage passes it nothing either. Both stages are built from one technique (ShaderPrograms::FindShadow), so both see this.
-#if defined(DCLF_BINDLESS) && (defined(RENDER_SHADOWMAP) || defined(RENDER_DEPTH)) && !defined(ALPHA_TEST) && !defined(ADDITIONAL_ALPHA_MASK) && \
+#if defined(DCLF_BINDLESS) && (defined(RENDER_SHADOWMAP) || defined(RENDER_DEPTH)) && !defined(ALPHA_TEST) && !defined(ADDITIONAL_ALPHA_MASK) &&                 \
 	(!defined(RENDER_SHADOWMAP_PB) || defined(DCLF_PARABOLA_CLIP)) && !defined(RENDER_SHADOWMASK_ANY) && !defined(DEBUG_SHADOWSPLIT) && !defined(DEBUG_COLOR) && \
 	!defined(DEPTH_WRITE_DECALS) && !defined(STENCIL_ABOVE_WATER) && !(defined(DCLF_PULLED) && defined(RENDER_NORMAL))
 #	define DCLF_EMPTY_PIXEL
@@ -162,14 +162,14 @@ cbuffer PerGeometry : register(b2)
 #	endif
 };
 
-#if defined(DCLF_PULLED)
+#	if defined(DCLF_PULLED)
 // Set by main from the draw's object (DCLF_PULLED, below), as the DCLF_BINDLESS build's statics.
 static precise row_major float4x4 World;
 static float4 TreeParams;
 // A shadow view's draw: whether it is skinned, which a SKINNED build decides per draw (CanonicalShadowTechnique compiles every
 // shadow caster's with SKINNED, the draw's technique in its sequence: DCLFShadowVertex). True elsewhere: the build's define decides.
 static bool DCLFDrawSkinned = true;
-#elif defined(DCLF_BINDLESS)
+#	elif defined(DCLF_BINDLESS)
 // Drawcall Limit Fix draws the shadow views indirectly: every object of a view shares one pipeline and
 // one PerGeometry block, so the values that differ between them come from the per-object record instead
 // (Common/DCLFObjects.hlsli). World is absolute in the record and made relative here to the drawing
@@ -181,15 +181,22 @@ static precise row_major float4x4 World = float4x4(
 	DCLFPlacements[DCLFObjectIndex].World[2] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.z),
 	float4(0, 0, 0, 1));
 static float4 TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
-#endif
+#	endif
 
 float2 SmoothSaturate(float2 value)
 {
 	return value * value * (3 - 2 * value);
 }
 
+#	if defined(TREE_WIND) && (defined(DCLF_PULLED) || (defined(VC) && !defined(TREE_ANIM) && !defined(LOD_LANDSCAPE) && !defined(SKINNED)))
+#		define TREE_WIND_VS
+#		include "TreeWind/TreeWind.hlsli"
+#	endif
+
 #	if defined(DCLF_PULLED)
-VS_OUTPUT DCLFShade(VS_INPUT input)
+VS_OUTPUT DCLFShade(VS_INPUT input, uint vertexID)
+#	elif defined(TREE_WIND_VS)
+VS_OUTPUT main(VS_INPUT input, uint vertexID : SV_VertexID)
 #	else
 VS_OUTPUT main(VS_INPUT input)
 #	endif
@@ -223,6 +230,14 @@ VS_OUTPUT main(VS_INPUT input)
 	positionMS.xyz += normalMS.xyz * normalMult;
 #		endif
 
+#		if defined(TREE_WIND_VS)
+	// Same offset as Lighting.hlsl, so depth and shadow passes match the swaying trees
+	if (TreeWind::IsEnabled()) {
+		float nearScale = TreeWind::GetNearScale(float3x4(World[0], World[1], World[2]), input.PositionMS.xyz);
+		positionMS.xy += TreeWind::GetOffset(input.PositionMS.xyz, TreeWind::Wind.x, vertexID, nearScale);
+	}
+#		endif
+
 #		if defined(LOD_LANDSCAPE)
 	positionMS = LodLandscape::AdjustLodLandscapeVertexPositionMS(positionMS, World, HighDetailRange);
 #		endif
@@ -231,22 +246,25 @@ VS_OUTPUT main(VS_INPUT input)
 	precise float4 positionWS = 0;
 	precise int4 boneIndices = 765.01.xxxx * input.BoneIndices.xyzw;
 #			if defined(DCLF_PULLED)
-	[branch] if (!DCLFDrawSkinned) {
+	[branch] if (!DCLFDrawSkinned)
+	{
 		precise float4x4 modelViewProj = mul(FrameBuffer::CameraViewProj, World);
 		positionCS = mul(modelViewProj, positionMS);
 		positionWS = mul(World, positionMS);
-	} else {
+	}
+	else
+	{
 #			endif
 
 #			if defined(DCLF_BINDLESS)
-	// The rows are absolute: the pivot is this view's eye.
-	float3x4 worldMatrix = Skinned::GetBoneTransformMatrixBindless(DCLFObjects[DCLFObjectIndex].DCLFBoneOffset, boneIndices, FrameBuffer::CameraPosAdjust.xyz, input.BoneWeights);
+		// The rows are absolute: the pivot is this view's eye.
+		float3x4 worldMatrix = Skinned::GetBoneTransformMatrixBindless(DCLFObjects[DCLFObjectIndex].DCLFBoneOffset, boneIndices, FrameBuffer::CameraPosAdjust.xyz, input.BoneWeights);
 #			else
 	float3x4 worldMatrix = Skinned::GetBoneTransformMatrix(Bones, boneIndices, FrameBuffer::CameraPosAdjust.xyz, input.BoneWeights);
 #			endif
-	positionWS = float4(mul(positionMS, transpose(worldMatrix)), 1);
+		positionWS = float4(mul(positionMS, transpose(worldMatrix)), 1);
 
-	positionCS = mul(FrameBuffer::CameraViewProj, positionWS);
+		positionCS = mul(FrameBuffer::CameraViewProj, positionWS);
 #			if defined(DCLF_PULLED)
 	}
 #			endif
@@ -418,7 +436,8 @@ VS_OUTPUT DCLFShadowVertex(uint index, uint a_instance)
 #		if defined(SKINNED)
 	input.BoneWeights = 0;
 	input.BoneIndices = 0;
-	[branch] if (DCLFDrawSkinned) {
+	[branch] if (DCLFDrawSkinned)
+	{
 		const uint64_t skinning = DCLFAttribute(6, first, second);
 		const uint2 weights = vk::RawBufferLoad<uint2>(skinning);
 		input.BoneWeights = float4(DCLFHalf2(weights.x), DCLFHalf2(weights.y));
@@ -435,7 +454,7 @@ VS_OUTPUT DCLFShadowVertex(uint index, uint a_instance)
 	TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
 	TexcoordOffset = asfloat(vk::RawBufferLoad<uint4>(materialRow));
 
-	VS_OUTPUT vsout = DCLFShade(input);
+	VS_OUTPUT vsout = DCLFShade(input, index);
 	// The viewport's depth transform, here: z' = min * w + z * (max - min) under a [0, 1] viewport is the window depth the view's
 	// own viewport gives (depth bias applies after it either way), and the clip distances keep its clipping, z in [0, w]
 	// before the transform (the views' rasterizer states clip depth, never clamp it: DrawPipelines::ShadowRasterStateId).
@@ -464,9 +483,11 @@ VS_OUTPUT DCLFShadowVertex(uint index, uint a_instance)
 VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 {
 	VS_OUTPUT vsout;
-	[loop] for (;;) {
+	[loop] for (;;)
+	{
 		const uint drawInstance = WaveReadLaneFirst(a_instance);
-		[branch] if (drawInstance == a_instance) {
+		[branch] if (drawInstance == a_instance)
+		{
 			vsout = DCLFShadowVertex(index, drawInstance);
 			break;
 		}
@@ -494,7 +515,7 @@ VS_OUTPUT DCLFRefractionVertex(uint index, uint a_instance)
 	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
 	DCLFPipelineRowAddress = DCLFAddress(rows.xy);
 	DCLFMaterialRowAddress = DCLFAddress(rows.zw);
-	DCLFDrawVertexLayout = DCLFPipelineVertexLayout();  // the draw's slot's (one pipeline draws every layout)
+	DCLFDrawVertexLayout = DCLFPipelineVertexLayout();                   // the draw's slot's (one pipeline draws every layout)
 	const uint4 vertexBuffer = vk::RawBufferLoad<uint4>(sequence + 24);  // address, size, stride
 	const uint4 streamBuffer = vk::RawBufferLoad<uint4>(sequence + 40);
 	DCLFStream first, second;
@@ -591,9 +612,11 @@ VS_OUTPUT DCLFRefractionVertex(uint index, uint a_instance)
 VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 {
 	VS_OUTPUT vsout;
-	[loop] for (;;) {
+	[loop] for (;;)
+	{
 		const uint drawInstance = WaveReadLaneFirst(a_instance);
-		[branch] if (drawInstance == a_instance) {
+		[branch] if (drawInstance == a_instance)
+		{
 			vsout = DCLFRefractionVertex(index, drawInstance);
 			break;
 		}
@@ -796,14 +819,14 @@ void main(PS_INPUT input)
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
-#	if defined(DCLF_PULLED)
+#		if defined(DCLF_PULLED)
 	DCLFObjectWord = input.DCLFDraw.y;  // what AlphaTestRefRS reads
-#	endif
-#	if defined(DCLF_SHADOW_ALPHA)
+#		endif
+#		if defined(DCLF_SHADOW_ALPHA)
 	DCLFShadowAlphaRef = input.DCLFAlphaRef;
-#	endif
+#		endif
 
-#	if defined(ADDITIONAL_ALPHA_MASK)
+#		if defined(ADDITIONAL_ALPHA_MASK)
 	uint2 alphaMask = input.PositionCS.xy;
 	alphaMask.x = ((alphaMask.x << 2) & 12);
 	alphaMask.x = (alphaMask.y & 3) | (alphaMask.x & ~3);
@@ -829,88 +852,88 @@ PS_OUTPUT main(PS_INPUT input)
 	if (AlphaTestRef.w - maskValues[alphaMask.x] < 0) {
 		discard;
 	}
-#	endif
+#		endif
 
 	float2 baseTexCoord = 0;
-#	if !(defined(RENDER_DEPTH) && defined(RENDER_SHADOWMASK_ANY)) && SHADOWFILTER != 2
-#		if (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP)) && defined(ALPHA_TEST) && !defined(RENDER_SHADOWMAP_PB)
+#		if !(defined(RENDER_DEPTH) && defined(RENDER_SHADOWMASK_ANY)) && SHADOWFILTER != 2
+#			if (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP)) && defined(ALPHA_TEST) && !defined(RENDER_SHADOWMAP_PB)
 	baseTexCoord = input.TexCoord1.zw;
-#		elif (defined(ALPHA_TEST) && ((!defined(RENDER_DEPTH) && !defined(RENDER_SHADOWMAP)) || defined(RENDER_SHADOWMAP_PB))) || defined(RENDER_NORMAL) || defined(DEBUG_SHADOWSPLIT) || defined(RENDER_BASE_TEXTURE)
+#			elif (defined(ALPHA_TEST) && ((!defined(RENDER_DEPTH) && !defined(RENDER_SHADOWMAP)) || defined(RENDER_SHADOWMAP_PB))) || defined(RENDER_NORMAL) || defined(DEBUG_SHADOWSPLIT) || defined(RENDER_BASE_TEXTURE)
 	baseTexCoord = input.TexCoord0.xy;
+#			endif
 #		endif
-#	endif
-#	if defined(DCLF_SHADOW_ALPHA)
+#		if defined(DCLF_SHADOW_ALPHA)
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, baseTexCoord);
-#	else
+#		else
 	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, baseTexCoord, SharedData::MipBias);
-#	endif
+#		endif
 
-#	if defined(RENDER_SHADOWMAP_PB) && !defined(DCLF_PARABOLA_CLIP)
+#		if defined(RENDER_SHADOWMAP_PB) && !defined(DCLF_PARABOLA_CLIP)
 	if (input.TexCoord1.z < 0) {
 		discard;
 	}
-#	endif
+#		endif
 
 	float alpha = 1;
-#	if defined(ALPHA_TEST) && !(defined(RENDER_SHADOWMASK_ANY) && defined(RENDER_DEPTH))
+#		if defined(ALPHA_TEST) && !(defined(RENDER_SHADOWMASK_ANY) && defined(RENDER_DEPTH))
 	alpha = baseColor.w;
-#		if defined(DEPTH_WRITE_DECALS) && !defined(GRAYSCALE_MASK)
+#			if defined(DEPTH_WRITE_DECALS) && !defined(GRAYSCALE_MASK)
 	alpha = saturate(1.05 * alpha);
-#		endif
-#		if defined(OPAQUE_EFFECT)
+#			endif
+#			if defined(OPAQUE_EFFECT)
 	alpha *= BaseColor.w * PropertyColor.w;
-#		endif
-#		if (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP) || ((defined(RENDER_NORMAL) || defined(RENDER_NORMAL_CLEAR)) && defined(DEBUG_COLOR))) && defined(VC) && !defined(TREE_ANIM) && !defined(LOD_OBJECT)
+#			endif
+#			if (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP) || ((defined(RENDER_NORMAL) || defined(RENDER_NORMAL_CLEAR)) && defined(DEBUG_COLOR))) && defined(VC) && !defined(TREE_ANIM) && !defined(LOD_OBJECT)
 	alpha *= input.Alpha;
-#		elif defined(RENDER_SHADOWMASK_ANY) && defined(VC)
+#			elif defined(RENDER_SHADOWMASK_ANY) && defined(VC)
 	alpha *= input.Alpha.y;
-#		endif
-#		if defined(GRAYSCALE_TO_ALPHA)
+#			endif
+#			if defined(GRAYSCALE_TO_ALPHA)
 	float grayScaleColor = TexGrayscaleSampler.SampleBias(SampGrayscaleSampler, float2(baseColor.w, alpha), SharedData::MipBias).w;
 	if (grayScaleColor - AlphaTestRef.x < 0) {
 		discard;
 	}
-#		endif
-#		if defined(GRAYSCALE_MASK)
+#			endif
+#			if defined(GRAYSCALE_MASK)
 	if (baseColor.y - AlphaTestRef.x < 0) {
 		discard;
 	}
-#		elif !defined(RENDER_SHADOWMAP)
+#			elif !defined(RENDER_SHADOWMAP)
 	if (alpha - DepthAlphaTestRef < 0) {
 		discard;
 	}
+#			endif
 #		endif
-#	endif
 
-#	if defined(RENDER_SHADOWMASK_ANY)
+#		if defined(RENDER_SHADOWMASK_ANY)
 	float4 shadowColor = 1;
 
 	uint stencilValue = 0;
 	float shadowMapDepth = 0;
-#		if defined(RENDER_DEPTH)
+#			if defined(RENDER_DEPTH)
 	float2 depthUv = input.PositionCS.xy * VPOSOffset.xy + VPOSOffset.zw;
 	float depth = TexDepthUtilitySampler.Sample(SampDepthSampler, depthUv).x;
 
 	shadowMapDepth = depth;
 
-#			if defined(FOCUS_SHADOW)
+#				if defined(FOCUS_SHADOW)
 	uint3 stencilDimensions;
 	TexStencilSampler.GetDimensions(0, stencilDimensions.x, stencilDimensions.y, stencilDimensions.z);
 	stencilValue = TexStencilSampler.Load(float3(stencilDimensions.xy * depthUv, 0)).x;
-#			endif
+#				endif
 	depthUv = depthUv * FrameBuffer::DynamicResolutionParams2.xy;
 	float4 positionCS = float4(2 * float2(depthUv.x, -depthUv.y + 1) - 1, depth, 1);
 	float4 positionMS = mul(FrameBuffer::CameraViewProjInverse, positionCS);
 	positionMS.xyz = positionMS.xyz / positionMS.w;
 
 	float fadeFactor = 1 - pow(saturate(dot(positionMS.xyz, positionMS.xyz) / ShadowLightParam.z), 8);
-#		else
+#			else
 	float4 positionMS = input.PositionMS.xyzw;
 
 	shadowMapDepth = positionMS.w;
 
 	float fadeFactor = input.Alpha.x;
-#		endif
+#			endif
 
 	float noise = Random::InterleavedGradientNoise(input.PositionCS.xy, SharedData::FrameCount);
 
@@ -918,7 +941,7 @@ PS_OUTPUT main(PS_INPUT input)
 	sincos(Math::TAU * noise, rotation.y, rotation.x);
 	float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 
-#		if defined(RENDER_SHADOWMASK)
+#			if defined(RENDER_SHADOWMASK)
 	if (SharedData::InInterior)
 		shadowColor = float4(0, 0, 0, 0);
 
@@ -941,18 +964,18 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 positionLS = mul(transpose(lightProjectionMatrix), float4(positionMS.xyz, 1)).xyz;
 		float shadowMapCompareValue = positionLS.z - shadowMapThreshold;
 
-#			if SHADOWFILTER == 0
+#				if SHADOWFILTER == 0
 		float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(positionLS.xy, cascadeIndex)).x;
 		if (shadowMapValue >= shadowMapCompareValue) {
 			shadowVisibility = 1;
 		}
-#			elif SHADOWFILTER == 1
+#				elif SHADOWFILTER == 1
 		shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(positionLS.xy, cascadeIndex), shadowMapCompareValue).x;
-#			elif SHADOWFILTER == 2
+#				elif SHADOWFILTER == 2
 		shadowVisibility = SampleShadow3x3(TexShadowMapSamplerComp, SampShadowMapSamplerComp, positionLS.xy, cascadeIndex, shadowMapCompareValue, ShadowSampleParam.zw);
-#			elif SHADOWFILTER == 4 || SHADOWFILTER == 8
+#				elif SHADOWFILTER == 4 || SHADOWFILTER == 8
 		shadowVisibility = SampleShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, positionLS.xy, cascadeIndex, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z);
-#			endif
+#				endif
 
 		if (cascadeIndex < 1 && StartSplitDistances.y < shadowMapDepth) {
 			float cascade1ShadowVisibility = 0;
@@ -960,18 +983,18 @@ PS_OUTPUT main(PS_INPUT input)
 			float3 cascade1PositionLS = mul(transpose(ShadowMapProj[1]), float4(positionMS.xyz, 1)).xyz;
 			float cascade1ShadowMapCompareValue = cascade1PositionLS.z - AlphaTestRef.z;
 
-#			if SHADOWFILTER == 0
+#				if SHADOWFILTER == 0
 			float cascade1ShadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(cascade1PositionLS.xy, 1)).x;
 			if (cascade1ShadowMapValue >= cascade1ShadowMapCompareValue) {
 				cascade1ShadowVisibility = 1;
 			}
-#			elif SHADOWFILTER == 1
+#				elif SHADOWFILTER == 1
 			cascade1ShadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(cascade1PositionLS.xy, 1), cascade1ShadowMapCompareValue).x;
-#			elif SHADOWFILTER == 2
+#				elif SHADOWFILTER == 2
 			cascade1ShadowVisibility = SampleShadow3x3(TexShadowMapSamplerComp, SampShadowMapSamplerComp, cascade1PositionLS.xy, 1, cascade1ShadowMapCompareValue, ShadowSampleParam.zw);
-#			elif SHADOWFILTER == 4 || SHADOWFILTER == 8
+#				elif SHADOWFILTER == 4 || SHADOWFILTER == 8
 			cascade1ShadowVisibility = SampleShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, cascade1PositionLS.xy, 1, cascade1ShadowMapCompareValue, rotationMatrix, ShadowSampleParam.z);
-#			endif
+#				endif
 
 			float cascade1BlendFactor = smoothstep(0, 1, (shadowMapDepth - StartSplitDistances.y) / (EndSplitDistances.x - StartSplitDistances.y));
 			shadowVisibility = lerp(shadowVisibility, cascade1ShadowVisibility, cascade1BlendFactor);
@@ -984,36 +1007,36 @@ PS_OUTPUT main(PS_INPUT input)
 			float3 focusShadowMapPosition = mul(transpose(FocusShadowMapProj[focusShadowIndex]), float4(positionMS.xyz, 1));
 			float3 focusShadowMapUv = float3(focusShadowMapPosition.xy, StartSplitDistances.w + focusShadowIndex);
 			float focusShadowMapCompareValue = focusShadowMapPosition.z - 3 * shadowMapThreshold;
-#			if SHADOWFILTER == 4 || SHADOWFILTER == 8
+#				if SHADOWFILTER == 4 || SHADOWFILTER == 8
 			float focusShadowVisibility = SampleShadowPCF(TexFocusShadowMapSamplerComp, SampFocusShadowMapSamplerComp, focusShadowMapUv.xy, focusShadowMapUv.z, focusShadowMapCompareValue, rotationMatrix, ShadowSampleParam.z);
-#			elif SHADOWFILTER == 2
+#				elif SHADOWFILTER == 2
 			float focusShadowVisibility = SampleShadow3x3(TexFocusShadowMapSamplerComp, SampFocusShadowMapSamplerComp, focusShadowMapUv.xy, focusShadowMapUv.z, focusShadowMapCompareValue, ShadowSampleParam.zw);
-#			else
+#				else
 			float focusShadowVisibility = TexFocusShadowMapSamplerComp.SampleCmpLevelZero(SampFocusShadowMapSamplerComp, focusShadowMapUv, focusShadowMapCompareValue).x;
-#			endif
+#				endif
 			float focusShadowFade = FocusShadowFadeParam[focusShadowIndex];
 			shadowVisibility = min(shadowVisibility, lerp(1, focusShadowVisibility, focusShadowFade));
 		}
 
 		shadowColor.xyzw = lerp(1.0 * !SharedData::InInterior, shadowVisibility, fadeFactor);
 	}
-#		elif defined(RENDER_SHADOWMASKSPOT)
+#			elif defined(RENDER_SHADOWMASKSPOT)
 	float4 positionLS = mul(transpose(ShadowMapProj[0]), float4(positionMS.xyz, 1));
 	positionLS.xyz /= positionLS.w;
 	float2 shadowMapUv = positionLS.xy * 0.5 + 0.5;
 	float shadowBaseVisibility = 0;
-#			if SHADOWFILTER == 0
+#				if SHADOWFILTER == 0
 	float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(shadowMapUv, EndSplitDistances.x)).x;
 	if (shadowMapValue >= positionLS.z - AlphaTestRef.y) {
 		shadowBaseVisibility = 1;
 	}
-#			elif SHADOWFILTER == 1
+#				elif SHADOWFILTER == 1
 	shadowBaseVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), positionLS.z - AlphaTestRef.y).x;
-#			elif SHADOWFILTER == 2
+#				elif SHADOWFILTER == 2
 	shadowBaseVisibility = SampleShadow3x3(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, positionLS.z - AlphaTestRef.y, ShadowSampleParam.zw);
-#			elif SHADOWFILTER == 4 || SHADOWFILTER == 8
+#				elif SHADOWFILTER == 4 || SHADOWFILTER == 8
 	shadowBaseVisibility = SampleShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, positionLS.z - AlphaTestRef.y, rotationMatrix, ShadowSampleParam.z);
-#			endif
+#				endif
 	float shadowVisibilityFactor = pow(2 * length(0.5 * positionLS.xy), ShadowLightParam.x);
 	float shadowVisibility = shadowBaseVisibility - shadowVisibilityFactor * shadowBaseVisibility;
 
@@ -1023,23 +1046,23 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 focusShadowMapUv = float3(focusShadowMapPosition.xy, StartSplitDistances.w + focusShadowIndex);
 		float focusShadowMapCompareValue = focusShadowMapPosition.z - 3 * AlphaTestRef.y;
 		float focusShadowVisibility = 0;
-#			if SHADOWFILTER == 0
+#				if SHADOWFILTER == 0
 		float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, focusShadowMapUv).x;
 		if (shadowMapValue >= focusShadowMapCompareValue) {
 			focusShadowVisibility = 1;
 		}
-#			elif SHADOWFILTER == 1
+#				elif SHADOWFILTER == 1
 		focusShadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, focusShadowMapUv, focusShadowMapCompareValue).x;
-#			elif SHADOWFILTER == 2
+#				elif SHADOWFILTER == 2
 		focusShadowVisibility = SampleShadow3x3(TexShadowMapSamplerComp, SampShadowMapSamplerComp, focusShadowMapUv.xy, focusShadowMapUv.z, focusShadowMapCompareValue, ShadowSampleParam.zw);
-#			elif SHADOWFILTER == 4 || SHADOWFILTER == 8
+#				elif SHADOWFILTER == 4 || SHADOWFILTER == 8
 		focusShadowVisibility = SampleShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, focusShadowMapUv.xy, focusShadowMapUv.z, focusShadowMapCompareValue, rotationMatrix, ShadowSampleParam.z);
-#			endif
+#				endif
 		shadowVisibility = min(shadowVisibility, lerp(1, focusShadowVisibility, FocusShadowFadeParam[focusShadowIndex]));
 	}
 
 	shadowColor.xyzw = fadeFactor * shadowVisibility;
-#		elif defined(RENDER_SHADOWMASKPB)
+#			elif defined(RENDER_SHADOWMASKPB)
 	float4 unadjustedPositionLS = mul(transpose(ShadowMapProj[0]), float4(positionMS.xyz, 1));
 
 	float shadowVisibility = 0;
@@ -1049,24 +1072,24 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 lightDirection = normalize(normalize(positionLS) + float3(0, 0, 1));
 		float2 shadowMapUv = lightDirection.xy / lightDirection.z * 0.5 + 0.5;
 		float shadowMapCompareValue = saturate(length(positionLS) / ShadowLightParam.x) - AlphaTestRef.y;
-#			if SHADOWFILTER == 0
+#				if SHADOWFILTER == 0
 		float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(shadowMapUv, EndSplitDistances.x)).x;
 		if (shadowMapValue >= shadowMapCompareValue) {
 			shadowVisibility = 1;
 		}
-#			elif SHADOWFILTER == 1
+#				elif SHADOWFILTER == 1
 		shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), shadowMapCompareValue).x;
-#			elif SHADOWFILTER == 2
+#				elif SHADOWFILTER == 2
 		shadowVisibility = SampleShadow3x3(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, ShadowSampleParam.zw);
-#			elif SHADOWFILTER == 4 || SHADOWFILTER == 8
+#				elif SHADOWFILTER == 4 || SHADOWFILTER == 8
 		shadowVisibility = SampleDualParaboloidShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z, false);
-#			endif
+#				endif
 	} else {
 		shadowVisibility = 1;
 	}
 
 	shadowColor.xyzw = fadeFactor * shadowVisibility;
-#		elif defined(RENDER_SHADOWMASKDPB)
+#			elif defined(RENDER_SHADOWMASKDPB)
 	float3 positionLS = mul(transpose(ShadowMapProj[0]), float4(positionMS.xyz, 1)).xyz;
 
 	bool lowerHalf = positionLS.z * 0.5 + 0.5 < 0;
@@ -1080,51 +1103,51 @@ PS_OUTPUT main(PS_INPUT input)
 	shadowMapUv.y = lowerHalf ? 1.0 - 0.5 * shadowMapUv.y : 0.5 * shadowMapUv.y;
 
 	float shadowVisibility = 0;
-#			if SHADOWFILTER == 0
+#				if SHADOWFILTER == 0
 	float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(shadowMapUv, EndSplitDistances.x)).x;
 	if (shadowMapValue >= shadowMapCompareValue) {
 		shadowVisibility = 1;
 	}
-#			elif SHADOWFILTER == 1
+#				elif SHADOWFILTER == 1
 	shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), shadowMapCompareValue).x;
-#			elif SHADOWFILTER == 2
+#				elif SHADOWFILTER == 2
 	shadowVisibility = SampleShadow3x3(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, ShadowSampleParam.zw);
-#			elif SHADOWFILTER == 4 || SHADOWFILTER == 8
+#				elif SHADOWFILTER == 4 || SHADOWFILTER == 8
 	shadowVisibility = SampleDualParaboloidShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z, lowerHalf);
-#			endif
+#				endif
 
 	shadowColor.xyzw = fadeFactor * shadowVisibility;
+#			endif
 #		endif
-#	endif
 
-#	if defined(TEXTURE)
+#		if defined(TEXTURE)
 	float testAlpha = 1;
-#		if defined(RENDER_SHADOWMASK_ANY)
+#			if defined(RENDER_SHADOWMASK_ANY)
 	testAlpha = shadowColor.w;
-#		elif defined(DEBUG_SHADOWSPLIT) || defined(RENDER_BASE_TEXTURE)
+#			elif defined(DEBUG_SHADOWSPLIT) || defined(RENDER_BASE_TEXTURE)
 	testAlpha = baseColor.w;
-#		elif defined(LOCALMAP_FOGOFWAR)
+#			elif defined(LOCALMAP_FOGOFWAR)
 	testAlpha = input.Alpha;
-#		elif (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP)) && defined(ALPHA_TEST)
+#			elif (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP)) && defined(ALPHA_TEST)
 	testAlpha = alpha;
-#		elif defined(STENCIL_ABOVE_WATER)
+#			elif defined(STENCIL_ABOVE_WATER)
 	testAlpha = 0.5;
-#		elif defined(RENDER_NORMAL_CLEAR) && !defined(DEBUG_COLOR)
+#			elif defined(RENDER_NORMAL_CLEAR) && !defined(DEBUG_COLOR)
 	testAlpha = 0;
-#		endif
+#			endif
 	if (-AlphaTestRefRS + testAlpha < 0) {
 		discard;
 	}
-#	endif
+#		endif
 
-#	if defined(DCLF_SHADOW_ALPHA)
+#		if defined(DCLF_SHADOW_ALPHA)
 	psout.Color = 0;
 	return psout;
-#	endif
+#		endif
 
-#	if defined(RENDER_SHADOWMASK_ANY)
+#		if defined(RENDER_SHADOWMASK_ANY)
 	psout.Color.xyzw = shadowColor;
-#	elif defined(DEBUG_SHADOWSPLIT)
+#		elif defined(DEBUG_SHADOWSPLIT)
 
 	float3 splitFactor = 0;
 
@@ -1143,43 +1166,43 @@ PS_OUTPUT main(PS_INPUT input)
 		splitFactor.y += 1;
 	}
 
-#		if defined(DEBUG_COLOR)
+#			if defined(DEBUG_COLOR)
 	psout.Color.xyz = (-splitFactor.xyz + DebugColor.xyz) * 0.9 + splitFactor.xyz;
-#		else
+#			else
 	psout.Color.xyz = (-splitFactor.xyz + baseColor.xyz) * 0.9 + splitFactor.xyz;
-#		endif
+#			endif
 
 	psout.Color.w = baseColor.w;
-#	elif defined(DEBUG_COLOR)
+#		elif defined(DEBUG_COLOR)
 	psout.Color = float4(DebugColor.xyz, 1);
-#	elif defined(RENDER_BASE_TEXTURE)
+#		elif defined(RENDER_BASE_TEXTURE)
 	psout.Color.xyzw = baseColor;
-#		if defined(TRUE_PBR)
+#			if defined(TRUE_PBR)
 	psout.Color.xyz = TransferFunctions::LinearToGamma22(baseColor.xyz);
-#		endif
-#	elif defined(LOCALMAP_FOGOFWAR)
+#			endif
+#		elif defined(LOCALMAP_FOGOFWAR)
 	psout.Color = float4(0, 0, 0, input.Alpha);
-#	elif defined(GRAYSCALE_MASK)
+#		elif defined(GRAYSCALE_MASK)
 	psout.Color = float4(input.TexCoord1.x / input.TexCoord1.y, baseColor.yz, alpha);
-#	elif (defined(RENDER_SHADOWMAP) && defined(ALPHA_TEST)) || defined(RENDER_SHADOWMAP_PB)
+#		elif (defined(RENDER_SHADOWMAP) && defined(ALPHA_TEST)) || defined(RENDER_SHADOWMAP_PB)
 	psout.Color = float4(input.TexCoord1.xxx / input.TexCoord1.yyy, alpha);
-#	elif defined(RENDER_DEPTH) && (defined(ALPHA_TEST) || defined(ADDITIONAL_ALPHA_MASK))
+#		elif defined(RENDER_DEPTH) && (defined(ALPHA_TEST) || defined(ADDITIONAL_ALPHA_MASK))
 	psout.Color = float4(input.TexCoord1.x / input.TexCoord1.y, 1, 1, alpha);
-#	elif defined(STENCIL_ABOVE_WATER)
+#		elif defined(STENCIL_ABOVE_WATER)
 	psout.Color = float4(1, 0, 0, 0.5);
-#	elif defined(RENDER_NORMAL_CLEAR)
+#		elif defined(RENDER_NORMAL_CLEAR)
 	psout.Color = float4(0.5, 0.5, 0, 0);
-#	elif defined(RENDER_NORMAL)
+#		elif defined(RENDER_NORMAL)
 	float2 normal = 2 * (-0.5 + TexNormalSampler.Sample(SampNormalSampler, input.TexCoord0.xy).xy);
-#		if defined(RENDER_NORMAL_CLAMP)
+#			if defined(RENDER_NORMAL_CLAMP)
 	normal = clamp(normal, -0.1, 0.1);
-#		endif
+#			endif
 	psout.Color.xy = ((normal * 0.9 + input.Normal.xy) / input.TexCoord0.z) * 0.5 + 0.5;
 	psout.Color.z = input.Normal.w * (RefractionPower * input.TexCoord0.w);
 	psout.Color.w = 1;
-#	else
+#		else
 	psout.Color = float4(1, 1, 1, 1);
-#	endif
+#		endif
 
 	return psout;
 }

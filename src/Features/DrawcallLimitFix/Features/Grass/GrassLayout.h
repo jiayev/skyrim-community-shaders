@@ -89,15 +89,15 @@ namespace DCLF::GrassInstances
 		float scaleMask[3]{};
 		std::uint32_t pad = 0;
 		DescriptorIndex normalIndex, rmaosIndex, featuresIndex, pbrSampler;
-		float pbrParams1[4]{};  // roughness scale, specular level, emissive scale, 0
-		float pbrParams2[4]{};  // subsurface colour rgb, opacity
+		float pbrParams1[4]{};                 // roughness scale, specular level, emissive scale, 0
+		float pbrParams2[4]{};                 // subsurface colour rgb, opacity
 		float windDirection[2]{ 0.0f, 1.0f };  // the vertex stage's WindVector.xy: the shapes' model Y axis in world space
 		float lodMeshCost[2]{ 1.0f, 1.0f };    // tiers 1 and 2's sqrt(cost) (tier 0's minPixelScale where the tier has no mesh)
 		float pbrParams3[4]{};                 // fuzz colour rgb, weight
 		float pbrParams4[4]{};                 // subsurface balance, front and back specular weights, back roughness scale
 		DescriptorIndex fuzzIndex, emissiveIndex;
 		float canopyHeight[kTiers]{ 1.0f, 1.0f, 1.0f };  // the mesh's model-space height, by tier
-		float fuzzRoughness = -1.0f;  // negative uses base roughness
+		float fuzzRoughness = -1.0f;                     // negative uses base roughness
 		std::uint32_t pad2[2]{};
 	};
 	static_assert(sizeof(BucketRow) == 224);
@@ -141,11 +141,10 @@ namespace DCLF::GrassInstances
 		float simpleShadingPx = 0.0f, collisionDistSq = 0.0f, midLodPx = 0.0f, farLodPx = 0.0f;
 		float lodBandPx = 0.0f;
 		std::uint32_t flags = 0;
-		float densityDistanceRcp = 0.0f;  // 1 / the INI grass distance: the density thinning ramps in over it
-		std::uint32_t pad[13]{};
+		std::uint32_t pad[14]{};
 	};
 	static_assert(sizeof(CullRow) == 128 && offsetof(CullRow, alphaParam1) == 36 && offsetof(CullRow, alphaParam2) == 40 && offsetof(CullRow, flags) == 68 &&
-				  offsetof(CullRow, densityDistanceRcp) == 72);
+				  offsetof(CullRow, pad) == 72);
 
 	/**
 	 * @brief The draw row: one, written by every depth commit (and latched by it), read by the cull, the arguments' pass and the

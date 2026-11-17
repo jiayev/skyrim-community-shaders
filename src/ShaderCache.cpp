@@ -10,11 +10,12 @@
 #include <d3dcompiler.h>
 
 #include "Deferred.h"
+#include "HiZPyramid.h"
 #include "Rendering/EnvironmentProbe/Capture.h"
 #include "State.h"
 #include "Utils/D3D.h"
-#include "Utils/FileRename.h"
 #include "Utils/DxcShaderStore.h"
+#include "Utils/FileRename.h"
 #include "Utils/FxcShaderStore.h"
 #include "Utils/Logging.h"
 #include "Utils/SharedShaderStore.h"
@@ -24,6 +25,7 @@
 #include "Features/DrawcallLimitFix.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/RenderDoc.h"
+#include "Features/TreeWind.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 
 #include "Plugin.h"
@@ -722,6 +724,12 @@ namespace SIE
 				((descriptor & 0x20004000) == 0x4000 || (descriptor & 0x1E02000) == 0x2000) &&
 				!(descriptor & 0x80) && (descriptor & 0x14000) != 0x10000) {
 				defines[lastIndex++] = { "NO_PIXEL_SHADER", nullptr };
+			}
+
+			// Utility does not take the general feature defines (features that define for every shader type would
+			// change Utility permutations); Tree Wind needs its define here so depth and shadows sway with Lighting.
+			if (globals::features::treeWind.loaded && globals::features::treeWind.HasShaderDefine(RE::BSShader::Type::Utility)) {
+				defines[lastIndex++] = { globals::features::treeWind.GetShaderDefineName().data(), nullptr };
 			}
 
 			defines[lastIndex++] = { nullptr, nullptr };
@@ -1438,7 +1446,7 @@ namespace SIE
 
 			// Debug builds stay on FXC, whose debug flags the DXC path does not have.
 			const char* dxcTarget = shaderClass == ShaderClass::Vertex ? "vs_6_6" : shaderClass == ShaderClass::Pixel ? "ps_6_6" :
-			                                                                                                             "cs_6_6";
+			                                                                                                            "cs_6_6";
 			if (!debugCompile && Util::UseDxc(path, dxcTarget, descriptor)) {
 				auto dxc = Util::ResolveDxcShader({ path, defines.data(), dxcTarget });
 				if (dxc.blob) {
@@ -2068,6 +2076,7 @@ namespace SIE
 		compilationSet.Clear();
 		Util::ClearShaderCompileFailures();
 		globals::deferred->ClearShaderCache();
+		globals::hiZPyramid->ClearShaderCache();
 		for (auto* feature : Feature::GetFeatureList()) {
 			if (feature->loaded) {
 				feature->ClearShaderCache();

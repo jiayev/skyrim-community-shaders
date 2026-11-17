@@ -1,3 +1,4 @@
+#include "CrashDump.h"
 #include "D3DX9MathUpgrade.h"
 #include "Deferred.h"
 #include "Features/DrawcallLimitFix.h"
@@ -6,6 +7,7 @@
 #include "Features/Upscaling.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
+#include "HangWatchdog.h"
 #include "Hooks.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
@@ -14,8 +16,6 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/LogTee.h"
-#include "CrashDump.h"
-#include "HangWatchdog.h"
 
 #include <cstdlib>
 

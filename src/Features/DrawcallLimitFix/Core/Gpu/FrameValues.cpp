@@ -1,7 +1,6 @@
 // FrameValues (see the header): the render thread's Kick and the producers it dispatches onto the preparation pool, one at a time.
 
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/FrameValuePools.h"
@@ -10,6 +9,7 @@
 #include "Features/DrawcallLimitFix/Core/Extensions/ShadingFields.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Views.h"
 #include "Features/DrawcallLimitFix/Core/LatePoses/LatePoseOverrides.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include <Tracy/TracyC.h>
 
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
@@ -36,10 +36,10 @@
 #include <unordered_map>
 
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Capture/SkinPartitionWatch.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
-#include "Features/DrawcallLimitFix/Core/Engine/Capture/SkinPartitionWatch.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
@@ -366,7 +366,7 @@ namespace DCLF
 			std::atomic<std::uint64_t> newestContentEpoch{ 0 };                          // the content epoch the newest producer brought its backing to
 			std::atomic<std::uint64_t> floor{ 0 };                                       // the trim floor at the last Kick (diagnostics)
 			std::atomic<std::uint64_t> acquires{ 0 }, made{ 0 }, runs{ 0 }, bytes{ 0 };  // since the last take
-			std::string backingName;  // render thread: its backings' name, made at the first lease
+			std::string backingName;                                                     // render thread: its backings' name, made at the first lease
 		};
 
 		// A pool's class grows a quarter past the rows asked, not to a power of two: every class is held a frame in flight times
@@ -407,7 +407,7 @@ namespace DCLF
 			FrameLeases frameLeases, jobLeases;                // the frame's hold (bound at EndFrame) and the producer's
 		} late;
 		std::vector<org::services::BackingLease> noRegistered;  // BindFrameLeases' for the late stage's
-		BoundPoints boundPoints;  // BindFrameLeases' GPU points
+		BoundPoints boundPoints;                                // BindFrameLeases' GPU points
 		using ResourceOwners = std::vector<std::shared_ptr<const void>>;
 		std::shared_ptr<ResourceOwners> frameFieldOwners;
 		std::deque<std::pair<std::uint64_t, std::shared_ptr<ResourceOwners>>> retiredFieldOwners;
@@ -567,7 +567,7 @@ namespace DCLF
 		std::vector<RE::NiPointer<RE::NiAVObject>> owedNodes;  // node events a refused lease left unnamed
 		std::vector<std::uint8_t> moverDue, rootDue;           // per plan item, set by dueMovers / dueRoots (cleared alone)
 		std::vector<std::uint32_t> dueMovers, dueRoots;
-		std::vector<const void*> watchedList;                          // SkinPartitionWatch::Collect's, reused
+		std::vector<const void*> watchedList;                         // SkinPartitionWatch::Collect's, reused
 		ankerl::unordered_dense::set<const void*> watchedPartitions;  // the same, to look up
 		// The moved-only parity (Policy::SampleEveryMover), since its last line.
 		struct MovedParity
@@ -2243,6 +2243,7 @@ namespace DCLF
 			{ offsetof(BindlessShading, skinPerGeometry), sizeof(BindlessShading::skinPerGeometry) },
 			{ offsetof(BindlessShading, skinMaterial), sizeof(BindlessShading::skinMaterial) },
 			{ offsetof(BindlessShading, landscapeSeams), sizeof(BindlessShading::landscapeSeams) },
+			{ offsetof(BindlessShading, lodTreeWind), sizeof(BindlessShading::lodTreeWind) },
 		} };
 		static_assert(sizeof(BindlessShading::skinPerGeometry) <= sizeof(ShadingFieldValue::value));
 	}
@@ -2409,11 +2410,7 @@ namespace DCLF
 	template <class T>
 	void FrameValues::Impl::SendLate(const Job& a_job, Part a_part, const KeptWholeArray<T>& a_rows, std::span<const org::StreamingUploadRange> a_overrides)
 	{
-		SendRows(a_job.lateLeases[a_part], pools[a_part], kPartNames[a_part], a_job, a_rows.Size(), a_rows.ContentEpoch(), &a_rows,
-			[](const void* a_view, std::uint64_t a_contentEpoch, const Api::FrameValuePoolProducer::SendTarget&, const Api::FrameValuePoolProducer::RowSink& a_sink) {
-				static_cast<const KeptWholeArray<T>*>(a_view)->Emit(a_contentEpoch, a_sink);
-			},
-			a_overrides);
+		SendRows(a_job.lateLeases[a_part], pools[a_part], kPartNames[a_part], a_job, a_rows.Size(), a_rows.ContentEpoch(), &a_rows, [](const void* a_view, std::uint64_t a_contentEpoch, const Api::FrameValuePoolProducer::SendTarget&, const Api::FrameValuePoolProducer::RowSink& a_sink) { static_cast<const KeptWholeArray<T>*>(a_view)->Emit(a_contentEpoch, a_sink); }, a_overrides);
 	}
 
 	void FrameValues::Impl::BuildLateRows(const Job& a_job)
@@ -2637,8 +2634,9 @@ namespace DCLF
 			// and the signal behind it, until the present EndFrame keeps back.
 			if (static bool logged = false; !logged && !DCLF::Sealed(a_job.writeAfter)) {
 				logged = true;
-				logger::error("[DCLF] frame values {}: a reused copy's uploads wait for work the last present did not seal; the uploader may hold "
-							  "the frame's signal until the frame presents",
+				logger::error(
+					"[DCLF] frame values {}: a reused copy's uploads wait for work the last present did not seal; the uploader may hold "
+					"the frame's signal until the frame presents",
 					a_job.seq);
 			}
 		}

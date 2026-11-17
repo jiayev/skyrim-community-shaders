@@ -86,7 +86,7 @@ namespace DCLF::Features::Grass
 		std::uint64_t seq = 0;        // GrassShared's: orders a shape's events across the capture's threads
 		const void* shape = nullptr;  // a key: never dereferenced by the drain (the shape may be dead)
 		std::uint32_t group = 0;      // the engine's group index in the shape (not Remove's)
-		void* lodMesh = nullptr;      // Add: the shape's GrassMeshLibrary::MeshRecord at capture (GrassShared::MeshOf), null before LoadGrassType named it
+		void* lodMesh = nullptr;      // Add: the shape's GrassMeshLibrary::RegisteredMesh at capture (GrassShared::MeshOf), null before LoadGrassType named it
 		std::vector<GrassInstances::Instance> instances;
 		std::array<float, 3> origin{};
 		BucketKey key;
@@ -167,7 +167,7 @@ namespace DCLF::Features::Grass
 		std::uint32_t shapes = 0;  // its users: the shapes' groups drawn in it
 		std::uint32_t total = 0;
 		std::array<const void*, GrassInstances::kTiers> meshes{};
-		// Its shapes' source mesh (a GrassMeshLibrary::MeshRecord, shared with Grass Optimizations), whose activeBuckets it holds while
+		// Its shapes' source mesh (a GrassMeshLibrary::RegisteredMesh, shared with Grass Optimizations), whose activeBuckets it holds while
 		// it lives, and whether its LOD tiers wait for the library's loads (resolved once both tiers' loads settle).
 		void* lodMesh = nullptr;
 		bool lodPending = false;

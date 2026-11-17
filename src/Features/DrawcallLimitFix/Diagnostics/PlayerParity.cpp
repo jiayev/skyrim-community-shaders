@@ -2,14 +2,14 @@
 // to the menu as an immutable snapshot; the report.
 #include "PlayerParity.h"
 
-#include "Hooks.h"
-#include "Plugin.h"
-#include "Utils/UI.h"
 #include "Features/DrawcallLimitFix/Core/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Core/Scene/Model/SceneMirror.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorEvents.h"
+#include "Hooks.h"
+#include "Plugin.h"
+#include "Utils/UI.h"
 
 #include <imgui.h>
 
@@ -63,7 +63,9 @@ namespace DCLF::Diagnostics::PlayerParity
 
 		const char* TypeName(std::uint8_t a_type)
 		{
-			return a_type < SceneMirror::kTypeNames.size() ? SceneMirror::kTypeNames[a_type] : a_type == kLeak ? "geometry" : a_type == kEvicted ? "subtree" : "?";
+			return a_type < SceneMirror::kTypeNames.size() ? SceneMirror::kTypeNames[a_type] : a_type == kLeak ? "geometry" :
+			                                                                               a_type == kEvicted  ? "subtree" :
+			                                                                                                     "?";
 		}
 
 		std::string FieldNames(std::uint8_t a_type, std::uint32_t a_fields)
@@ -96,7 +98,8 @@ namespace DCLF::Diagnostics::PlayerParity
 			const RE::TESFile* file = index == 0xFE ? handler->LookupLoadedLightModByIndex(static_cast<std::uint16_t>((a_form >> 12) & 0xFFF)) :
 			                          index == 0xFF ? nullptr :
 			                                          handler->LookupLoadedModByIndex(static_cast<std::uint8_t>(index));
-			return file ? std::string(file->GetFilename()) : index == 0xFF ? "created in game" : "?";
+			return file ? std::string(file->GetFilename()) : index == 0xFF ? "created in game" :
+			                                                                 "?";
 		}
 
 		/** @brief An offender's reference as the menu and the report name it: plugin, base object, and the plugin that last edits it. */
@@ -269,7 +272,7 @@ namespace DCLF::Diagnostics::PlayerParity
 			for (const auto* file : handler->files)
 				if (file && file->compileIndex != 0xFF)
 					out << (file->compileIndex == 0xFE ? fmt::format("  FE:{:03X} {}\n", file->smallFileCompileIndex, file->GetFilename()) :
-					                                       fmt::format("  {:02X}     {}\n", file->compileIndex, file->GetFilename()));
+														 fmt::format("  {:02X}     {}\n", file->compileIndex, file->GetFilename()));
 		}
 		out << "\nSKSE plugins:\n";
 		std::error_code ec;
@@ -283,29 +286,29 @@ namespace DCLF::Diagnostics::PlayerParity
 
 	void DrawPanel()
 	{
-		if (!ImGui::TreeNodeEx("Compatibility monitor", ImGuiTreeNodeFlags_DefaultOpen))
+		if (!ImGui::TreeNodeEx(T("feature.drawcall_limit_fix.compatibility_monitor.compatibility_monitor", "Compatibility monitor"), ImGuiTreeNodeFlags_DefaultOpen))
 			return;
-		ImGui::TextWrapped(
+		ImGui::TextWrapped(T("feature.drawcall_limit_fix.compatibility_monitor.watches_for_changes_other_plugins_make_to_the_scene_node",
 			"Watches for changes other plugins make to the scene (node flags, fades, materials, alpha) that Drawcall Limit Fix has no hook for, "
-			"and names each object's reference and plugin. Costs a little CPU while on; it does not change what is drawn.");
+			"and names each object's reference and plugin. Costs a little CPU while on; it does not change what is drawn."));
 		bool on = Requested();
-		if (ImGui::Checkbox("Watch for changes other plugins make", &on))
+		if (ImGui::Checkbox(T("feature.drawcall_limit_fix.compatibility_monitor.watch_for_changes_other_plugins_make", "Watch for changes other plugins make"), &on))
 			Request(on);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Each frame compares a slice of the scene with what DCLF holds; a difference no hook explains is an offender. Turning it on starts a fresh list.");
+			ImGui::TextUnformatted(T("feature.drawcall_limit_fix.compatibility_monitor.each_frame_compares_a_slice_of_the_scene_with_what", "Each frame compares a slice of the scene with what DCLF holds; a difference no hook explains is an offender. Turning it on starts a fresh list."));
 		const auto offenders = Current();
-		ImGui::Text("%llu checks, %zu offenders", static_cast<unsigned long long>(offenders->probes), offenders->entries.size());
+		ImGui::Text(T("feature.drawcall_limit_fix.compatibility_monitor.llu_checks_zu_offenders", "%llu checks, %zu offenders"), static_cast<unsigned long long>(offenders->probes), offenders->entries.size());
 		// The report goes into the diagnostic capture (the Advanced section's button).
-		if (ImGui::Button("Clear"))
+		if (ImGui::Button(T("feature.drawcall_limit_fix.compatibility_monitor.clear", "Clear")))
 			Clear();
 		constexpr std::size_t kRows = 200;
 		if (!offenders->entries.empty() && ImGui::BeginTable("##dclfOffenders", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
 											   ImVec2(0.0f, 300.0f))) {
-			ImGui::TableSetupColumn("Plugin");
-			ImGui::TableSetupColumn("Reference");
-			ImGui::TableSetupColumn("Changed");
-			ImGui::TableSetupColumn("Checks");
-			ImGui::TableSetupColumn("Frames");
+			ImGui::TableSetupColumn(T("feature.drawcall_limit_fix.compatibility_monitor.plugin", "Plugin"));
+			ImGui::TableSetupColumn(T("feature.drawcall_limit_fix.compatibility_monitor.reference", "Reference"));
+			ImGui::TableSetupColumn(T("feature.drawcall_limit_fix.compatibility_monitor.changed", "Changed"));
+			ImGui::TableSetupColumn(T("feature.drawcall_limit_fix.compatibility_monitor.checks", "Checks"));
+			ImGui::TableSetupColumn(T("feature.drawcall_limit_fix.compatibility_monitor.frames", "Frames"));
 			ImGui::TableHeadersRow();
 			// The names resolved once per form (the menu draws every frame).
 			static std::map<std::uint32_t, Named> names;
@@ -319,7 +322,7 @@ namespace DCLF::Diagnostics::PlayerParity
 				ImGui::TextUnformatted(found->second.plugin.c_str());
 				ImGui::TableNextColumn();
 				if (offender.references > 1)
-					ImGui::Text("%s (+%u sharing it)", found->second.reference.c_str(), offender.references - 1);
+					ImGui::Text(T("feature.drawcall_limit_fix.compatibility_monitor.s_u_sharing_it", "%s (+%u sharing it)"), found->second.reference.c_str(), offender.references - 1);
 				else
 					ImGui::TextUnformatted(found->second.reference.c_str());
 				ImGui::TableNextColumn();

@@ -93,7 +93,7 @@ public:
 	/** @brief Returns whether the game window is minimized. */
 	static bool IsWindowMinimized();
 
-	static void NotifyWindowFocus(bool a_focused);        // WM_ACTIVATEAPP / WM_ACTIVATE
+	static void NotifyWindowFocus(bool a_focused);  // WM_ACTIVATEAPP / WM_ACTIVATE
 	/**
 	 * @brief Any thread (a test run's dclf:fg command): frame generation set as the menu's method stepper sets it, at the next render
 	 * frame's start. 0: off, 1: FSR-FG, 2: DLSS-G.

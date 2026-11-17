@@ -6,7 +6,7 @@ namespace GrassShared
 	{
 		// Written by the loader threads' LoadGrassType and the dtor's caller, read by either consumer.
 		std::mutex meshMutex;
-		std::unordered_map<const RE::BSMultiStreamInstanceTriShape*, ::GrassMeshLibrary::MeshRecord*> meshByShape;
+		std::unordered_map<const RE::BSMultiStreamInstanceTriShape*, ::GrassMeshLibrary::RegisteredMesh*> meshByShape;
 	}
 
 	::GrassMeshLibrary& MeshLibrary()
@@ -15,14 +15,14 @@ namespace GrassShared
 		return library;
 	}
 
-	::GrassMeshLibrary::MeshRecord* MeshOf(const RE::BSMultiStreamInstanceTriShape* shape)
+	::GrassMeshLibrary::RegisteredMesh* MeshOf(const RE::BSMultiStreamInstanceTriShape* shape)
 	{
 		std::scoped_lock lock(meshMutex);
 		const auto it = meshByShape.find(shape);
 		return it == meshByShape.end() ? nullptr : it->second;
 	}
 
-	bool RecordMesh(const RE::BSMultiStreamInstanceTriShape* shape, ::GrassMeshLibrary::MeshRecord* mesh)
+	bool RecordMesh(const RE::BSMultiStreamInstanceTriShape* shape, ::GrassMeshLibrary::RegisteredMesh* mesh)
 	{
 		std::scoped_lock lock(meshMutex);
 		auto& entry = meshByShape[shape];

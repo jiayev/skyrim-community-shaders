@@ -316,8 +316,15 @@ float2 GetTreeShiftVector(float4 position, float4 color)
 }
 #	endif  // TREE_ANIM
 
+#	if defined(TREE_WIND) && defined(VC) && !defined(TREE_ANIM) && !defined(LOD) && !defined(LODLANDSCAPE) && !defined(LANDSCAPE) && !defined(SKINNED) && !defined(EYE)
+#		define TREE_WIND_VS
+#		include "TreeWind/TreeWind.hlsli"
+#	endif
+
 #	if defined(DCLF_PULLED) || defined(DCLF_PULLED_VERTICES)
-VS_OUTPUT DCLFShade(VS_INPUT input)
+VS_OUTPUT DCLFShade(VS_INPUT input, uint vertexID)
+#	elif defined(TREE_WIND_VS)
+VS_OUTPUT main(VS_INPUT input, uint vertexID : SV_VertexID)
 #	else
 VS_OUTPUT main(VS_INPUT input)
 #	endif
@@ -346,6 +353,14 @@ VS_OUTPUT main(VS_INPUT input)
 	previousInputPosition.xyz += normal.xyz * treeShiftVector.y;
 #	endif
 
+#	if defined(TREE_WIND_VS)
+	if (TreeWind::IsEnabled()) {
+		float nearScale = TreeWind::GetNearScale(World, input.Position.xyz);
+		inputPosition.xy += TreeWind::GetOffset(input.Position.xyz, TreeWind::Wind.x, vertexID, nearScale);
+		previousInputPosition.xy += TreeWind::GetOffset(input.Position.xyz, TreeWind::Wind.y, vertexID, nearScale);
+	}
+#	endif
+
 #	if defined(SKINNED)
 	precise int4 actualIndices = 765.01.xxxx * input.BoneIndices.xyzw;
 
@@ -367,8 +382,12 @@ VS_OUTPUT main(VS_INPUT input)
 	precise float4 worldPosition = float4(mul(inputPosition, transpose(worldMatrix)), 1);
 
 	DCLF_PRECISE float4 viewPos = mul(ViewProj, worldPosition);
-#	else   // !SKINNED
+#	else  // !SKINNED
+#		if defined(TREE_WIND_VS)
+	precise float4 previousWorldPosition = float4(mul(PreviousWorld, previousInputPosition), 1);
+#		else
 	precise float4 previousWorldPosition = float4(mul(PreviousWorld, inputPosition), 1);
+#		endif
 	precise float4 worldPosition = float4(mul(World, inputPosition), 1);
 	precise float4x4 world4x4 = float4x4(World[0], World[1], World[2], float4(0, 0, 0, 1));
 	precise float4x4 modelView = mul(ViewProj, world4x4);
@@ -563,7 +582,7 @@ VS_OUTPUT DCLFPulledVertex(uint index, uint a_instance)
 	const VS_INPUT input = DCLFPulledInput(index, first, second);
 
 	DCLFVertexObjectStatics();
-	VS_OUTPUT vsout = DCLFShade(input);
+	VS_OUTPUT vsout = DCLFShade(input, index);
 	// T7c1: Terrain Blending's depth offset (Utility.hlsl, OFFSET_DEPTH) for a near terrain block's draw into the main depth, pushed per
 	// call in the word a shadow view's vertex layout takes (DrawPipelines.h, kZDrawPushOffsetDepth): 0 for every other Z-prepass call.
 	if (DCLFVertexLayout.x != 0)
@@ -611,7 +630,7 @@ VS_OUTPUT main(uint index : SV_VertexID)
 	first.stride = DCLFVertexStride;
 	second.address = DCLFAddress(DCLFStreamBuffer.xy);
 	second.stride = DCLFStreamStride;
-	return DCLFShade(DCLFPulledInput(index, first, second));
+	return DCLFShade(DCLFPulledInput(index, first, second), index);
 }
 #	endif  // DCLF_PULLED, DCLF_PULLED_VERTICES
 #endif      // VSHADER
@@ -2355,10 +2374,8 @@ PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
 	float2 dynamicWet = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust.z, worldNormal.xyz);
 	float skinWetness = Skin::PerlinNoise(wetUV, skinData.wetParams.x, skinData.wetParams.y, skinData.wetParams.z, clamp(dynamicWet.x + dynamicWet.y + skinData.skinParams2.y, 0.f, 2.f)) * skinWetMask * skinData.physicalParams.w;
 	float3 heightWetNormal = CalculateNormalFromHeight(skinWetness, skinData.wetParams.w * 0.0005, uv);
-	if (skinEnabled)
-#		else
-	if (skinEnabled)
 #		endif
+	[branch] if (skinEnabled)
 	{
 		float2 detailUV = uv * skinData.skinDetailParams.x;
 #		if defined(MODELSPACENORMALS)
@@ -3649,12 +3666,12 @@ PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
 
 	indirectContext = CreateIndirectLightingContext(ambientNormal, vertexNormal.xyz, viewDirection);
 
-#	if defined(TRUE_PBR)
+#		if defined(TRUE_PBR)
 	float indirectFuzzNdotV = clamp(abs(dot(indirectContext.worldNormal, indirectContext.viewDir)), isThinSurface ? 0.0f : EPSILON_DOT_CLAMP, 1.0f);
 	// Ambient uses its own normal and the unrefracted view, so rebuild the layer only if that changes NdotV.
 	[branch] if (indirectFuzzNdotV != directFuzzNdotV)
 		material.Fuzz = PBR::CreateFuzzLayer(material, indirectFuzzNdotV);
-#	endif
+#		endif
 	GetIndirectLobeWeights(indirectLobeWeights, indirectContext, material,
 		uvOriginal);
 
@@ -4213,13 +4230,12 @@ void DCLFPixelObjectStatics()
 #		if DCLF_WRITES_TEX_FEEDBACK
 [earlydepthstencil]
 #		endif
-PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
-{
-	const uint64_t sequence = DCLFDrawSequence(input.DCLFDrawInstance);
-	DCLFObjectWord = DCLFSequenceObjectWord(sequence);
-	DCLFRowStatics(DCLFSequenceRows(sequence));
-	DCLFPixelObjectStatics();
-	return DCLFShadePS(input, frontFace);
-}
+	PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace) {
+		const uint64_t sequence = DCLFDrawSequence(input.DCLFDrawInstance);
+		DCLFObjectWord = DCLFSequenceObjectWord(sequence);
+		DCLFRowStatics(DCLFSequenceRows(sequence));
+		DCLFPixelObjectStatics();
+		return DCLFShadePS(input, frontFace);
+	}
 #	endif  // DCLF_PULLED
 #endif      // PSHADER

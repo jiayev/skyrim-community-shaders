@@ -161,7 +161,6 @@ struct Cull
 	float SimpleShadingPx, CollisionDistSq, MidLodPx, FarLodPx;
 	float LodBandPx;
 	uint Flags;
-	float DensityDistanceRcp;
 };
 
 Cull LoadCull(ByteAddressBuffer a_draw)
@@ -170,7 +169,7 @@ Cull LoadCull(ByteAddressBuffer a_draw)
 	const float4 b = asfloat(a_draw.Load4(kRowCull + 16));
 	const float4 c = asfloat(a_draw.Load4(kRowCull + 32));
 	const float4 d = asfloat(a_draw.Load4(kRowCull + 48));
-	const uint3 e = a_draw.Load3(kRowCull + 64);
+	const uint2 e = a_draw.Load2(kRowCull + 64);
 	Cull cull;
 	cull.MinPixelSize = a.x;
 	cull.FullDetailPx = a.y;
@@ -190,7 +189,6 @@ Cull LoadCull(ByteAddressBuffer a_draw)
 	cull.FarLodPx = d.w;
 	cull.LodBandPx = asfloat(e.x);
 	cull.Flags = e.y;
-	cull.DensityDistanceRcp = asfloat(e.z);
 	return cull;
 }
 
@@ -354,19 +352,19 @@ uint Tier(Cull a_cull, float a_projPx, float a_dither, uint a_bucketFlags)
 		return;
 	}
 
-	// The density thinning, ramped in over the INI grass distance.
+	// Density thinning uses the same projected-size ramp as Grass Optimizations.
 	const float pxScale = lerp(1.0, meshCost, effCostBias);
 	const float effMinPx = cull.MinPixelSize * pxScale;
 	float lodFade = 1.0;
 	const float effFullPx = cull.FullDetailPx * pxScale;
 	bool thinned = projPx < effMinPx;
 	if (!thinned && projPx < effFullPx) {
-		const float distanceRamp = saturate(dist * cull.DensityDistanceRcp);
-		const float t = saturate((effFullPx - projPx) / max(effFullPx - effMinPx, 1e-4)) * distanceRamp;
+		const float t = saturate((effFullPx - projPx) / max(effFullPx - effMinPx, 1e-4));
 		const float keep = lerp(1.0, cull.MinKeep, t);
 		const float h = RandFloat(rand.x);
-		thinned = h > keep + cull.FadeBand;
-		lodFade = saturate((keep + cull.FadeBand - h) / max(cull.FadeBand, 1e-4));
+		const float cutoff = keep * (1.0 + cull.FadeBand);
+		thinned = h > cutoff;
+		lodFade = saturate((cutoff - h) / max(keep * cull.FadeBand, 1e-4));
 	}
 	if (thinned) {
 		draws.InterlockedAdd(kStatThinned, 1u, scratch);

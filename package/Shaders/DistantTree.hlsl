@@ -84,10 +84,18 @@ struct VS_OUTPUT
 	float4 PreviousWorldPosition: POSITION2;
 #endif  // RENDER_DEPTH
 	float4 ViewPosition: POSITION3;
+#if defined(TREE_WIND) && !defined(RENDER_DEPTH)
+	// The billboard before sway: its facing and shadow, and so its lighting, stay put while the top bends
+	float3 RestWorldPosition: POSITION4;
+#endif
 };
 
 #ifdef VSHADER
 #	if defined(DCLF_PULLED)
+#		if defined(TREE_WIND)
+#			define TREE_WIND_BILLBOARD
+#			include "TreeWind/TreeWind.hlsli"
+#		endif
 // The record's instance data (TEXCOORD4, TEXCOORD5 of the engine's draw), its mesh's vertex, and its shape's translation: the
 // engine's World is the shape's, a translation. Precise throughout: the Z-prepass and the colour pass each compute the
 // position, and the colour pass tests EQUAL against the Z-prepass's depth.
@@ -139,6 +147,17 @@ VS_OUTPUT main(uint a_vertex : SV_VertexID, uint a_instance : SV_InstanceID)
 	adjustedModelPosition.z = scaledModelPosition.z;
 	precise float3 modelPosition = input.InstanceData1.xyz + adjustedModelPosition.xyz;
 	// The translation is made eye-relative first, so the sum never rounds at world magnitude.
+	precise float3 previousModelPosition = modelPosition;
+#		if defined(TREE_WIND)
+#			if !defined(RENDER_DEPTH)
+	vsout.RestWorldPosition = (translate - FrameBuffer::CameraPosAdjust.xyz) + modelPosition;
+#			endif
+	if (TreeWind::IsEnabled()) {
+		precise float cameraDistance = length((translate - FrameBuffer::CameraPosAdjust.xyz) + modelPosition);
+		modelPosition.xy += TreeWind::GetBillboardOffset(input.InstanceData1.xyz, input.Position.z, input.InstanceData1.w, cameraDistance, TreeWind::Wind.x);
+		previousModelPosition.xy += TreeWind::GetBillboardOffset(input.InstanceData1.xyz, input.Position.z, input.InstanceData1.w, cameraDistance, TreeWind::Wind.y);
+	}
+#		endif
 	precise float4 relativePosition = float4((translate - FrameBuffer::CameraPosAdjust.xyz) + modelPosition, 1.0);
 	precise float4 viewPosition = mul(FrameBuffer::CameraViewProj, relativePosition);
 
@@ -147,7 +166,7 @@ VS_OUTPUT main(uint a_vertex : SV_VertexID, uint a_instance : SV_InstanceID)
 	vsout.Depth.zw = input.InstanceData2.zw;
 #		else
 	vsout.WorldPosition = relativePosition;
-	precise float4 previousRelativePosition = float4((translate - FrameBuffer::CameraPreviousPosAdjust.xyz) + modelPosition, 1.0);
+	precise float4 previousRelativePosition = float4((translate - FrameBuffer::CameraPreviousPosAdjust.xyz) + previousModelPosition, 1.0);
 	vsout.PreviousWorldPosition = previousRelativePosition;
 	vsout.ViewPosition = viewPosition;
 #		endif  // RENDER_DEPTH
@@ -180,24 +199,45 @@ cbuffer PerGeometry : register(b2)
 	row_major float4x4 PreviousWorld : packoffset(c8);
 };
 
+#		if defined(TREE_WIND)
+#			include "TreeWind/TreeWind.hlsli"
+// The depth and colour passes draw the same swaying billboards and must place them identically
+#			define TREE_WIND_PRECISE precise
+#		else
+#			define TREE_WIND_PRECISE
+#		endif
+
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout = (VS_OUTPUT)0;
 
-	float3 scaledModelPosition = input.InstanceData1.www * input.Position.xyz;
-	float3 adjustedModelPosition = 0.0.xxx;
+	TREE_WIND_PRECISE float3 scaledModelPosition = input.InstanceData1.www * input.Position.xyz;
+	TREE_WIND_PRECISE float3 adjustedModelPosition = 0.0.xxx;
 	adjustedModelPosition.x = dot(float2(1, -1) * input.InstanceData2.xy, scaledModelPosition.xy);
 	adjustedModelPosition.y = dot(input.InstanceData2.yx, scaledModelPosition.xy);
 	adjustedModelPosition.z = scaledModelPosition.z;
-	float4 finalModelPosition = float4(input.InstanceData1.xyz + adjustedModelPosition.xyz, 1.0);
-	float4 viewPosition = mul(WorldViewProj, finalModelPosition);
+	TREE_WIND_PRECISE float4 finalModelPosition = float4(input.InstanceData1.xyz + adjustedModelPosition.xyz, 1.0);
+	TREE_WIND_PRECISE float4 previousModelPosition = finalModelPosition;
+#		if defined(TREE_WIND) && !defined(RENDER_DEPTH)
+	vsout.RestWorldPosition = mul(World, finalModelPosition).xyz;
+#		endif
+
+#		if defined(TREE_WIND)
+	if (TreeWind::IsEnabled()) {
+		precise float cameraDistance = length(mul(World, finalModelPosition).xyz);
+		finalModelPosition.xy += TreeWind::GetBillboardOffset(input.InstanceData1.xyz, input.Position.z, input.InstanceData1.w, cameraDistance, TreeWind::Wind.x);
+		previousModelPosition.xy += TreeWind::GetBillboardOffset(input.InstanceData1.xyz, input.Position.z, input.InstanceData1.w, cameraDistance, TreeWind::Wind.y);
+	}
+#		endif
+
+	TREE_WIND_PRECISE float4 viewPosition = mul(WorldViewProj, finalModelPosition);
 
 #		ifdef RENDER_DEPTH
 	vsout.Depth.xy = viewPosition.zw;
 	vsout.Depth.zw = input.InstanceData2.zw;
 #		else
 	vsout.WorldPosition = mul(World, finalModelPosition);
-	vsout.PreviousWorldPosition = mul(PreviousWorld, finalModelPosition);
+	vsout.PreviousWorldPosition = mul(PreviousWorld, previousModelPosition);
 	vsout.ViewPosition = viewPosition;
 #		endif  // RENDER_DEPTH
 
@@ -393,8 +433,13 @@ void main(PS_INPUT input)
 		discard;
 	}
 
+#			if defined(TREE_WIND)
+	float3 ddx = ddx_coarse(input.RestWorldPosition);
+	float3 ddy = ddy_coarse(input.RestWorldPosition);
+#			else
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
+#			endif
 	float3 normal = -normalize(cross(ddx, ddy));
 
 	float3 directionalAmbientColor = max(0, Color::Ambient(SharedData::GetAmbient(normal)));
@@ -415,8 +460,13 @@ void main(PS_INPUT input)
 	dirShadow = lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, screenUV, screenNoise), 0.8);
 #				endif
 
+#				if defined(TREE_WIND)
+	if (dirShadow != 0.0)
+		dirShadow *= ShadowSampling::GetWorldShadow(input.RestWorldPosition, FrameBuffer::CameraPosAdjust.xyz);
+#				else
 	if (dirShadow != 0.0)
 		dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
+#				endif
 
 	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * dirShadow * 0.5 * Color::BRDFScale;
 
@@ -463,7 +513,11 @@ void main(PS_INPUT input)
 	psout.Albedo = float4(baseColor.xyz, 1);
 	psout.Masks = float4(0, 0, 1, 0);
 #			else
+#				if defined(TREE_WIND)
+	float dirShadow = ShadowSampling::GetWorldShadow(input.RestWorldPosition, FrameBuffer::CameraPosAdjust.xyz);
+#				else
 	float dirShadow = ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
+#				endif
 
 	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * dirShadow * 0.5 * Color::BRDFScale;
 

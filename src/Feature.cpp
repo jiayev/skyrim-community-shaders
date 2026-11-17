@@ -28,6 +28,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
+#include "Features/ProceduralAurora.h"
 #include "Features/ProceduralSun.h"
 #include "Features/PseudoSunBounce.h"
 #include "Features/RainRefraction.h"
@@ -44,6 +45,8 @@
 #include "Features/TerrainHelper.h"
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
+#include "Features/TextureStreaming.h"
+#include "Features/TreeWind.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/VRAMBudget.h"
@@ -51,7 +54,6 @@
 #include "Features/ViewAtmosphere.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
-#include "Features/TextureStreaming.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
 #include "I18n/I18n.h"
@@ -256,12 +258,14 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::horizonFix,
 		&globals::features::vramBudget,
 		&globals::features::textureStreaming,
+		&globals::features::treeWind,
 		&globals::features::exponentialHeightFog,
 		&globals::features::hdrDisplay,
 		&globals::features::physicalSky,
 		&globals::features::postProcessing,
 		&globals::features::skin,
-		&globals::features::pseudoSunBounce
+		&globals::features::pseudoSunBounce,
+		&globals::features::proceduralAurora
 	};
 
 	return features;
