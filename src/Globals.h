@@ -31,6 +31,7 @@ struct SubsurfaceScattering;
 struct TerrainBlending;
 struct TerrainHelper;
 struct TerrainShadows;
+struct TreeWind;
 struct UnifiedWater;
 struct VanillaFresnel;
 struct VolumetricLighting;
@@ -50,6 +51,7 @@ struct Skin;
 struct PseudoSunBounce;
 struct ScreenshotFeature;
 struct SceneManager;
+struct ProceduralAurora;
 
 class State;
 class Deferred;
@@ -59,6 +61,7 @@ class RenderDoc;
 class RemoteControl;
 class Menu;
 class SceneSettingsManager;
+class HiZPyramid;
 
 namespace SIE
 {
@@ -131,6 +134,7 @@ namespace globals
 		extern TerrainBlending terrainBlending;
 		extern TerrainHelper terrainHelper;
 		extern TerrainShadows terrainShadows;
+		extern TreeWind treeWind;
 		extern UnifiedWater unifiedWater;
 		extern VanillaFresnel vanillaFresnel;
 		extern VolumetricLighting volumetricLighting;
@@ -154,6 +158,7 @@ namespace globals
 		extern PostProcessing postProcessing;
 		extern Skin skin;
 		extern PseudoSunBounce pseudoSunBounce;
+		extern ProceduralAurora proceduralAurora;
 
 	}
 
@@ -270,6 +275,7 @@ namespace globals
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
 	extern Profiler* profiler;
+	extern HiZPyramid* hiZPyramid;
 	extern SceneSettingsManager* sceneSettingsManager;
 
 	/** @brief Initializes core singletons (ShaderCache, State, Menu, Deferred). Called once at plugin load. */

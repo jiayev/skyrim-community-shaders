@@ -1,5 +1,8 @@
 #include "ScreenSpaceReflections.h"
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
+#include "Utils/DebugSection.h"
+
 #include "Deferred.h"
 #include "DynamicCubemaps.h"
 #include "I18n/I18n.h"
@@ -132,8 +135,15 @@ void ScreenSpaceReflections::DrawSettings()
 			}
 		}
 	}
+}
 
-	ImGui::SeparatorText(T(TKEY("debug"), "Debug"));
+void ScreenSpaceReflections::DrawDebugSection()
+{
+	if (SceneWidgetInterceptor::IsArmed())
+		return;
+	Util::DebugSection section;
+	if (!section)
+		return;
 
 	if (ImGui::TreeNode(T(TKEY("buffer_viewer"), "Buffer Viewer"))) {
 		static float debugRescale = .3f;
@@ -146,7 +156,7 @@ void ScreenSpaceReflections::DrawSettings()
 		if (texNRDSpecOutput)
 			BUFFER_VIEWER_NODE(texNRDSpecOutput, debugRescale)
 		if (auto validation = settings.Reblur.EnableValidation ? nrdReblurSpecular.GetValidationSRV() : nullptr) {
-			if (ImGui::TreeNode("NRD Validation")) {
+			if (ImGui::TreeNode(T("feature.ssr.nrd_validation", "NRD Validation"))) {
 				ImGui::Image(validation, { nrdReblurSpecular.GetWidth() * debugRescale, nrdReblurSpecular.GetHeight() * debugRescale });
 				ImGui::TreePop();
 			}

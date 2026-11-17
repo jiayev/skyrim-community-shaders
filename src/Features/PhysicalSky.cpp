@@ -1,5 +1,7 @@
 #include "PhysicalSky.h"
 
+#include "Utils/DebugSection.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
@@ -553,10 +555,6 @@ void PhysicalSky::DrawSettings()
 		}
 		if (ImGui::BeginTabItem(T(TKEY("weather_effects"), "Weather Effects"))) {
 			SettingsWeatherEffects();
-			ImGui::EndTabItem();
-		}
-		if (!SceneWidgetInterceptor::IsArmed() && ImGui::BeginTabItem(T(TKEY("debug"), "Debug"))) {
-			SettingsDebug();
 			ImGui::EndTabItem();
 		}
 		ImGui::EndTabBar();
@@ -1424,8 +1422,13 @@ void PhysicalSky::DrawVanillaCloudSection()
 	}
 }
 
-void PhysicalSky::SettingsDebug()
+void PhysicalSky::DrawDebugSection()
 {
+	if (SceneWidgetInterceptor::IsArmed())
+		return;
+	Util::DebugSection section;
+	if (!section)
+		return;
 	InfoBox(T(TKEY("beep_boop"), "Beep Boop."));
 	ImGui::Checkbox(T(TKEY("skip_cloud_shape_noise"), "Skip Cloud Shape and Detail Noise"), &settings.cloudNoise.skipShapeNoise);
 

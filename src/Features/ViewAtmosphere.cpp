@@ -1,5 +1,9 @@
 #include "ViewAtmosphere.h"
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
+
+#include "Utils/DebugSection.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -125,12 +129,18 @@ void ViewAtmosphere::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("lookup_jitter"), "Lookup Jitter"), &settings.lookupJitter, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::TreePop();
 	}
-	if (Util::ShowDebugSections() && ImGui::TreeNode(T(TKEY("debug"), "Shared Volume Debug"))) {
-		preview.Draw(Luminance(), "luminance", T(TKEY("debug_luminance"), "Integrated Luminance"), 1.0f);
-		preview.Draw(Transmittance(), "transmittance", T(TKEY("debug_transmittance"), "RGB Transmittance"), 1.0f);
-		preview.Draw(Source(), "source", T(TKEY("debug_source"), "Local Light Source / Fog Extinction"), 1.0f);
-		ImGui::TreePop();
-	}
+}
+
+void ViewAtmosphere::DrawDebugSection()
+{
+	if (SceneWidgetInterceptor::IsArmed())
+		return;
+	Util::DebugSection section;
+	if (!section)
+		return;
+	preview.Draw(Luminance(), "luminance", T(TKEY("debug_luminance"), "Integrated Luminance"), 1.0f);
+	preview.Draw(Transmittance(), "transmittance", T(TKEY("debug_transmittance"), "RGB Transmittance"), 1.0f);
+	preview.Draw(Source(), "source", T(TKEY("debug_source"), "Local Light Source / Fog Extinction"), 1.0f);
 }
 
 #undef I18N_KEY_PREFIX

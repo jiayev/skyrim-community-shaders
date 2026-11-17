@@ -108,6 +108,12 @@ void HistogramAutoExposure::DrawCameraExposureReadout()
 void HistogramAutoExposure::DrawSettings()
 {
 	const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
+	if (cam) {
+		DrawCameraControlledNote(T("feature.post_processing.histogram_auto_exposure.cinematic_controlled", "Exposure mode, compensation and limits are controlled by Cinematic Camera. The saved settings below apply again when it is disabled."));
+		DrawCameraExposureReadout();
+	}
+
+	ImGui::SeparatorText(T("feature.post_processing.histogram_auto_exposure.section_exposure", "Exposure"));
 	ImGui::BeginDisabled(cam != nullptr);
 	ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.exposure_compensation", "Exposure Compensation"), &settings.ExposureCompensation, -5.f, 5.f, "%+.2f EV");
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -131,15 +137,16 @@ void HistogramAutoExposure::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(
 			T("feature.post_processing.histogram_auto_exposure.min_max_the_average_scene_luminance_will_be",
-				"[Min, Max] The average scene luminance will be clamped between them when doing auto exposure."
+				"[Min, Max] The average scene luminance will be clamped between them when doing auto exposure. "
 				"Turning up the minimum, for example, makes it adapt less to darkness and therefore prevents over-brightening of dark scenes."));
 	ImGui::EndDisabled();
 
 	ImGui::SeparatorText(T("feature.post_processing.histogram_auto_exposure.purkinje_effect", "Purkinje Effect"));
-	ImGui::TextWrapped(
+	Util::SettingHint(
 		T("feature.post_processing.histogram_auto_exposure.the_purkinje_effect_simulates_the_blue_shift_of",
 			"The Purkinje effect simulates the blue shift of human vision under low light.\n"
-			"If you don't like the effect, you can set the strength to zero."));
+			"If you don't like the effect, you can set the strength to zero."),
+		false);
 
 	ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.max_strength", "Max Strength"), &settings.PurkinjeStrength, 0.f, 5.f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.fade_in_ev", "Fade In EV100"), &settings.PurkinjeStartEV, -10.f, 3.f, "%.2f EV100");
@@ -149,7 +156,7 @@ void HistogramAutoExposure::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted(T("feature.post_processing.histogram_auto_exposure.from_this_point_onward_the_purkinje_effect_remains", "From this point onward, the Purkinje effect remains the greatest."));
 
-	if (ImGui::CollapsingHeader(T("feature.post_processing.histogram_auto_exposure.histogram", "Histogram"), ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::CollapsingHeader(T("feature.post_processing.histogram_auto_exposure.histogram", "Histogram"))) {
 		histogramReadbackRequested = true;
 		histogramReadbackRequestFrame = static_cast<int64_t>(globals::state->frameCount);
 

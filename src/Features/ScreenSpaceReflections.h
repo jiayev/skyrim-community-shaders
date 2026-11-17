@@ -40,6 +40,8 @@ struct ScreenSpaceReflections : Feature
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
+	bool HasDebugSection() const override { return true; }
+	void DrawDebugSection() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

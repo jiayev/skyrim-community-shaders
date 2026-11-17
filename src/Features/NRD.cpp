@@ -1,5 +1,7 @@
 #include "NRD.h"
 
+#include "Utils/DebugSection.h"
+
 #include "Deferred.h"
 #include "State.h"
 #include "Upscaling.h"
@@ -18,23 +20,30 @@ void NRD::RestoreDefaultSettings()
 
 void NRD::DrawSettings()
 {
-	ImGui::TextWrapped(
+	ImGui::TextWrapped(T("feature.nrd.nrd_provides_shared_denoising_infrastructure_for_screen_space_radiance_signals",
 		"NRD provides shared denoising infrastructure for screen-space "
 		"radiance signals. It is consumed by features such as Screen Space "
 		"GI and Screen Space Reflections; toggle those features to control "
-		"whether denoising actually runs.");
+		"whether denoising actually runs."));
 
 	ImGui::Separator();
-	ImGui::Checkbox("Enabled", &settings.Enabled);
+	ImGui::Checkbox(T("feature.nrd.enabled", "Enabled"), &settings.Enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(
+		ImGui::Text(T("feature.nrd.when_disabled_nrd_skips_the_guide_preparation_pass_and_consumer",
 			"When disabled, NRD skips the guide preparation pass and consumer "
-			"features that depend on denoising will fall back to undenoised input.");
+			"features that depend on denoising will fall back to undenoised input."));
 	}
+}
 
-	if (ImGui::TreeNode("Buffer Viewer")) {
+void NRD::DrawDebugSection()
+{
+	Util::DebugSection section;
+	if (!section)
+		return;
+
+	if (ImGui::TreeNode(T("feature.nrd.buffer_viewer", "Buffer Viewer"))) {
 		static float debugRescale = .3f;
-		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		ImGui::SliderFloat(T("feature.nrd.view_resize", "View Resize"), &debugRescale, 0.f, 1.f);
 
 		if (texNRDViewZ)
 			BUFFER_VIEWER_NODE(texNRDViewZ, debugRescale)
@@ -278,63 +287,62 @@ bool NRD::DrawReblurSettings(REBLURSettings& s, bool showAdvanced, const char* t
 	ImGui::PushID(tag);
 
 	if (showAdvanced) {
-		ImGui::SeparatorText("Accumulation");
+		ImGui::SeparatorText(T("feature.nrd.accumulation", "Accumulation"));
 		{
 			int v = (int)s.MaxAccumulatedFrameNum;
-			if (ImGui::SliderInt("Max Accumulated Frames", &v, 1, (int)nrd::REBLUR_MAX_HISTORY_FRAME_NUM)) {
+			if (ImGui::SliderInt(T("feature.nrd.max_accumulated_frames", "Max Accumulated Frames"), &v, 1, (int)nrd::REBLUR_MAX_HISTORY_FRAME_NUM)) {
 				s.MaxAccumulatedFrameNum = (uint32_t)v;
 				changed = true;
 			}
 
 			v = (int)s.MaxFastAccumulatedFrameNum;
-			if (ImGui::SliderInt("Max Fast Accumulated Frames", &v, 1, (int)s.MaxAccumulatedFrameNum)) {
+			if (ImGui::SliderInt(T("feature.nrd.max_fast_accumulated_frames", "Max Fast Accumulated Frames"), &v, 1, (int)s.MaxAccumulatedFrameNum)) {
 				s.MaxFastAccumulatedFrameNum = (uint32_t)v;
 				changed = true;
 			}
 
 			v = (int)s.MaxStabilizedFrameNum;
-			if (ImGui::SliderInt("Max Stabilized Frames", &v, 0, (int)s.MaxAccumulatedFrameNum)) {
+			if (ImGui::SliderInt(T("feature.nrd.max_stabilized_frames", "Max Stabilized Frames"), &v, 0, (int)s.MaxAccumulatedFrameNum)) {
 				s.MaxStabilizedFrameNum = (uint32_t)v;
 				changed = true;
 			}
 		}
 
-		ImGui::SeparatorText("Spatial Filter");
+		ImGui::SeparatorText(T("feature.nrd.spatial_filter", "Spatial Filter"));
 		{
-			changed |= ImGui::SliderFloat("Min Blur Radius", &s.MinBlurRadius, 0.0f, 10.0f, "%.1f px");
-			changed |= ImGui::SliderFloat("Max Blur Radius", &s.MaxBlurRadius, 0.0f, 60.0f, "%.1f px");
-			changed |= ImGui::SliderFloat("Lobe Angle Fraction", &s.LobeAngleFraction, 0.0f, 1.0f, "%.2f");
-			changed |= ImGui::SliderFloat("Roughness Fraction", &s.RoughnessFraction, 0.0f, 1.0f, "%.2f");
-			changed |= ImGui::SliderFloat("Plane Distance Sensitivity", &s.PlaneDistanceSensitivity, 0.0f, 0.1f, "%.4f");
+			changed |= ImGui::SliderFloat(T("feature.nrd.min_blur_radius", "Min Blur Radius"), &s.MinBlurRadius, 0.0f, 10.0f, "%.1f px");
+			changed |= ImGui::SliderFloat(T("feature.nrd.max_blur_radius", "Max Blur Radius"), &s.MaxBlurRadius, 0.0f, 60.0f, "%.1f px");
+			changed |= ImGui::SliderFloat(T("feature.nrd.lobe_angle_fraction", "Lobe Angle Fraction"), &s.LobeAngleFraction, 0.0f, 1.0f, "%.2f");
+			changed |= ImGui::SliderFloat(T("feature.nrd.roughness_fraction", "Roughness Fraction"), &s.RoughnessFraction, 0.0f, 1.0f, "%.2f");
+			changed |= ImGui::SliderFloat(T("feature.nrd.plane_distance_sensitivity", "Plane Distance Sensitivity"), &s.PlaneDistanceSensitivity, 0.0f, 0.1f, "%.4f");
 		}
 
-		ImGui::SeparatorText("Quality");
+		ImGui::SeparatorText(T("feature.nrd.quality", "Quality"));
 		{
-			changed |= ImGui::SliderFloat("Fast History Clamping Sigma", &s.FastHistoryClampingSigmaScale, 1.0f, 3.0f, "%.2f");
-			changed |= ImGui::SliderFloat("Min Hit Distance Weight", &s.MinHitDistanceWeight, 0.0001f, 0.2f, "%.4f");
+			changed |= ImGui::SliderFloat(T("feature.nrd.fast_history_clamping_sigma", "Fast History Clamping Sigma"), &s.FastHistoryClampingSigmaScale, 1.0f, 3.0f, "%.2f");
+			changed |= ImGui::SliderFloat(T("feature.nrd.min_hit_distance_weight", "Min Hit Distance Weight"), &s.MinHitDistanceWeight, 0.0001f, 0.2f, "%.4f");
 
 			int v = (int)s.HistoryFixFrameNum;
-			if (ImGui::SliderInt("History Fix Frame Num", &v, 0, 4)) {
+			if (ImGui::SliderInt(T("feature.nrd.history_fix_frame_num", "History Fix Frame Num"), &v, 0, 4)) {
 				s.HistoryFixFrameNum = (uint32_t)v;
 				changed = true;
 			}
 
 			v = (int)s.HistoryFixBasePixelStride;
-			if (ImGui::SliderInt("History Fix Pixel Stride", &v, 1, 20)) {
+			if (ImGui::SliderInt(T("feature.nrd.history_fix_pixel_stride", "History Fix Pixel Stride"), &v, 1, 20)) {
 				s.HistoryFixBasePixelStride = (uint32_t)v;
 				changed = true;
 			}
 		}
 
-		ImGui::SeparatorText("Debug");
-		{
-			changed |= ImGui::SliderFloat("Split Screen", &s.SplitScreen, 0.0f, 1.0f, "%.2f");
-			changed |= ImGui::Checkbox("NRD Validation Overlay", &s.EnableValidation);
-			changed |= ImGui::Checkbox("Output History Length", &s.ReturnHistoryLength);
+		if (Util::DebugSection section; section) {
+			changed |= ImGui::SliderFloat(T("feature.nrd.split_screen", "Split Screen"), &s.SplitScreen, 0.0f, 1.0f, "%.2f");
+			changed |= ImGui::Checkbox(T("feature.nrd.nrd_validation_overlay", "NRD Validation Overlay"), &s.EnableValidation);
+			changed |= ImGui::Checkbox(T("feature.nrd.output_history_length", "Output History Length"), &s.ReturnHistoryLength);
 
 			static const char* hitDistReconModes[] = { "OFF", "AREA_3X3", "AREA_5X5" };
 			int hdMode = (int)s.HitDistanceReconstructionMode;
-			if (ImGui::Combo("Hit Distance Reconstruction", &hdMode, hitDistReconModes, 3)) {
+			if (ImGui::Combo(T("feature.nrd.hit_distance_reconstruction", "Hit Distance Reconstruction"), &hdMode, hitDistReconModes, 3)) {
 				s.HitDistanceReconstructionMode = (uint32_t)hdMode;
 				changed = true;
 			}

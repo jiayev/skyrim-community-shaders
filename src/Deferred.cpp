@@ -386,11 +386,14 @@ void Deferred::DeferredPasses()
 	auto& ibl = globals::features::ibl;
 
 	auto& physSky = globals::features::physicalSky;
+	// Matches SKYLIGHTING_COVERAGE_REGISTER in DeferredCompositeCS.hlsl, after Physical Sky and Masks2
+	constexpr UINT SKYLIGHTING_COVERAGE_SLOT = 20;
 
 	// Deferred Composite
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
+		const bool skylightingReady = skylighting.loaded && skylighting.texProbeArray;
 		ID3D11ShaderResourceView* skylightingProbes = skylighting.loaded && skylighting.texProbeArray ? skylighting.texProbeArray->srv.get() : nullptr;
 		ID3D11ShaderResourceView* srvs[]{
 			specular.SRV,                                                                              // t0  SpecularTexture
@@ -414,6 +417,10 @@ void Deferred::DeferredPasses()
 			physSky.loaded && physSky.texShadowVolume ? physSky.texShadowVolume->srv.get() : nullptr,  // t18 PhysicalSky Shadow Volume
 			masks2.SRV,                                                                                // t19 Masks2Texture
 		};
+		ID3D11ShaderResourceView* skylightingCoverageSrvs[2]{
+			skylightingReady ? skylighting.texProbeCoverage->srv.get() : nullptr,    // t18 SkylightingProbeCoverage
+			skylightingReady ? skylighting.texZenithOcclusion->srv.get() : nullptr,  // t19 SkylightingZenithDepth
+		};
 
 		ID3D11SamplerState* samplers[]{
 			dynamicCubemaps.loaded ? linearSampler : nullptr,
@@ -423,6 +430,7 @@ void Deferred::DeferredPasses()
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 		globals::features::viewAtmosphere.Bind(true);
+		context->CSSetShaderResources(SKYLIGHTING_COVERAGE_SLOT, ARRAYSIZE(skylightingCoverageSrvs), skylightingCoverageSrvs);
 
 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -454,6 +462,7 @@ void Deferred::DeferredPasses()
 	{
 		ID3D11ShaderResourceView* views[20]{};
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
+		context->CSSetShaderResources(SKYLIGHTING_COVERAGE_SLOT, 2, views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -483,12 +492,7 @@ void Deferred::DeferredPasses()
 
 void Deferred::EndDeferred()
 {
-	if (!globals::state->inWorld)
-		return;
-
-	auto shaderCache = globals::shaderCache;
-
-	if (!shaderCache->IsEnabled())
+	if (!deferredPass)
 		return;
 
 	auto shadowState = globals::game::shadowState;

@@ -50,10 +50,14 @@ void Skin::ReloadResources()
 	editor.thumbnailKey.clear();
 	// Files may have been edited outside the game. Drafts without unsaved changes follow the files.
 	if (!editor.draftKey.empty() && !MaterialDirty())
-		LoadMaterialDraft(editor.draftKey);
+		LoadMaterialDraft(editor.draftKey, false);
 	if (editor.draftTarget && !CharacterDirty()) {
 		const auto* saved = SkinCharacters::Find(*SkinCharacters::Get(), editor.draftTarget.key);
 		editor.character = editor.characterBaseline = saved ? saved->customization : SkinCharacters::Customization{};
+		for (auto& draft : editor.undo)
+			draft.character = editor.character;
+		for (auto& draft : editor.redo)
+			draft.character = editor.character;
 	}
 }
 
@@ -274,7 +278,7 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	PerGeometryData data{};
 	data.profile = MakeData(Resolve({}, settings.DefaultProfile), false);
 	data.profile.skinParams.w = 0;
-	if (a_pass && a_pass->geometry) {
+	if (a_pass && a_pass->geometry && !SkinSurfaces::IsRaceMenuOverlay(a_pass->geometry, a_pass->shaderProperty)) {
 		data.skinPerGeometry = GetWetness(a_pass->geometry);
 		if (SkinMaterials::IsCompatible(a_pass->shaderProperty)) {
 			auto& entry = Observe(a_pass->geometry, a_pass->shaderProperty);

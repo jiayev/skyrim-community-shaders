@@ -64,6 +64,8 @@ namespace SceneSettingsPolicy
 		{ "PostProcessing", "Color Grading and Tone Mapping", "tonemapParams" },
 		{ "PostProcessing", "Motion Blur", "VelocityScale" },
 		{ "ScreenSpaceGI", "EnableGI" },
+		// Debug section: backend log verbosity, read only at startup
+		{ "Upscaling", "streamlineLogLevel" },
 		{ "VolumetricLighting" },
 		{ "ViewAtmosphere" },
 	};
