@@ -221,8 +221,6 @@ void PhysicalLens::ClearShaderCache()
 	planningValid = false;
 	ghostWaveValid = false;
 	lastGhostFrame = ~0u;
-	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/PhysicalLensFlare");
-	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/PhysicalLensImaging");
 	CompileShaders();
 }
 

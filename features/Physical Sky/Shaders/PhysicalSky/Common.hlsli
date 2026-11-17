@@ -56,6 +56,8 @@ Texture2D<unorm float> TexApShadow : register(t64);
 Texture2D<float4> TexSkyTail : register(t66);
 #endif
 
+#include "PhysicalSky/DiskPhase.hlsli"
+
 	static const float RCP_PI = 1 / Math::PI;  // PI
 	static const float AP_MAX_DIST = 40000.0f / GAME_UNIT_TO_M;
 	static const uint3 CLOUD_DIM = uint3(512, 512, 64);
@@ -186,15 +188,15 @@ Texture2D<float4> TexSkyTail : register(t66);
 		mu = clamp(mu, -localHorizon / r, 1.0);
 	}
 
-	float3 SampleAtmosphereLightTr(Texture2D<float4> transmittance, SamplerState samp, float3 planetPos, float3 lightDir)
+	float3 SampleAtmosphereLightTr(Texture2D<float4> transmittance, SamplerState samp, float3 planetPos, float3 lightDir, float angularRadius = 0.0)
 	{
 		const float radius = length(planetPos);
 		const float sinHorizon = saturate(SharedData::physSkyData.rPlanet / max(radius, 1.0));
 		const float cosHorizon = -sqrt(max(0.0, 1.0 - sinHorizon * sinHorizon));
 		const float mu = dot(planetPos, lightDir) / max(radius, 1.0);
-		// Approximate the visible fraction of a solar disc (0.266 degree radius).
+		// Approximate the visible fraction of the emitter disc at the planet horizon.
 		// Keep planet visibility separate from the smooth, unoccluded LUT.
-		const float discWidth = max(0.00465 * sinHorizon, 1e-6);
+		const float discWidth = max(sin(angularRadius) * sinHorizon, 1e-6);
 		const float visibility = smoothstep(-discWidth, discWidth, mu - cosHorizon);
 		[branch] if (visibility <= 0.0 || radius < SharedData::physSkyData.rPlanet) return 0.0;
 		return transmittance.SampleLevel(samp, TrLutUv(radius, mu), 0).rgb * visibility;
@@ -215,7 +217,8 @@ Texture2D<float4> TexSkyTail : register(t66);
 		return acos(clamp(-horizonDistance / viewRadius, -1.0, 0.0));
 	}
 
-	float2 SkyViewLutUv(float3 rayDir, uint lutHeight)
+	/** @brief Resolution-independent sky-view coordinate (wrapped azimuth, horizon-warped zenith); map it with SkyViewLutTexel. */
+	float2 SkyViewCoord(float3 rayDir)
 	{
 		const float u = atan2(rayDir.y, rayDir.x) * 0.5 * RCP_PI;
 		const float zenith = acos(clamp(rayDir.z, -1.0, 1.0));
@@ -223,7 +226,17 @@ Texture2D<float4> TexSkyTail : register(t66);
 		const float v = zenith <= horizon ?
 		                    0.5 * (1.0 - sqrt(saturate(1.0 - zenith / horizon))) :
 		                    0.5 + 0.5 * sqrt(saturate((zenith - horizon) / (Math::PI - horizon)));
-		return float2(frac(u), (0.5 + v * (lutHeight - 1.0)) / lutHeight);
+		return float2(frac(u), v);
+	}
+
+	float2 SkyViewLutTexel(float2 skyCoord, uint lutHeight)
+	{
+		return float2(skyCoord.x, (0.5 + skyCoord.y * (lutHeight - 1.0)) / lutHeight);
+	}
+
+	float2 SkyViewLutUv(float3 rayDir, uint lutHeight)
+	{
+		return SkyViewLutTexel(SkyViewCoord(rayDir), lutHeight);
 	}
 
 	// url: http://www.physics.hmc.edu/faculty/esin/a101/limbdarkening.pdf
@@ -321,13 +334,13 @@ Texture2D<float4> TexSkyTail : register(t66);
 			float x2 = max(0., x - 2.45) / (Math::PI - 2.15);
 			float x3 = max(0., x - 2.95) / (Math::PI - 2.95);
 			float y = (exp(-max(x * 1.5 + 0.0, 0.0) * 30.0)         // front peak
-					   + smoothstep(1.7, 0., x) * 0.45 * 0.8        // front ramp
-					   + smoothbump(0.4, 0.5, cos_theta) * 0.02     // front bump middle
-					   - smoothstep(1., 0.2, x) * 0.06              // front ramp damp wave
-					   + smoothbump(2.18, 0.20, x) * 0.06           // first trail wave
-					   + smoothstep(2.28, 2.45, x) * 0.18           // trailing piece
-					   - powerful_scurve(x2 * 4.0, 3.5, 8.) * 0.04  // trail
-					   + x2 * -0.085 + x3 * x3 * 0.1);              // trail peak
+			           + smoothstep(1.7, 0., x) * 0.45 * 0.8        // front ramp
+			           + smoothbump(0.4, 0.5, cos_theta) * 0.02     // front bump middle
+			           - smoothstep(1., 0.2, x) * 0.06              // front ramp damp wave
+			           + smoothbump(2.18, 0.20, x) * 0.06           // first trail wave
+			           + smoothstep(2.28, 2.45, x) * 0.18           // trailing piece
+			           - powerful_scurve(x2 * 4.0, 3.5, 8.) * 0.04  // trail
+			           + x2 * -0.085 + x3 * x3 * 0.1);              // trail peak
 
 			float3 ret = y;
 			// spectralize a bit
@@ -406,17 +419,24 @@ Texture2D<float4> TexSkyTail : register(t66);
 		return TexSkyTail.SampleLevel(samp, SkyViewLutUv(viewDir, height), 0).rgb;
 	}
 
-	float3 SampleTr(float3 lightDir, SamplerState sampSv)
+	float3 SampleTr(float3 lightDir, SamplerState sampSv, float angularRadius = 0.0)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 
 		if (data.trMix < 1e-8)
 			return 1;
 
-		float3 tr = SampleAtmosphereLightTr(TexTrLut, sampSv, float3(0, 0, data.zCameraPlanet), lightDir);
+		float3 tr = SampleAtmosphereLightTr(TexTrLut, sampSv, float3(0, 0, data.zCameraPlanet), lightDir, angularRadius);
 		tr = lerp(1, tr, data.trMix);
 
 		return tr;
+	}
+
+	/// Transmittance towards the body lighting the scene, not along the shadow direction, which swings between bodies and holds above the horizon
+	float3 SampleDirLightTr(SamplerState samp)
+	{
+		const float3 bodyDir = SharedData::physSkyData.dirLightBodyDir;
+		return SampleTr(dot(bodyDir, bodyDir) > 1e-6 ? bodyDir : normalize(SharedData::DirLightDirection.xyz), samp, SharedData::physSkyData.diskAngularRadius.w);
 	}
 
 	float3 SampleViewCelestialTr(float3 direction, SamplerState samp)
@@ -433,7 +453,7 @@ Texture2D<float4> TexSkyTail : register(t66);
 		return lerp(1.0, SampleAtmosphereLightTr(TexTrLut, samp, origin + direction * AP_MAX_DIST, direction), data.trMix);
 	}
 
-#		if defined(CLOUD_SHADOWS) && defined(PS_SKY_SAMPLERS)
+#		if defined(CLOUD_SHADOWS) && defined(CLOUDS) && defined(PS_SKY_SAMPLERS)
 	float3 RelightCloud(float4 baseColor, float3 viewDir, float3 cloudPosWS, SamplerState sampTr, SamplerState sampCube)
 	{
 		if (baseColor.w <= 0)
@@ -447,16 +467,16 @@ Texture2D<float4> TexSkyTail : register(t66);
 
 		// TODO: planet shadowing
 
-		float3 trAtmos = SampleAtmosphereLightTr(TexTrLut, sampTr, cloudPosWS + float3(0, 0, data.zCameraPlanet), dirLightDir);
+		float3 trAtmos = SampleAtmosphereLightTr(TexTrLut, sampTr, cloudPosWS + float3(0, 0, data.zCameraPlanet), dirLightDir, data.diskAngularRadius[data.dirLightDiskIndex]);
 		trAtmos = lerp(1, trAtmos, data.trMix);
 		dirLightColor *= trAtmos;
 
-		float u = dot(viewDir, dirLightDir);
+		const float4 discPhase = SampleLightDiscPhase(viewDir, data.dirLightDisc, data.dirLightDiskIndex);
 		float phaseCloud = Remap(
 							   baseColor.a,
 							   data.silverLiningSpread > 0 ? data.silverLiningSpread : 0,
 							   data.silverLiningSpread < 0 ? 1 + data.silverLiningSpread : 1,
-							   lerp(0.25 * RCP_PI, Phase::ThomasSchander(u), data.silverLiningMix),
+							   lerp(0.25 * RCP_PI, discPhase.x, data.silverLiningMix),
 							   0.25 * RCP_PI) *
 		                   2 * Math::PI * data.cloudRelightMix;
 
@@ -491,10 +511,7 @@ Texture2D<float4> TexSkyTail : register(t66);
 			float directVisibility = 1.0 - saturate(dot(rayShadow, 0.25));
 
 			float cloudOpticalDepth = -log(max(1.0 - baseColor.a, 1e-3));
-			float forwardG = lerp(0.82, 0.94, saturate(1.0 - abs(data.silverLiningSpread)));
-			float forwardMieCore = max(0.0, Phase::HG(u, forwardG) - 0.25 * RCP_PI);
-			float forwardMieAureole = max(0.0, Phase::Draine(u, 0.78, 2.0) - 0.25 * RCP_PI);
-			float forwardMiePhase = forwardMieCore + 0.45 * forwardMieAureole;
+			float forwardMiePhase = max(0.0, discPhase.w - DISK_PHASE_ISOTROPIC.w);
 			float silverEdgeMask = smoothstep(0.08, 0.35, baseColor.a) * (1.0 - smoothstep(0.45, 0.85, baseColor.a));
 			float silverSingleScatter = 1.35 * silverEdgeMask * (1.0 - exp(-cloudOpticalDepth)) * exp(-0.5 * cloudOpticalDepth);
 			float directSingleScatter = 0.9 * cloudOpticalDepth * exp(-0.75 * cloudOpticalDepth);
@@ -511,7 +528,7 @@ Texture2D<float4> TexSkyTail : register(t66);
 					linIblAmbient += ColorManagement::SceneToLinear(vanillaAmbient * SharedData::iblSettings.DALCAmount);
 				else
 					linIblAmbient += ImageBasedLighting::GetEnvIBLColor(cloudAmbientDir);
-				float3 linReflectionAmbient = ImageBasedLighting::GetSkyIBLColorOccluded(cloudAmbientDir, skyVisibility);
+				float3 linReflectionAmbient = ImageBasedLighting::GetSkyIBLColor(cloudAmbientDir) * skyVisibility;
 				linIblAmbient += linReflectionAmbient;
 				linIblAmbient = ImageBasedLighting::ApplyIBLReflectionFallback(linIblAmbient, linReflectionAmbient, cloudPosWS);
 
@@ -529,7 +546,8 @@ Texture2D<float4> TexSkyTail : register(t66);
 #		endif
 #	endif
 
-	float4 SampleAp(float3 viewDir, float dist, float shadow, SamplerState sampSv)
+	// The skyCoord overloads let a caller share one SkyViewCoord: FXC does not merge copies across branches.
+	float4 SampleAp(float2 skyCoord, float dist, float shadow, SamplerState sampSv)
 	{
 		if (ViewAtmosphere::Enabled())
 			return float4(0, 0, 0, 1);
@@ -537,7 +555,7 @@ Texture2D<float4> TexSkyTail : register(t66);
 
 		uint3 apDims;
 		TexApLut.GetDimensions(apDims.x, apDims.y, apDims.z);
-		const float2 skyLutUv = SkyViewLutUv(viewDir, apDims.y);
+		const float2 skyLutUv = SkyViewLutTexel(skyCoord, apDims.y);
 		const float depth_slice = ApDepthUv(dist, apDims.z);
 		float4 apColor = TexApLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0);
 		apColor.rgb *= 1.0 - saturate(shadow);
@@ -546,6 +564,13 @@ Texture2D<float4> TexSkyTail : register(t66);
 		apColor.a = lerp(1, apColor.a, data.apTrMix);
 
 		return apColor;
+	}
+
+	float4 SampleAp(float3 viewDir, float dist, float shadow, SamplerState sampSv)
+	{
+		if (ViewAtmosphere::Enabled())
+			return float4(0, 0, 0, 1);
+		return SampleAp(SkyViewCoord(viewDir), dist, shadow, sampSv);
 	}
 
 	float4 SampleAp(float3 viewDir, uint2 pxCoord, float dist, SamplerState sampSv)
@@ -572,8 +597,11 @@ Texture2D<float4> TexSkyTail : register(t66);
 	TextureCube<float4> TexVolCubeDepth : register(t67);
 #		endif
 
+	// The screen-space cloud targets only exist while volumetric clouds are enabled.
 	float3 CompositeVolumetricClouds(float3 color, uint2 pxCoord)
 	{
+		if (!SharedData::physSkyData.enableVolumetricClouds)
+			return color;
 		const float4 cloud = TexVolLum[pxCoord];
 		const float3 channel = !ViewAtmosphere::Enabled() && SharedData::physSkyData.lightningColorIntensity.w > 0.0 ? TexLightningChannels[pxCoord].rgb : 0.0;
 		return ColorManagement::SceneColor::ScaleAndAddLinear(color, TexVolTr[pxCoord], cloud.rgb + channel);
@@ -581,6 +609,8 @@ Texture2D<float4> TexSkyTail : register(t66);
 
 	float3 CompositeVolumetricCloudsUvDr(float3 color, float2 screenUvDr, SamplerState samp)
 	{
+		if (!SharedData::physSkyData.enableVolumetricClouds)
+			return color;
 		const float4 cloud = TexVolLum.SampleLevel(samp, screenUvDr, 0);
 		const float3 channel = !ViewAtmosphere::Enabled() && SharedData::physSkyData.lightningColorIntensity.w > 0.0 ? TexLightningChannels.SampleLevel(samp, screenUvDr, 0).rgb : 0.0;
 		return ColorManagement::SceneColor::ScaleAndAddLinear(color, TexVolTr.SampleLevel(samp, screenUvDr, 0), cloud.rgb + channel);
@@ -593,12 +623,14 @@ Texture2D<float4> TexSkyTail : register(t66);
 
 	float3 ApplyVolumetricCloudTransmittanceUv(float3 color, float2 screenUv, SamplerState samp)
 	{
+		if (!SharedData::physSkyData.enableVolumetricClouds)
+			return color;
 		const float3 volTr = TexVolTr.SampleLevel(samp, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(screenUv), 0);
 		return ColorManagement::SceneColor::ScaleByLinear(color, volTr);
 	}
 
 #		ifndef PS_DEFERRED_RSRCS
-	float3 CompositeVolumetricCloudsCube(float3 color, float3 viewDir, SamplerState samp)
+	float3 CompositeVolumetricCloudsCube(float3 color, float3 viewDir, float2 skyCoord, SamplerState samp)
 	{
 		// Celestial layers are drawn over the already-composited sky. Only occlude
 		// their emission; adding the cloud source again would duplicate its energy.
@@ -610,13 +642,18 @@ Texture2D<float4> TexSkyTail : register(t66);
 		                         0.0;
 		const float cloudT = TexVolCubeTr.SampleLevel(samp, viewDir, 0);
 		const float depth = TexVolCubeDepth.SampleLevel(samp, viewDir, 0).x * 1000.0 / GAME_UNIT_TO_M;
-		const float4 air = SampleAp(viewDir, depth, 0.0, samp);
+		const float4 air = SampleAp(skyCoord, depth, 0.0, samp);
 		return ColorManagement::SceneColor::ScaleAndAddLinear(color, cloudT, (cloud.rgb + flash) * air.a + air.rgb * (1.0 - cloudT));
 	}
 
-	ViewAtmosphere::Medium SampleReflectionMedium(float3 viewDir, float distance, SamplerState samp, bool skyRay)
+	float3 CompositeVolumetricCloudsCube(float3 color, float3 viewDir, SamplerState samp)
 	{
-		const float2 uv = SkyViewLutUv(viewDir, 32u);
+		return CompositeVolumetricCloudsCube(color, viewDir, SkyViewCoord(viewDir), samp);
+	}
+
+	ViewAtmosphere::Medium SampleReflectionMedium(float3 viewDir, float2 skyCoord, float distance, SamplerState samp, bool skyRay)
+	{
+		const float2 uv = SkyViewLutTexel(skyCoord, 32u);
 		ViewAtmosphere::Medium medium = ViewAtmosphere::SampleReflection(uv, distance, samp);
 		if (SharedData::physSkyData.enableVolumetricClouds) {
 			const float depth = TexVolCubeDepth.SampleLevel(samp, viewDir, 0).x * 1000.0 / GAME_UNIT_TO_M;
@@ -633,10 +670,20 @@ Texture2D<float4> TexSkyTail : register(t66);
 		return medium;
 	}
 
+	ViewAtmosphere::Medium SampleReflectionMedium(float3 viewDir, float distance, SamplerState samp, bool skyRay)
+	{
+		return SampleReflectionMedium(viewDir, SkyViewCoord(viewDir), distance, samp, skyRay);
+	}
+
+	float3 CompositeReflectionMedium(float3 color, float3 viewDir, float2 skyCoord, float distance, SamplerState samp, bool skyRay)
+	{
+		const ViewAtmosphere::Medium medium = SampleReflectionMedium(viewDir, skyCoord, distance, samp, skyRay);
+		return ColorManagement::SceneColor::ScaleAndAddLinear(color, medium.transmittance, medium.luminance);
+	}
+
 	float3 CompositeReflectionMedium(float3 color, float3 viewDir, float distance, SamplerState samp, bool skyRay)
 	{
-		const ViewAtmosphere::Medium medium = SampleReflectionMedium(viewDir, distance, samp, skyRay);
-		return ColorManagement::SceneColor::ScaleAndAddLinear(color, medium.transmittance, medium.luminance);
+		return CompositeReflectionMedium(color, viewDir, SkyViewCoord(viewDir), distance, samp, skyRay);
 	}
 #		endif
 
@@ -647,8 +694,21 @@ Texture2D<float4> TexSkyTail : register(t66);
 		const float4 apSample = SampleAp(viewDir, pxCoord, dist, sampSv);
 		color = color * apSample.w + apSample.xyz;
 
-		if (SharedData::physSkyData.enableVolumetricClouds && !SharedData::PostWaterComposite)
+		if (!SharedData::PostWaterComposite)
 			return CompositeVolumetricClouds(color, pxCoord);
+
+		return color;
+	}
+
+	float3 CompositeAerialPerspective(float3 color, float2 skyCoord, float2 screenPos, float2 screenUv, float dist, SamplerState sampSv)
+	{
+		if (ViewAtmosphere::Enabled())
+			return color;
+		const float4 apSample = SampleAp(skyCoord, dist, GetApShadow(uint2(screenPos)), sampSv);
+		color = color * apSample.w + apSample.xyz;
+
+		if (!SharedData::PostWaterComposite)
+			return CompositeVolumetricCloudsUv(color, screenUv, sampSv);
 
 		return color;
 	}
@@ -657,27 +717,26 @@ Texture2D<float4> TexSkyTail : register(t66);
 	{
 		if (ViewAtmosphere::Enabled())
 			return color;
-		const float4 apSample = SampleAp(viewDir, uint2(screenPos), dist, sampSv);
+		return CompositeAerialPerspective(color, SkyViewCoord(viewDir), screenPos, screenUv, dist, sampSv);
+	}
+
+#		ifndef PS_DEFERRED_RSRCS
+	float3 CompositeAerialPerspectiveReflection(float3 color, float3 viewDir, float2 skyCoord, float dist, SamplerState sampSv)
+	{
+		if (ViewAtmosphere::ReflectionEnabled())
+			return CompositeReflectionMedium(color, viewDir, skyCoord, dist, sampSv, false);
+		const float4 apSample = SampleAp(skyCoord, dist, 0.0, sampSv);
 		color = color * apSample.w + apSample.xyz;
 
-		if (SharedData::physSkyData.enableVolumetricClouds && !SharedData::PostWaterComposite)
-			return CompositeVolumetricCloudsUv(color, screenUv, sampSv);
+		if (SharedData::physSkyData.enableVolumetricClouds)
+			return CompositeVolumetricCloudsCube(color, viewDir, skyCoord, sampSv);
 
 		return color;
 	}
 
-#		ifndef PS_DEFERRED_RSRCS
 	float3 CompositeAerialPerspectiveReflection(float3 color, float3 viewDir, float dist, SamplerState sampSv)
 	{
-		if (ViewAtmosphere::ReflectionEnabled())
-			return CompositeReflectionMedium(color, viewDir, dist, sampSv, false);
-		const float4 apSample = SampleAp(viewDir, dist, 0.0, sampSv);
-		color = color * apSample.w + apSample.xyz;
-
-		if (SharedData::physSkyData.enableVolumetricClouds)
-			return CompositeVolumetricCloudsCube(color, viewDir, sampSv);
-
-		return color;
+		return CompositeAerialPerspectiveReflection(color, viewDir, SkyViewCoord(viewDir), dist, sampSv);
 	}
 #		endif
 

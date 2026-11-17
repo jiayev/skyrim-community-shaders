@@ -76,20 +76,17 @@ void CloudStormManager::SetupResources()
 	desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
 	DX::ThrowIfFailed(globals::d3d::device->CreateSamplerState(&desc, sampler.put()));
 	Util::SetResourceName(sampler.get(), "PhysicalSky::StormNdfSampler");
-	CompileShaders();
 }
 
-void CloudStormManager::CompileShaders()
+void CloudStormManager::CompileShaders(Util::AsyncShaderSet& a_shaders)
 {
-	program = nullptr;
 	key.clear();
 	active.clear();
 	wind.clear();
 	references.clear();
 	replacementNodes.clear();
 	replacementTextures.clear();
-	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\StormNdf.cs.hlsl", {}, "cs_5_0")))
-		program.attach(raw);
+	a_shaders.Add(program, L"Data\\Shaders\\PhysicalSky\\StormNdf.cs.hlsl");
 }
 
 void CloudStormManager::Update(TextureManager& textures, ID3D11ShaderResourceView* pattern, uint64_t noiseRevision, const std::string& worldspace, bool enabled)
@@ -507,7 +504,7 @@ std::array<uint32_t, 4> CloudStormManager::ScreenRect(float bottomZ, uint32_t wi
 void PhysicalSky::UpdateCloudStorm(const std::string& worldspace)
 {
 	cloudStormManager.Update(ndfTexManager, ndfManager.GetNoiseInputs()[2], ndfManager.GetNoiseRevision(), worldspace,
-		settings.enabled && settings.enableVolumetricClouds);
+		IsActive() && VolumetricCloudsEnabled());
 }
 
 bool PhysicalSky::IsReplacedSkyGeometry(const RE::BSGeometry* geometry) const

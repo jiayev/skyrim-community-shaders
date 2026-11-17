@@ -1348,6 +1348,12 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(noise["displayPath"], "Volumetric Noise")
         self.assertIn("SceneControllable", noise["flags"])
 
+    def test_debug_section_settings_use_debug_display_path(self):
+        debug = self.entries_by_id[
+            ("LightLimitFix", "", "EnableLightsVisualisation")]
+        self.assertEqual(debug["displayPath"], "Debug")
+        self.assertIn("SceneControllable", debug["flags"])
+
     def test_safe_editor_metadata(self):
         ripple_lifetime = self.entries_by_id[
             ("WetnessEffects", "", "RippleLifetime")]
@@ -1469,9 +1475,14 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             if entry["feature"] == "PostProcessing" and CONTROLLABLE_FLAG in entry.get("flags", "") and
             int(entry.get("aggregateCount", 0)) <= 1)
         survivors = [entry for entry in self.entries if entry is not dropped]
+        # Added controls can exceed the recorded floor. Pin this fixture to today's count.
+        feature_floors = dict(FEATURE_FLOORS)
+        feature_floors["PostProcessing"] = sum(
+            entry["feature"] == "PostProcessing" and CONTROLLABLE_FLAG in entry.get("flags", "")
+            for entry in self.entries)
         GENERATOR.validate_entries(survivors, *CMAKE_CATALOG_FLOORS)
         with self.assertRaises(ValueError):
-            GENERATOR.validate_entries(survivors, *CMAKE_CATALOG_FLOORS, FEATURE_FLOORS)
+            GENERATOR.validate_entries(survivors, *CMAKE_CATALOG_FLOORS, feature_floors)
 
     def test_catalog_validation_rejects_lost_scene_bindings(self):
         # Persisted-but-hidden entries alone must not satisfy the gate.

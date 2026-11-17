@@ -14,6 +14,7 @@
 #include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "CloudShadows.h"
 #include "Deferred.h"
+#include "Effects11.h"
 #include "Features/ViewAtmosphere.h"
 #include "I18n/I18n.h"
 #include "LinearLighting.h"
@@ -170,6 +171,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	secundaColor,
 	proceduralSun,
 	sunDiskRad,
+	masserDiskRad,
+	secundaDiskRad,
 
 	worldspaceWhitelist,
 	groundAlbedo,
@@ -270,6 +273,44 @@ namespace
 			v.x * m._21 + v.y * m._22 + v.z * m._23,
 			v.x * m._31 + v.y * m._32 + v.z * m._33
 		};
+	}
+
+	constexpr float kSunIlluminanceSpeed = 0.1f;
+	constexpr float kMoonIlluminanceSpeed = 0.001f;
+
+	/** @brief Zeroes negative or non-finite channels of a light color, since light cannot be negative. */
+	void ClampLightColor(float3& color)
+	{
+		for (float* channel : { &color.x, &color.y, &color.z })
+			*channel = std::isfinite(*channel) ? std::max(*channel, 0.f) : 0.f;
+	}
+
+	/** @brief Luminance of a linear sRGB color in the active working gamut, matching Color::RGBToLuminance. */
+	float GetWorkingLuminance(const float3& color)
+	{
+		if (globals::features::linearLighting.IsACEScgActive()) {
+			static const auto matrix = getWhiteAdaptedRGBMatrix("sRGB", "ACEScg");
+			const auto working = TransformColor(color, matrix);
+			return working.x * 0.2722287168f + working.y * 0.6740817658f + working.z * 0.0536895174f;
+		}
+		return color.x * 0.2125f + color.y * 0.7154f + color.z * 0.0721f;
+	}
+
+	/** @brief Lux control that scales all channels of a light color together, preserving its chromaticity. */
+	void DrawIlluminanceControl(const char* label, float3& color, float speed)
+	{
+		SceneWidgetInterceptor::InterceptFloat3(label, &color.x, [&](float* rgb) {
+			float3 bound{ rgb[0], rgb[1], rgb[2] };
+			const float previous = GetWorkingLuminance(bound);
+			float illuminance = previous;
+			if (!ImGui::DragFloat(label, &illuminance, speed, 0.f, FLT_MAX, "%.3f lux", ImGuiSliderFlags_AlwaysClamp) || !std::isfinite(illuminance))
+				return false;
+			bound = previous > 0.f ? bound * (illuminance / previous) : float3(illuminance);
+			rgb[0] = bound.x;
+			rgb[1] = bound.y;
+			rgb[2] = bound.z;
+			return true;
+		});
 	}
 
 	////////////////////////////////////////////////////////////////////////////////////////////////
@@ -504,6 +545,8 @@ void PhysicalSky::LoadSettings(json& o_json)
 	settings = o_json;
 	settings.cloudBlurRadius = std::clamp(settings.cloudBlurRadius, 0, 2);
 	settings.SanitizeLightning();
+	for (auto* color : { &settings.sunlightColor, &settings.masserColor, &settings.secundaColor })
+		ClampLightColor(*color);
 	if (settings.aerosolType != loadedType ||
 		settings.aerosolLoading != loadedLoading ||
 		settings.aerosolHumidity != loadedHumidity)
@@ -531,8 +574,16 @@ void PhysicalSky::Settings::ApplyAerosolOptics()
 	aerosolPhaseG = optics.phaseG;
 }
 
+bool PhysicalSky::IsActive() const
+{
+	return loaded && settings.enabled && !globals::features::effects11.OwnsFeature(E11Handoff::Feature::PhysicalSky);
+}
+
 void PhysicalSky::DrawSettings()
 {
+	const Util::LockedSection enbLock(globals::features::effects11.OwnsFeature(E11Handoff::Feature::PhysicalSky),
+		T("common.settings_managed_by_enb", "This setting is managed by Effects 11."));
+
 	if (SceneWidgetInterceptor::IsArmed())
 		ImGui::TextWrapped("%s", T(TKEY("scene_settings_hint"), "Scene settings control sunlight, atmosphere and the cloud weather: coverage, altitude, shape, motion, lighting and cirrus. Map source, noise and rendering quality stay global and are hidden while editing a scene. Interior settings require Physical Sky to be enabled for interiors."));
 
@@ -570,7 +621,9 @@ void PhysicalSky::SettingsGeneral()
 		ImGui::TableNextColumn();
 		ImGui::Text("%s", T(TKEY("shader_status"), "Shader Status: "));
 		ImGui::TableNextColumn();
-		if (ShadersOK())
+		if (shaders.Pending())
+			ImGui::TextColored(Util::Colors::GetWarning(), "%s", T(TKEY("compiling"), "Compiling"));
+		else if (ShadersOK())
 			ImGui::TextColored({ 0, 1, 0, 1 }, T("feature.physical_sky.ok", "OK"));
 		else
 			ImGui::TextColored({ 1, 0, 0, 1 }, T("feature.physical_sky.error", "ERROR"));
@@ -715,30 +768,11 @@ void PhysicalSky::SettingsCelestials()
 	ImGui::SeparatorText(T(TKEY("sun"), "Sun"));
 	{
 		ImGui::PushID("Sun");
-		ImGui::ColorEdit3(T(TKEY("light_color"), "Light Color"), &settings.sunlightColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		if (ImGui::ColorEdit3(T(TKEY("light_color"), "Light Color"), &settings.sunlightColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+			ClampLightColor(settings.sunlightColor);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("sun_light_color_hint"), "Linear RGB illuminance before atmospheric extinction. The lux control scales all channels together, preserving the color."));
-		const char* illuminanceLabel = T(TKEY("sun_illuminance"), "Solar Illuminance");
-		SceneWidgetInterceptor::InterceptFloat3(illuminanceLabel, &settings.sunlightColor.x, [&](float* rgb) {
-			float3 color{ rgb[0], rgb[1], rgb[2] };
-			float illuminance;
-			// Match Color::RGBToLuminance in the active working gamut.
-			if (globals::features::linearLighting.IsACEScgActive()) {
-				static const auto matrix = getWhiteAdaptedRGBMatrix("sRGB", "ACEScg");
-				const auto working = TransformColor(color, matrix);
-				illuminance = working.x * 0.2722287168f + working.y * 0.6740817658f + working.z * 0.0536895174f;
-			} else {
-				illuminance = color.x * 0.2125f + color.y * 0.7154f + color.z * 0.0721f;
-			}
-			const float previous = illuminance;
-			if (!ImGui::DragFloat(illuminanceLabel, &illuminance, 0.1f, 0.f, FLT_MAX, "%.3f lux", ImGuiSliderFlags_AlwaysClamp) || !std::isfinite(illuminance))
-				return false;
-			color = previous > 0.f ? color * (illuminance / previous) : float3(illuminance);
-			rgb[0] = color.x;
-			rgb[1] = color.y;
-			rgb[2] = color.z;
-			return true;
-		});
+		DrawIlluminanceControl(T(TKEY("sun_illuminance"), "Solar Illuminance"), settings.sunlightColor, kSunIlluminanceSpeed);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(T(TKEY("sun_illuminance_hint"), "Illuminance on a surface perpendicular to the sun, before atmospheric extinction: 10 lux supplies 10 linear lighting units. Calibrated for LL + PBR with Override Directional Light enabled. Directional Light Multiplier, horizon fading and shadows apply afterward."));
 		ImGui::Checkbox(T(TKEY("procedural_sun"), "Procedural Sun"), &settings.proceduralSun);
@@ -748,21 +782,33 @@ void PhysicalSky::SettingsCelestials()
 		ImGui::PopID();
 	}
 
+	const auto drawMoonIlluminance = [](float3& color) {
+		DrawIlluminanceControl(T(TKEY("moon_illuminance"), "Lunar Illuminance"), color, kMoonIlluminanceSpeed);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T(TKEY("moon_illuminance_hint"), "Illuminance on a surface perpendicular to the moon, before atmospheric extinction. Scales all channels together, preserving the color."));
+	};
+
 	ImGui::SeparatorText(T(TKEY("masser"), "Masser"));
 	{
 		ImGui::PushID("Masser");
-		ImGui::ColorEdit3(T(TKEY("light_color"), "Light Color"), &settings.masserColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		if (ImGui::ColorEdit3(T(TKEY("light_color"), "Light Color"), &settings.masserColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+			ClampLightColor(settings.masserColor);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("light_color_hint"), "This sets the light color BEFORE it goes through the atmosphere i.e. extraterrestrial radiance."));
+		drawMoonIlluminance(settings.masserColor);
+		ImGui::SliderAngle(T(TKEY("disk_angular_radius"), "Disk Angular Radius"), &settings.masserDiskRad, 0.05f, 30.f, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::PopID();
 	}
 
 	ImGui::SeparatorText(T(TKEY("secunda"), "Secunda"));
 	{
 		ImGui::PushID("Secunda");
-		ImGui::ColorEdit3(T(TKEY("light_color"), "Light Color"), &settings.secundaColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		if (ImGui::ColorEdit3(T(TKEY("light_color"), "Light Color"), &settings.secundaColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+			ClampLightColor(settings.secundaColor);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("light_color_hint"), "This sets the light color BEFORE it goes through the atmosphere i.e. extraterrestrial radiance."));
+		drawMoonIlluminance(settings.secundaColor);
+		ImGui::SliderAngle(T(TKEY("disk_angular_radius"), "Disk Angular Radius"), &settings.secundaDiskRad, 0.05f, 30.f, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::PopID();
 	}
 }
@@ -928,13 +974,16 @@ void PhysicalSky::DrawCloudStatus()
 		ImGui::Text("%s", T(TKEY("enable_volumetric_clouds_tooltip"), "Enable ray-marched volumetric clouds with NDF-based cloud shapes."));
 
 	if (settings.enableVolumetricClouds) {
-		const bool ready = ShadersOK();
+		const bool ready = VolumetricCloudsEnabled() && ShadersOK();
 		ImGui::SameLine();
 		Util::Badge(ready ? T(TKEY("cloud_status_ready"), "Ready") : T(TKEY("cloud_status_unavailable"), "Not Ready"),
 			ready ? Util::Colors::GetSuccess() : Util::Colors::GetWarning());
 		if (ImGui::IsItemHovered())
 			Util::AddTooltip(T(TKEY("cloud_status_tooltip"),
 				"Ready means the cloud shaders and the generated shape noise are available. Not Ready usually means shaders are still compiling or a required cloud texture is missing."));
+		if (volumetricScreenResourcesFailed)
+			Util::Text::WrappedWarning("%s", T(TKEY("cloud_targets_failed"),
+												 "Volumetric clouds are off for this session because their screen targets could not be created, usually from running out of video memory. Restart the game to retry."));
 	}
 
 	if (scene) {
@@ -1678,17 +1727,54 @@ void PhysicalSky::SetupResources()
 		texApShadow->CreateUAV(uavDesc);
 	}
 
-	CompileShaders();
-
+	{
+		const D3D11_TEXTURE2D_DESC desc{
+			.Width = kDiskPhaseLutSize,
+			.Height = 3,
+			.MipLevels = 1,
+			.ArraySize = 1,
+			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
+			.SampleDesc = { 1, 0 },
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
+		};
+		texDiskPhaseLut = eastl::make_unique<Texture2D>(desc, "PhysicalSky::DiskPhaseLut");
+		D3D11_SHADER_RESOURCE_VIEW_DESC srv{ .Format = desc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D };
+		srv.Texture2D.MipLevels = 1;
+		texDiskPhaseLut->CreateSRV(srv);
+		const D3D11_UNORDERED_ACCESS_VIEW_DESC uav{ .Format = desc.Format, .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D };
+		texDiskPhaseLut->CreateUAV(uav);
+		diskPhaseCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<std::array<float, 12>>(), "PhysicalSky::DiskPhaseConstants");
+		diskPhaseValid = false;
+	}
 	// Volumetric cloud resources
 	SetupVolumetricResources();
+
+	UpdateShaders();
 }
 
 void PhysicalSky::ClearShaderCache()
 {
 	texturePreview.ClearShaderCache();
-	CompileShaders();
-	CompileVolumetricShaders();
+	recompileRequested = true;
+}
+
+void PhysicalSky::UpdateShaders()
+{
+	if (recompileRequested.exchange(false)) {
+		shaders.Cancel();
+		baseShadersQueued = volumetricShadersQueued = false;
+		diskPhaseValid = false;
+	}
+	shaders.Publish();
+	if (!baseShadersQueued) {
+		CompileShaders();
+		baseShadersQueued = true;
+	}
+	if (!volumetricShadersQueued && IsActive() && settings.enableVolumetricClouds) {
+		CompileVolumetricShaders();
+		volumetricShadersQueued = true;
+	}
 }
 
 void PhysicalSky::CompileShaders()
@@ -1697,11 +1783,12 @@ void PhysicalSky::CompileShaders()
 	{
 		winrt::com_ptr<ID3D11ComputeShader>* csPtr;
 		std::string_view filename;
-		std::vector<std::pair<const char*, const char*>> defines = {};
+		Util::AsyncShaderSet::Defines defines = {};
 		std::string_view entry = "main";
 	};
 
 	std::vector<ShaderCompileInfo> shaderInfos = {
+		{ &csDiskPhaseLutGen, "DiskPhaseLut.cs.hlsl", {} },
 		{ &csTrLutGen, "LutGen.cs.hlsl", { { "LUTGEN", "0" } } },
 		{ &csMsLutGen, "LutGen.cs.hlsl", { { "LUTGEN", "1" } } },
 		{ &csSvLutGen, "LutGen.cs.hlsl", { { "LUTGEN", "2" } } },
@@ -1711,24 +1798,20 @@ void PhysicalSky::CompileShaders()
 		{ &csShadowAccumHalfRes, "ShadowAccum.cs.hlsl", { { "HALF_RES", "" } } }
 	};
 
-	for (auto& info : shaderInfos) {
-		*info.csPtr = nullptr;
-		auto path = std::filesystem::path("Data\\Shaders\\PhysicalSky") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.data())))
-			info.csPtr->attach(rawPtr);
-	}
+	for (auto& info : shaderInfos)
+		shaders.Add(*info.csPtr, (std::filesystem::path(kShaderDir) / info.filename).wstring(), std::move(info.defines), std::string(info.entry));
 }
 
 bool PhysicalSky::ShadersOK()
 {
-	bool baseShadersOk = csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes &&
+	bool baseShadersOk = csDiskPhaseLutGen && texDiskPhaseLut && diskPhaseCb && csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes &&
 	                     texTrLut && texSvLut && texApLut && texApShadow;
 	// The cloud maps themselves are created lazily by the first generation
 	// dispatch, so readiness is a property of the generation shaders. The render
 	// path still verifies every texture before binding.
 	const bool ndfReady = (ndfManager.texHeight && ndfManager.texModeling && ndfManager.generatorProgram && ndfManager.noiseProgram);
 	const bool cirrusMapsReady = !settings.cloudLayer.cirrus.enabled || cirrusMapManager.ShadersReady(settings.cloudLayer.cirrus);
-	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
+	bool volumetricShadersOk = !VolumetricCloudsEnabled() ||
 	                           (vsCloudBoundary && psCloudBoundary && texCloudBoundary && cloudBoundaryCB && cloudBoundaryIndices && cloudBoundaryBlend && cloudBoundaryRasterizer && cloudBoundaryDepth &&
 								   csCloudHeightBounds && csCloudHeightBoundsReduce && texCloudHeightBounds && texCloudHeightBoundsTiles && texCloudWeatherBounds &&
 								   csCloudAmbientLighting && texCloudAmbientLighting &&
@@ -1760,6 +1843,7 @@ bool PhysicalSky::SetLocalCloudState(const LocalNdfState& state)
 
 void PhysicalSky::Reset()
 {
+	UpdateShaders();
 	const auto worldspaceID = GetCurrentWorldspaceEditorID();
 	if (cloudAmbientWorldspace != worldspaceID) {
 		cloudAmbientValid = false;
@@ -1767,8 +1851,9 @@ void PhysicalSky::Reset()
 	}
 	UpdateCloudWind();
 	UpdateCloudStorm(worldspaceID);
-	voxelCloudManager.Update(settings.voxelClouds, worldspaceID, settings.enabled && settings.enableVolumetricClouds);
-	if (settings.enabled && settings.enableVolumetricClouds)
+	const bool volumetricCloudsActive = IsActive() && VolumetricCloudsEnabled() && EnsureVolumetricScreenResources();
+	voxelCloudManager.Update(settings.voxelClouds, worldspaceID, volumetricCloudsActive);
+	if (volumetricCloudsActive)
 		localNdfManager.Update(settings.cloudMap, ndfTexManager, worldspaceID);
 	const float2 lowAltitudeRange = settings.cloudLayer.low.GetNdfAltitudeRangeKm();
 	const auto localAltitude = localNdfManager.GetAltitude();
@@ -1798,7 +1883,7 @@ void PhysicalSky::Reset()
 
 	auto& linearLighting = globals::features::linearLighting;
 
-	bool allGood = settings.enabled && ShadersOK() && skySync.loaded && skySync.settings.Enabled;
+	bool allGood = IsActive() && ShadersOK() && skySync.loaded && skySync.settings.Enabled;
 
 	// check worldspace
 	bool worldspaceEnabled = false;
@@ -1831,7 +1916,8 @@ void PhysicalSky::Reset()
 		lightning.Update(*this, worldspaceID, false);
 		if (skySync.loaded && skySync.settings.Enabled)
 			skySync.workingLightColors = std::nullopt;
-		cbData.enabled = allGood;
+		// Some shader paths read cloud shadow and lightning fields without checking enabled, so clear them all
+		cbData = {};
 		volMainHistoryValid = false;
 		cloudAmbientValid = false;
 		return;
@@ -1875,7 +1961,6 @@ void PhysicalSky::Reset()
 		.masserColor = sRGBToWorkingGamut(settings.masserColor),
 		.apTrMix = settings.apTrMix,
 		.secundaDir = { secundaDir.x, secundaDir.y, secundaDir.z },
-		.sunDiskCos = cos(settings.sunDiskRad) * (settings.proceduralSun ? 1.f : 0.f),
 		.secundaColor = sRGBToWorkingGamut(settings.secundaColor),
 		.enabled = allGood,
 		.vanillaMix = settings.vanillaMix,
@@ -1901,7 +1986,7 @@ void PhysicalSky::Reset()
 		.cloudOriginalMix = settings.cloudOriginalMix,
 		.silverLiningMix = settings.silverLiningMix,
 		.silverLiningSpread = settings.silverLiningSpread,
-		.enableVolumetricClouds = settings.enableVolumetricClouds ? 1u : 0u,
+		.enableVolumetricClouds = VolumetricCloudsEnabled() ? 1u : 0u,
 		.shadowVolumeRange = settings.shadowVolumeRange / Util::Units::GAME_UNIT_TO_KM,
 		.lowestCloudAltitude = traceBottomKm / Util::Units::GAME_UNIT_TO_KM,
 		.highestCloudAltitude = traceTopKm / Util::Units::GAME_UNIT_TO_KM,
@@ -1913,7 +1998,7 @@ void PhysicalSky::Reset()
 		.lightSkyStatics = settings.lightSkyStatics ? 1u : 0u,
 		.skyStaticsBrightness = settings.skyStaticsBrightness,
 	};
-	lightning.Update(*this, worldspaceID, allGood && !inInterior && !globals::state->isMapMenuOpen && settings.enableVolumetricClouds && csLightningQuery && csLightningComposite && csLightningCubeComposite);
+	lightning.Update(*this, worldspaceID, allGood && !inInterior && !globals::state->isMapMenuOpen && VolumetricCloudsEnabled() && csLightningQuery && csLightningComposite && csLightningCubeComposite);
 	auto lightningColor = sRGBToWorkingGamut({ cbData.lightningColorIntensity.x, cbData.lightningColorIntensity.y, cbData.lightningColorIntensity.z });
 	// Same working-gamut Y and photometric scale as the solar illuminance control.
 	const float lightningY = wideGamut ? lightningColor.x * 0.2722287168f + lightningColor.y * 0.6740817658f + lightningColor.z * 0.0536895174f :
@@ -1952,13 +2037,45 @@ void PhysicalSky::Reset()
 	const float observerRadius = std::max(cbData.zCameraPlanet, planetRadius);
 	const float observerHorizonDip = std::acos(std::clamp(planetRadius / observerRadius, 0.0f, 1.0f));
 	const float localUpRange = observerHorizonDip + horizonDip;
-	const float solarLimit = std::min(horizonDip + localUpRange + 0.00465f, RE::NI_PI * 0.5f);
+	const auto radius = [](float value, float fallback, float maximum) {
+		return std::isfinite(value) ? std::clamp(value, 0.f, maximum) : fallback;
+	};
+	cbData.diskAngularRadius = {
+		radius(settings.sunDiskRad, DirectX::XMConvertToRadians(0.53f), DirectX::XMConvertToRadians(10.f)),
+		radius(settings.masserDiskRad, DirectX::XMConvertToRadians(8.f), DirectX::XMConvertToRadians(30.f)),
+		radius(settings.secundaDiskRad, DirectX::XMConvertToRadians(4.f), DirectX::XMConvertToRadians(30.f)),
+		0.f  // the directional light's, blended below
+	};
+	cbData.diskBillboardScale = float4(1.f);
+	if (const auto* sky = globals::game::sky; sky && sky->root) {
+		const auto& viewer = sky->root->world.translate;
+		const auto sunTan = sky->sun ? Util::GetBillboardHalfTan(sky->sun->sunBase.get(), viewer, 0.f) : 0.f;
+		const auto masserTan = sky->masser ? Util::GetBillboardHalfTan(sky->masser->moonMesh.get(), viewer, 0.f) : 0.f;
+		const auto secundaTan = sky->secunda ? Util::GetBillboardHalfTan(sky->secunda->moonMesh.get(), viewer, 0.f) : 0.f;
+		if (settings.proceduralSun && sunTan > 0.f)
+			cbData.diskBillboardScale.x = std::tan(cbData.diskAngularRadius.x) / sunTan;
+		if (masserTan > 0.f)
+			cbData.diskBillboardScale.y = std::tan(cbData.diskAngularRadius.y) / masserTan;
+		if (secundaTan > 0.f)
+			cbData.diskBillboardScale.z = std::tan(cbData.diskAngularRadius.z) / secundaTan;
+	}
+	cbData.sunDiskCos = settings.proceduralSun ? std::cos(cbData.diskAngularRadius.x) : 0.f;
+	// Caster order matches the disc slots and phase LUT rows: Sun, Masser, Secunda
+	const auto blend = skySync.GetDirectionalLightBlend();
+	const std::array bodyRadii{ cbData.diskAngularRadius.x, cbData.diskAngularRadius.y, cbData.diskAngularRadius.z };
+	cbData.diskAngularRadius.w = std::lerp(bodyRadii[static_cast<size_t>(blend.source)], bodyRadii[static_cast<size_t>(blend.target)], blend.targetWeight);
+	cbData.dirLightBodyDir = { blend.direction.x, blend.direction.y, blend.direction.z };
+	cbData.dirLightDiskIndex = static_cast<uint>(blend.discBody);
+	const auto discDir = skySync.GetCelestialDirection(globals::game::sky, blend.discBody);
+	cbData.dirLightDisc = { discDir.x, discDir.y, discDir.z, blend.discWeight };
+	const float solarLimit = std::min(horizonDip + localUpRange + cbData.diskAngularRadius.x, RE::NI_PI * 0.5f);
 	cbData.volCloudUseSun = sunDir.z > -std::sin(solarLimit) ? 1u : 0u;
 }
 
 void PhysicalSky::EarlyPrepass()
 {
 	if (cbData.enabled) {
+		UpdateDiskPhaseLut();
 		GenerateLuts();
 	}
 }
@@ -1966,6 +2083,8 @@ void PhysicalSky::EarlyPrepass()
 void PhysicalSky::ReflectionsPrepass()
 {
 	if (cbData.enabled) {
+		auto* phaseSrv = texDiskPhaseLut->srv.get();
+		globals::d3d::context->PSSetShaderResources(106, 1, &phaseSrv);
 		auto* lightningReflection = texLightningCubeLum ? texLightningCubeLum->srv.get() : nullptr;
 		globals::d3d::context->PSSetShaderResources(109, 1, &lightningReflection);
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get() };
@@ -1983,9 +2102,32 @@ void PhysicalSky::ReflectionsPrepass()
 	}
 }
 
+void PhysicalSky::ClearVolumetricToNeutral()
+{
+	auto context = globals::d3d::context;
+	for (auto* texture : { texVolTr.get(), texVolLowTr.get(), texVolHistoryTr.get(), texVolFilteredTr.get(), texVolCubeTr.get() }) {
+		if (texture)
+			context->ClearUnorderedAccessViewFloat(texture->uav.get(), kClearTransmittance);
+	}
+	for (auto* texture : { texVolLum.get(), texVolAux.get(), texVolLowLum.get(), texVolLowAux.get(), texVolHistoryLum.get(), texVolHistoryAux.get(),
+			 texVolFilteredLum.get(), texVolFilteredAux.get(), texVolCubeLum.get(), texLightningMask.get(), texLightningHistory.get(), texLightningChannels.get() }) {
+		if (texture)
+			context->ClearUnorderedAccessViewFloat(texture->uav.get(), kClearLuminance);
+	}
+	if (texShadowVolume)
+		context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), kClearShadowVolume);
+	if (texCloudShadowMean) {
+		ID3D11ShaderResourceView* nullShadowMean = nullptr;
+		context->PSSetShaderResources(69, 1, &nullShadowMean);
+		context->CSSetShaderResources(69, 1, &nullShadowMean);
+		context->ClearUnorderedAccessViewFloat(texCloudShadowMean->uav.get(), kClearLuminance);
+	}
+	volumetricNeutralCleared = true;
+}
+
 void PhysicalSky::Prepass()
 {
-	if (settings.enabled && settings.enableVolumetricClouds) {
+	if (IsActive() && VolumetricCloudsEnabled()) {
 		const bool generatedShape = settings.cloudNoise.procedural || !importedShapeNoiseSrv;
 		const bool generatedAdjustment = settings.cloudNoise.procedural || cloudAdjustmentGenerated;
 		const bool generatedNoise = generatedShape || generatedAdjustment;
@@ -2003,7 +2145,9 @@ void PhysicalSky::Prepass()
 		}
 	}
 	if (cbData.enabled) {
-		const bool renderVolumetricClouds = settings.enableVolumetricClouds && ShadersOK();
+		auto* phaseSrv = texDiskPhaseLut->srv.get();
+		globals::d3d::context->PSSetShaderResources(106, 1, &phaseSrv);
+		const bool renderVolumetricClouds = VolumetricCloudsEnabled() && ShadersOK();
 
 		if (renderVolumetricClouds) {
 			const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();
@@ -2087,41 +2231,9 @@ void PhysicalSky::Prepass()
 		// Volumetric clouds
 		if (renderVolumetricClouds && !globals::features::viewAtmosphere.CompositeEnabled()) {
 			RenderVolumetricClouds(VolumetricCloudPass::kMainViewAndCubemap);
-		} else if (!renderVolumetricClouds && texVolTr && texVolLum) {
-			// Clear to neutral when disabled (white transmittance, black luminance)
-			auto context = globals::d3d::context;
-			FLOAT trClr[4] = { 1.f, 1.f, 1.f, 1.f };
-			FLOAT lumClr[4] = { 0.f, 0.f, 0.f, 0.f };
-			context->ClearUnorderedAccessViewFloat(texVolTr->uav.get(), trClr);
-			context->ClearUnorderedAccessViewFloat(texVolLum->uav.get(), lumClr);
-			if (texVolAux)
-				context->ClearUnorderedAccessViewFloat(texVolAux->uav.get(), lumClr);
-			if (texVolLowTr)
-				context->ClearUnorderedAccessViewFloat(texVolLowTr->uav.get(), trClr);
-			if (texVolLowLum)
-				context->ClearUnorderedAccessViewFloat(texVolLowLum->uav.get(), lumClr);
-			if (texVolLowAux)
-				context->ClearUnorderedAccessViewFloat(texVolLowAux->uav.get(), lumClr);
-			if (texVolHistoryTr)
-				context->ClearUnorderedAccessViewFloat(texVolHistoryTr->uav.get(), trClr);
-			if (texVolHistoryLum)
-				context->ClearUnorderedAccessViewFloat(texVolHistoryLum->uav.get(), lumClr);
-			if (texVolHistoryAux)
-				context->ClearUnorderedAccessViewFloat(texVolHistoryAux->uav.get(), lumClr);
-			if (texVolCubeTr)
-				context->ClearUnorderedAccessViewFloat(texVolCubeTr->uav.get(), trClr);
-			if (texVolCubeLum)
-				context->ClearUnorderedAccessViewFloat(texVolCubeLum->uav.get(), lumClr);
-			if (texShadowVolume) {
-				constexpr FLOAT shadowClear[4] = { 1.f, 0.f, 0.f, 0.f };
-				context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), shadowClear);
-			}
-			if (texCloudShadowMean) {
-				ID3D11ShaderResourceView* nullShadowMean = nullptr;
-				context->PSSetShaderResources(69, 1, &nullShadowMean);
-				context->CSSetShaderResources(69, 1, &nullShadowMean);
-				context->ClearUnorderedAccessViewFloat(texCloudShadowMean->uav.get(), lumClr);
-			}
+		} else if (!renderVolumetricClouds) {
+			if (!volumetricNeutralCleared)
+				ClearVolumetricToNeutral();
 			volMainHistoryValid = false;
 			volHistoryFrameDim = {};
 			cloudAmbientValid = false;
@@ -2293,7 +2405,7 @@ void PhysicalSky::AccumShadow()
 			static_cast<ID3D11ShaderResourceView*>(nullptr),
 			terrainShadows.IsShadowMapReady() ? terrainShadows.texShadowHeight->srv.get() : nullptr,
 			cloudShadows.loaded ? cloudShadows.texCloudShadowLayers[CloudShadows::kMaxCloudLayers - 1]->srv.get() : nullptr,
-			settings.enableVolumetricClouds && texShadowVolume ? texShadowVolume->srv.get() : nullptr,
+			VolumetricCloudsEnabled() && texShadowVolume ? texShadowVolume->srv.get() : nullptr,
 		};
 		auto uav = texApShadow->uav.get();
 
@@ -2325,11 +2437,14 @@ void PhysicalSky::AccumShadow()
 void PhysicalSky::ModifySky()
 {
 	auto context = globals::d3d::context;
-	context->PSGetSamplers(3, 2, originalPSSamplers);
+	// Bound even while disabled: the sky VS reads physSkyData.enabled from it to decide whether to reshape the dome
 	context->VSGetConstantBuffers(6, 1, originalVSSkyFeatureBuffer.put());
 	auto* featureBuffer = globals::state->featureDataCB->CB();
 	context->VSSetConstantBuffers(6, 1, &featureBuffer);
 
+	if (!cbData.enabled)
+		return;
+	context->PSGetSamplers(3, 2, originalPSSamplers);
 	auto samplers = std::array{ sampTr.get(), sampSv.get() };
 	context->PSSetSamplers(3, static_cast<UINT>(samplers.size()), samplers.data());
 }
@@ -2337,14 +2452,26 @@ void PhysicalSky::ModifySky()
 void PhysicalSky::RestoreSamplers()
 {
 	auto context = globals::d3d::context;
-	context->PSSetSamplers(3, 2, originalPSSamplers);
 	auto* featureBuffer = originalVSSkyFeatureBuffer.get();
 	context->VSSetConstantBuffers(6, 1, &featureBuffer);
 	originalVSSkyFeatureBuffer = nullptr;
+
+	if (!cbData.enabled)
+		return;
+	context->PSSetSamplers(3, 2, originalPSSamplers);
+	for (auto*& sampler : originalPSSamplers) {
+		if (sampler)
+			sampler->Release();  // balances the reference PSGetSamplers added
+		sampler = nullptr;
+	}
 }
 
 void PhysicalSky::ModifyGrass()
 {
+	// Grass samples s7 only for volumetric cloud shadows.
+	grassSamplerModified = cbData.enabled && cbData.enableVolumetricClouds;
+	if (!grassSamplerModified)
+		return;
 	auto context = globals::d3d::context;
 	context->PSGetSamplers(7, 1, originalPSGrassSampler.put());
 
@@ -2354,6 +2481,8 @@ void PhysicalSky::ModifyGrass()
 
 void PhysicalSky::RestoreGrassSampler()
 {
+	if (!std::exchange(grassSamplerModified, false))
+		return;
 	auto context = globals::d3d::context;
 	auto sampler = originalPSGrassSampler.get();
 	context->PSSetSamplers(7, 1, &sampler);
@@ -2362,6 +2491,9 @@ void PhysicalSky::RestoreGrassSampler()
 
 void PhysicalSky::ModifyWater()
 {
+	waterSamplerModified = cbData.enabled != 0;
+	if (!waterSamplerModified)
+		return;
 	auto context = globals::d3d::context;
 	context->PSGetSamplers(13, 1, originalPSWaterSampler.put());
 
@@ -2375,6 +2507,8 @@ void PhysicalSky::ModifyWater()
 
 void PhysicalSky::RestoreWaterSampler()
 {
+	if (!std::exchange(waterSamplerModified, false))
+		return;
 	auto context = globals::d3d::context;
 	auto sampler = originalPSWaterSampler.get();
 	context->PSSetSamplers(13, 1, &sampler);

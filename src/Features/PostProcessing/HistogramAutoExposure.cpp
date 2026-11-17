@@ -122,11 +122,6 @@ void HistogramAutoExposure::DrawSettings()
 
 	ImGui::TextWrapped("%s", T("feature.post_processing.histogram_auto_exposure.ev100_units", "Scene EV100 = log2(luminance in cd/m2) + 3 (K = 12.5). 0 EV100 = 0.125 cd/m2. Uses the Physical Sky / Linear Lighting unit scale; other lights are not yet physically calibrated. Exposure compensation is a relative adjustment in stops."));
 
-	if (cam) {
-		ImGui::TextWrapped("%s", T("feature.post_processing.histogram_auto_exposure.cinematic_controlled", "Exposure mode, compensation and limits are controlled by Cinematic Camera. The saved settings below apply again when it is disabled."));
-		DrawCameraExposureReadout();
-	}
-
 	ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.adaptation_speed", "Adaptation Speed"), &settings.AdaptSpeed, 0.1f, 5.f, "%.2f");
 	ImGui::SliderFloat2(T("feature.post_processing.histogram_auto_exposure.focus_area", "Focus Area"), &settings.AdaptArea.x, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -330,7 +325,6 @@ void HistogramAutoExposure::ClearShaderCache()
 			}
 	}
 
-	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/HistogramAutoExposure");
 	CompileComputeShaders();
 }
 
