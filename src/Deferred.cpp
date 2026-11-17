@@ -433,8 +433,8 @@ void Deferred::DeferredPasses()
 			masks2.SRV,                                                                                // t19 Masks2Texture
 		};
 		ID3D11ShaderResourceView* skylightingCoverageSrvs[2]{
-			skylightingReady ? skylighting.texProbeCoverage->srv.get() : nullptr,    // t18 SkylightingProbeCoverage
-			skylightingReady ? skylighting.texZenithOcclusion->srv.get() : nullptr,  // t19 SkylightingZenithDepth
+			skylightingReady ? skylighting.texProbeCoverage->srv.get() : nullptr,    // t20 SkylightingProbeCoverage
+			skylightingReady ? skylighting.texZenithOcclusion->srv.get() : nullptr,  // t21 SkylightingZenithDepth
 		};
 
 		ID3D11SamplerState* samplers[]{

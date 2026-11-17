@@ -103,6 +103,7 @@ namespace DCLF::Features
 			Integrations::CloudShadows::kCloudOcclusionRegister,
 			Integrations::PhysicalSky::kTransmittance,
 			Integrations::PhysicalSky::kCloudShadowMean,
+			Integrations::PhysicalSky::kDiskPhase,
 			Integrations::PhysicalSky::kCloudShadowVolume,
 			Integrations::ExponentialHeightFog::kLightScatteringRegister,
 			Integrations::DynamicCubemaps::kReflectionsRegister,

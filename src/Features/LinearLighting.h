@@ -21,8 +21,6 @@ struct LinearLighting : Feature
 				T("feature.linear_lighting.key_feature_3", "Makes PBR really work") } };
 	};
 
-	virtual bool IsCore() const override { return true; };
-
 	/** @brief ENABLE_LL is a compile-time define; emit it only when the feature is enabled. */
 	virtual inline std::string_view GetShaderDefineName() override { return "ENABLE_LL"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return IsLinearLightingActive(); }
@@ -111,6 +109,8 @@ struct LinearLighting : Feature
 	RE::NiColor LightColorToWorking(const RE::NiLight* light, bool effect = false) const;
 	RE::NiColor DirectionalColorToWorking(const RE::NiLight* light, bool effect = false) const;
 	bool IsSunlightOverridden(const RE::NiLight* light) const;
+	/** @brief Whether any light currently carries a working-space sunlight override. */
+	bool HasSunlightOverride() const { return workingSunlight != nullptr; }
 	float GetSunlightScale(const RE::NiLight* light) const;
 	void SetSunlightColor(RE::NiLight* light, RE::NiColor color);
 	void ClearSunlightColor(const RE::NiLight* light);

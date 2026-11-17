@@ -860,7 +860,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 
 #		if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
-		dirColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampDepthSampler);
+		dirColor *= PhysSky::SampleDirLightTr(SampDepthSampler);
 #		endif
 
 #		if defined(SKYLIGHTING)
@@ -949,7 +949,7 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 	float3 sunlightTransmission = shadow;
 #		if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
-		sunlightTransmission *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampDepthSampler);
+		sunlightTransmission *= PhysSky::SampleDirLightTr(SampDepthSampler);
 #		endif
 
 	float3 dirLight = ShadowSampling::GetDirectionalLighting();
@@ -1021,9 +1021,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float lightingInfluence = LightingInfluence.x;
 	float3 propertyColor = PropertyColor.xyz;
 	float shadowVariance = 1.0;
-
-	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;
-	float2 screenUV = FrameBuffer::ViewToUV(viewPosition);
 
 	bool isFire = false;
 	bool isLightSprite = false;
@@ -1189,6 +1186,9 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #	endif
 
+	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;
+	float2 screenUV = FrameBuffer::ViewToUV(viewPosition);
+
 	// Light only pixels that survive the alpha test.
 #	if defined(LIGHTING)
 	propertyColor = GetLightingColor(input.MSPosition.xyz, input.WorldPosition.xyz, input.Position.xy, shadowVariance);
@@ -1274,19 +1274,22 @@ PS_OUTPUT main(PS_INPUT input)
 #	if !defined(LIGHTING) && defined(VC) && defined(TEXCOORD) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(SOFT)
 	bool applyViewRayShadow = Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha && lightingInfluence == 1.0;
 #		if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
+	// The fog block above already shadowed it
 	applyViewRayShadow = applyViewRayShadow && !isEnbVolumetricFog;
 #		endif
 	if (applyViewRayShadow) {
+		// One call site: each GetLightingShadow inlines the whole view-ray shadow loop.
+		float3 unshadowedColor = lightColor;
 #		if defined(PHYSICAL_SKY)
-		if (SharedData::physSkyData.enabled && SharedData::physSkyData.lightSkyStatics) {
-			float3 sceneLighting = ShadowSampling::GetSceneLightingColor(input.WorldPosition.xyz);
-			float3 skyStaticLighting = GetLightingShadow(sceneLighting, input.WorldPosition.xyz, input.Position.xy, depth, shadowVariance);
-			lightColor = baseColor.xyz * skyStaticLighting * SharedData::physSkyData.skyStaticsBrightness / Math::PI;
-		} else
+		const bool lightSkyStatics = SharedData::physSkyData.enabled && SharedData::physSkyData.lightSkyStatics;
+		if (lightSkyStatics)
+			unshadowedColor = ShadowSampling::GetSceneLightingColor(input.WorldPosition.xyz);
 #		endif
-		{
-			lightColor = GetLightingShadow(lightColor, input.WorldPosition.xyz, input.Position.xy, depth, shadowVariance);
-		}
+		lightColor = GetLightingShadow(unshadowedColor, input.WorldPosition.xyz, input.Position.xy, depth, shadowVariance);
+#		if defined(PHYSICAL_SKY)
+		if (lightSkyStatics)
+			lightColor = baseColor.xyz * lightColor * SharedData::physSkyData.skyStaticsBrightness / Math::PI;
+#		endif
 	}
 #	endif
 
@@ -1392,6 +1395,10 @@ PS_OUTPUT main(PS_INPUT input)
 		blendedColor = lightColor.xyz;
 #	endif
 	}
+
+	// Hide vanilla aurora ribbons while the procedural aurora is on, even ones reloaded mid-frame
+	[branch] if (SharedData::proceduralAuroraSettings.Enabled && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsAurora))
+		discard;
 
 	float4 finalColor = float4(blendedColor, alpha);
 #	if defined(MULTBLEND_DECAL)

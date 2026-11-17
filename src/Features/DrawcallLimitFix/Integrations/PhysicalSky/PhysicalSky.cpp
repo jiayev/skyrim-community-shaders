@@ -18,6 +18,7 @@ namespace DCLF::Integrations::PhysicalSky
 		{
 			context.RegisterFrameTexture({ .name = "atmospheric transmittance", .textureRegister = kTransmittance, .view = &View<&::PhysicalSky::texTrLut> });
 			context.RegisterFrameTexture({ .name = "mean cloud shadow", .textureRegister = kCloudShadowMean, .view = &View<&::PhysicalSky::texCloudShadowMean> });
+			context.RegisterFrameTexture({ .name = "disk phase", .textureRegister = kDiskPhase, .view = &View<&::PhysicalSky::texDiskPhaseLut> });
 			context.RegisterFrameTexture({ .name = "cloud shadow volume", .textureRegister = kCloudShadowVolume, .view = &View<&::PhysicalSky::texShadowVolume> });
 		}
 	}

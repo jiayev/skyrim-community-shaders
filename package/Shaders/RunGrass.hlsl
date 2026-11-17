@@ -971,7 +971,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif
 #				if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
-		dirLightColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+		dirLightColor *= PhysSky::SampleDirLightTr(SampShadowMaskSampler);
 		dirLightColor *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, SampPhysicalSkyWrapSampler, true);
 	}
 #				endif
@@ -1044,10 +1044,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	DirectLightingOutput totalLighting = (DirectLightingOutput)0;
 	DirectContext dirContext = CreateDirectLightingContext(normal, normal, vertexNormal, viewDirection, viewDirection,
 		SharedData::DirLightDirection.xyz, SharedData::DirLightDirection.xyz, dirLightColor, dirDetailedShadow, dirSoftShadow);
+	dirContext.lightDisk = LightDisk::DirectionalSource();
 	DirectLightingOutput dirOutput;
 	PBR::GetDirectLightInputThinSurface(dirOutput, dirContext, material, grassSurface, pbrDetail, wrap);
 #				if defined(WETNESS_EFFECTS)
-	dirOutput.transmission *= WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, SharedData::DirLightDirection.xyz, dirLightColor, dirDetailedShadow, dirOutput.diffuse, dirOutput.specular, wetnessDirectSpecularColor);
+	dirOutput.transmission *= WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, SharedData::DirLightDirection.xyz, dirLightColor, dirDetailedShadow, dirOutput.diffuse, dirOutput.specular, wetnessDirectSpecularColor, dirContext.lightDisk);
 #				endif
 	totalLighting.diffuse += dirOutput.diffuse;
 	totalLighting.specular += dirOutput.specular;
@@ -1408,7 +1409,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #				if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
-		dirLightColorMultiplier *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+		dirLightColorMultiplier *= PhysSky::SampleDirLightTr(SampShadowMaskSampler);
 		dirLightColorMultiplier *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, SampPhysicalSkyWrapSampler, true);
 	}
 #				endif

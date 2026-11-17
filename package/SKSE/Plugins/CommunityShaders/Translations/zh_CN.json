@@ -1985,6 +1985,7 @@
     "feature.physical_sky.debug_weather_noise_3": "噪声输入 3",
     "feature.physical_sky.description": "基于物理的天空模型，用于生成真实的天空渐变，并提供其他天文效果。",
     "feature.physical_sky.disabled": "%s（禁用）",
+    "feature.physical_sky.disk_angular_radius": "圆盘角半径",
     "feature.physical_sky.editor_id": "编辑器 ID",
     "feature.physical_sky.enable_all_exterior_cells": "启用所有室外单元",
     "feature.physical_sky.enable_cirrus": "启用卷云",
@@ -2715,7 +2716,6 @@
     "feature.post_processing.lens_flare.tooltip_intensity": "整个镜头光斑效果的总强度。",
     "feature.post_processing.lens_flare.tooltip_kernel_scale": "散景核相对于 FFT 分辨率的基础大小。\n在极致模式下，每个鬼影的缩放会乘以此值。",
     "feature.post_processing.lens_flare.tooltip_non_intrusive_ghosts": "仅在直视光源时应用鬼影。",
-    "feature.post_processing.lens_flare.tooltip_threshold_ev": "以 EV100 为单位的亮度阈值（0 EV100 = 0.125 线性亮度）。",
     "feature.post_processing.lens_flare.tooltip_threshold_range": "阈值裁切的渐变范围。",
     "feature.post_processing.lens_flare.tooltip_tint": "应用于镜头光斑效果的径向颜色渐变。",
     "feature.post_processing.lens_flare.view_resize": "视图缩放",
@@ -4957,5 +4957,6 @@
     "ui.restore_saved_settings_title": "恢复已保存的设置？",
     "ui.search": "搜索...",
     "ui.search_clear": "清空搜索",
-    "ui.search_features": "搜索功能..."
+    "ui.search_features": "搜索功能...",
+    "feature.post_processing.lens_flare.tooltip_threshold_ev": "以 EV100 为单位的亮度阈值（0 EV100 = 0.125 线性亮度）。"
 }

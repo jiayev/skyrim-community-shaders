@@ -666,9 +666,11 @@ namespace EnvironmentProbe
 				auto* transmittance = sky.texTrLut ? sky.texTrLut->srv.get() : nullptr;
 				auto* mean = sky.texCloudShadowMean ? sky.texCloudShadowMean->srv.get() : nullptr;
 				auto* volume = sky.texShadowVolume ? sky.texShadowVolume->srv.get() : nullptr;
+				auto* diskPhase = sky.texDiskPhaseLut ? sky.texDiskPhaseLut->srv.get() : nullptr;
 				context->PSSetShaderResources(61, 1, &transmittance);
 				context->PSSetShaderResources(69, 1, &mean);
 				context->PSSetShaderResources(112, 1, &volume);
+				context->PSSetShaderResources(38, 1, &diskPhase);
 			}
 			auto& llf = globals::features::lightLimitFix;
 			if (llf.loaded && llf.probeLightMasks) {

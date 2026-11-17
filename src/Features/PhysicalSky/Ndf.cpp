@@ -163,22 +163,17 @@ void NdfManager::SetupResources()
 	};
 	sampler = nullptr;
 	DX::ThrowIfFailed(globals::d3d::device->CreateSamplerState(&desc, sampler.put()));
-	CompileShaders();
 }
 
-void NdfManager::CompileShaders()
+void NdfManager::CompileShaders(Util::AsyncShaderSet& a_shaders)
 {
 	generatedValid = false;
 	noiseValid.fill(false);
 	noiseInputs.fill(nullptr);
 	for (auto& resource : noiseInputResources)
 		resource = nullptr;
-	generatorProgram = nullptr;
-	noiseProgram = nullptr;
-	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\NdfGenerate.cs.hlsl", {}, "cs_5_0")))
-		generatorProgram.attach(raw);
-	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\NdfNoise.cs.hlsl", {}, "cs_5_0")))
-		noiseProgram.attach(raw);
+	a_shaders.Add(generatorProgram, L"Data\\Shaders\\PhysicalSky\\NdfGenerate.cs.hlsl");
+	a_shaders.Add(noiseProgram, L"Data\\Shaders\\PhysicalSky\\NdfNoise.cs.hlsl");
 }
 
 const char* NdfManager::GetSettingsTypeName(const NdfSettings& settings)
@@ -323,7 +318,7 @@ void NdfManager::DrawNdfNoise(NdfSettings& settings, TextureManager& textures)
 	auto& procedural = settings.procedural;
 	for (uint32_t index = 0; index < 4; ++index) {
 		ImGui::PushID(static_cast<int>(index));
-		if (ImGui::TreeNode(T("feature.physical_sky.ndf.noise", "Noise"), T(TKEY("ndf_noise_input"), "Noise input %u"), index)) {
+		if (ImGui::TreeNode("Noise", T(TKEY("ndf_noise_input"), "Noise input %u"), index)) {  // i18n-ignore: ImGui ID
 			auto& input = procedural.noise[index];
 			DrawNdfTextureChoice(textures, T(TKEY("ndf_dds_override"), "DDS override"), input.texturePath, 1, T(TKEY("ndf_generated"), "Generated"));
 			auto& noise = input.parameters;
@@ -653,16 +648,13 @@ void MidCloudMapManager::SetupResources()
 	sampler = nullptr;
 	DX::ThrowIfFailed(globals::d3d::device->CreateSamplerState(&desc, sampler.put()));
 	Util::SetResourceName(sampler.get(), "PhysicalSky::MiddleCloudWeatherSampler");
-	CompileShaders();
 }
 
-void MidCloudMapManager::CompileShaders()
+void MidCloudMapManager::CompileShaders(Util::AsyncShaderSet& a_shaders)
 {
 	valid = false;
 	output = nullptr;
-	shader = nullptr;
-	if (auto* raw = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\MidCloudGenerate.cs.hlsl", {}, "cs_5_0")))
-		shader.attach(raw);
+	a_shaders.Add(shader, L"Data\\Shaders\\PhysicalSky\\MidCloudGenerate.cs.hlsl");
 }
 
 bool MidCloudMapManager::Update(const MidCloudSettings& settings, TextureManager& textures, const NdfManager& ndf)
@@ -765,18 +757,15 @@ void CirrusMapManager::SetupResources()
 	};
 	sampler = nullptr;
 	DX::ThrowIfFailed(globals::d3d::device->CreateSamplerState(&desc, sampler.put()));
-	CompileShaders();
 }
 
-void CirrusMapManager::CompileShaders()
+void CirrusMapManager::CompileShaders(Util::AsyncShaderSet& a_shaders)
 {
 	generatedValid = false;
 	outputs = {};
 	for (auto& resource : outputResources)
 		resource = nullptr;
-	weatherProgram = nullptr;
-	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\CirrusGenerate.cs.hlsl", {}, "cs_5_0", "generateWeather")))
-		weatherProgram.attach(raw);
+	a_shaders.Add(weatherProgram, L"Data\\Shaders\\PhysicalSky\\CirrusGenerate.cs.hlsl", {}, "generateWeather");
 }
 
 bool CirrusMapManager::ShadersReady(const CirrusSettings&) const
@@ -1036,7 +1025,7 @@ void CirrusMapManager::DrawSettings(CirrusSettings& cirrus, CloudLightingSetting
 	if (!SceneWidgetInterceptor::IsArmed() && ImGui::TreeNode(T(TKEY("cirrus_pattern_settings"), "Pattern Scale & Texture"))) {
 		ImGui::SliderFloat(T(TKEY("cirrus_uv_size"), "Cirrus UV Size"), &cirrus.uvSize, 0.1f, 32.f, "%.2f x", ImGuiSliderFlags_Logarithmic);
 		Util::Text::WrappedSecondary("%s", T(TKEY("cirrus_uv_size_hint"), "Larger values enlarge both weather and detail patterns without changing wind speed. At 1x, weather repeats every 16.384 km and details every 4.29 km. Global setting; scenes cannot override it."));
-		ImGui::TextUnformatted(T("feature.physical_sky.ndf.data_textures_physicalsky_cirrus_dds", "Data/Textures/PhysicalSky/cirrus.dds"));
+		ImGui::TextUnformatted("Data/Textures/PhysicalSky/cirrus.dds");  // i18n-ignore: file path
 		ImGui::TreePop();
 	}
 }
@@ -1066,7 +1055,7 @@ void MidCloudMapManager::DrawSettings(MidCloudSettings& settings, TextureManager
 		ImGui::SliderFloat(T(TKEY("middle_height_power"), "Coverage to thickness response"), &settings.heightPower, 0.25f, 4.f);
 		ImGui::TreePop();
 	}
-	if (ImGui::TreeNode(T("feature.physical_sky.ndf.bands", "Bands"), T(TKEY("middle_bands"), "Cloud bands"))) {
+	if (ImGui::TreeNode("Bands", T(TKEY("middle_bands"), "Cloud bands"))) {  // i18n-ignore: ImGui ID
 		ImGui::SliderFloat(T(TKEY("middle_band_direction"), "Band direction"), &settings.bands.direction, 0.f, 180.f, "%.0f deg");
 		ImGui::SliderFloat(T(TKEY("middle_band_wavelength"), "Band spacing"), &settings.bands.wavelength, 500.f, 16000.f, "%.0f m");
 		ImGui::SliderFloat(T(TKEY("middle_band_warp"), "Band bend (wavelengths)"), &settings.bands.warp, 0.f, 1.f);

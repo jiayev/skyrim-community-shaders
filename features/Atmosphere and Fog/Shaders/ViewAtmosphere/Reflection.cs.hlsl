@@ -95,8 +95,8 @@ void BuildAngularPhase(uint2 pixel, uint ray)
 			const float azimuth = (pixel.x + (x + 0.5) * 0.25) * (2.0 * Math::PI / 32.0);
 			const float3 direction = float3(radius * cos(azimuth), radius * sin(azimuth), z);
 			const float3 cosine = float3(dot(direction, sky.sunDir), dot(direction, sky.masserDir), dot(direction, sky.secundaDir));
-			rayleigh += weight * float3(PhysSky::Phase::Rayleigh(cosine.x), PhysSky::Phase::Rayleigh(cosine.y), PhysSky::Phase::Rayleigh(cosine.z));
-			mie += weight * float3(PhysSky::Phase::CornetteShanks(cosine.x, sky.aerosolPhaseG), PhysSky::Phase::CornetteShanks(cosine.y, sky.aerosolPhaseG), PhysSky::Phase::CornetteShanks(cosine.z, sky.aerosolPhaseG));
+			rayleigh += weight * float3(PhysSky::DiskRayleigh(cosine.x, 0u), PhysSky::DiskRayleigh(cosine.y, 1u), PhysSky::DiskRayleigh(cosine.z, 2u));
+			mie += weight * float3(PhysSky::SampleDiskPhase(cosine.x, 0u).z, PhysSky::SampleDiskPhase(cosine.y, 1u).z, PhysSky::SampleDiskPhase(cosine.z, 2u).z);
 #	ifdef EXP_HEIGHT_FOG
 			const float g = SharedData::exponentialHeightFogSettings.volumetricFogEnabled ? SharedData::exponentialHeightFogSettings.volumetricFogScatteringDistribution : SharedData::exponentialHeightFogSettings.directionalInscatteringAnisotropy;
 			fogPhase += weight * ExponentialHeightFog::HenyeyGreenstein(dot(direction, PhysSky::GetCloudShadowLightDirection()), g);
@@ -131,14 +131,14 @@ float SkyVisibility(float3 position, float3 direction, float g)
 	return Skylighting::MixDiffuse(lerp(1.0, visibility, Skylighting::GetFadeOutFactor(position)));
 }
 
-float3 AtmosphereSource(float3 position, float3 lightDirection, float3 color,
+float3 AtmosphereSource(uint lightIndex, float3 position, float3 lightDirection, float3 color,
 	float3 rayleigh, float3 mie, float rayleighPhase, float miePhase, float directVisibility, float3 diffuseVisibility)
 {
 	if (!any(color > 0.0))
 		return 0.0;
 	const float3 planet = PhysSky::GetMediumPlanetPosition(position);
 	const float radius = length(planet);
-	const float3 tr = PhysSky::SampleAtmosphereLightTr(PhysSky::TexTrLut, LinearSampler, planet, lightDirection);
+	const float3 tr = PhysSky::SampleAtmosphereLightTr(PhysSky::TexTrLut, LinearSampler, planet, lightDirection, SharedData::physSkyData.diskAngularRadius[lightIndex]);
 	const float3 ms = ReflectionMsLut.SampleLevel(LinearSampler, PhysSky::MsLutUv(radius, dot(planet / radius, lightDirection)), 0).rgb;
 	float fogTr = 1.0;
 #	ifdef EXP_HEIGHT_FOG
@@ -160,8 +160,10 @@ float FogOpticalDepth(float3 direction, float nearDistance, float farDistance)
 		return 0.0;
 	const float height0 = FrameBuffer::CameraPosAdjust.z + direction.z * nearDistance;
 	const float height1 = FrameBuffer::CameraPosAdjust.z + direction.z * farDistance;
-	float integral = fog.fogDensity * 0.001 * ExponentialHeightFog::HeightDensityIntegral(height0 - fog.fogHeight, height1 - fog.fogHeight, fog.fogHeightFalloff * 0.001);
-	integral += fog.fogDensity2 * 0.001 * ExponentialHeightFog::HeightDensityIntegral(height0 - fog.fogHeight2, height1 - fog.fogHeight2, fog.fogHeightFalloff2 * 0.001);
+	const float2 fogHeights = float2(fog.fogHeight, fog.fogHeight2);
+	const float2 layerIntegrals = ExponentialHeightFog::HeightDensityIntegral(height0 - fogHeights, height1 - fogHeights, float2(fog.fogHeightFalloff, fog.fogHeightFalloff2) * 0.001);
+	float integral = fog.fogDensity * 0.001 * layerIntegrals.x;
+	integral += fog.fogDensity2 * 0.001 * layerIntegrals.y;
 	float scale = 0.69314718056;
 	if (fog.volumetricFogEnabled) {
 		scale = fog.volumetricFogExtinctionScale * (0.5 / 0.69314718056);
@@ -191,8 +193,10 @@ float3 FogSource(float3 position, float3 direction, float visibility, float phas
 		}
 	}
 	const float3 lightDirection = PhysSky::GetCloudShadowLightDirection();
-	const float3 lightColor = SharedData::physSkyData.volCloudUseSun != 0u ? SharedData::physSkyData.sunlightColor : SharedData::DirLightColor.xyz;
-	const float3 tr = PhysSky::SampleAtmosphereLightTr(PhysSky::TexTrLut, LinearSampler, PhysSky::GetMediumPlanetPosition(position), lightDirection);
+	const bool useSun = SharedData::physSkyData.volCloudUseSun != 0u;
+	const float3 lightColor = useSun ? SharedData::physSkyData.sunlightColor : SharedData::DirLightColor.xyz;
+	const float angularRadius = useSun ? SharedData::physSkyData.diskAngularRadius.x : SharedData::physSkyData.diskAngularRadius.w;
+	const float3 tr = PhysSky::SampleAtmosphereLightTr(PhysSky::TexTrLut, LinearSampler, PhysSky::GetMediumPlanetPosition(position), lightDirection, angularRadius);
 	const float fogTr = ExponentialHeightFog::EvaluateHeightFogLightTransmittance(position, FrameBuffer::CameraPosAdjust.xyz, lightDirection);
 	const float3 direct = Color::DirectionalLight(lightColor) * tr * fogTr * visibility * phase;
 	if (!volumetric)
@@ -231,9 +235,9 @@ float3 FogSource(float3 position, float3 direction, float visibility, float phas
 	const SharedData::PhysSkyData sky = SharedData::physSkyData;
 	// Existing world shadow data follows the active directional caster only.
 	const float3 caster = PhysSky::GetCloudShadowLightDirection();
-	float3 source = AtmosphereSource(position, sky.sunDir, sky.sunlightColor, rayleigh, mie, AngularRayleigh[thread.y].x, AngularMie[thread.y].x, dot(caster, sky.sunDir) > 0.999 ? directVisibility : 1.0, diffuseVisibility);
-	source += AtmosphereSource(position, sky.masserDir, sky.masserColor, rayleigh, mie, AngularRayleigh[thread.y].y, AngularMie[thread.y].y, dot(caster, sky.masserDir) > 0.999 ? directVisibility : 1.0, diffuseVisibility);
-	source += AtmosphereSource(position, sky.secundaDir, sky.secundaColor, rayleigh, mie, AngularRayleigh[thread.y].z, AngularMie[thread.y].z, dot(caster, sky.secundaDir) > 0.999 ? directVisibility : 1.0, diffuseVisibility);
+	float3 source = AtmosphereSource(0u, position, sky.sunDir, sky.sunlightColor, rayleigh, mie, AngularRayleigh[thread.y].x, AngularMie[thread.y].x, dot(caster, sky.sunDir) > 0.999 ? directVisibility : 1.0, diffuseVisibility);
+	source += AtmosphereSource(1u, position, sky.masserDir, sky.masserColor, rayleigh, mie, AngularRayleigh[thread.y].y, AngularMie[thread.y].y, dot(caster, sky.masserDir) > 0.999 ? directVisibility : 1.0, diffuseVisibility);
+	source += AtmosphereSource(2u, position, sky.secundaDir, sky.secundaColor, rayleigh, mie, AngularRayleigh[thread.y].z, AngularMie[thread.y].z, dot(caster, sky.secundaDir) > 0.999 ? directVisibility : 1.0, diffuseVisibility);
 	source *= sky.apLumMix;
 	extinction *= sky.apTrMix;
 #	ifdef EXP_HEIGHT_FOG

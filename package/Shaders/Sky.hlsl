@@ -17,11 +17,11 @@
 #if defined(PROCEDURAL_SUN)
 #	include "ProceduralSun/ProceduralSun.hlsli"
 
-/** @brief True for the in-world sun pass, unless Physical Sky or Effects 11 already draws its own sun. */
+/** @brief True for the in-world sun pass, unless Physical Sky is enabled or Effects 11 draws its own sun. */
 bool IsProceduralSunActive()
 {
 #	if defined(PHYSICAL_SKY)
-	if (SharedData::physSkyData.enabled && SharedData::physSkyData.sunDiskCos > 0.0)
+	if (SharedData::physSkyData.enabled)
 		return false;
 #	endif
 	bool effects11OwnsSun = false;
@@ -123,6 +123,22 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float4 inputPosition = float4(input.Position.xyz, 1.0);
 	float4 previousInputPosition = inputPosition;
+
+#	if defined(PHYSICAL_SKY) && (defined(TEX) || defined(MOONMASK))
+	if (SharedData::physSkyData.enabled) {
+		float scale = 1.0;
+#		if !defined(MOONMASK)
+		if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsMoon)
+#		endif
+			scale = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSecunda) ? SharedData::physSkyData.diskBillboardScale.z : SharedData::physSkyData.diskBillboardScale.y;
+#		if !defined(DITHER) && !defined(MOONMASK)
+		else if (SharedData::physSkyData.sunDiskCos > 0.0 && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun))
+			scale = SharedData::physSkyData.diskBillboardScale.x;
+#		endif
+		inputPosition.xyz *= scale;
+		previousInputPosition.xyz *= scale;
+	}
+#	endif
 
 #	if defined(PROCEDURAL_SUN) && defined(TEX) && !defined(DITHER)
 	if (IsProceduralSunActive()) {
@@ -379,6 +395,9 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 skyScale = ColorManagement::SRGBToWorking(PParams.yyy);
 #	endif
 	float alphaTransmittance = 1.0;
+#	if defined(PROCEDURAL_AURORA) && defined(DITHER) && !defined(TEX)
+	float3 auroraColor = 0.0;  // kept for the physical sky dome, which replaces the vanilla gradient
+#	endif
 
 #	if defined(PS_CLOUDS)
 	float psCloudDist = 1e3f / 1.428e-2;
@@ -487,12 +506,15 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(HDR_OUTPUT)
 #			if defined(EFFECTS11_PROCEDURAL_SUN)
-	if (!proceduralSunActive)
+	// The procedural disc already carries physical radiance
+	[branch] if (!proceduralSunActive)
 #			endif
 	{
 		float hdrSunGain = HDRSun::GetHdrSunGain(hdrSunTexCoord, baseColor);
 		baseColor.xyz *= hdrSunGain;
-		if (HDRSun::IsHdrSunActive() && !enableProceduralSun) {
+		// Physical Sky's vanilla-sun treatment; without it the sun takes the plain HDR gain only
+		const bool physicalSkyHdrSun = HDRSun::IsHdrSunActive() && SharedData::physSkyData.enabled && !enableProceduralSun;
+		if (physicalSkyHdrSun) {
 			// Dither bright output to reduce banding in high-boost sun path.
 			// Same baseColor/skyScale treatment for DITHER and non-DITHER; DITHER adds noiseGrad later.
 			baseColor.xyz += (Random::InterleavedGradientNoise(input.Position.xy) - 0.5f) *
@@ -501,7 +523,7 @@ PS_OUTPUT main(PS_INPUT input)
 		}
 
 #			if defined(CLOUD_SHADOWS)
-		if (HDRSun::IsHdrSunActive() && !enableProceduralSun && !standaloneSunActive) {
+		if (physicalSkyHdrSun && !standaloneSunActive) {
 			float cloudMult = CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, SampBaseSampler);
 			baseColor.xyz *= cloudMult;
 #				if defined(ENABLE_LL)
@@ -555,12 +577,12 @@ PS_OUTPUT main(PS_INPUT input)
 	const float auroraPixelAngle = length(fwidth(auroraDirection));
 	[branch] if (SharedData::proceduralAuroraSettings.Enabled && SharedData::proceduralAuroraSettings.Atmosphere.x > 0.0 && auroraDirection.z > -0.03)
 	{
-		float3 aurora = ColorManagement::SRGBToWorking(ProceduralAurora::Render(auroraDirection, auroraPixelAngle));
+		auroraColor = ColorManagement::SRGBToWorking(ProceduralAurora::Render(auroraDirection, auroraPixelAngle));
 #					if defined(EFFECTS11)
 		[branch] if (SharedData::enbSettings.Enable)
-			aurora = pow(max(aurora, 0.0), SharedData::enbSettings.AuroraCurve) * SharedData::enbSettings.AuroraIntensity;
+			auroraColor = pow(max(auroraColor, 0.0), SharedData::enbSettings.AuroraCurve) * SharedData::enbSettings.AuroraIntensity;
 #					endif
-		psout.Color.xyz += aurora;
+		psout.Color.xyz += auroraColor;
 	}
 #				endif
 
@@ -682,6 +704,10 @@ PS_OUTPUT main(PS_INPUT input)
 		float skyShadow = GetPhysSkyCloudShadow(skyViewDir, input.Position.xy);
 		float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
 		float3 physSkyColor = inReflection ? PhysSky::SampleSky(skyViewDir, skyShadow, PhysSky::SampSv) : PhysSky::SampleViewSky(skyViewDir, skyShadow, PhysSky::SampSv);
+#			if defined(PROCEDURAL_AURORA)
+		// Like stars and moons: attenuated by the atmosphere and added before volumetric clouds cover it
+		physSkyColor += auroraColor * PhysSky::SampleViewCelestialTr(skyViewDir, PhysSky::SampSv);
+#			endif
 		float3 skyColor = physSkyColor;
 		if (inReflection && ViewAtmosphere::ReflectionEnabled()) {
 			uint tailWidth, tailHeight;

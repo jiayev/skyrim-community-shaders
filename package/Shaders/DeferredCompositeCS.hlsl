@@ -101,6 +101,7 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 #if defined(PHYSICAL_SKY)
 #	define PS_DEFERRED_RSRCS
 #	define PS_DEFERRED_SAMPLERS
+// t14 TexApLut, t15 TexApShadow, t16 TexVolTr, t17 TexVolLum, t18 TexShadowVolume, s1 SampSv
 #	include "PhysicalSky/Common.hlsli"
 #endif
 
