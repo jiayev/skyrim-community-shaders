@@ -2,15 +2,15 @@
 // epoch's shape (SubmitSharedEpoch: Features/Forward's forward epoch), each epoch's commit of the installed publication's payload, and
 // the frame blocks taken from the capture.
 
-#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
-#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
-#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
-#include "Features/DrawcallLimitFix/Core/Render/Epochs/ExecutionOwners.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
+#include "Features/DrawcallLimitFix/Core/Render/Direct/Sites.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/ExecutionOwners.h"
+#include "Features/DrawcallLimitFix/Core/Render/Epochs/GraphConditions.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Shading/EngineShaders.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 namespace DCLF
 {
@@ -150,8 +150,7 @@ namespace DCLF
 				drawn = Direct::ForwardReached(result.optional);
 			if (revision.recordings && !revision.recordings->recordings.empty())
 				impl->SubmitRevisionRecording(a_epoch, *revision.recordings, 0);
-			owners.Seal(impl->scene.get());
-		}, owners.Handle());
+			owners.Seal(impl->scene.get()); }, owners.Handle());
 		if (!drawn) {
 			++f.noSharedPayload;
 			return {};
@@ -284,13 +283,15 @@ namespace DCLF
 			// mid-frame would pair them). The frame's colour epoch is not DCLF's (its claimed objects miss this one frame's colour pass);
 			// the next frame waits at its start for a snapshot made for them. Anything else is a defect.
 			if (newResources)
-				logger::info("[DCLF] main resources made at frame {}'s colour pass ({}x{}): its colour epoch is not drawn (no revision of the frame's is for them); "
-							 "the next frame waits at its start for a snapshot made for them",
+				logger::info(
+					"[DCLF] main resources made at frame {}'s colour pass ({}x{}): its colour epoch is not drawn (no revision of the frame's is for them); "
+					"the next frame waits at its start for a snapshot made for them",
 					Scene::FrameView::Get().GetFrame(), resources->width, resources->height);
 			else if (revision && resources == resourcesBefore && impl->unbuilt[jobIndex]++ == 0)
 				logger::warn("[DCLF] the {} epoch of frame {} has no payload for its resources in the installed publication: not submitted <- UNBUILT",
 					depthOnly ? "Z-prepass" : "colour", Scene::FrameView::Get().GetFrame());
-			outcome(!revision ? "no revision, not submitted" : !ahead ? "no installed payload, not submitted" : "payload for other resources, not submitted");
+			outcome(!revision ? "no revision, not submitted" : !ahead ? "no installed payload, not submitted" :
+																		"payload for other resources, not submitted");
 			capture.Release();
 			return;
 		}
@@ -323,13 +324,14 @@ namespace DCLF
 			impl->CommitMainPayload(capture, blocks, in, *payload, resources, stats, owners.List(), revision);
 			// The rows this execution draws, whichever commit latched them (the depth commit's draw families' rows, which this frame's
 			// colour epoch draws too, or a frame before's when this frame's depth epoch did not run).
-			owners.Seal(impl->scene.get());
-		}, owners.Handle());
+			owners.Seal(impl->scene.get()); }, owners.Handle());
 		impl->committedPayload[jobIndex] = committed;
 		impl->committedFrame[jobIndex] = Scene::FrameView::Get().GetFrame();
 		capture.Release();
 		++stats.epochs;
-		outcome(!ok ? "FAILED" : committed ? "submitted" : "NOT COMMITTED", true);
+		outcome(!ok ? "FAILED" : committed ? "submitted" :
+											 "NOT COMMITTED",
+			true);
 		if (!committed) {
 			stats.cpuMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 			return;
@@ -422,6 +424,12 @@ namespace DCLF
 		const bool replayVertexInputs = !a_depthOnly && prepassInputs;
 		MirrorFrameBlocks(a_capture, a_depthOnly, replayVertexInputs, a_out);
 		SupplyFixedBlocks(a_out);
+		// Tree Wind's bindless vertex stage reads FeatureData even when the native pass binds it only to PS.
+		// Keep the Z-prepass's copy for the colour pass so its vertex inputs remain bit-identical.
+		if (!replayVertexInputs)
+			a_out.vs[kFeatureDataRegister] = a_out.ps[kFeatureDataRegister];
+		if (a_depthOnly)
+			prepassVS[kFeatureDataRegister] = a_out.vs[kFeatureDataRegister];
 		CarryMissingBlocks(a_depthOnly, replayVertexInputs, a_out);
 		// The forward epoch draws with the colour epoch's blocks, but after the composite, where the engine's PerFrame has FrameParams.z
 		// raised. Lighting's forward stage needs it to apply its fog and fade. Only that stage reads it, and the colour epoch's Lighting

@@ -430,7 +430,7 @@ namespace DCLF
 		if (auto* own = state.resources.get(); own && own->frameConstants) {
 			// The view's own frame constants, from this frame's sources (a snapshot component of the frame, as the shadow views' record):
 			// the record (its frame textures as SubmitViewEpoch resolved them, the installed payload, FrameValues' buffers, the frame
-			// bindings), CS's SharedData and FeatureData (PS b5, b6), the shared light block and the frame-wide rows. The faces' programs
+			// bindings), CS's SharedData (PS b5) and FeatureData (VS and PS b6), the shared light block and the frame-wide rows. The faces' programs
 			// read no other frame slot (VS and PS b12 are each face's block).
 			const auto& adopted = Adopted();
 			CommitUploads uploads(commitStagedPool, adopted);
@@ -455,7 +455,7 @@ namespace DCLF
 			}
 			const auto shared = traits.kind == ViewKind::EnvironmentProbe ? a_faces.front().shared : SharedDataBlock();
 			const auto feature = FeatureDataBlock();
-			const std::uint32_t vsMask = (1u << kPerFrameVertexRegister) | (1u << kFrameFogRegister);
+			const std::uint32_t vsMask = (1u << kPerFrameVertexRegister) | (1u << kFrameFogRegister) | (feature.empty() ? 0u : 1u << kFeatureDataRegister);
 			const std::uint32_t psMask = (1u << kPerFrameVertexRegister) | (shared.empty() ? 0u : 1u << kSharedDataRegister) | (feature.empty() ? 0u : 1u << kFeatureDataRegister);
 			auto& textures = GpuTextures::Get();
 			const std::uint32_t nullIndex = textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u;
@@ -476,6 +476,7 @@ namespace DCLF
 				}
 			}
 			frame(own->frameConstants, &record, sizeof(record), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
+			frame(own->frameConstants, feature.data(), feature.size(), FrameSlotOffset(false, kFeatureDataRegister));
 			frame(own->frameConstants, shared.data(), shared.size(), FrameSlotOffset(true, kSharedDataRegister));
 			frame(own->frameConstants, feature.data(), feature.size(), FrameSlotOffset(true, kFeatureDataRegister));
 			ZeroSharedLightOnce(uploads, own->frameConstants, own->sharedLightZeroed);

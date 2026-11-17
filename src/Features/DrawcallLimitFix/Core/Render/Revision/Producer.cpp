@@ -2,17 +2,17 @@
 // revision's shapes and latches from a publication and the frame's posted RevisionInputs, then AssembleRevision seals them. Also the
 // main shape's plans (shared with the commits).
 
-#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/MainRanges.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ObjectContributors.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/ProgramFamilies.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/Registry.h"
 #include "Features/DrawcallLimitFix/Core/Extensions/SceneResources.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Core/Gpu/PooledBackings.h"
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Core/Render/Resources/FrameRecords.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Zones.h"
 
 namespace DCLF
 {
@@ -385,6 +385,7 @@ namespace DCLF
 				if (frameBuffer.copy)
 					addTo(frameBuffer.copy.get(), std::size_t(frameBuffer.elements) * frameBuffer.stride, 0);
 			add(sizeof(DrawBindings), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
+			add(a_depth.ps[kFeatureDataRegister], FrameSlotOffset(false, kFeatureDataRegister));
 			add(a_depth.ps[kSharedDataRegister], FrameSlotOffset(true, kSharedDataRegister));
 			add(a_depth.ps[kFeatureDataRegister], FrameSlotOffset(true, kFeatureDataRegister));
 			FrameRowWrites([](void* a_add, std::size_t a_bytes, std::uint64_t a_offset) { (*static_cast<decltype(add)*>(a_add))(a_bytes, a_offset); }, &add);
