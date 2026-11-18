@@ -11,10 +11,12 @@
 #include "Common/Color.hlsli"
 
 Texture2D<float4> TexColor : register(t0);
+#ifdef HAS_PHYSICAL_LENS
 Texture2DArray<float> TexPhysicalFlare : register(t8);
 Texture2DArray<float4> TexPhysicalLens : register(t9);
-#include "PostProcessing/PhysicalLensImaging/diffraction_composite.hlsli"
-#include "PostProcessing/PhysicalLensImaging/mapping.hlsli"
+#	include "PostProcessing/PhysicalLensImaging/diffraction_composite.hlsli"
+#	include "PostProcessing/PhysicalLensImaging/mapping.hlsli"
+#endif
 
 #ifdef HAS_BLOOM
 Texture2D<float4> TexBloom : register(t1);
@@ -188,8 +190,12 @@ cbuffer CompositeCB : register(b3)
 	float FlareIntensity;
 	float BloomRadius;
 	float BloomIntensity;
+#ifdef HAS_PHYSICAL_LENS
 	float HasPhysicalFlare;
 	float HasPhysicalLens;
+#else
+	float2 CompositePadding;
+#endif
 };
 
 #ifdef HAS_BLOOM
@@ -234,7 +240,8 @@ float3 SampleBicubicCatmullRom(Texture2D<float4> tex, SamplerState samp, float2 
 	return max(result, 0.0);
 }
 
-#include "PostProcessing/PhysicalLensFlare/reconstruction.hlsli"
+#ifdef HAS_PHYSICAL_LENS
+#	include "PostProcessing/PhysicalLensFlare/reconstruction.hlsli"
 float3 SamplePhysicalFlare(float2 uv, float2 texSize)
 {
 	// Include the filter halo, including partial tiles at odd render sizes.
@@ -247,6 +254,7 @@ float3 SamplePhysicalFlare(float2 uv, float2 texSize)
 	[branch] if ((occupied & (1u << 17)) != 0) result = max(SamplePhysicalMip(TexPhysicalFlare, LinearSampler, uv, texSize, 0), 0);
 	return result;
 }
+#endif
 
 #ifdef HAS_LENS_FLARE
 float3 SampleFlare(uint2 tid)
@@ -290,20 +298,30 @@ float4 PSComposite(FullscreenTriangleVSOutput input) :
 {
 	uint2 tid = uint2(input.Position.xy);
 
+#ifdef HAS_PHYSICAL_LENS
 	float2 sceneUV = input.TexCoord;
 	float3 sceneColor;
 	[branch] if (DiffractionEnabled > 0)
-		sceneColor = PreExposure::Decode(SamplePhysicalLensWave(TexColor, TexPhysicalLens, LinearSampler, input.TexCoord, sceneUV));
+		sceneColor = SamplePhysicalLensWave(TexColor, TexPhysicalLens, LinearSampler, input.TexCoord, sceneUV);
 	else if (HasPhysicalLens > 0)
-		sceneColor = PreExposure::Decode(SamplePhysicalLensImage(TexColor, TexPhysicalLens, LinearSampler, input.TexCoord, sceneUV));
-	else sceneColor = PreExposure::Decode(TexColor[tid].rgb);
+		sceneColor = SamplePhysicalLensImage(TexColor, TexPhysicalLens, LinearSampler, input.TexCoord, sceneUV);
+	else sceneColor = TexColor[tid].rgb;
 	uint2 sceneTid = min(uint2(saturate(sceneUV) * OutputSize), uint2(OutputSize) - 1);
+#else
+	float3 sceneColor = TexColor[tid].rgb;
+	uint2 sceneTid = tid;
+#endif
+	sceneColor = PreExposure::Decode(sceneColor);
 
 	// Accumulate bloom/flare/glare contributions (separate from scene)
 	float3 bloomContrib = 0;
 
 #ifdef HAS_BLOOM
+#	ifdef HAS_PHYSICAL_LENS
+	bloomContrib += SampleBloom(sceneUV, fwidth(input.TexCoord));
+#	else
 	bloomContrib += SampleBloom(input.TexCoord, fwidth(input.TexCoord));
+#	endif
 #endif
 
 #ifdef HAS_LENS_FLARE
@@ -314,12 +332,14 @@ float4 PSComposite(FullscreenTriangleVSOutput input) :
 	bloomContrib += TexGlare[tid].rgb;
 #endif
 
+#ifdef HAS_PHYSICAL_LENS
 	[branch] if (HasPhysicalFlare > 0)
 	{
 		uint w, h, layers;
 		TexPhysicalFlare.GetDimensions(w, h, layers);
 		bloomContrib += SamplePhysicalFlare(input.TexCoord, float2(w, h));
 	}
+#endif
 	bloomContrib = PreExposure::Decode(bloomContrib);
 
 #ifdef HAS_EXPOSURE

@@ -224,6 +224,8 @@ void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float 
 	const float3 lightColor = context.coatLightColor;
 	const float specularScale = 1.0;
 #	else
+	const float3 viewDir = context.viewDir;
+	const float3 lightDir = context.lightDir;
 	const float3 lightColor = context.lightColor;
 	const float specularScale = context.detailedShadow * Color::PBRLightingCompensation * Color::PBRLightingScale;
 #	endif
@@ -231,7 +233,7 @@ void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float 
 	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::InitSurfaceWetnessState(wetnessNormal, roughness);
 
 	float3 wetnessSpecular = 0;
-	float3 wetnessThroughput = WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, context.viewDir, context.lightDir, lightColor, specularScale, lightingOutput.diffuse, lightingOutput.specular, wetnessSpecular, context.lightDisk);
+	float3 wetnessThroughput = WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDir, lightDir, lightColor, specularScale, lightingOutput.diffuse, lightingOutput.specular, wetnessSpecular, context.lightDisk);
 #	if defined(TRUE_PBR)
 	if (PBR::IsThinSurfaceMaterial(PBRFlags))
 		lightingOutput.transmission *= wetnessThroughput;

@@ -677,7 +677,6 @@
     "cs_editor.scene_page_copy_reject_catalog": "Det är inte en inställning som en scen kan åsidosätta.",
     "cs_editor.scene_page_copy_reject_companion": "En annan del av samma kontroll kan inte kopieras.",
     "cs_editor.scene_page_copy_reject_layer": "Den här sidan kan inte innehålla inställningen.",
-    "cs_editor.scene_page_copy_reject_overwrite": "En åsidosättning från en modd innehåller redan inställningen.",
     "cs_editor.scene_page_copy_reject_value": "Värdet är inte giltigt här.",
     "cs_editor.scene_page_copy_result": "{} kopierade, {} överskrivna, {} överhoppade",
     "cs_editor.scene_page_copy_title": "Kopiera inställningar",
@@ -4061,6 +4060,5 @@
     "ui.restore_saved_settings_title": "Återställa sparade inställningar?",
     "ui.search": "Sök…",
     "ui.search_clear": "Rensa sökningen",
-    "ui.search_features": "Sök funktioner…",
-    "feature.post_processing.lens_flare.tooltip_threshold_ev": "Ljusstyrketröskel i EV100 (0 EV100 = 0,125 linjär luminans)."
+    "ui.search_features": "Sök funktioner…"
 }
