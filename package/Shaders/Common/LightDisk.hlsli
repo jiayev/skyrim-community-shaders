@@ -26,10 +26,10 @@ namespace LightDisk
 		if (sinSquared <= 0.0 || cosine * cosine >= sinSquared)
 			return saturate(cosine);
 		const float sine = sqrt(saturate(1.0 - cosine * cosine));
-		const float cotRadius = disk.y / disk.x;
+		const float cotRadius = disk.y / max(disk.x, EPSILON_DIVISION);
 		const float boundary = clamp(-cotRadius * cosine / sine, -1.0, 1.0);
 		const float tangent = sine * sqrt(saturate(1.0 - boundary * boundary));
-		const float z = tangent / cotRadius;
+		const float z = tangent / max(cotRadius, EPSILON_DIVISION);
 		const float zSquared = z * z;
 		// Factor atan(z) - z before division by the disc area. Direct subtraction
 		// loses the entire small-disc terminator in shader-model-5 arithmetic.
@@ -49,7 +49,7 @@ namespace LightDisk
 		} else {
 			remainder = atan(z) - z;
 		}
-		return max(0.0, (cosine * acos(boundary) + z + remainder / sinSquared) / Math::PI);
+		return max(0.0, (cosine * acos(boundary) + z + remainder / max(sinSquared, EPSILON_LENGTH_SQ)) / Math::PI);
 	}
 
 	// Representative point on the emitter cone nearest the reflected view ray.
