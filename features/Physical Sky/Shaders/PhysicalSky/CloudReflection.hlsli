@@ -40,12 +40,11 @@ VolumetricCloudResult ResolveCloudReflection()
 {
 	VolumetricCloudResult result = (VolumetricCloudResult)0;
 	const float4 weights = ReflectionWeights[0];
-	const float rawTransmission = CloudBackgroundTransmittance(ReflectionDirect[0].a, ReflectionAmbient[0].a);
-	const float transmission = saturate((rawTransmission - 0.1) / 0.9);
+	const float transmission = CloudBackgroundTransmittance(ReflectionDirect[0].a, ReflectionAmbient[0].a);
 	const float opacity = 1.0 - transmission;
 	result.transmittance = transmission;
-	result.lum = (ReflectionDirect[0].rgb + ReflectionAmbient[0].rgb) / (1.0 - min(rawTransmission, 0.1));
-	result.lightning = ReflectionLightning[0] / (1.0 - min(rawTransmission, 0.1));
+	result.lum = ReflectionDirect[0].rgb + ReflectionAmbient[0].rgb;
+	result.lightning = ReflectionLightning[0];
 	result.cloud_depth = weights.y > 0.0 ? weights.x / weights.y : VolumetricCloudBuffer[0].rayMarchRange;
 	result.motionMetadata = weights.y > 0.0 ? saturate(weights.zw / weights.y) : 0.0;
 	result.stormMotion = weights.y > 0.0 ? ReflectionMotion[0] * (opacity / weights.y) : 0.0;
@@ -68,7 +67,7 @@ void TrimUpperCloudReflection(inout VolumetricCloudResult value, uint lane)
 		GroupMemoryBarrierWithGroupSync();
 	}
 	const float2 incident = lane > 0u ? ReflectionDirect[lane - 1u].xy : 1.0;
-	if (max(incident.x, incident.y) <= 0.1) {
+	if (max(incident.x, incident.y) <= CloudViewTransmissionCutoff) {
 		value = (VolumetricCloudResult)0;
 		value.rawTransmission = 1.0;
 	}
@@ -90,7 +89,7 @@ void TrimUpperCloudReflection(inout VolumetricCloudResult value, uint lane)
 	const float cosine = max(max(abs(direction.x), abs(direction.y)), abs(direction.z));
 	const float footprint = 2.0 * cosine / (dimensions.x * 4u);
 	const float2 stratum = float2(lane, lane + 1u) / float(CloudReflectionSegments);
-	const VolumetricCloudResult value = RenderVolumetricCloudRay(direction, eye, 0.0, jitter, 0.0, 0.0, footprint, stratum);
+	const VolumetricCloudResult value = RenderVolumetricCloudRay(direction, eye, 0.0, jitter, 0.0, footprint, stratum);
 	ReduceCloudReflection(value, lane);
 	bool hasUpper = info.middleLayer.z > 0.0 || info.cirrusEnabled != 0u;
 	VolumetricCloudResult lower = (VolumetricCloudResult)0;

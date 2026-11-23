@@ -162,9 +162,7 @@ float EvaluateVoxelDensity(float3 metres, float3 field, VoxelCloudData cloud, fl
 	const float mip = max(log2(abs(distance * cloud.noise.y) + 1.0) + mipBias, minimumMip);
 	const float3 coordinate = float3(metres.xy - VolumetricCloudBuffer[0].noiseWindOffset * GAME_UNIT_TO_M, metres.z) * (cloud.noise.x * .01);
 	const float4 noise = NoiseVoxel.SampleLevel(TileableSampler, coordinate, mip);
-	const float baseNoise = lerp(noise.y, noise.x, field.x);
-	const float smallNoise = noise.w * .2 + .1;
-	float threshold = baseNoise + (smallNoise - baseNoise + (noise.z * .3 - smallNoise) * pow(max(field.x, 0.0), .0625)) * field.y;
+	float threshold = VoxelErosionThreshold(noise, field.x, field.y);
 	const bool nearDetail = distance < 150.0 && enableNearDetail;
 	const float blend = saturate((distance - 50.0) * .01);
 	if (nearDetail) {
@@ -174,7 +172,7 @@ float EvaluateVoxelDensity(float3 metres, float3 field, VoxelCloudData cloud, fl
 		threshold = nearNoise + (blend * .100000024 + .9) * (threshold - nearNoise);
 	}
 	const float verticalDensity = pow(saturate(field.z), 4.0);
-	const float baseDensity = verticalDensity * saturate((field.x - threshold) / max(1.0 - threshold, 1e-6));
+	const float baseDensity = verticalDensity * ErodeVoxelSupport(field.x, threshold);
 	if (baseDensity <= 0.0)
 		return 0.0;
 	const float logDensity = (max(1e-10, verticalDensity) * .3 + .3) * log2(baseDensity);
@@ -187,7 +185,7 @@ float AddVoxelDensity(float3 pos, float mipBias, float viewDistance, float minim
 	uint2 occupied, float ndfDensity, inout CloudDensityContext context)
 {
 	float voxelDensity = 0.0, referenceDensity = 0.0;
-	NDFInfo voxelContext = (NDFInfo)0;
+	CloudMaterialSample voxelContext = (CloudMaterialSample)0;
 	float dominant = 0.0;
 	CLOUD_VOXEL_INSTANCE_LOOP for (uint i = 0u; i < CloudVoxelCount(); ++i)
 	{
@@ -227,7 +225,7 @@ float AddVoxelDensity(float3 pos, float mipBias, float viewDistance, float minim
 
 float sampleCloudDensity(float3 pos, CloudLayer layer, float mipBias, float viewDistance, float minimumMip, out CloudDensityContext context)
 {
-	const float ndfDensity = sampleNdfCloudDensity(pos, layer, mipBias, viewDistance, minimumMip, context);
+	const float ndfDensity = sampleNonVoxelCloudDensity(pos, layer, mipBias, viewDistance, minimumMip, context);
 	return AddVoxelDensity(pos, mipBias, viewDistance, minimumMip, uint2(0xffffffffu, 0xffffffffu), ndfDensity, context);
 }
 

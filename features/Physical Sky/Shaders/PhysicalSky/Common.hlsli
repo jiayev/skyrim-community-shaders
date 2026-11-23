@@ -770,16 +770,16 @@ Texture2D<float4> TexSkyTail : register(t66);
 	}
 
 #if !defined(PS_DEFERRED_RSRCS) && (!defined(PS_PREPASS_RSRCS) || defined(PS_ENABLE_DIRLIGHT_TRANSMITTANCE))
-	float4 GetShadowVolumeSample(float3 posRelative, float3 sunDir)
+	float4 GetShadowVolumeSample(float3 posRelative, float3 sunDir, float2 height, float4 box)
 	{
-		SharedData::PhysSkyData data = SharedData::physSkyData;
 		uint3 dimensions;
 		TexShadowVolume.GetDimensions(dimensions.x, dimensions.y, dimensions.z);
 		if (any(dimensions == 0u))
 			return -1.0;
-		const float2 center = CloudShadowVolume::GridCenter(FrameBuffer::CameraPosAdjust.xy, data.shadowVolumeRange, dimensions.xy);
-		float3 boundsMin = float3(center - 0.5 * data.shadowVolumeRange, data.volCloudLowBottom);
-		float3 boundsMax = float3(center + 0.5 * data.shadowVolumeRange, data.volCloudLowBottom + data.volCloudLowThickness);
+		const float2 center = box.z > 0.0 ? box.xy : CloudShadowVolume::GridCenter(FrameBuffer::CameraPosAdjust.xy, SharedData::physSkyData.shadowVolumeRange, dimensions.xy);
+		const float range = box.z > 0.0 ? box.z : SharedData::physSkyData.shadowVolumeRange;
+		float3 boundsMin = float3(center - 0.5 * range, height.x);
+		float3 boundsMax = float3(center + 0.5 * range, height.y);
 
 		return CloudShadowVolume::GetSample(posRelative, sunDir, boundsMin, boundsMax, dimensions.xy);
 	}
@@ -795,19 +795,22 @@ Texture2D<float4> TexSkyTail : register(t66);
 		float3 posRelative = worldPosAbs;
 		posRelative.z -= data.zBottom;
 
-		float4 shadowSample = GetShadowVolumeSample(posRelative, GetCloudShadowLightDirection());
-		float meanTransmittance = 1.0;
+		const float4 profile = useFarField ? CloudShadowVolume::MeanProfile.Load(int3(0, 0, 0)) : 0.0;
+		const bool haveAtlas = profile.w == 2.0;
+		const float4 box = haveAtlas ? CloudShadowVolume::MeanProfile.Load(int3(2, 0, 0)) : 0.0;
+		const float4 caster = haveAtlas ? CloudShadowVolume::MeanProfile.Load(int3(1, 0, 0)) : float4(GetCloudShadowLightDirection(), 0.0);
+		const float2 height = haveAtlas ? profile.xy : data.volCloudLowBottom + float2(0.0, data.volCloudLowThickness);
+		float4 shadowSample = GetShadowVolumeSample(posRelative, caster.xyz, height, box);
+		float2 farTransmittance = 1.0;
 		float localWeight = 1.0;
-		if (useFarField) {
-			uint3 dimensions;
-			TexShadowVolume.GetDimensions(dimensions.x, dimensions.y, dimensions.z);
-			meanTransmittance = CloudShadowVolume::FarTransmittance(posRelative, GetCloudShadowLightDirection(), shadowSample, dimensions.xy, localWeight);
+		if (haveAtlas) {
+			farTransmittance = CloudShadowVolume::FarTransmittance(posRelative, shadowSample, profile, caster, box, localWeight);
 			shadowSample.w *= localWeight;
 		}
 #	ifdef PS_LINEAR_SHADOW_SAMPLER
-		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, samp, shadowSample, meanTransmittance);
+		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, samp, shadowSample, farTransmittance.x, farTransmittance.y);
 #	else
-		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, shadowSample, meanTransmittance);
+		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, shadowSample, farTransmittance.x, farTransmittance.y);
 #	endif
 
 		return cloudTransmittance.xxx;

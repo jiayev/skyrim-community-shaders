@@ -8,6 +8,21 @@ RWTexture2D<float> RWTexFilteredTr : register(u3);
 RWTexture2D<float4> RWTexFilteredLum : register(u4);
 RWTexture2D<float4> RWTexFilteredAux : register(u5);
 
+void AccumulateCloudBlur(float sampleTr, float4 sampleColor, float centerTr, float4 centerColor,
+	float spatialWeight, inout float transmittance, inout float4 color)
+{
+	// A small opening can carry far more energy than a cloud-covered pixel
+	// when the background is the solar disc. Fade the blur with the optical
+	// depth difference. Return rejected weight to the center for both outputs.
+	const float low = min(centerTr, sampleTr) + 1e-5;
+	const float high = max(centerTr, sampleTr) + 1e-5;
+	const float similarity = saturate(2.0 - 0.5 * (high / low));
+	const float sampleWeight = spatialWeight * similarity;
+	const float centerWeight = spatialWeight - sampleWeight;
+	transmittance += sampleTr * sampleWeight + centerTr * centerWeight;
+	color += sampleColor * sampleWeight + centerColor * centerWeight;
+}
+
 [numthreads(8, 8, 1)] void filterCloudWideFast(uint2 pixel : SV_DispatchThreadID) {
 	const int2 maximum = int2(VolumetricCloudBuffer[0].activeFrameDim) - 1;
 	if (any(int2(pixel) > maximum))
@@ -15,6 +30,8 @@ RWTexture2D<float4> RWTexFilteredAux : register(u5);
 	uint2 dimensions;
 	TexCloudResultTr.GetDimensions(dimensions.x, dimensions.y);
 	const float4 metadata = TexCloudResultAux[pixel];
+	const float centerTr = TexCloudResultTr[pixel];
+	const float4 centerColor = TexCloudResultLum[pixel];
 	const float falloff = 1.0 - saturate(abs(metadata.x - 1.0) / 6.0);
 	const float radius = (pow(falloff, 4.0) * 0.67 + 0.33) * 2.0;
 	float4 color = 0.0;
@@ -29,8 +46,8 @@ RWTexture2D<float4> RWTexFilteredAux : register(u5);
 		const float4 sceneDepths = TexCloudResultAux.GatherGreen(TransmittanceSampler, uv);
 		[branch] if (all(abs(sceneDepths - metadata.y) <= 0.064))
 		{
-			transmittance += TexCloudResultTr.SampleLevel(TransmittanceSampler, uv, 0);
-			color += TexCloudResultLum.SampleLevel(TransmittanceSampler, uv, 0);
+			AccumulateCloudBlur(TexCloudResultTr.SampleLevel(TransmittanceSampler, uv, 0),
+				TexCloudResultLum.SampleLevel(TransmittanceSampler, uv, 0), centerTr, centerColor, 1.0, transmittance, color);
 			weight += 1.0;
 		}
 		else
@@ -44,15 +61,15 @@ RWTexture2D<float4> RWTexFilteredAux : register(u5);
 				const float tapWeight = axisWeight.x * axisWeight.y;
 				const int2 samplePixel = min(base + corner, maximum);
 				if (tapWeight > 0.0 && abs(TexCloudResultAux[samplePixel].y - metadata.y) <= 0.064) {
-					transmittance += TexCloudResultTr[samplePixel] * tapWeight;
-					color += TexCloudResultLum[samplePixel] * tapWeight;
+					AccumulateCloudBlur(TexCloudResultTr[samplePixel], TexCloudResultLum[samplePixel],
+						centerTr, centerColor, tapWeight, transmittance, color);
 					weight += tapWeight;
 				}
 			}
 		}
 	}
-	RWTexFilteredTr[pixel] = weight > 0.0 ? transmittance / weight : TexCloudResultTr[pixel];
-	RWTexFilteredLum[pixel] = weight > 0.0 ? color / weight : TexCloudResultLum[pixel];
+	RWTexFilteredTr[pixel] = weight > 0.0 ? saturate(transmittance / weight) : centerTr;
+	RWTexFilteredLum[pixel] = weight > 0.0 ? color / weight : centerColor;
 	RWTexFilteredAux[pixel] = metadata;
 }
 
@@ -84,11 +101,12 @@ groupshared float4 CloudFilterAux[CloudFilterCount];
 		return;
 	const uint center = (thread.y + CLOUD_BLUR_RADIUS) * CloudFilterWidth + thread.x + CLOUD_BLUR_RADIUS;
 	const float4 metadata = CloudFilterAux[center];
+	const float centerTr = CloudFilterTr[center];
+	const float4 centerColor = CloudFilterLum[center];
 	const float falloff = 1.0 - saturate(abs(metadata.x - 1.0) / 6.0);
 	const float radius = (pow(falloff, 4.0) * 0.67 + 0.33) * CLOUD_BLUR_RADIUS;
 	float4 color = 0.0;
 	float transmittance = 0.0;
-	float2 transmittanceRange = float2(1, 0);
 	float weightSum = 0.0;
 	[unroll] for (int y = -CLOUD_BLUR_RADIUS; y <= CLOUD_BLUR_RADIUS; ++y)
 	{
@@ -106,16 +124,13 @@ groupshared float4 CloudFilterAux[CloudFilterCount];
 			const float2 axisWeight = (saturate(1.0 - abs(float2(x, y) - radius)) + saturate(1.0 - abs(float2(x, y) + radius))) * 0.5;
 			const float weight = axisWeight.x * axisWeight.y;
 #endif
-			const float sampleTr = CloudFilterTr[sampleIndex];
-			transmittanceRange = float2(min(transmittanceRange.x, sampleTr), max(transmittanceRange.y, sampleTr));
-			transmittance += sampleTr * weight;
-			color += CloudFilterLum[sampleIndex] * weight;
+			AccumulateCloudBlur(CloudFilterTr[sampleIndex], CloudFilterLum[sampleIndex],
+				centerTr, centerColor, weight, transmittance, color);
 			weightSum += weight;
 		}
 	}
-	color = weightSum > 0.0 ? color / weightSum : CloudFilterLum[center];
-	RWTexFilteredTr[pixel] = weightSum > 0.0 ? clamp(transmittance / weightSum, transmittanceRange.x, transmittanceRange.y) : CloudFilterTr[center];
-	RWTexFilteredLum[pixel] = color;
+	RWTexFilteredTr[pixel] = weightSum > 0.0 ? saturate(transmittance / weightSum) : centerTr;
+	RWTexFilteredLum[pixel] = weightSum > 0.0 ? color / weightSum : centerColor;
 	RWTexFilteredAux[pixel] = metadata;
 }
 

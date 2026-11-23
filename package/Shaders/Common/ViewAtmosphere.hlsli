@@ -24,6 +24,12 @@ namespace ViewAtmosphere
 	Texture3D<float4> Transmittance : register(t126);
 	StructuredBuffer<Parameters> Data : register(t127);
 
+	float2 ProjectUv(float4 position)
+	{
+		const float4 clip = mul(FrameBuffer::CameraViewProjUnjittered, position);
+		return clip.xy / max(clip.w, 1e-6) * float2(0.5, -0.5) + 0.5;
+	}
+
 	bool Enabled()
 	{
 		uint count, stride;

@@ -192,7 +192,7 @@ void CloudStormManager::Update(TextureManager& textures, ID3D11ShaderResourceVie
 			textures.EnsureLoaded(heightPath);
 			textures.EnsureLoaded(modelingPath);
 			maps = { textures.Query(heightPath), textures.Query(modelingPath) };
-			if (!NdfManager::IsTexturePair(maps))
+			if (!CloudWeatherManager::IsTexturePair(maps))
 				continue;
 		}
 		NdfTextureSet coreMaps;
@@ -205,7 +205,7 @@ void CloudStormManager::Update(TextureManager& textures, ID3D11ShaderResourceVie
 			textures.EnsureLoaded(heightPath);
 			textures.EnsureLoaded(modelingPath);
 			coreMaps = { textures.Query(heightPath), textures.Query(modelingPath) };
-			if (!NdfManager::IsTexturePair(coreMaps))
+			if (!CloudWeatherManager::IsTexturePair(coreMaps))
 				continue;
 		}
 		// The reference core pattern is Perlin-Worley. Weather noise slots are editable and
@@ -216,7 +216,7 @@ void CloudStormManager::Update(TextureManager& textures, ID3D11ShaderResourceVie
 		if (!coreMaps && std::filesystem::is_regular_file(patternPath)) {
 			textures.EnsureLoaded(patternPath.string());
 			corePattern = textures.Query(patternPath.string());
-			if (!NdfManager::IsTextureNdf(corePattern, 1)) {
+			if (!CloudWeatherManager::IsLinearTexture(corePattern, 1)) {
 				logger::error("PhysicalSky storm instance {}: invalid core pattern {}", id, patternPath.string());
 				continue;
 			}
@@ -578,7 +578,7 @@ std::array<uint32_t, 4> CloudStormManager::ScreenRect(float bottomZ, uint32_t wi
 void PhysicalSky::UpdateCloudStorm(const std::string& worldspace)
 {
 	auto* scene = SceneSettingsManager::GetSingleton();
-	cloudStormManager.Update(ndfTexManager, ndfManager.GetNoiseInputs()[2], ndfManager.GetNoiseRevision(), worldspace,
+	cloudStormManager.Update(cloudTextures, weatherMap.GetNoiseInputs()[2], weatherMap.GetNoiseRevision(), worldspace,
 		IsActive() && VolumetricCloudsEnabled(), settings.supercellStorms, volWind.stormTime,
 		scene->GetTransitionControl(SceneSettingsManager::TransitionControl::LocationSeconds));
 }

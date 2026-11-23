@@ -67,9 +67,6 @@ void StoreVoxelCloudSample(uint2 tid, float4 voxelColor, float voxelDepth)
 		return;
 	}
 	const float phase = ApplyCloudForwardPeakOcclusion(CloudLowPhase(direction));
-	float3 ambientSky = 0.0, ambientGround = 0.0;
-	[branch] if (info.ambientStrength > 0.0 && CloudAmbientSHOnly != 0u)
-		CloudAmbientTransport::SHSources(ambientSky, ambientGround);
 #	ifdef CLOUD_VOXEL_SINGLE
 	// A single placement's reference width/material are constant along the ray.
 	// Fetch the existing calibration once; height, density and attenuation are
@@ -78,17 +75,18 @@ void StoreVoxelCloudSample(uint2 tid, float4 voxelColor, float voxelDepth)
 	[branch] if (info.msStrength > 0.0 && info.msAlbedo > 0.0)
 	{
 		const VoxelCloudData cloud = VoxelClouds[0];
-		NDFInfo material = (NDFInfo)0;
+		CloudMaterialSample material = (CloudMaterialSample)0;
 		material.altitude = VoxelAltitude(cloud);
 		material.voxelBlend = 1.0;
 		material.voxelDensityScale = cloud.parameters.y * cloud.centerWeight.w;
 		msProfile = PrepareCloudMsProfile(material);
 	}
 #	endif
+	const CloudAerialRay air = MakeCloudAerialRay(direction);
 	float3 radiance = 0.0;
 	float transmission = 1.0, depthSum = 0.0, weightSum = 0.0;
 	// Selecting the next box also skips gaps between independent placements.
-	CLOUD_VOXEL_INSTANCE_LOOP for (uint region = 0u; region < CloudVoxelCount() && transmission > .1; ++region)
+	CLOUD_VOXEL_INSTANCE_LOOP for (uint region = 0u; region < CloudVoxelCount() && transmission > CloudViewTransmissionCutoff; ++region)
 	{
 		if (region != 0u)
 			interval = CloudVoxelInterval(eye, direction, cursor, true);
@@ -96,10 +94,10 @@ void StoreVoxelCloudSample(uint2 tid, float4 voxelColor, float voxelDepth)
 		if (end <= interval.x)
 			break;
 		float distance = interval.x;
-		[loop] while (distance < end && transmission > .1)
+		[loop] while (distance < end && transmission > CloudViewTransmissionCutoff)
 		{
 			uint2 occupied;
-			const float step = CloudVoxelStep(eye + direction * distance, distance, 0.0, occupied);
+			const float step = min(CloudVoxelStep(eye + direction * distance, distance, 0.0, occupied), end - distance);
 			if (any(occupied != 0u)) {
 				const float metres = distance * GAME_UNIT_TO_M;
 				const float3 position = eye + direction * (distance + step * 0.5);
@@ -107,12 +105,12 @@ void StoreVoxelCloudSample(uint2 tid, float4 voxelColor, float voxelDepth)
 				const float density = AddVoxelDensity(position, 0.0, metres, 0.0, occupied, 0.0, context);
 				if (density > 1e-10) {
 					context.ndf.voxelBlend = 1.0;
-					const float depthWeight = CloudDepthWeight(transmission, density, distance);
-					depthSum += depthWeight * distance;
-					weightSum += depthWeight;
 					const float opticalDepth = step * GAME_UNIT_TO_M * density;
 					const float stepTransmission = exp(-opticalDepth);
 					const float opacity = CloudOpacity(opticalDepth);
+					const float depthWeight = transmission * opacity;
+					depthSum += depthWeight * (distance + 0.5 * step);
+					weightSum += depthWeight;
 #	ifdef CLOUD_VOXEL_SINGLE
 					const float lightDepth = TraceVoxelLighting(position, metres) * info.sunExtinction;
 					const float multiple = CloudMultipleScattering(density, context.ndf, msProfile);
@@ -124,14 +122,10 @@ void StoreVoxelCloudSample(uint2 tid, float4 voxelColor, float voxelDepth)
 					if (info.ambientStrength > 0.0) {
 						const float2 material = CloudMaterialAmbient(context.ndf);
 						source += opacity * material.y * info.ambientStrength * info.cloudLightingScale *
-						          CloudAmbientTransport::ViewSource(position, context.ndf.height_fraction, density, ambientSky, ambientGround);
+						          CloudAmbientLight::SkySource(position);
 					}
-					// Native NVDF integrates aerial perspective at each occupied step.
-					if (!ViewAtmosphere::Enabled()) {
-						const float4 air = SampleCloudAerialPerspective(direction, distance, 0.0);
-						source = source * air.a + air.rgb * opacity;
-					}
-					radiance += transmission * source;
+					const ViewAtmosphere::Medium perspective = SampleCloudAerialPerspective(air, distance + step * 0.5);
+					radiance += transmission * (source * perspective.transmittance + perspective.luminance * opacity);
 					transmission *= stepTransmission;
 				}
 			}
@@ -139,7 +133,7 @@ void StoreVoxelCloudSample(uint2 tid, float4 voxelColor, float voxelDepth)
 		}
 		cursor = interval.y;
 	}
-	const float opacity = 1.0 - saturate((transmission - .1) / .9);
+	const float opacity = 1.0 - transmission;
 	StoreVoxelCloudSample(tid, float4(min(radiance, 65504.0), opacity),
 		weightSum > 0.0 ? EncodeCloudDepth(depthSum / weightSum) : 0.0);
 }

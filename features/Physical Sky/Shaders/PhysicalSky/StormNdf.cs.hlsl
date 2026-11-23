@@ -25,8 +25,7 @@ float2 Rotate(float2 p, float angle)
 		return;
 	const float2 p = ((pixel + 0.5) / float2(width, height) - 0.5) * (2.0 * Storm.animation.z);
 	const float level = Storm.generation.z;
-	// Cache the weather-independent terms of ApplySupercell. The density pass
-	// supplies the live weather NDF before evaluating its vertical profile.
+	// Cache the instance’s shape for composition in the density pass.
 	float2 bounds = float2(level, 1.0);
 	float3 model = 0.0;
 	float coreCoverageContribution = 0.0;
@@ -106,7 +105,7 @@ float2 Rotate(float2 p, float angle)
 		const float heightResidual = (1.0 - strength * back.a) * (1.0 - strength * saturate(stormMask * 7.0));
 		// RG: height intercept; B: back alpha; A: back coverage contribution.
 		// Modeling R holds the core contribution so the max/lerp coverage
-		// expression can be evaluated against live weather, not an empty baseline.
+		// expression can be evaluated against other overlapping storm instances.
 		Height[uint3(pixel, 0)] = float4(bounds - float2(level, 1.0) * heightResidual, back.a, strength * back.a * back.r);
 		Modeling[uint3(pixel, 0)] = float4(coreCoverageContribution, model.gb, stormMask);
 	}

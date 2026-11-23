@@ -1,22 +1,40 @@
 #ifndef PHYSICAL_SKY_CLOUD_NOISE_HLSLI
 #define PHYSICAL_SKY_CLOUD_NOISE_HLSLI
 
+float VoxelErosionThreshold(float4 noise, float support, float billow)
+{
+	const float wisp = lerp(noise.g, noise.r, support);
+	const float smallBillow = noise.a * 0.2 + 0.1;
+	return wisp + (smallBillow - wisp + (noise.b * 0.3 - smallBillow) * pow(max(support, 0.0), 0.0625)) * billow;
+}
+
+float ErodeVoxelSupport(float support, float threshold)
+{
+	return saturate((support - threshold) / max(1.0 - threshold, 1e-6));
+}
+
 float CloudDensityExponent(float height)
 {
 	return saturate((height - 0.25) * 4.0) * 0.29999998 + 0.35;
 }
 
+float CloudBaseProfile(float height, float width, float power, float shapingStart)
+{
+	const float baseHeight = saturate((height - shapingStart) / max(1.0 - shapingStart, 1e-6));
+	return pow(baseHeight, 0.3) * pow(saturate(baseHeight * width), power);
+}
+
+// Nubis Cubed, pp. 94, 99 and 104. In each pair the finer channel
+// takes over deeper inside the dimensional profile.
+float2 NubisErosionThresholds(float4 noise, float profile)
+{
+	return float2(lerp(noise.r, noise.g, profile),
+		0.3 * lerp(noise.b, noise.a, pow(profile, 0.25)));
+}
+
 float2 ReconstructNdfVoxelNoiseComponents(float4 noise, float profile)
 {
-	// Nubis Cubed (2023), pp. 94, 99, 104: RG are low/high-frequency
-	// Curly-Alligator wisps; BA are low/high-frequency Alligator billows.
-	// These are value-erosion thresholds, not the NDF texture's density lobes.
-	const float dimensionalProfile = saturate(profile);
-	const float wispyThreshold = lerp(noise.r, noise.g, dimensionalProfile);
-	const float billowyThreshold = lerp(noise.b, noise.a, pow(dimensionalProfile, 0.25)) * 0.3;
-	const float billow = 1.0 - billowyThreshold;
-	const float wisps = 1.0 - wispyThreshold;
-	return float2(billow, wisps);
+	return 1.0 - NubisErosionThresholds(noise, saturate(profile)).yx;
 }
 
 float ReconstructNdfVoxelNoiseDensity(float4 noise, float profile, float topType, float height)
@@ -76,10 +94,9 @@ float ShapeCloudBaseDensity(float eroded, float height, float bottomWidth, float
 		return 0.0;
 	const float bottomBoost = pow(1.0 - eroded, 10.0) * 8.0;
 	const float baseWidth = 10.0 - saturate((bottomWidth - 1.0) * 0.11111111) * 9.0;
-	const float profileHeight = saturate((height - shapingStart) / max(1.0 - shapingStart, 1e-6));
 	const float stormWidth = lerp(baseWidth, storm * 9.0 + 1.0, pow(abs(storm), 0.3));
 	const float stormPower = lerp(bottomPower, 0.3, storm * storm);
-	const float baseProfile = pow(profileHeight, 0.3) * pow(saturate(profileHeight * stormWidth), stormPower);
+	const float baseProfile = CloudBaseProfile(height, stormWidth, stormPower, shapingStart);
 	const float density = lerp(bottomBoost, 1.0, saturate(height * 5.0)) * eroded * baseProfile;
 	const float shapedDensity = pow(density, saturate((height - 0.25) * 4.0) * 0.29999998 + 0.35);
 	// Lighting uses the density before the storm ceiling fade, enhanced by

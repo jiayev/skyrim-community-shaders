@@ -195,12 +195,13 @@ class SceneSettingsPolicyTests(unittest.TestCase):
             ("aerosolAbsorption", "x"), ("aerosolAbsorption", "y"), ("aerosolAbsorption", "z"),
             ("", "aerosolPhaseG"),
             ("ozoneAbsorption", "x"), ("ozoneAbsorptionAP1", "x"),
-            ("cloudMap", "localCloud"),
-            ("cloudLayer/low", "densityScale"), ("cloudLayer/low", "ndfAltitudeOffset"),
-            ("cloudLayer/low", "bottomSpreadScale"), ("cloudLayer/low", "bottomSpreadHeight"),
-            ("cloudLayer/low", "bottomSoftness"), ("cloudLayer/low", "bottomSoftnessHeight"),
-            ("cloudLayer/low", "topExpansionScale"), ("cloudLayer/low", "curvatureRadius"),
-            ("cloudLayer/low", "ndfAltitudeScale"),
+            ("cloudWeather", "layout"), ("cloudWeather", "coverage"),
+            ("cloudWeather", "cloudType"), ("cloudWeather", "typeVariation"), ("cloudWeather", "convection"),
+            ("cloudLayer/low", "baseDepthScale"), ("cloudLayer/low", "curvatureRadius"),
+            ("cloudLayer/low/weatherSize", "x"), ("cloudLayer/low/weatherSize", "y"),
+            ("cloudLayer/low", "baseAltitude"), ("cloudLayer/low", "worldScale"),
+            ("cloudLayer/low", "stratusExtinction"), ("cloudLayer/low", "cumulusExtinction"),
+            ("cloudLayer/low", "stormExtinction"), ("cloudLayer/low", "baseFadeMeters"),
             ("cloudLayer/middle", "densityScale"), ("cloudLayer/middle", "altitude"),
             ("cloudLayer/cirrus", "densityScale"), ("cloudLayer/cirrus", "altitude"),
             ("cloudLayer/lighting", "brightness"), ("cloudLayer/lighting", "sunExtinction"),
@@ -213,17 +214,6 @@ class SceneSettingsPolicyTests(unittest.TestCase):
             ("cloudLayer/wind/lowVelocity", "x"), ("cloudLayer/wind/lowVelocity", "y"),
             ("cloudLayer/wind/highVelocity", "x"), ("cloudLayer/wind/highVelocity", "y"),
             ("cloudLayer/wind", "development"), ("cloudLayer/wind", "disturbance"),
-            ("cloudMap/procedural/parameters/primary/range", "w"),
-            ("cloudMap/procedural/parameters/secondary/range", "w"),
-            ("cloudMap/procedural/parameters/modeling/range", "w"),
-            ("cloudMap/procedural/parameters/modeling/offset", "x"),
-            ("cloudMap/procedural/parameters/heightVariation", "exponent"),
-            ("cloudMap/procedural/parameters/baseHeight", "y"),
-            ("cloudMap/procedural/parameters/bottomTypeRange", "z"),
-            ("cloudMap/procedural/parameters/windOffset", "x"),
-            ("cloudMap/procedural/parameters", "localModelingWeight"),
-            ("cloudMap/procedural/parameters", "localHeightWeight"),
-            ("cloudMap/procedural/parameters", "localWindScale"),
         ]
         for identity in appearance:
             with self.subTest(setting=identity):
@@ -246,15 +236,9 @@ class SceneSettingsPolicyTests(unittest.TestCase):
             ("aerosolType",), ("aerosolLoading",), ("aerosolHumidity",),
             ("cloudRelightMix",), ("cloudOriginalMix",),
             ("silverLiningMix",), ("silverLiningSpread",), ("cloudShadowRemapRange",),
-            ("cloudMap", "type"), ("cloudMap", "texture"),
-            ("cloudMap", "procedural", "noise"), ("cloudMap", "procedural", "local"),
-            ("cloudMap", "procedural", "localMaskPath"),
-            ("cloudMap", "procedural", "parameters", "heightFromCoverage"),
-            ("cloudMap", "procedural", "parameters", "localBlendMode"),
+            ("cloudWeather", "noise"), ("usePerformanceCloudSteps",),
             ("cloudLayer", "cirrus", "uvSize"),
         ]
-        global_paths.extend(("cloudMap", "procedural", "parameters", layer, "noise")
-                            for layer in ("primary", "secondary", "coverageGain", "modeling", "modelingGain", "heightVariation"))
         blacklist = [normalize_path(path) for path in self.blacklist]
         for path in global_paths:
             prefix = normalize_path(("PhysicalSky", *path))

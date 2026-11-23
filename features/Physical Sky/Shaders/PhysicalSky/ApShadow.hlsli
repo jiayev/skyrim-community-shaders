@@ -83,13 +83,24 @@ namespace AtmosphereShadow
 
 		const DirectionalShadowLightData light = DirectionalShadowLights[0];
 		const float4 clipPos = mul(FrameBuffer::CameraViewProj, float4(posWorldRel, 1));
+		if (clipPos.w <= 0.0)
+			return 1.0;
 		const float shadowMapDepth = SharedData::GetScreenDepth(clipPos.z / clipPos.w);
 		[branch] if (light.EndSplitDistances.y <= 0.0 || shadowMapDepth >= light.EndSplitDistances.y) return 1.0;
 
 		const uint cascadeIndex = shadowMapDepth >= light.EndSplitDistances.x ? 1u : 0u;
 		const float3 positionLS = mul(light.ShadowProj[cascadeIndex], float4(posWorldRel + FrameBuffer::CameraPosAdjust.xyz, 1)).xyz;
-		const float edgeFade = pow(saturate(shadowMapDepth / light.EndSplitDistances.y), 16);
-		return lerp(GatherCascadeShadow(cascadeIndex, positionLS), 1.0, edgeFade);
+		// Elevated cloud receivers can leave the light's frustum well before the
+		// camera-depth split. Its last row of blockers does not extend into the sky.
+		if (any(positionLS < 0.0) || any(positionLS > 1.0))
+			return 1.0;
+		const float2 dimensions = float2(shadowWidth, shadowHeight);
+		const float2 f = frac(positionLS.xy * dimensions - 0.5);
+		const float4 taps = TexDirectShadows.GatherRed(SampTr, float3(positionLS.xy, cascadeIndex)) >= positionLS.z;
+		const float visibility = lerp(lerp(taps.w, taps.z, f.x), lerp(taps.x, taps.y, f.x), f.y);
+		const float2 border = min(positionLS.xy, 1.0 - positionLS.xy) * dimensions;
+		const float coverage = saturate(min(border.x, border.y)) * (1.0 - pow(saturate(shadowMapDepth / light.EndSplitDistances.y), 16));
+		return lerp(1.0, visibility, coverage);
 	}
 
 	float SampleShadow(float3 posWorldRel, float distance, ShadowRayData ray)

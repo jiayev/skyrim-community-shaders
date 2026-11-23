@@ -27,16 +27,9 @@ float LightningHash(float value)
 	const float distanceSample = LightningHash(seed + 1.0);
 	float2 xy = FrameBuffer::CameraPosAdjust.xy + float2(cos(angle), sin(angle)) *
 	                                                  lerp(SharedData::physSkyData.lightningPlacement.x, SharedData::physSkyData.lightningPlacement.y, distanceSample * distanceSample);
-	float bottom = info.lowCloudTraceBottomAltitude, top = info.lowCloudTraceTopAltitude;
-	// Match the weather renderer's moving field and local height overrides.
-	// The global trace slab is not the cloud column's actual base and top.
-	const float2 fieldMeters = CloudFieldPosition((xy - info.noiseWindOffset) * GAME_UNIT_TO_M, info.cloudEvolution.xy);
-	const float2 heights = SampleCloudHeights(fieldMeters * GAME_UNITS_PER_METER, xy).xy;
-	if (heights.y > heights.x) {
-		const float curvature = CloudCurvatureOffset(xy - FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
-		bottom = heights.x - curvature;
-		top = heights.y - curvature;
-	}
+	const float2 heights = WeatherColumnBounds(xy, info);
+	float bottom = WeatherCloudWorldHeight(xy, heights.x, info.cloudCurvatureRadius);
+	float top = WeatherCloudWorldHeight(xy, heights.y, info.cloudCurvatureRadius);
 	[loop] for (uint storm = 0u; storm < CloudStormCount(); ++storm)
 	{
 		if (IsVolcanic(CloudStorms[storm]))
@@ -145,17 +138,24 @@ float4 LightningChannel(float3 direction, float sceneDistance, float footprint, 
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	if (any(pixel >= uint2(info.activeFrameDim)))
 		return;
-	float4 cloud = RWLightningColor[pixel];
-	cloud.rgb += Lightning::ActiveMask(LightningResolvedMask[pixel]) * Lightning::Color();
-	RWLightningColor[pixel] = float4(min(cloud.rgb, 65504.0), cloud.a);
 	const float3 ray = CloudScreenRay(pixel);
+	const bool unified = ViewAtmosphere::Enabled();
+	float3 scattered = Lightning::ActiveMask(LightningResolvedMask[pixel]) * Lightning::Color();
+	if (unified && any(scattered > 0.0)) {
+		const float cloudDistance = DecodeCloudDepth(TexCloudResultAux[pixel].x);
+		const ViewAtmosphere::Medium air = ViewAtmosphere::Sample(ViewAtmosphere::ProjectUv(float4(ray, 0.0)), cloudDistance, TransmittanceSampler);
+		scattered *= air.transmittance;
+	}
+	float4 cloud = RWLightningColor[pixel];
+	cloud.rgb += scattered;
+	RWLightningColor[pixel] = float4(min(cloud.rgb, 65504.0), cloud.a);
 	const float deviceDepth = TexDepth[pixel];
 	const float sceneDistance = deviceDepth >= 1.0 - 1e-6 ? info.rayMarchRange :
 	                                                        SharedData::GetScreenDepth(deviceDepth) / max(abs(mul(FrameBuffer::CameraView, float4(ray, 0)).z), 1e-6);
 	const float footprint = 2.0 / max(abs(FrameBuffer::CameraProj[1][1]) * info.activeFrameDim.y, 1.0);
 	float4 channel = LightningChannel(ray, sceneDistance, footprint, SharedData::physSkyData.lightningColorIntensity.w);
-	if (!ViewAtmosphere::Enabled() && channel.a > 0.0)
-		channel.rgb *= SampleCloudAerialPerspective(ray, DecodeCloudDepth(channel.a), 0.0).a;
+	if (channel.a > 0.0 && !unified)
+		channel.rgb *= SampleCloudAerialPerspective(MakeCloudAerialRay(ray), DecodeCloudDepth(channel.a)).transmittance;
 	RWLightningChannels[pixel] = float4(min(channel.rgb, 65504.0), channel.a);
 }
 

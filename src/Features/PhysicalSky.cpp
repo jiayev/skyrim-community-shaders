@@ -34,12 +34,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	zBottom)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	TexNdfSettings,
-	heightPath,
-	modelingPath)
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	NdfNoiseParameters,
+	WeatherNoiseParameters,
 	type, seed, frequency, octaves, persistence, lacunarity, contrast, bias, repetitions, responseExponent)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -51,52 +46,20 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	skipShapeNoise, useVoxelNoise, procedural, seed, shape, warp, warpCorrelation)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	NdfNoiseInput,
+	WeatherNoiseInput,
 	parameters, texturePath)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	NdfNoiseLayer,
+	WeatherNoiseLayer,
 	noise, frequency, exponent, offset, range)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	NdfGenerationParameters,
-	primary, secondary, coverageGain, modeling, modelingGain, heightVariation,
-	heightAuxiliaryRange, bottomTypeRange, baseHeight, bottomTypeExponent, heightFromCoverage,
-	localBlendMode, localModelingWeight, localHeightWeight, localWindScale, windOffset)
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	ProceduralNdfSettings,
-	parameters, noise, local, localMaskPath)
-
-void to_json(nlohmann::json& j, const NdfSettings& value)
-{
-	j = { { "version", 3 }, { "type", value.type }, { "texture", value.texture }, { "procedural", value.procedural }, { "localCloud", value.localCloud }, { "localTexelSize", value.localTexelSize } };
-}
-
-void from_json(const nlohmann::json& j, NdfSettings& value)
-{
-	value = {};
-	if (j.value("version", 0u) != 2u && j.value("version", 0u) != 3u)
-		return;
-	value.type = j.value("type", NdfType::Procedural) == NdfType::Texture ? NdfType::Texture : NdfType::Procedural;
-	value.texture = j.value("texture", TexNdfSettings{});
-	value.procedural = j.value("procedural", ProceduralNdfSettings{});
-	value.localCloud = j.value("localCloud", SceneBlend{});
-	value.localTexelSize = j.value("localTexelSize", 32.f);
-}
+	CloudWeatherSettings,
+	coverage, cloudType, typeVariation, convection, layout, noise)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LowCloudSettings,
-	ndfAltitudeOffset,
-	ndfAltitudeScale,
-	curvatureRadius,
-	ndfScale,
-	bottomSpreadScale,
-	bottomSpreadHeight,
-	bottomSoftness,
-	bottomSoftnessHeight,
-	topExpansionScale,
-	densityScale)
+	baseAltitude, worldScale, baseDepthScale, curvatureRadius, weatherSize, stratusExtinction, cumulusExtinction, stormExtinction, baseFadeMeters, baseHeightVariation, nvdfDetail)
 
 void to_json(nlohmann::json& j, const CirrusSettings& value)
 {
@@ -207,12 +170,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	rayMarchRange,
 	shadowVolumeRange,
 	marchStepScale,
+	usePerformanceCloudSteps,
 	cloudBlurRadius,
-	cloudAmbientSHOnly,
 	cloudHalfResTrace,
 	cloudFastReconstruction,
 	cloudCascadeShadows,
-	cloudMap,
+	cloudWeather,
 	cloudLayer,
 	cloudNoise,
 	voxelClouds,
@@ -585,6 +548,11 @@ void PhysicalSky::LoadSettings(json& o_json)
 	const auto loadedLoading = settings.aerosolLoading;
 	const auto loadedHumidity = settings.aerosolHumidity;
 	settings = o_json;
+	if (!o_json.contains("usePerformanceCloudSteps")) {
+		const auto legacySteps = o_json.find("useEveWeatherSteps");
+		if (legacySteps != o_json.end() && legacySteps->is_boolean())
+			settings.usePerformanceCloudSteps = legacySteps->get<bool>();
+	}
 	settings.cloudBlurRadius = std::clamp(settings.cloudBlurRadius, 0, 2);
 	settings.SanitizeLightning();
 	for (auto* color : { &settings.sunlightColor, &settings.masserColor, &settings.secundaColor })
@@ -1024,7 +992,7 @@ void PhysicalSky::DrawCloudStatus()
 
 	ImGui::Checkbox(T(TKEY("enable_volumetric_clouds"), "Enable Volumetric Clouds"), &settings.enableVolumetricClouds);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("enable_volumetric_clouds_tooltip"), "Enable ray-marched volumetric clouds with NDF-based cloud shapes."));
+		ImGui::Text("%s", T(TKEY("enable_volumetric_clouds_tooltip"), "Enable ray-marched clouds shaped by cloud type."));
 
 	if (settings.enableVolumetricClouds) {
 		const bool ready = VolumetricCloudsEnabled() && ShadersOK();
@@ -1055,7 +1023,7 @@ void PhysicalSky::DrawCloudLayerProfile()
 {
 	const auto& low = settings.cloudLayer.low;
 	const auto& cirrus = settings.cloudLayer.cirrus;
-	const float2 altitudeKm = low.GetNdfAltitudeRangeKm();
+	const float2 altitudeKm = low.GetAltitudeRangeKm(weatherMap.HasConvection());
 	const float cirrusKm = cirrus.GetAltitudeKm();
 	const auto middleAltitude = settings.cloudLayer.middle.GetAltitudeRange();
 	const float scale = Util::GetUIScale();
@@ -1106,6 +1074,7 @@ void PhysicalSky::DrawCloudLayerProfile()
 
 	const float baseY = yFor(altitudeKm.x);
 	const float topY = yFor(altitudeKm.y);
+	cloudCrossSectionRequested = true;
 	const auto* slab = settings.enableVolumetricClouds && texCloudCrossSection && cloudCrossSectionReady ?
 	                       texCloudCrossSection->srv.get() :
 	                       nullptr;
@@ -1205,7 +1174,7 @@ void PhysicalSky::SettingsVolumetricClouds()
 
 	ImGui::SetNextItemOpen(settings.cloudLayer.middle.enabled, ImGuiCond_FirstUseEver);
 	if (ImGui::CollapsingHeader(T(TKEY("middle_clouds"), "Middle Clouds (As / Ac)"), ImGuiTreeNodeFlags_SpanAvailWidth))
-		MidCloudMapManager::DrawSettings(settings.cloudLayer.middle, ndfTexManager);
+		MidCloudMapManager::DrawSettings(settings.cloudLayer.middle, cloudTextures);
 	DrawCirrusSection();
 	DrawCloudStormSection();
 	if (ImGui::CollapsingHeader(T(TKEY("voxel_section"), "Voxel Clouds"), ImGuiTreeNodeFlags_SpanAvailWidth)) {
@@ -1221,27 +1190,16 @@ void PhysicalSky::SettingsVolumetricClouds()
 
 void PhysicalSky::DrawWeatherMapSection()
 {
-	const bool scene = SceneWidgetInterceptor::IsArmed();
-
 	if (ImGui::TreeNode(T(TKEY("cloud_weather_map"), "Weather Map"))) {
-		Util::Text::WrappedSecondary("%s", T(TKEY("cloud_weather_map_desc"),
-											   "Low-cloud coverage, cloud types and height distribution. Noise inputs are configured under Shared Noise & Textures."));
+		auto& weather = settings.cloudWeather;
+		ImGui::SliderFloat(T(TKEY("weather_cloud_coverage"), "Weather Coverage"), &weather.coverage, 0.f, 1.f);
+		ImGui::SliderFloat(T(TKEY("weather_cloud_type"), "Cloud Type Index"), &weather.cloudType, -1.f, 1.f);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T(TKEY("weather_cloud_preview_type_legend"), "−1 is nimbostratus, 0 is stratus, 0.2 is cumulus, and 0.4–1 are congestus variants."));
+		ImGui::SliderFloat(T(TKEY("weather_cloud_type_variation"), "Cloud Type Variation"), &weather.typeVariation, 0.f, 1.f);
+		ImGui::SliderFloat(T(TKEY("weather_cloud_convection"), "Convection"), &weather.convection, 0.f, 1.f);
+		weatherMap.DrawLayout(weather, cloudTextures);
 		DrawCloudWeatherPreview(false);
-		if (!scene) {
-			if (ImGui::TreeNode(T(TKEY("cloud_map_source"), "Map Source"))) {
-				ndfManager.DrawNdfSource(settings.cloudMap, ndfTexManager);
-				ImGui::TreePop();
-			}
-			Util::Text::Secondary("%s: %s", T(TKEY("cloud_source_label"), "Source"), NdfManager::GetSettingsTypeName(settings.cloudMap));
-		}
-
-		ndfManager.DrawNdfShape(settings.cloudMap.procedural.parameters);
-
-		if (ImGui::TreeNode(T(TKEY("ndf_overlay_section"), "Generator Overlay"))) {
-			ndfManager.DrawNdfOverlay(settings.cloudMap, ndfTexManager);
-			ImGui::TreePop();
-		}
-
 		ImGui::TreePop();
 	}
 }
@@ -1273,23 +1231,23 @@ void PhysicalSky::DrawCloudWeatherPreview(bool middle, bool standalone)
 			const char* channels[] = {
 				T(TKEY("ndf_preview_coverage"), "Coverage"),
 				T(TKEY("cloud_preview_type"), "Cloud type"),
-				T(TKEY("ndf_preview_bottom_height"), "Bottom height"),
-				T(TKEY("ndf_preview_top_height"), "Top height")
+				middle ? T(TKEY("ndf_preview_bottom_height"), "Bottom height") : T(TKEY("weather_cloud_preview_storm_coverage"), "Cumulonimbus coverage"),
+				middle ? T(TKEY("ndf_preview_top_height"), "Top height") : T(TKEY("weather_cloud_preview_storm_type"), "Cumulonimbus type")
 			};
 			auto& channel = cloudWeatherPreviewChannel[layer];
 			ImGui::Combo(T(TKEY("cloud_preview_channel"), "Display"), &channel, channels, IM_ARRAYSIZE(channels));
 			Util::Text::WrappedSecondary("%s", T(TKEY("cloud_preview_live_hint"), "Live map of the active scene, including weather transitions. It shows the weather field before cloud detail and density scaling."));
-			if (channel == 0)
+			if (channel == 0 || (!middle && channel == 2))
 				Util::Text::WrappedSecondary("%s", T(TKEY("cloud_preview_coverage_legend"), "Black: clear; white: full coverage"));
 			else if (channel == 1)
-				Util::Text::WrappedSecondary("%s", middle ? T(TKEY("cloud_preview_middle_type_legend"), "Black: altostratus (As); white: altocumulus (Ac)") : T(TKEY("cloud_preview_low_type_legend"), "Black to white: increasing cloud type at the top"));
+				Util::Text::WrappedSecondary("%s", middle ? T(TKEY("cloud_preview_middle_type_legend"), "Black: altostratus (As); white: altocumulus (Ac)") : T(TKEY("weather_cloud_preview_type_legend"), "−1 is nimbostratus, 0 is stratus, 0.2 is cumulus, and 0.4–1 are congestus variants."));
 			else
-				Util::Text::WrappedSecondary("%s", T(TKEY("cloud_preview_height_legend"), "Black: layer base; white: top of the layer's height range"));
-			const auto maps = ndfManager.GetNdf(live.settings.cloudMap, ndfTexManager);
+				Util::Text::WrappedSecondary("%s", middle ? T(TKEY("cloud_preview_height_legend"), "Black: layer base; white: top of the layer's height range") : T(TKEY("weather_cloud_preview_storm_legend"), "Black: trail; intermediate: anvil edge; white: core"));
 			const auto* id = standalone ? (middle ? "middleWeatherWindow" : "lowWeatherWindow") : (middle ? "middleWeatherInline" : "lowWeatherInline");
-			ID3D11ShaderResourceView* source = middle ? midCloudMapManager.Weather() : channel >= 2 ? maps.height :
-			                                                                                          maps.modeling;
-			const uint32_t component = middle ? std::array{ 1u, 4u, 2u, 3u }[channel] : std::array{ 1u, 2u, 1u, 2u }[channel];
+			auto* source = middle ? live.midCloudMapManager.Weather() : live.weatherMap.FiniteWeather();
+			if (!middle && !source)
+				source = live.weatherMap.Weather();
+			const uint32_t component = middle ? std::array{ 1u, 4u, 2u, 3u }[channel] : static_cast<uint32_t>(channel + 1);
 			const float width = std::max(1.f, std::min(ImGui::GetContentRegionAvail().x, ImGui::GetFontSize() * (standalone ? 32.f : 20.f)));
 			texturePreview.DrawMap(source, id, component, middle && channel != 0, width);
 		}
@@ -1304,31 +1262,32 @@ void PhysicalSky::DrawCloudResourcesSection()
 
 	if (ImGui::CollapsingHeader(T(TKEY("cloud_resources"), "Shared Noise & Textures"), ImGuiTreeNodeFlags_SpanAvailWidth)) {
 		Util::Text::WrappedSecondary("%s", T(TKEY("cloud_resources_desc"),
-											   "Global inputs shared by the cloud layers. Weather noise supplies coverage and type; shape noise adds detail to low and middle clouds."));
+											   "Procedural noise settings feed the low cloud layouts. DDS slot overrides apply to middle clouds, cirrus and authored volumes."));
 		if (ImGui::TreeNode(T(TKEY("cloud_weather_noise"), "Weather Noise"))) {
-			ndfManager.DrawNdfNoise(settings.cloudMap, ndfTexManager);
+			weatherMap.DrawNoise(settings.cloudWeather, cloudTextures);
 			ImGui::TreePop();
 		}
 		if (ImGui::TreeNode(T(TKEY("cloud_shape_noise"), "Shape Noise"))) {
 			cloudNoiseGenerator.DrawSettings(settings.cloudNoise);
-			ImGui::Checkbox(T(TKEY("ndf_use_voxel_noise"), "Use NVDF Noise for NDF Clouds"), &settings.cloudNoise.useVoxelNoise);
+			ImGui::Checkbox(T(TKEY("middle_use_voxel_noise"), "Use NVDF Noise for Middle Clouds"), &settings.cloudNoise.useVoxelNoise);
 			ImGui::TreePop();
 		}
 		if (ImGui::TreeNode(T(TKEY("ndf_texture_inputs"), "Texture inputs"))) {
-			ndfTexManager.DrawUI();
+			cloudTextures.DrawUI();
 			ImGui::TreePop();
 		}
 		if (Util::Button(T(TKEY("reload_cloud_textures"), "Reload Cloud Textures"), { -FLT_MIN, 0 })) {
-			ndfTexManager.Reload();
-			localNdfManager.RefreshAssets();
+			cloudTextures.Reload();
 			LoadCloudTextures();
 		}
 		ImGui::Text("%s: %s", T(TKEY("cloud_shape_source"), "Shape source"),
 			(settings.cloudNoise.procedural || !importedShapeNoiseSrv) ? T(TKEY("cloud_source_generated"), "Generated") : T(TKEY("cloud_source_dds"), "DDS"));
 		ImGui::Text("%s: %s", T(TKEY("cloud_profile_source"), "Profile source"), T(TKEY("cloud_source_dds"), "DDS"));
 		ImGui::Text("%s: %s", T(TKEY("cloud_adjustment_source"), "Adjustment source"), settings.cloudNoise.procedural ? T(TKEY("cloud_source_generated"), "Generated") : T(TKEY("cloud_source_dds"), "DDS"));
-		if (baseShapeNoiseSrv && cloudProfileLutSrv && cloudAdjustmentLutSrv)
+		if (weatherCurlSrv && weatherWorleySrv && weatherProfilesSrv && baseShapeNoiseSrv && cloudProfileLutSrv && cloudAdjustmentLutSrv)
 			ImGui::TextColored(Util::Colors::GetSuccess(), "%s", T(TKEY("cloud_textures_loaded"), "Cloud Textures: Loaded"));
+		else if (!weatherCurlSrv || !weatherWorleySrv || !weatherProfilesSrv)
+			Util::Text::WrappedWarning("%s", T(TKEY("weather_cloud_luts_missing"), "Check the cloud profiles, Worley noise and curl noise textures."));
 		else if (!cloudProfileLutSrv || !importedAdjustmentLutSrv)
 			Util::Text::WrappedWarning("%s", T(TKEY("cloud_luts_missing"), "Cloud Textures: Required Nubis LUTs missing or invalid"));
 		else
@@ -1344,42 +1303,36 @@ void PhysicalSky::DrawLowCloudSection()
 	if (ImGui::CollapsingHeader(T(TKEY("composition"), "Low Clouds"), ImGuiTreeNodeFlags_SpanAvailWidth)) {
 		Util::Text::WrappedSecondary("%s", T(TKEY("cloud_low_desc"),
 											   "The main deck: altitude and scale, silhouette shaping, and opacity."));
+		DrawCloudSpeciesPresets();
 
 		ImGui::SeparatorText(T(TKEY("cloud_density_group"), "Density"));
-		ImGui::SliderFloat(T(TKEY("cloud_density_scale"), "Extinction Scale"), &low.densityScale, 0.f, 1.f, "%.3f 1/m");
+		ImGui::SliderFloat(T(TKEY("weather_cloud_stratus_extinction"), "Stratus peak extinction"), &low.stratusExtinction, 0.f, .75f, "%.3f m⁻¹", ImGuiSliderFlags_Logarithmic);
+		ImGui::SliderFloat(T(TKEY("weather_cloud_cumulus_extinction"), "Cumulus peak extinction"), &low.cumulusExtinction, 0.f, .75f, "%.3f m⁻¹", ImGuiSliderFlags_Logarithmic);
+		ImGui::SliderFloat(T(TKEY("weather_cloud_storm_extinction"), "Cumulonimbus core peak extinction"), &low.stormExtinction, 0.f, .75f, "%.3f m⁻¹", ImGuiSliderFlags_Logarithmic);
+		if (Util::Button(T(TKEY("weather_cloud_reference_extinction"), "Reset extinction at current cloud size"))) {
+			const float scale = low.GetWorldScale();
+			low.stratusExtinction = low.sourceStratus / scale;
+			low.cumulusExtinction = low.sourceCumulus / scale;
+			low.stormExtinction = low.sourceCore / scale;
+		}
+		ImGui::SliderFloat(T(TKEY("weather_cloud_nvdf_detail"), "NVDF erosion detail"), &low.nvdfDetail, 0.f, 1.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("cloud_density_scale_desc"), "Extinction per meter equals this scale times the reconstructed cloud density. It controls view opacity, sunlight attenuation and cloud shadows. At density 0.1 and scale 0.75, a 40 m path transmits about 5% of light."));
+			ImGui::TextWrapped("%s", T(TKEY("weather_cloud_nvdf_detail_desc"), "At zero, Worley noise shapes the density. At one, Nubis billow and wisp noise erodes the cloud profile before density is applied."));
+		ImGui::SliderFloat(T(TKEY("weather_cloud_base_fade"), "Cloud base softening"), &low.baseFadeMeters, 0.f, 450.f, "%.0f m");
+		Util::Text::WrappedSecondary("%s", T(TKEY("weather_cloud_extinction_desc"), "Extinction per metre at full density. The cloud type controls how density falls off at the edges and with height. View, sunlight and shadows use the same field."));
 
 		ImGui::SeparatorText(T(TKEY("cloud_altitude_group"), "Altitude & Scale"));
-		ImGui::DragFloat(T(TKEY("ndf_altitude_offset"), "NDF Base Altitude"), &low.ndfAltitudeOffset, 1.f, 0.f, 20000.f, "%.0f m", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::DragFloat(T(TKEY("ndf_altitude_scale"), "NDF Height Span"), &low.ndfAltitudeScale, 1.f, 1.f, 20000.f, "%.0f m", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("ndf_altitude_encoding"), "Altitude = base altitude + NDF height * height span. Applies to both generated and imported maps."));
-		ImGui::SliderFloat2(T(TKEY("ndf_scale"), "NDF Scale"), &low.ndfScale.x, 1.f, 50.f, "%.2f km");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("ndf_scale_desc"), "Horizontal size of the weather map. Larger values stretch cloud masses across more of the sky."));
+		ImGui::DragFloat(T(TKEY("weather_cloud_base_altitude"), "Cloud Base Altitude"), &low.baseAltitude, 1.f, 0.f, 20000.f, "%.0f m", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T(TKEY("weather_cloud_base_variation"), "Cloud base height variation"), &low.baseHeightVariation, 0.f, 450.f, "%.0f m");
+		ImGui::SliderFloat(T(TKEY("weather_cloud_world_scale"), "Cloud Size"), &low.worldScale, 0.15f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("weather_cloud_base_depth"), "Base layer depth"), &low.baseDepthScale, .15f, 1.65f, "%.2f x");
+		ImGui::SliderFloat2(T(TKEY("weather_cloud_map_size"), "Weather Map Size"), &low.weatherSize.x, 4.f, 64.f, "%.2f km");
 		if (ImGui::SliderFloat(T(TKEY("cloud_curvature_radius"), "Cloud Curvature Radius"), &low.curvatureRadius, 25.f, 10000.f, "%.2f km", ImGuiSliderFlags_Logarithmic))
 			volMainHistoryValid = false;
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("cloud_curvature_radius_desc"), "Controls how far clouds bend below the horizon. Smaller radii curve them more; NDF thickness is unaffected."));
+			ImGui::Text("%s", T(TKEY("cloud_curvature_radius_desc"), "Controls how far clouds bend below the horizon. Smaller radii curve them more."));
 
 		DrawWeatherMapSection();
-
-		ImGui::SeparatorText(T(TKEY("cloud_shape_group"), "Shape"));
-		Util::Text::WrappedSecondary("%s", T(TKEY("cloud_weather_shape_desc"), "These weather controls shape both global and local NDF clouds. A local map changes coverage, types and heights; it does not carry a separate density or softness preset."));
-		ImGui::SliderFloat(T(TKEY("cloud_bottom_spread_scale"), "Bottom Spread"), &low.bottomSpreadScale, 0.f, 1.f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_bottom_spread_height"), "Bottom Spread Height"), &low.bottomSpreadHeight, 0.001f, 1.f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_bottom_softness"), "Bottom Softness"), &low.bottomSoftness, 0.f, 1.f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_bottom_softness_height"), "Bottom Softness Height"), &low.bottomSoftnessHeight, 0.f, 1.f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_top_expansion"), "Top Expansion"), &low.topExpansionScale, 0.f, 1.f, "%.3f");
-		if (ImGui::TreeNode(T(TKEY("cloud_local_section"), "Local Cloud"))) {
-			Util::Text::WrappedSecondary("%s", T(TKEY("cloud_local_desc"),
-												   "A single authored cloud map placed in the world for hero shapes; it replaces the weather map inside its rectangle."));
-			const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();
-			localNdfManager.DrawSettings(settings.cloudMap, GetCurrentWorldspaceEditorID(),
-				{ camera.x * Util::Units::GAME_UNIT_TO_M, camera.y * Util::Units::GAME_UNIT_TO_M });
-			ImGui::TreePop();
-		}
 	}
 }
 
@@ -1391,7 +1344,7 @@ void PhysicalSky::DrawCirrusSection()
 	if (ImGui::CollapsingHeader(T(TKEY("cirrus"), "Cirrus"), ImGuiTreeNodeFlags_SpanAvailWidth)) {
 		Util::Text::WrappedSecondary("%s", T(TKEY("cloud_cirrus_desc"),
 											   "The high ice-cloud veil. It is a separate layer with its own weather map and lighting."));
-		CirrusMapManager::DrawSettings(cirrus, settings.cloudLayer.lighting, ndfTexManager);
+		CirrusMapManager::DrawSettings(cirrus, settings.cloudLayer.lighting, cloudTextures);
 	}
 }
 
@@ -1410,10 +1363,10 @@ void PhysicalSky::DrawCloudMotionSection()
 			ImGui::Text("%s", T(TKEY("cloud_wind_velocity_desc"), "Horizontal velocity in world X/Y axes. Scene transitions blend the components, including across direction changes. The resulting travel speed is capped at 80 m/s."));
 		ImGui::SliderFloat(T(TKEY("cloud_development"), "Development Speed"), &wind.development, 0.f, 1.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("cloud_development_desc"), "Controls internal low-cloud evolution. Zero freezes development while wind continues to carry the clouds."));
+			ImGui::Text("%s", T(TKEY("cloud_development_desc"), "Controls the growth and dissipation of procedural low clouds. Zero freezes development; wind can still carry the clouds."));
 		ImGui::SliderFloat(T(TKEY("cloud_disturbance"), "Disturbance Strength"), &wind.disturbance, 0.f, 1.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("cloud_disturbance_desc"), "Controls local low-cloud deformation. High and low wind differences also produce a gradual cloud lean."));
+			ImGui::Text("%s", T(TKEY("cloud_disturbance_desc"), "Controls curl displacement in the cumulonimbus trail. Above 0.2, it also frays low cloud edges. Wind shear directs the outflow."));
 
 		const auto speed = [](const float2& velocity) {
 			return std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y);
@@ -1430,8 +1383,6 @@ void PhysicalSky::DrawCloudLightingSection()
 
 	ImGui::SetNextItemOpen(false, ImGuiCond_FirstUseEver);
 	if (ImGui::CollapsingHeader(T(TKEY("cloud_lighting"), "Cloud Lighting"), ImGuiTreeNodeFlags_SpanAvailWidth)) {
-		Util::Text::WrappedSecondary("%s", T(TKEY("cloud_lighting_method"), "Low clouds combine single scattering, energy-normalized local multiple scattering and ambient illumination. Albedo controls absorption and droplet size controls angular scattering. Cirrus uses a thin-layer approximation."));
-
 		ImGui::SeparatorText(T(TKEY("cloud_lighting_intensity"), "Intensity & Transmission"));
 		ImGui::SliderFloat(T(TKEY("cloud_brightness"), "Cloud Brightness"), &lighting.brightness, 0.f, 4.f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_sun_extinction"), "Directional Extinction Scale"), &lighting.sunExtinction, 0.f, 4.f, "%.3f");
@@ -1496,7 +1447,6 @@ void PhysicalSky::DrawCloudQualitySection()
 					settings.shadowVolumeRange = preset.shadowVolumeRange;
 					settings.marchStepScale = preset.marchStepScale;
 					settings.cloudBlurRadius = preset.cloudBlurRadius;
-					settings.cloudAmbientSHOnly = preset.cloudAmbientSHOnly;
 					settings.cloudHalfResTrace = preset.cloudHalfResTrace;
 					settings.cloudFastReconstruction = preset.cloudFastReconstruction;
 					settings.cloudCascadeShadows = preset.cloudCascadeShadows;
@@ -1511,9 +1461,6 @@ void PhysicalSky::DrawCloudQualitySection()
 			ImGui::EndTable();
 		}
 
-		ImGui::Checkbox(T(TKEY("cloud_ambient_sh_only"), "Approximate Ambient Occlusion"), &settings.cloudAmbientSHOnly);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextWrapped("%s", T(TKEY("cloud_ambient_sh_only_desc"), "Use sky spherical harmonics and a local density estimate for ambient shading. Large clouds lose some interior shadowing and light bounce."));
 		ImGui::Checkbox(T(TKEY("cloud_half_res_trace"), "Half-Resolution Cloud Trace"), &settings.cloudHalfResTrace);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("%s", T(TKEY("cloud_half_res_trace_desc"), "Trace one ray per 8x8 pixel block each frame. Thin cloud edges and silhouettes resolve less precisely."));
@@ -1528,6 +1475,12 @@ void PhysicalSky::DrawCloudQualitySection()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("ray_march_range_desc"), "Maximum low-cloud distance from the camera, including clear space before and between clouds."));
 		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Volume Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
+		const char* marchModes[] = { T(TKEY("cloud_march_performance"), "Performance"), T(TKEY("cloud_march_quality"), "Quality") };
+		int marchMode = settings.usePerformanceCloudSteps ? 0 : 1;
+		if (ImGui::Combo(T(TKEY("cloud_march_mode"), "Cloud Ray Marching"), &marchMode, marchModes, IM_ARRAYSIZE(marchModes)))
+			settings.usePerformanceCloudSteps = marchMode == 0;
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextWrapped("%s", T(TKEY("cloud_march_mode_desc"), "Performance increases the step length with distance. Quality samples thin edges and distant detail more finely."));
 		ImGui::SliderFloat(T(TKEY("cloud_march_step_scale"), "Cloud March Step Scale"), &settings.marchStepScale, 0.125f, 2.f, "%.3f", ImGuiSliderFlags_Logarithmic);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("%s", T(TKEY("cloud_march_step_scale_desc"), "Step length multiplier. Larger steps cost less and lose thin detail; smaller steps cost more and resolve thin detail."));
@@ -1608,11 +1561,8 @@ void PhysicalSky::DrawDebugSection()
 		}
 
 		if (ImGui::TreeNode(T(TKEY("cloud_shape"), "Cloud Shape"))) {
-			ndfManager.DrawPreview();
-			localNdfManager.DrawDebug(ndfTexManager, debugScale);
-			const auto ndf = ndfManager.GetNdf(settings.cloudMap, ndfTexManager);
-			DrawDebugCloudTexture(ndf.height, "ndfHeight", T(TKEY("debug_ndf_height"), "NDF height / shaping start"), debugScale);
-			DrawDebugCloudTexture(ndf.modeling, "ndfModeling", T(TKEY("debug_ndf_modeling"), "NDF coverage / types"), debugScale);
+			DrawCloudWeatherPreview(false, true);
+			DrawDebugCloudTexture(weatherProfilesSrv.get(), "weatherProfiles", T(TKEY("debug_cloud_type_profiles"), "Cloud type profiles"), debugScale);
 			if (ImGui::TreeNode(T(TKEY("debug_weather_noise"), "Shared weather noise inputs"))) {
 				const char* labels[] = {
 					T(TKEY("debug_weather_noise_0"), "Noise input 0"),
@@ -1622,7 +1572,7 @@ void PhysicalSky::DrawDebugSection()
 				};
 				for (uint32_t i = 0; i < 4; ++i) {
 					const auto id = std::format("weatherNoise{}", i);
-					DrawDebugCloudTexture(ndfManager.GetNoiseInputs()[i], id.c_str(), labels[i], debugScale, true);
+					DrawDebugCloudTexture(weatherMap.GetNoiseInputs()[i], id.c_str(), labels[i], debugScale, true);
 				}
 				ImGui::TreePop();
 			}
@@ -1638,7 +1588,7 @@ void PhysicalSky::DrawDebugSection()
 					const auto state = endpoint.at("value").get<CirrusWeatherState>();
 					if (!state.localMap.empty()) {
 						const auto id = std::format("cirrusLocal{}", state.localMap);
-						DrawDebugCloudTexture(ndfTexManager.Query(state.localMap), id.c_str(), T(TKEY("debug_cirrus_local"), "Cirrus local coverage / type / mask"), debugScale);
+						DrawDebugCloudTexture(cloudTextures.Query(state.localMap), id.c_str(), T(TKEY("debug_cirrus_local"), "Cirrus local coverage / type / mask"), debugScale);
 					}
 				} catch (const nlohmann::json::exception&) {
 				}
@@ -1691,7 +1641,6 @@ void PhysicalSky::DrawDebugSection()
 
 		if (ImGui::TreeNode(T(TKEY("cloud_lighting"), "Cloud Lighting"))) {
 			BUFFER_VIEWER_NODE(texVolCloudAmbientSH, 4.f);
-			BUFFER_VIEWER_NODE(texCloudAmbientLighting, 1.f);
 			DrawDebugCloudTexture(texShadowVolume ? texShadowVolume->srv.get() : nullptr, "cloud_shadow_transport", T(TKEY("cloud_shadow_transport"), "Cloud Shadow Transport"), debugScale);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::TextWrapped("%s", T(TKEY("cloud_shadow_transport_desc"), "Red stores sunlight transmittance; green stores optical depth for multiple scattering. Select a channel and display range to inspect thick cloud paths."));
@@ -1904,58 +1853,41 @@ bool PhysicalSky::ShadersOK()
 	// The cloud maps themselves are created lazily by the first generation
 	// dispatch, so readiness is a property of the generation shaders. The render
 	// path still verifies every texture before binding.
-	const bool ndfReady = (ndfManager.texHeight && ndfManager.texModeling && ndfManager.generatorProgram && ndfManager.noiseProgram);
+	const bool weatherReady = weatherMap.Ready() && weatherProfilesSrv && weatherWorleySrv && weatherCurlSrv;
+	const bool weatherViewReady = static_cast<bool>(weatherViewShaders.general);
 	const bool cirrusMapsReady = !settings.cloudLayer.cirrus.enabled || cirrusMapManager.ShadersReady(settings.cloudLayer.cirrus);
-	const bool ambientShadersOk = settings.cloudAmbientSHOnly ||
-	                              (csCloudAmbientLighting && csCloudAmbientDensity && csCloudAmbientBoundary && csCloudAmbientSweep &&
-									  csCloudAmbientSweepFar && csCloudAmbientProject && csCloudAmbientLayout && csCloudAmbientView &&
-									  (!voxelCloudManager.Count() || csCloudAmbientDensityVoxel));
 	const bool reconstructionShadersOk = csVolFilter &&
 	                                     (settings.cloudFastReconstruction ? csVolReprojectFast && csVolFilterWideFast :
 																			 csVolReproject && csVolFilterWide);
 	bool volumetricShadersOk = !VolumetricCloudsEnabled() ||
-	                           (vsCloudBoundary && psCloudBoundary && texCloudBoundary && cloudBoundaryCB && cloudBoundaryIndices && cloudBoundaryBlend && cloudBoundaryRasterizer && cloudBoundaryDepth &&
-								   csCloudHeightBounds && csCloudHeightBoundsReduce && texCloudHeightBounds && texCloudHeightBoundsTiles && texCloudWeatherBounds &&
-								   ambientShadersOk && cloudAmbientVolumeCB && reconstructionShadersOk &&
-								   csVolMainView && csUpperView && csUpperSunDepth && texUpperSunDepth && csVolMainWithoutStorm && csVolMainSingleVolcanic && csStormTiles && texStormTiles && csVolCubeReproject && csVolShadowVolume && csVolShadowResample && texShadowVolumeRaw && csCloudShadowMean && csCloudShadowMeanVolcanic && texCloudShadowMean && csVolCubemap && csVolAmbientSH && csCloudAmbientReduce && texVolCloudAmbientSH && texCloudAmbientPartial &&
+	                           (csWeatherAmbientSlices && cloudAmbientVolumeCB && reconstructionShadersOk &&
+								   csVolMainView && weatherViewReady && csWeatherLightSlices && csWeatherLightReproject && weatherLightVolume && weatherLightHistory && csUpperView && csUpperSunDepth && texUpperSunDepth && csVolMainSingleVolcanic && csStormTiles && texStormTiles && csVolCubeReproject && csVolShadowVolume && csVolShadowResample && texShadowVolumeRaw && csCloudShadowMean && csCloudShadowMeanVolcanic && texCloudShadowMean && csVolCubemap && csVolAmbientSH && csCloudAmbientReduce && texVolCloudAmbientSH && texCloudAmbientPartial &&
 								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux &&
 								   texVolFilteredTr && texVolFilteredLum && texVolFilteredAux &&
 								   texVolHistoryTr && texVolHistoryLum && texVolHistoryAux && texVolCubeTr && texVolCubeLum &&
 								   texVolCubeAux && texVolCubeHistoryTr && texVolCubeHistoryLum && texVolCubeHistoryAux &&
 								   texVolCubeTraceTr && texVolCubeTraceLum && texVolCubeTraceAux &&
-								   texShadowVolume && baseShapeNoiseSrv && cloudProfileLutSrv && cloudAdjustmentLutSrv && ndfReady && cirrusMapsReady);
+								   texShadowVolume && baseShapeNoiseSrv && cloudProfileLutSrv && cloudAdjustmentLutSrv && weatherReady && cirrusMapsReady);
 	const bool voxelShadersOk = !voxelCloudManager.Count() || (cloudDispatchCb && csVoxelView && csVoxelLighting && csVolCubemapVoxel && csVolShadowVoxel && csCloudShadowMeanVoxel &&
 																  texVoxelTraceTr && texVoxelTraceLum && texVoxelTraceAux && texVoxelTraceMotion && texVoxelTraceLightning);
 	return baseShadersOk && volumetricShadersOk && voxelShadersOk;
-}
-
-bool PhysicalSky::SetLocalCloudState(const LocalNdfState& state)
-{
-	if (state.enabled && (state.worldspace.empty() || LocalNdfManager::AssetPath(state.asset).empty()))
-		return false;
-	settings.cloudMap.localCloud.states = nlohmann::json::array({ { { "value", state }, { "weight", 1.f } } });
-	volMainHistoryValid = false;
-	return true;
 }
 
 void PhysicalSky::Reset()
 {
 	UpdateShaders();
 	const auto worldspaceID = GetCurrentWorldspaceEditorID();
-	if (cloudAmbientWorldspace != worldspaceID) {
-		cloudAmbientValid = false;
-		cloudAmbientWorldspace = worldspaceID;
+	if (weatherLightWorldspace != worldspaceID) {
+		weatherLightWorldspace = worldspaceID;
+		weatherLightValid = false;
 	}
 	UpdateCloudWind();
 	UpdateCloudStorm(worldspaceID);
 	const bool volumetricCloudsActive = IsActive() && VolumetricCloudsEnabled() && EnsureVolumetricScreenResources();
 	voxelCloudManager.Update(settings.voxelClouds, worldspaceID, volumetricCloudsActive);
-	if (volumetricCloudsActive)
-		localNdfManager.Update(settings.cloudMap, ndfTexManager, worldspaceID);
-	const float2 lowAltitudeRange = settings.cloudLayer.low.GetNdfAltitudeRangeKm();
-	const auto localAltitude = localNdfManager.GetAltitude();
-	float lowCloudBaseKm = localAltitude.y > 0.f ? std::min(lowAltitudeRange.x, localAltitude.x * 0.001f) : lowAltitudeRange.x;
-	float lowCloudTopKm = localAltitude.y > 0.f ? std::max(lowAltitudeRange.y, (localAltitude.x + localAltitude.y) * 0.001f) : lowAltitudeRange.y;
+	const float2 lowAltitudeRange = settings.cloudLayer.low.GetAltitudeRangeKm(true);
+	float lowCloudBaseKm = lowAltitudeRange.x;
+	float lowCloudTopKm = lowAltitudeRange.y;
 	if (cloudStormManager.Count()) {
 		const auto stormAltitude = cloudStormManager.Altitude();
 		lowCloudBaseKm = std::min(lowCloudBaseKm, stormAltitude.x * 0.001f);
@@ -1973,7 +1905,8 @@ void PhysicalSky::Reset()
 	}
 	const float traceBottomKm = settings.cloudLayer.cirrus.enabled ? std::min(lowCloudBaseKm, settings.cloudLayer.cirrus.GetAltitudeKm()) : lowCloudBaseKm;
 	const float traceTopKm = settings.cloudLayer.cirrus.enabled ? std::max(lowCloudTopKm, settings.cloudLayer.cirrus.GetAltitudeKm()) : lowCloudTopKm;
-	const float shadowBottomKm = settings.cloudLayer.low.GetShadowBottomKm(lowCloudBaseKm, settings.shadowVolumeRange, kShadowVolW);
+	const auto shadowCamera = globals::game::frameBufferCached.GetCameraPosAdjust();
+	const float shadowBottomKm = settings.cloudLayer.low.GetShadowBottomKm(lowCloudBaseKm, settings.shadowVolumeRange, kShadowVolW, { shadowCamera.x, shadowCamera.y });
 	const float lowCloudThicknessKm = lowCloudTopKm - shadowBottomKm;
 	auto& skySync = globals::features::skySync;
 	skySync.workingLightColors = std::nullopt;
@@ -2016,7 +1949,6 @@ void PhysicalSky::Reset()
 		// Some shader paths read cloud shadow and lightning fields without checking enabled, so clear them all
 		cbData = {};
 		volMainHistoryValid = false;
-		cloudAmbientValid = false;
 		return;
 	}
 
@@ -2025,9 +1957,15 @@ void PhysicalSky::Reset()
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
-	auto sunDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Sun)];
-	auto masserDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Masser)];
-	auto secundaDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Secunda)];
+	const auto* sky = globals::game::sky;
+	// Match the world-space disc direction in State::UpdateSharedData. SkySync
+	// keeps its raw directions in sky-local coordinates for the caster logic.
+	const auto sunDir = skySync.GetCelestialDirection(sky, SkySync::Caster::Sun);
+	const auto toWorld = [sky](const RE::NiPoint3& direction) {
+		return sky && sky->root ? sky->root->world.rotate * direction : direction;
+	};
+	const auto masserDir = toWorld(skySync.rawDirections[static_cast<int>(SkySync::Caster::Masser)]);
+	const auto secundaDir = toWorld(skySync.rawDirections[static_cast<int>(SkySync::Caster::Secunda)]);
 
 	// Wide gamut support: when ACEScg is active, transform color parameters
 	// from sRGB gamut to AP1 gamut so that the LUTs are natively generated in AP1 space.
@@ -2044,12 +1982,9 @@ void PhysicalSky::Reset()
 	};
 
 	const bool linearLightingActive = linearLighting.IsLinearLightingActive();
-	const auto* sky = globals::game::sky;
 	UpdateMoonPhotometry(moonPhotometry[0], sky ? sky->masser : nullptr, linearLightingActive);
 	UpdateMoonPhotometry(moonPhotometry[1], sky ? sky->secunda : nullptr, linearLightingActive);
 
-	if (cbData.zBottom != zBottom)
-		cloudAmbientValid = false;
 	cbData = {
 		.texDim = res,
 		.rcpTexDim = float2(1.0f) / res,
@@ -2189,9 +2124,10 @@ void PhysicalSky::Reset()
 	const auto blend = skySync.GetDirectionalLightBlend();
 	const std::array bodyRadii{ cbData.diskAngularRadius.x, cbData.diskAngularRadius.y, cbData.diskAngularRadius.z };
 	cbData.diskAngularRadius.w = std::lerp(bodyRadii[static_cast<size_t>(blend.source)], bodyRadii[static_cast<size_t>(blend.target)], blend.targetWeight);
-	cbData.dirLightBodyDir = { blend.direction.x, blend.direction.y, blend.direction.z };
+	const auto bodyDir = toWorld(blend.direction);
+	cbData.dirLightBodyDir = { bodyDir.x, bodyDir.y, bodyDir.z };
 	cbData.dirLightDiskIndex = static_cast<uint>(blend.discBody);
-	const auto discDir = skySync.GetCelestialDirection(globals::game::sky, blend.discBody);
+	const auto discDir = skySync.GetCelestialDirection(sky, blend.discBody);
 	cbData.dirLightDisc = { discDir.x, discDir.y, discDir.z, blend.discWeight };
 	const float solarLimit = std::min(horizonDip + localUpRange + cbData.diskAngularRadius.x, RE::NI_PI * 0.5f);
 	cbData.volCloudUseSun = sunDir.z > -std::sin(solarLimit) ? 1u : 0u;
@@ -2265,7 +2201,6 @@ void PhysicalSky::Prepass()
 			baseShapeNoiseSrv.copy_from(shape);
 			cloudAdjustmentLutSrv.copy_from(adjustment);
 			volMainHistoryValid = false;
-			cloudAmbientValid = false;
 			cloudCrossSectionDirty = true;
 		}
 	}
@@ -2282,10 +2217,8 @@ void PhysicalSky::Prepass()
 			if (cameraDx * cameraDx + cameraDy * cameraDy > 32.f * 32.f)
 				cloudCrossSectionDirty = true;
 
-			auto historyCloudMap = nlohmann::json(settings.cloudMap);
-			historyCloudMap.erase("localCloud");
 			const auto cloudSettingsKey = nlohmann::json{
-				{ "map", historyCloudMap },
+				{ "weather", { settings.cloudWeather.coverage, settings.cloudWeather.cloudType, settings.cloudWeather.typeVariation, settings.cloudWeather.convection, settings.cloudWeather.layout } },
 				{ "skipShapeNoise", settings.cloudNoise.skipShapeNoise },
 				{ "useVoxelNoise", settings.cloudNoise.useVoxelNoise },
 				{ "low", settings.cloudLayer.low },
@@ -2295,6 +2228,7 @@ void PhysicalSky::Prepass()
 				{ "stormRevision", cloudStormManager.Revision() },
 				{ "range", settings.rayMarchRange },
 				{ "step", settings.marchStepScale },
+				{ "performanceSteps", settings.usePerformanceCloudSteps },
 				{ "froxel", globals::features::viewAtmosphere.IsPrepared() },
 				{ "planet", settings.planetRadius },
 				{ "bottom", cbData.zBottom }
@@ -2302,35 +2236,33 @@ void PhysicalSky::Prepass()
 			cloudWeatherChanged = cloudSettingsKey != volCloudSettingsKey;
 			if (cloudWeatherChanged) {
 				// A continuous weather blend changes values every frame. Keep the
-				// accumulated image and transport solution, but refresh weather bounds.
-				cloudHeightBoundsDirty = true;
+				// accumulated image and transport solution across continuous changes.
 				volCloudSettingsKey = cloudSettingsKey;
 				cloudCrossSectionDirty = true;
 			}
-			if (ndfManager.UpdateNdf(settings.cloudMap, ndfTexManager)) {
-				cloudHeightBoundsDirty = true;
+			if (weatherMap.Update(settings.cloudWeather, cloudTextures, volWind.phase, settings.cloudLayer.wind.UpperFlowDirection())) {
 				cloudCrossSectionDirty = true;
+				cloudWeatherBoundsValid = false;
 			}
 			if (settings.cloudLayer.cirrus.enabled)
-				cirrusMapManager.Update(settings.cloudLayer.cirrus, ndfTexManager, ndfManager);
-			if (settings.cloudLayer.middle.enabled && midCloudMapManager.Update(settings.cloudLayer.middle, ndfTexManager, ndfManager))
+				cirrusMapManager.Update(settings.cloudLayer.cirrus, cloudTextures, weatherMap);
+			if (settings.cloudLayer.middle.enabled && midCloudMapManager.Update(settings.cloudLayer.middle, cloudTextures, weatherMap))
 				middleBoundsDirty = true;
 
 			// Resource/layer switches and reference-frame changes still invalidate
 			// history. Map regeneration and continuous appearance changes do not.
 			auto noiseTopology = nlohmann::json::array();
-			for (const auto& input : settings.cloudMap.procedural.noise) {
+			for (const auto& input : settings.cloudWeather.noise) {
 				const auto& noise = input.parameters;
 				noiseTopology.push_back({ input.texturePath, noise.type, noise.seed,
 					noise.frequency, noise.octaves, noise.lacunarity, noise.repetitions });
 			}
 			const auto historyKey = nlohmann::json{
-				{ "ndfSource", { settings.cloudMap.type, settings.cloudMap.texture } },
 				{ "noiseTopology", noiseTopology },
-				{ "textures", ndfTexManager.revision },
+				{ "textures", cloudTextures.revision },
 				{ "skipShapeNoise", settings.cloudNoise.skipShapeNoise },
 				{ "useVoxelNoise", settings.cloudNoise.useVoxelNoise },
-				{ "cloudAmbientSHOnly", settings.cloudAmbientSHOnly },
+				{ "performanceSteps", settings.usePerformanceCloudSteps },
 				{ "cloudHalfResTrace", settings.cloudHalfResTrace },
 				{ "cloudFastReconstruction", settings.cloudFastReconstruction },
 				{ "middleEnabled", settings.cloudLayer.middle.enabled },
@@ -2344,10 +2276,9 @@ void PhysicalSky::Prepass()
 			}.dump();
 			if (historyKey != volCloudHistoryKey) {
 				volMainHistoryValid = false;
-				cloudAmbientValid = false;
 				volCloudHistoryKey = historyKey;
 			}
-			if (cloudCrossSectionDirty)
+			if (std::exchange(cloudCrossSectionRequested, false) && cloudCrossSectionDirty)
 				RenderCloudCrossSection();
 			RenderVolumetricClouds(VolumetricCloudPass::kShadowVolume);
 		}
@@ -2364,7 +2295,6 @@ void PhysicalSky::Prepass()
 				ClearVolumetricToNeutral();
 			volMainHistoryValid = false;
 			volHistoryFrameDim = {};
-			cloudAmbientValid = false;
 		}
 
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get(), texApShadow->srv.get() };
@@ -2380,7 +2310,7 @@ void PhysicalSky::Prepass()
 
 		// Bind volumetric cloud results and shadow volume for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
 		// RenderVolumetricClouds already bound the reconstructed/composited result.
-		// Do not replace it with the NDF-only trace before the sky is drawn.
+		// Keep the shadow-volume composition until the sky is drawn.
 		if (texVolTr && texVolLum && (!renderVolumetricClouds || globals::features::viewAtmosphere.CompositeEnabled())) {
 			std::array<ID3D11ShaderResourceView*, 3> volSrvs = { texVolTr->srv.get(), texVolLum->srv.get(), texShadowVolume ? texShadowVolume->srv.get() : nullptr };
 			globals::d3d::context->PSSetShaderResources(110, (uint)volSrvs.size(), volSrvs.data());

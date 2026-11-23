@@ -63,8 +63,8 @@ float3 CloudSampleDisplacement(float3 ray, float4 metadata, float opacity, float
 	float lowDepth = DecodeCloudDepth(metadata.x);
 	float2 projectionWeights = float2(1.0 - cirrusFraction, cirrusFraction);
 	if (cirrusFraction > 0.0 && cirrusFraction < 0.99) {
-		const float3 planetEye = float3(0, 0, FrameBuffer::CameraPosAdjust.z - info.bottomZ + info.planetRadius);
-		const float2 shell = IntersectSpherePair(planetEye, ray, info.planetRadius + info.cirrusAltitude);
+		const float3 cirrusEye = float3(0, 0, FrameBuffer::CameraPosAdjust.z - info.bottomZ + info.cloudCurvatureRadius);
+		const float2 shell = IntersectSpherePair(cirrusEye, ray, info.cloudCurvatureRadius + info.cirrusAltitude);
 		const float cirrusDepth = shell.x >= 0.0 ? shell.x : shell.y;
 		if (cirrusDepth > 0.0) {
 			lowDepth = max((lowDepth - cirrusFraction * cirrusDepth) / (1.0 - cirrusFraction), 0.0);
@@ -77,31 +77,23 @@ float3 CloudSampleDisplacement(float3 ray, float4 metadata, float opacity, float
 			}
 		}
 	}
-	const float2 position = (FrameBuffer::CameraPosAdjust.xy + ray.xy * lowDepth - info.noiseWindOffset) * GAME_UNIT_TO_M;
-	const float2 shearChange = (info.cloudShapeShear - info.previousShapeShear) * smoothstep(0.0, 1.0, height);
-	const float2 fieldDelta = CloudPreviousFieldOffset(position, -shearChange * GAME_UNIT_TO_M, info.cloudEvolution);
-	float3 lowDisplacement = float3(info.cloudWindDelta - fieldDelta * GAME_UNITS_PER_METER,
-		info.cloudEvolutionDelta * (4.0 * height * (1.0 - height)));
-	const float localWeight = LocalNdfMotionWeight(FrameBuffer::CameraPosAdjust.xy + ray.xy * lowDepth, height, info);
-	const float localMotionUncertainty = length(lowDisplacement) * localWeight;
-	lowDisplacement *= 1.0 - localWeight;
-	// Ownership comes from nonzero extinction integrated on this ray. A mean
-	// depth inside the storm's box says nothing about which clouds were visible.
+	float3 lowDisplacement = float3(info.cloudWindDelta, 0.0);
 	const float stormWeight = saturate(stormFraction / max(1.0 - cirrusFraction, 1e-6));
 	const float3 stormDisplacement = stormMotion.xyz / max(stormMotion.w, 1e-6);
 	const float stormUncertainty = stormWeight * (1.0 - stormWeight) * length(stormDisplacement - lowDisplacement);
 	lowDisplacement = lerp(lowDisplacement, stormDisplacement, stormWeight);
-	const float2 currentRelativeXY = ray.xy * lowDepth;
-	const float2 previousRelativeXY = currentRelativeXY + FrameBuffer::CameraPosAdjust.xy - info.previousCamera.xy - lowDisplacement.xy;
+	const float2 currentXY = FrameBuffer::CameraPosAdjust.xy + ray.xy * lowDepth;
+	const float2 previousXY = currentXY - lowDisplacement.xy;
 	const float previousRadius = info.noisePadding.x > 0.0 ? info.noisePadding.x : info.cloudCurvatureRadius;
-	const float curvatureDisplacement = (1.0 - stormWeight) *
-	                                    (dot(previousRelativeXY - currentRelativeXY, previousRelativeXY + currentRelativeXY) / info.cloudCurvatureRadius +
-											dot(previousRelativeXY, previousRelativeXY) / previousRadius * ((info.cloudCurvatureRadius - previousRadius) / info.cloudCurvatureRadius));
+	const float currentZ = FrameBuffer::CameraPosAdjust.z - info.bottomZ + ray.z * lowDepth;
+	const float altitude = WeatherCloudAltitude(float3(currentXY, currentZ), info.cloudCurvatureRadius);
+	const float previousZ = WeatherCloudWorldHeight(previousXY, altitude, previousRadius);
+	const float curvatureDisplacement = (1.0 - stormWeight) * (currentZ - previousZ);
 	lowDisplacement.z += curvatureDisplacement;
 	const float3 highDisplacement = float3(info.cirrusWindDelta, 0);
 	const float3 disagreement = lowDisplacement - highDisplacement;
 	const float transverseDisagreement = length(disagreement - ray * dot(disagreement, ray));
-	uncertainty = (1.0 - cirrusFraction) * ((1.0 - stormWeight) * (abs(info.cloudEvolutionDelta) + length(shearChange) * 60.0 + localMotionUncertainty) + abs(curvatureDisplacement) + stormUncertainty) +
+	uncertainty = (1.0 - cirrusFraction) * (abs(curvatureDisplacement) + stormUncertainty) +
 	              cirrusFraction * (1.0 - cirrusFraction) * transverseDisagreement;
 	return lowDisplacement * projectionWeights.x + highDisplacement * projectionWeights.y;
 }
@@ -127,59 +119,18 @@ struct CloudTemporalSample
 	float2 lightning;
 };
 
-CloudTemporalSample ReconstructCloudSamples(float transmittances[4], float4 colors[4], float4 metadata[4], float2 masks[4], float2 fraction, bool reweightEmpty)
-{
-	float4 weights = float4((1.0 - fraction.x) * (1.0 - fraction.y), fraction.x * (1.0 - fraction.y),
-		(1.0 - fraction.x) * fraction.y, fraction.x * fraction.y);
-	if (reweightEmpty) {
-		[unroll] for (uint i = 0u; i < 4u; ++i)
-			weights[i] = transmittances[i] == 1.0 ? 0.01 : weights[i];
-		weights /= dot(weights, float4(1, 1, 1, 1));
-	}
-	CloudTemporalSample result = (CloudTemporalSample)0;
-	float weightSum = 0.0;
-	float2 transmittanceRange = float2(1, 0);
-	[unroll] for (uint i = 0u; i < 4u; ++i)
-	{
-		transmittanceRange = float2(min(transmittanceRange.x, transmittances[i]), max(transmittanceRange.y, transmittances[i]));
-		result.transmittance += transmittances[i] * weights[i];
-		weightSum += weights[i];
-		result.color += colors[i] * weights[i];
-		result.metadata += metadata[i] * weights[i];
-		result.lightning += masks[i] * weights[i];
-	}
-	result.transmittance = clamp(result.transmittance / weightSum, transmittanceRange.x, transmittanceRange.y);
-	return result;
-}
-
 CloudTemporalSample ReconstructCloud(Texture2D<float> transmittance, Texture2D<float4> color, Texture2D<float4> depth, Texture2D<float2> mask,
-	float2 position, int2 maximum, bool reweightEmpty)
+	float2 position, int2 maximum)
 {
-	if (!reweightEmpty) {
-		uint2 dimensions;
-		transmittance.GetDimensions(dimensions.x, dimensions.y);
-		const float2 uv = (clamp(position, 0.0, float2(maximum)) + 0.5) / float2(dimensions);
-		CloudTemporalSample result;
-		result.transmittance = transmittance.SampleLevel(TransmittanceSampler, uv, 0);
-		result.color = color.SampleLevel(TransmittanceSampler, uv, 0);
-		result.metadata = depth.SampleLevel(TransmittanceSampler, uv, 0);
-		result.lightning = mask.SampleLevel(TransmittanceSampler, uv, 0);
-		return result;
-	}
-	const int2 base = int2(floor(position));
-	float transmittances[4];
-	float4 colors[4];
-	float4 metadata[4];
-	float2 masks[4];
-	[unroll] for (uint i = 0u; i < 4u; ++i)
-	{
-		const int2 pixel = clamp(base + int2(i & 1u, i >> 1u), 0, maximum);
-		transmittances[i] = transmittance[pixel];
-		colors[i] = color[pixel];
-		metadata[i] = depth[pixel];
-		masks[i] = mask[pixel];
-	}
-	return ReconstructCloudSamples(transmittances, colors, metadata, masks, saturate(position - floor(position)), reweightEmpty);
+	uint2 dimensions;
+	transmittance.GetDimensions(dimensions.x, dimensions.y);
+	const float2 uv = (clamp(position, 0.0, float2(maximum)) + 0.5) / float2(dimensions);
+	CloudTemporalSample result;
+	result.transmittance = transmittance.SampleLevel(TransmittanceSampler, uv, 0);
+	result.color = color.SampleLevel(TransmittanceSampler, uv, 0);
+	result.metadata = depth.SampleLevel(TransmittanceSampler, uv, 0);
+	result.lightning = mask.SampleLevel(TransmittanceSampler, uv, 0);
+	return result;
 }
 
 bool CloudFootprintHasCloud(Texture2D<float4> color, float2 position, int2 maximum)
@@ -211,7 +162,7 @@ struct CloudSurfaceAccumulator
 	bool found;
 };
 
-/** @brief Adds one trace sample when its scene depth matches; empty rays get a token weight. */
+/** @brief Adds one trace sample when its scene depth matches the output pixel. */
 void AccumulateCloudSurface(inout CloudSurfaceAccumulator accumulator, int2 pixel, float2 position, float sceneDepth, float spatialWeight)
 {
 	const float4 metadata = TexVolLowAux[pixel];
@@ -224,7 +175,7 @@ void AccumulateCloudSurface(inout CloudSurfaceAccumulator accumulator, int2 pixe
 	accumulator.depthRange = float2(min(accumulator.depthRange.x, metadata.x), max(accumulator.depthRange.y, metadata.x));
 	accumulator.sampleMinimum = min(accumulator.sampleMinimum, float4(color.rgb, transmittance));
 	accumulator.sampleMaximum = max(accumulator.sampleMaximum, float4(color.rgb, transmittance));
-	const float weight = transmittance == 1.0 ? 0.01 : spatialWeight;
+	const float weight = spatialWeight;
 	accumulator.result.transmittance += transmittance * weight;
 	accumulator.result.color += color * weight;
 	accumulator.result.metadata += metadata * weight;
@@ -325,21 +276,6 @@ void ResolveCloudHistoryVisibility(inout CloudTemporalSample history, CloudTempo
 	history.lightning = lerp(current.lightning, history.lightning, historyWeight);
 }
 
-float4 LoadCloudBoundary(uint2 pixel, float3 ray)
-{
-	const float4 rect = VolumetricCloudBuffer[0].ndfBoundaryRect;
-	const float2 camera = FrameBuffer::CameraPosAdjust.xy;
-	const float empty = asfloat(0x7f7fffffu);
-	const float exitX = abs(ray.x) > 1e-8 ? ((ray.x > 0.0 ? rect.z : rect.x) - camera.x) / ray.x : empty;
-	const float exitY = abs(ray.y) > 1e-8 ? ((ray.y > 0.0 ? rect.w : rect.y) - camera.y) / ray.y : empty;
-	const float3 depths = TexCloudBoundary.Load(int3(pixel, 0)).xyz;
-	const float viewCosine = max(abs(mul(FrameBuffer::CameraView, float4(ray, 0)).z), 1e-6);
-	return float4(depths.x != empty ? DecodeCloudDepth(depths.x) / viewCosine : 0.0,
-		DecodeCloudDepth(-depths.y) / viewCosine,
-		depths.z != empty ? DecodeCloudDepth(depths.z) / viewCosine : 0.0,
-		max(min(exitX, exitY), 0.0));
-}
-
 #ifdef CLOUD_MAIN_DISPATCH
 cbuffer CloudDispatch : register(b3) { uint4 StormScreenRect; };
 #endif
@@ -380,7 +316,7 @@ cbuffer CloudDispatch : register(b3) { uint4 StormScreenRect; };
 	                                                        linearDepth / max(abs(mul(FrameBuffer::CameraView, float4(ray, 0)).z), 1e-6);
 	const float3 eye = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 	const float2 jitter = float2(CloudTemporalMarchHash(pixel, info.cloudFrameIndex), CloudSpatialMarchHash(pixel));
-	const VolumetricCloudResult result = RenderVolumetricCloudRay(ray, eye, sceneDistance, jitter, 0.0, LoadCloudBoundary(tid, ray), 0.0);
+	const VolumetricCloudResult result = RenderVolumetricCloudRay(ray, eye, sceneDistance, jitter, 0.0, 0.0);
 	RWTexTr[tid] = result.transmittance.x;
 	RWTexLum[tid] = float4(min(result.lum, 65504.0), 1.0 - result.transmittance.x);
 	RWStormMotion[tid] = result.stormMotion;
@@ -501,7 +437,7 @@ void RenderUpperViewPixel(uint2 tid)
 	bool useHistory = info.historyValid != 0u && all(info.previousFrameDim > 0.0) && clip.w > 0.0 && all(previousUv == saturate(previousUv));
 	if (useHistory) {
 		result = ReconstructCloud(TexVolHistoryTr, TexVolHistoryLum, TexVolHistoryAux, TexLightningHistory,
-			previousUv * info.previousFrameDim - 0.5, int2(info.previousFrameDim) - 1, false);
+			previousUv * info.previousFrameDim - 0.5, int2(info.previousFrameDim) - 1);
 		const float3 historyPosition = RebaseCloudHistoryDepth(result, ray, previousPosition, cameraDelta);
 		const bool tracedPhase = all(((pixel >> (CloudTraceScale - 1u)) & 3u) == CloudPhaseOffset());
 		const bool traced = tracedPhase && (CloudTraceScale == 1u || abs(TexVolLowAux[tracePixel].y - sceneDepth) <= 0.064);
@@ -556,7 +492,7 @@ void RenderUpperViewPixel(uint2 tid)
 #ifdef CLOUD_FAST_RECONSTRUCTION
 			result = spatial;
 #else
-			result = ReconstructCloud(TexVolLowTr, TexVolLowLum, TexVolLowAux, TexLightningTrace, currentPosition, traceMaximum, true);
+			result = ReconstructCloud(TexVolLowTr, TexVolLowLum, TexVolLowAux, TexLightningTrace, currentPosition, traceMaximum);
 #endif
 		}
 	}
@@ -603,32 +539,15 @@ float3 CloudCubeDirection(float2 pixel, uint face, uint size)
 }
 
 CloudTemporalSample ReconstructCloudCube(TextureCube<float> transmittance, TextureCube<float4> color, TextureCube<float4> depth, TextureCube<float2> mask,
-	float2 position, uint face, uint size, bool reweightEmpty)
+	float2 position, uint face, uint size)
 {
-	if (!reweightEmpty) {
-		const float3 direction = CloudCubeDirection(clamp(position, 0.0, float(size - 1u)), face, size);
-		CloudTemporalSample result;
-		result.transmittance = transmittance.SampleLevel(TransmittanceSampler, direction, 0);
-		result.color = color.SampleLevel(TransmittanceSampler, direction, 0);
-		result.metadata = depth.SampleLevel(TransmittanceSampler, direction, 0);
-		result.lightning = mask.SampleLevel(TransmittanceSampler, direction, 0);
-		return result;
-	}
-	const float2 base = floor(position);
-	float transmittances[4];
-	float4 colors[4];
-	float4 metadata[4];
-	float2 masks[4];
-	[unroll] for (uint i = 0u; i < 4u; ++i)
-	{
-		const float2 pixel = clamp(base + float2(i & 1u, i >> 1u), 0.0, float(size - 1u));
-		const float3 direction = CloudCubeDirection(pixel, face, size);
-		transmittances[i] = transmittance.SampleLevel(TransmittanceSampler, direction, 0);
-		colors[i] = color.SampleLevel(TransmittanceSampler, direction, 0);
-		metadata[i] = depth.SampleLevel(TransmittanceSampler, direction, 0);
-		masks[i] = mask.SampleLevel(TransmittanceSampler, direction, 0);
-	}
-	return ReconstructCloudSamples(transmittances, colors, metadata, masks, saturate(position - base), reweightEmpty);
+	const float3 direction = CloudCubeDirection(clamp(position, 0.0, float(size - 1u)), face, size);
+	CloudTemporalSample result;
+	result.transmittance = transmittance.SampleLevel(TransmittanceSampler, direction, 0);
+	result.color = color.SampleLevel(TransmittanceSampler, direction, 0);
+	result.metadata = depth.SampleLevel(TransmittanceSampler, direction, 0);
+	result.lightning = mask.SampleLevel(TransmittanceSampler, direction, 0);
+	return result;
 }
 
 bool CloudFootprintHasCloud(TextureCube<float4> color, float2 position, uint face, uint size)
@@ -704,7 +623,7 @@ float2 CloudCubePosition(float3 direction, uint face)
 	bool useHistory = info.historyValid != 0u && all(isfinite(previousDirection));
 	if (useHistory) {
 		result = ReconstructCloudCube(TexCubeHistoryTr, TexCubeHistoryLum, TexCubeHistoryAux, TexLightningCubeHistory,
-			historyUv * dims.x - 0.5, face, dims.x, false);
+			historyUv * dims.x - 0.5, face, dims.x);
 		RebaseCloudHistoryDepth(result, direction, previousPosition, cameraDelta);
 		const bool traced = all((tid.xy & 3u) == CloudPhaseOffset());
 		if (traced) {
@@ -719,7 +638,7 @@ float2 CloudCubePosition(float3 direction, uint face)
 		}
 		if (!traced && evolutionBlend > 0.0) {
 			const CloudTemporalSample current = ReconstructCloudCube(TexCubeTraceTr, TexCubeTraceLum, TexCubeTraceAux, TexLightningCubeTrace,
-				(float2(tid.xy) - CloudPhaseOffset()) * 0.25, tid.z, dims.x / 4u, true);
+				(float2(tid.xy) - CloudPhaseOffset()) * 0.25, tid.z, dims.x / 4u);
 			result.transmittance = BlendCloudTransmittance(result.transmittance, current.transmittance, evolutionBlend);
 			result.color = lerp(result.color, current.color, evolutionBlend);
 			result.metadata = lerp(result.metadata, current.metadata, evolutionBlend);
@@ -731,7 +650,7 @@ float2 CloudCubePosition(float3 direction, uint face)
 	}
 	if (!useHistory) {
 		result = ReconstructCloudCube(TexCubeTraceTr, TexCubeTraceLum, TexCubeTraceAux, TexLightningCubeTrace,
-			(float2(tid.xy) - CloudPhaseOffset()) * 0.25, tid.z, dims.x / 4u, true);
+			(float2(tid.xy) - CloudPhaseOffset()) * 0.25, tid.z, dims.x / 4u);
 	}
 	RWTexCubeTr[tid] = saturate(result.transmittance);
 	RWTexCubeLum[tid] = float4(clamp(result.color.rgb, 0.0, 65504.0), saturate(result.color.a));

@@ -334,6 +334,7 @@ void ViewAtmosphere::Render()
 	bind(112, sky.texShadowVolume ? sky.texShadowVolume->srv.get() : nullptr);
 	bind(69, sky.texCloudShadowMean ? sky.texCloudShadowMean->srv.get() : nullptr);
 	bind(70, CloudDiffuseTransport());
+	bind(71, sky.projectedAPShadowFrame == globals::state->frameCount && sky.texProjectedAPShadow ? sky.texProjectedAPShadow->srv.get() : nullptr);
 	ID3D11UnorderedAccessView* nullUavs[2]{};
 	globals::profiler->BeginPass("ViewAtmosphere::LightScattering");
 	for (uint32_t level = 0; level < 3; ++level) {
@@ -358,7 +359,7 @@ void ViewAtmosphere::Render()
 		context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
 	}
 	globals::profiler->EndPass();
-	for (UINT slot : { 0u, 1u, 2u, 5u, 25u, 31u, 35u, 36u, 37u, 50u, 60u, 61u, 67u, 68u, 69u, 70u, 76u, 77u, 98u, 102u, 103u, 112u, 127u })
+	for (UINT slot : { 0u, 1u, 2u, 5u, 25u, 31u, 35u, 36u, 37u, 50u, 60u, 61u, 67u, 68u, 69u, 70u, 71u, 76u, 77u, 98u, 102u, 103u, 112u, 127u })
 		bind(slot, nullptr);
 	ID3D11Buffer* nullBuffers[2]{};
 	ID3D11SamplerState* nullSamplers[2]{};

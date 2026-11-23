@@ -427,6 +427,59 @@ std::optional<size_t> SceneSettingsManager::AddContextSetting(const SceneContext
 	return FindContextUserEntry(context, featureShortName, settingPath, settingKey);
 }
 
+std::optional<json> SceneSettingsManager::GetContextValueForEdit(const SceneContextId& context, const SettingIdentity& setting)
+{
+	if (!IsValidSceneContext(context))
+		return std::nullopt;
+	if (const auto index = FindContextUserEntry(context, setting.featureShortName, setting.settingPath, setting.settingKey)) {
+		const auto& entry = GetContextEntries(context)[*index];
+		if (!entry.deleted)
+			return std::optional<json>{ std::in_place, entry.value };
+	} else if (const auto* contextEntries = GetCopyContextEntries(context)) {
+		const auto effective = BuildEffectiveContextEntries(*contextEntries, context);
+		if (const auto it = effective.find(setting); it != effective.end())
+			return std::optional<json>{ std::in_place, it->second->value };
+	}
+	return CaptureContextValue(context, setting);
+}
+
+bool SceneSettingsManager::ApplyContextPreset(const SceneContextId& context, const std::map<SettingIdentity, json>& values)
+{
+	if (!IsValidSceneContext(context) || values.empty())
+		return false;
+	const auto rules = GetSceneContextRules(context);
+	FeatureSettingsCache cache;
+	std::vector<SettingEntry> additions;
+	std::vector<EntryValueUpdate> replacements;
+	for (const auto& [setting, value] : values) {
+		const auto& [feature, path, key] = setting;
+		if (!ValidateSceneSettingEntry(rules.label, rules.sceneType, feature, path, key, value, rules.requireNumeric, &cache))
+			return false;
+		if (const auto index = FindContextUserEntry(context, feature, path, key)) {
+			replacements.push_back({ *index, value });
+		} else {
+			auto original = CaptureContextValue(context, setting);
+			if (!original)
+				return false;
+			auto entry = MakeUserEntry(feature, path, key, std::move(*original), context.period);
+			entry.value = value;
+			additions.push_back(std::move(entry));
+		}
+	}
+	auto* contextEntries = EnsureContextEntriesMut(context);
+	if (!contextEntries)
+		return false;
+	for (auto& update : replacements) {
+		auto& entry = (*contextEntries)[update.index];
+		entry.value = std::move(update.value);
+		entry.deleted = false;
+		entry.paused = false;
+	}
+	contextEntries->insert(contextEntries->end(), std::make_move_iterator(additions.begin()), std::make_move_iterator(additions.end()));
+	CommitContextUserEntryMutation(context);
+	return true;
+}
+
 void SceneSettingsManager::UpdateContextEntryValues(const SceneContextId& context,
 	std::span<const EntryValueUpdate> updates, bool deferSave)
 {

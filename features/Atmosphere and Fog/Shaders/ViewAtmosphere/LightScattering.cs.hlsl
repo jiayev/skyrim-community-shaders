@@ -9,6 +9,7 @@ SamplerComparisonState ShadowSampler : register(s1);
 Texture3D<float4> MediumHistory : register(t0);
 Texture2DArray<float4> DirectionalShadowMap : register(t1);
 Texture2D<float4> MediumMsLut : register(t2);
+Texture3D<float> ProjectedAPShadow : register(t71);
 RWTexture3D<float4> MediumSource : register(u0);
 cbuffer MediumDispatch : register(b0)
 {
@@ -27,6 +28,65 @@ StructuredBuffer<DirectionalShadowLightData> DirectionalShadowLights : register(
 #if defined(TERRAIN_SHADOWS)
 #	include "TerrainShadows/TerrainShadows.hlsli"
 #endif
+
+float ProjectedAPColumnTransmittance(uint2 column, uint3 dimensions, float lightDistance)
+{
+	const float steps = ProjectedAPShadow.Load(int4(column, 0, 0));
+	if (steps == 0.0)
+		return 1.0;
+	const float start = ProjectedAPShadow.Load(int4(column, 1, 0));
+	const float stepLength = ProjectedAPShadow.Load(int4(column, 2, 0));
+	const float boundary = clamp((lightDistance - start) / stepLength, 0.0, steps);
+	const float3 uvw = float3(float2(column) + 0.5, boundary + 3.5) / dimensions;
+	return exp(-ProjectedAPShadow.SampleLevel(LinearSampler, uvw, 0));
+}
+
+float AtmosphereCloudTransmittance(float3 worldPosition, float fallback)
+{
+	const SharedData::PhysSkyData sky = SharedData::physSkyData;
+	if (!sky.enableVolumetricClouds || sky.volCloudLowThickness <= 0.0)
+		return fallback;
+	const float4 profile = CloudShadowVolume::MeanProfile.Load(int3(0, 0, 0));
+	if (profile.w != 2.0)
+		return fallback;
+	const float4 box = CloudShadowVolume::MeanProfile.Load(int3(2, 0, 0));
+	const float3 cloudPosition = worldPosition - float3(0, 0, sky.zBottom);
+	const float4 caster = CloudShadowVolume::MeanProfile.Load(int3(1, 0, 0));
+	const float2 projection = CloudShadowVolume::MeanProfile.Load(int3(3, 0, 0)).xy;
+	uint3 apDimensions;
+	ProjectedAPShadow.GetDimensions(apDimensions.x, apDimensions.y, apDimensions.z);
+	[branch] if (apDimensions.z != 0u && caster.z > 0.0)
+	{
+		float3 across, up;
+		float2 size;
+		CloudShadowVolume::LightPlane(caster.xyz, box.z, across, up, size);
+		const float2 uv = (float2(dot(cloudPosition, across), dot(cloudPosition, up)) - projection) / size + 0.5;
+		const float2 edge = min(uv, 1.0 - uv) * apDimensions.xy;
+		const float weight = smoothstep(0.5, 2.0, min(edge.x, edge.y));
+		if (weight <= 0.0)
+			return fallback;
+
+		const float2 texel = clamp(uv * apDimensions.xy - 0.5, 0.0, float2(apDimensions.xy) - 1.0);
+		const uint2 low = uint2(texel);
+		const uint2 high = min(low + 1u, apDimensions.xy - 1u);
+		const float lightDistance = dot(cloudPosition, caster.xyz);
+		const float a = ProjectedAPColumnTransmittance(low, apDimensions, lightDistance);
+		const float b = ProjectedAPColumnTransmittance(uint2(high.x, low.y), apDimensions, lightDistance);
+		const float c = ProjectedAPColumnTransmittance(uint2(low.x, high.y), apDimensions, lightDistance);
+		const float d = ProjectedAPColumnTransmittance(high, apDimensions, lightDistance);
+		const float2 fraction = frac(texel);
+		return lerp(fallback, lerp(lerp(a, b, fraction.x), lerp(c, d, fraction.x), fraction.y), weight);
+	}
+
+	if (any(abs(worldPosition.xy - box.xy) >= 0.5 * box.z))
+		return fallback;
+	uint2 dimensions;
+	CloudShadowVolume::MeanProfile.GetDimensions(dimensions.x, dimensions.y);
+	float tailWeight;
+	return CloudShadowVolume::ProjectedTransmittance(cloudPosition, profile, caster, box, projection,
+		dimensions - 1u, fallback, tailWeight)
+	    .x;
+}
 
 float MediumVisibility(float3 position, out float atmosphereVisibility, out float3 diffuseVisibility)
 {
@@ -53,12 +113,14 @@ float MediumVisibility(float3 position, out float atmosphereVisibility, out floa
 	if ((ViewAtmosphere::Data[0].flags.z & 512u) && CloudShadows::IntersectCloudDist(position, SharedData::DirLightDirection.xyz) >= 0.0)
 		layerShadow = CloudShadows::GetCloudShadowMult(position, LinearSampler);
 #endif
-	const float volumeShadow = PhysSky::GetDirlightTransmittance(position + FrameBuffer::CameraPosAdjust.xyz, LinearSampler, true).x;
+	const float3 worldPosition = position + FrameBuffer::CameraPosAdjust.xyz;
+	const float volumeShadow = PhysSky::GetDirlightTransmittance(worldPosition, LinearSampler, true).x;
+	const float apVolumeShadow = AtmosphereCloudTransmittance(worldPosition, volumeShadow);
 	const float2 remap = SharedData::physSkyData.cloudShadowRemapRange;
 	// MS LUTs assume clear-sky illumination. Keep cloud transport on that source
 	// beyond the direct-shadow box, including light scattered by the clouds.
-	diffuseVisibility = atmosphereVisibility * PhysSky::Remap(layerShadow, remap.x, remap.y, 0, 1) * PhysSky::GetCloudDiffuseTransmittance(position + FrameBuffer::CameraPosAdjust.xyz);
-	atmosphereVisibility *= PhysSky::Remap(layerShadow, remap.x, remap.y, 0, 1) * PhysSky::Remap(volumeShadow, remap.x, remap.y, 0, 1);
+	diffuseVisibility = atmosphereVisibility * PhysSky::Remap(layerShadow, remap.x, remap.y, 0, 1) * PhysSky::GetCloudDiffuseTransmittance(worldPosition);
+	atmosphereVisibility *= PhysSky::Remap(layerShadow, remap.x, remap.y, 0, 1) * PhysSky::Remap(apVolumeShadow, remap.x, remap.y, 0, 1);
 	visibility *= layerShadow * volumeShadow;
 	return saturate(visibility);
 }

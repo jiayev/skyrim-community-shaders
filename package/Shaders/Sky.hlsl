@@ -757,8 +757,7 @@ PS_OUTPUT main(PS_INPUT input)
 			sunDiskRadiance = min(sunDiskRadiance, 62250.0f);
 #			endif
 
-			float3 sunDiskColor = sunDiskRadiance * limbFactor * softEdge;
-			psout.Color.xyz = sunDiskColor;
+			psout.Color.xyz = ColorManagement::LinearToScene(sunDiskRadiance * limbFactor * softEdge);
 			psout.Color.w = 1.0;
 		} else if (enableProceduralSun) {
 			psout.Color = 0.0f;

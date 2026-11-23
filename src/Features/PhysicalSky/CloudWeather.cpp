@@ -109,7 +109,7 @@ namespace nlohmann
 
 namespace
 {
-	eastl::unique_ptr<Texture2D> CreateNdfTexture(uint32_t dimension, DXGI_FORMAT format, const char* name, bool mips = false, uint32_t height = 0)
+	eastl::unique_ptr<Texture2D> CreateWeatherTexture(uint32_t dimension, DXGI_FORMAT format, const char* name, bool mips = false, uint32_t height = 0)
 	{
 		D3D11_TEXTURE2D_DESC desc{
 			.Width = dimension,
@@ -144,14 +144,12 @@ namespace
 	}
 }
 
-void NdfManager::SetupResources()
+void CloudWeatherManager::SetupResources()
 {
-	generatorCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<NdfGenerationParameters>());
-	noiseCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<NdfNoiseParameters>());
-	texHeight = CreateNdfTexture(kNdfDim, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::NdfHeight");
-	texModeling = CreateNdfTexture(kNdfDim, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::NdfModeling");
-	for (auto& texture : noiseTextures)
-		texture = CreateNdfTexture(kNdfDim, DXGI_FORMAT_R16_FLOAT, "PhysicalSky::NdfNoise", true);
+	generatorCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<GenerationParameters>(), "PhysicalSky::CloudWeatherConstants");
+	noiseCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<WeatherNoiseParameters>());
+	for (auto& map : maps)
+		map = CreateWeatherTexture(kMapSize, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::CloudWeather");
 	D3D11_SAMPLER_DESC desc{
 		.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
 		.AddressU = D3D11_TEXTURE_ADDRESS_WRAP,
@@ -163,86 +161,25 @@ void NdfManager::SetupResources()
 	};
 	sampler = nullptr;
 	DX::ThrowIfFailed(globals::d3d::device->CreateSamplerState(&desc, sampler.put()));
+	Util::SetResourceName(sampler.get(), "PhysicalSky::CloudWeatherSampler");
 }
 
-void NdfManager::CompileShaders(Util::AsyncShaderSet& a_shaders)
+CloudWeatherSettings::CloudWeatherSettings()
+{
+	layout.states.push_back({ { "value", CloudWeatherLayout{} }, { "weight", 1.f } });
+}
+
+void CloudWeatherManager::CompileShaders(Util::AsyncShaderSet& a_shaders)
 {
 	generatedValid = false;
-	noiseValid.fill(false);
+	for (auto& field : sharedNoise)
+		field.valid = false;
+	layoutNoise.clear();
 	noiseInputs.fill(nullptr);
 	for (auto& resource : noiseInputResources)
 		resource = nullptr;
-	a_shaders.Add(generatorProgram, L"Data\\Shaders\\PhysicalSky\\NdfGenerate.cs.hlsl");
-	a_shaders.Add(noiseProgram, L"Data\\Shaders\\PhysicalSky\\NdfNoise.cs.hlsl");
-}
-
-const char* NdfManager::GetSettingsTypeName(const NdfSettings& settings)
-{
-	return settings.type == NdfType::Texture ?
-	           T(TKEY("ndf_type_texture_pair"), "Texture Pair") :
-	           T(TKEY("ndf_type_procedural"), "Procedural");
-}
-
-const char* NdfManager::GetSettingsHint(const NdfSettings& settings)
-{
-	return settings.type == NdfType::Texture ?
-	           T(TKEY("ndf_hint_texture"),
-				   "Two linear 2D textures: height RG = bottom/top, modeling RGB = coverage/top type/bottom type. Heights use the NDF base altitude and height span in Low Clouds.") :
-	           T(TKEY("ndf_hint_procedural"),
-				   "Two coverage signals and a shared type signal drive the profiles. Height variation changes only the bottom bound. Noise slots can be generated locally or supplied as DDS textures.");
-}
-
-static void DrawNdfLayer(const char* label, NdfNoiseLayer& layer, bool power, const NdfNoiseLayer* defaults = nullptr)
-{
-	if (!ImGui::TreeNode(label))
-		return;
-	if (defaults && !SceneWidgetInterceptor::IsArmed() && Util::Button(T(TKEY("ndf_reset_response"), "Restore default response"))) {
-		layer.range = defaults->range;
-		layer.exponent = defaults->exponent;
-	}
-	if (!SceneWidgetInterceptor::IsArmed()) {
-		const char* slotNames[] = { "0", "1", "2", "3", T(TKEY("ndf_noise_slot_zero"), "Zero") };
-		int slot = static_cast<int>(std::min(layer.noise, 4u));
-		if (ImGui::Combo(T(TKEY("ndf_noise_slot"), "Noise slot"), &slot, slotNames, IM_ARRAYSIZE(slotNames)))
-			layer.noise = static_cast<uint32_t>(slot);
-	}
-	ImGui::DragFloat(T(TKEY("ndf_frequency"), "Frequency"), &layer.frequency, 0.05f, 0.f, 64.f);
-	ImGui::DragFloat2(T(TKEY("ndf_offset"), "Offset"), &layer.offset.x, 0.005f);
-	if (power)
-		ImGui::SliderFloat(T(TKEY("ndf_exponent"), "Exponent"), &layer.exponent, 0.01f, 8.f);
-	ImGui::TextUnformatted(T(TKEY("ndf_remap"), "Remap"));
-	ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &layer.range.x, 0.01f, -16.f, 16.f);
-	ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &layer.range.z, 0.01f, -16.f, 16.f);
-	ImGui::TreePop();
-}
-
-static void DrawNdfParameters(NdfGenerationParameters& parameters)
-{
-	DrawNdfLayer(T(TKEY("ndf_primary_coverage"), "Primary coverage"), parameters.primary, true);
-	DrawNdfLayer(T(TKEY("ndf_secondary_coverage"), "Secondary coverage"), parameters.secondary, true);
-	DrawNdfLayer(T(TKEY("ndf_coverage_gain"), "Coverage gain"), parameters.coverageGain, false);
-	const auto defaultType = NdfGenerationParameters{}.modeling;
-	DrawNdfLayer(T(TKEY("ndf_top_type_noise"), "Top type / shared type noise"), parameters.modeling, true, &defaultType);
-	if (ImGui::TreeNode(T(TKEY("ndf_bottom_type"), "Bottom type"))) {
-		ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &parameters.bottomTypeRange.x, 0.01f, -16.f, 16.f);
-		ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &parameters.bottomTypeRange.z, 0.01f, -16.f, 16.f);
-		ImGui::SliderFloat(T(TKEY("ndf_exponent"), "Exponent"), &parameters.bottomTypeExponent, 0.01f, 8.f);
-		ImGui::TreePop();
-	}
-	DrawNdfLayer(T(TKEY("ndf_type_gain"), "Type gain"), parameters.modelingGain, false);
-	ImGui::PushID("heightAuxiliaryRange");
-	ImGui::TextUnformatted(T(TKEY("ndf_height_auxiliary"), "Bottom shaping start from top type"));
-	ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &parameters.heightAuxiliaryRange.x, 0.01f, -16.f, 16.f);
-	ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &parameters.heightAuxiliaryRange.z, 0.01f, -16.f, 16.f);
-	ImGui::PopID();
-	ImGui::SliderFloat2(T(TKEY("ndf_base_height_rg"), "Base height RG"), &parameters.baseHeight.x, 0.f, 1.f);
-	if (!SceneWidgetInterceptor::IsArmed()) {
-		bool fromCoverage = parameters.heightFromCoverage != 0u;
-		if (ImGui::Checkbox(T(TKEY("ndf_height_from_coverage"), "Height variation from coverage"), &fromCoverage))
-			parameters.heightFromCoverage = fromCoverage ? 1u : 0u;
-	}
-	DrawNdfLayer(T(TKEY("ndf_bottom_height_variation"), "Bottom height variation"), parameters.heightVariation, true);
-	ImGui::DragFloat2(T(TKEY("ndf_weather_offset"), "Weather offset (m)"), &parameters.windOffset.x, 1.f);
+	a_shaders.Add(generatorProgram, L"Data\\Shaders\\PhysicalSky\\CloudWeatherGenerate.cs.hlsl");
+	a_shaders.Add(noiseProgram, L"Data\\Shaders\\PhysicalSky\\WeatherNoise.cs.hlsl");
 }
 
 namespace
@@ -261,69 +198,23 @@ namespace
 					a_path = choice;
 			ImGui::EndCombo();
 		}
-		if (!a_path.empty() && !NdfManager::IsTextureNdf(textures.Query(a_path), a_channels))
+		if (!a_path.empty() && !CloudWeatherManager::IsLinearTexture(textures.Query(a_path), a_channels))
 			Util::Text::WrappedWarning("%s", T(TKEY("ndf_incompatible_texture"), "Missing or incompatible texture; using generated input (local influences are skipped)."));
 	}
 }
 
-void NdfManager::DrawNdfSource(NdfSettings& settings, TextureManager& textures)
+void CloudWeatherManager::DrawNoise(CloudWeatherSettings& settings, TextureManager& textures)
 {
 	if (SceneWidgetInterceptor::IsArmed())
 		return;
-	const char* generatorNames[] = {
-		T(TKEY("ndf_type_texture_pair"), "Texture Pair"),
-		T(TKEY("ndf_type_procedural"), "Procedural")
-	};
-	int source = settings.type == NdfType::Texture ? 0 : 1;
-	if (ImGui::Combo(T(TKEY("cloud_map_generator"), "Cloud Map Generator"), &source, generatorNames, IM_ARRAYSIZE(generatorNames)))
-		settings.type = source == 0 ? NdfType::Texture : NdfType::Procedural;
-	ImGui::TextWrapped("%s", GetSettingsHint(settings));
-	if (settings.type == NdfType::Texture) {
-		DrawNdfTextureChoice(textures, T(TKEY("ndf_height_rg"), "Height RG"), settings.texture.heightPath, 2);
-		DrawNdfTextureChoice(textures, T(TKEY("ndf_modeling_rgb"), "Modeling RGB"), settings.texture.modelingPath, 3);
-		if (!IsTexturePair({ textures.Query(settings.texture.heightPath), textures.Query(settings.texture.modelingPath) }))
-			ImGui::TextWrapped("%s", T(TKEY("ndf_select_both_textures"), "Select matching linear 2D Height RG and Modeling RGB textures; invalid pairs use the procedural cloud map."));
-	}
-}
-
-void NdfManager::DrawNdfShape(NdfGenerationParameters& parameters)
-{
-	DrawNdfParameters(parameters);
-}
-
-void NdfManager::DrawNdfOverlay(NdfSettings& settings, TextureManager& textures)
-{
-	ImGui::TextWrapped("%s", T(TKEY("ndf_overlay_hint"), "This overlay repeats with the generated global field; Local Cloud Instances handle world placement."));
-	if (!SceneWidgetInterceptor::IsArmed()) {
-		DrawNdfTextureChoice(textures, T(TKEY("ndf_height_rg"), "Height RG"), settings.procedural.local.heightPath, 2);
-		DrawNdfTextureChoice(textures, T(TKEY("ndf_modeling_rgb"), "Modeling RGB"), settings.procedural.local.modelingPath, 3);
-		DrawNdfTextureChoice(textures, T(TKEY("ndf_influence_mask"), "Influence mask R (optional)"), settings.procedural.localMaskPath, 1);
-		const char* blendModes[] = {
-			T(TKEY("ndf_blend_interpolate"), "Interpolate"),
-			T(TKEY("ndf_blend_maximum"), "Maximum")
-		};
-		int mode = settings.procedural.parameters.localBlendMode == 0u ? 0 : 1;
-		if (ImGui::Combo(T(TKEY("ndf_modeling_blend"), "Modeling blend"), &mode, blendModes, IM_ARRAYSIZE(blendModes)))
-			settings.procedural.parameters.localBlendMode = static_cast<uint32_t>(mode);
-	}
-	ImGui::SliderFloat(T(TKEY("ndf_modeling_weight"), "Modeling weight"), &settings.procedural.parameters.localModelingWeight, 0.f, 1.f);
-	ImGui::SliderFloat(T(TKEY("ndf_height_weight"), "Height weight"), &settings.procedural.parameters.localHeightWeight, 0.f, 1.f);
-	ImGui::DragFloat(T(TKEY("ndf_local_offset_multiplier"), "Local offset multiplier"), &settings.procedural.parameters.localWindScale, 0.01f, -4.f, 4.f);
-}
-
-void NdfManager::DrawNdfNoise(NdfSettings& settings, TextureManager& textures)
-{
-	if (SceneWidgetInterceptor::IsArmed())
-		return;
-	auto& procedural = settings.procedural;
 	for (uint32_t index = 0; index < 4; ++index) {
 		ImGui::PushID(static_cast<int>(index));
 		if (ImGui::TreeNode("Noise", T(TKEY("ndf_noise_input"), "Noise input %u"), index)) {  // i18n-ignore: ImGui ID
-			auto& input = procedural.noise[index];
+			auto& input = settings.noise[index];
 			DrawNdfTextureChoice(textures, T(TKEY("ndf_dds_override"), "DDS override"), input.texturePath, 1, T(TKEY("ndf_generated"), "Generated"));
 			auto& noise = input.parameters;
 			if (Util::Button(T(TKEY("ndf_reset_noise_parameters"), "Reset noise parameters")))
-				noise = ProceduralNdfSettings{}.noise[index].parameters;
+				noise = CloudWeatherSettings{}.noise[index].parameters;
 			const char* noiseTypes[] = {
 				T(TKEY("ndf_noise_alligator"), "Alligator"),
 				T(TKEY("ndf_noise_perlin_fbm"), "Perlin fBm"),
@@ -335,7 +226,7 @@ void NdfManager::DrawNdfNoise(NdfSettings& settings, TextureManager& textures)
 			ImGui::InputScalar(T(TKEY("ndf_seed"), "Seed"), ImGuiDataType_U32, &noise.seed);
 			const uint32_t one = 1, maxOctaves = 8, maxLacunarity = 4, maxRepetitions = 8;
 			ImGui::SliderScalar(T(TKEY("ndf_tile_repetitions"), "Tile repetitions"), ImGuiDataType_U32, &noise.repetitions, &one, &maxRepetitions);
-			const uint32_t maxFrequency = std::min(128u, kNdfDim / (2u * std::clamp(noise.repetitions, 1u, maxRepetitions)));
+			const uint32_t maxFrequency = std::min(128u, kMapSize / (2u * std::clamp(noise.repetitions, 1u, maxRepetitions)));
 			ImGui::SliderScalar(T(TKEY("ndf_base_frequency"), "Base frequency"), ImGuiDataType_U32, &noise.frequency, &one, &maxFrequency);
 			ImGui::SliderScalar(T(TKEY("ndf_octaves"), "Octaves"), ImGuiDataType_U32, &noise.octaves, &one, &maxOctaves);
 			ImGui::SliderScalar(T(TKEY("ndf_lacunarity"), "Lacunarity"), ImGuiDataType_U32, &noise.lacunarity, &one, &maxLacunarity);
@@ -349,197 +240,237 @@ void NdfManager::DrawNdfNoise(NdfSettings& settings, TextureManager& textures)
 	}
 }
 
-void NdfManager::DrawPreview(float a_size)
-{
-	const char* channels[] = {
-		T(TKEY("ndf_preview_off"), "Off"),
-		T(TKEY("ndf_preview_coverage_a"), "Coverage A"),
-		T(TKEY("ndf_preview_coverage_b"), "Coverage B"),
-		T(TKEY("ndf_coverage_gain"), "Coverage gain"),
-		T(TKEY("ndf_type_gain"), "Type gain"),
-		T(TKEY("ndf_preview_coverage"), "Coverage"),
-		T(TKEY("ndf_preview_top_type"), "Top type"),
-		T(TKEY("ndf_bottom_type"), "Bottom type"),
-		T(TKEY("ndf_preview_bottom_height"), "Bottom height"),
-		T(TKEY("ndf_preview_top_height"), "Top height"),
-		T(TKEY("ndf_preview_shaping_start"), "Bottom shaping start"),
-		T(TKEY("ndf_preview_height_variation"), "Height variation")
-	};
-	ImGui::Combo(T(TKEY("ndf_preview"), "NDF component"), &preview, channels, IM_ARRAYSIZE(channels));
-	if (preview && texPreview && generatedValid && generatedData.preview == static_cast<uint32_t>(preview))
-		ImGui::Image(texPreview->srv.get(), { a_size, a_size * texPreview->desc.Height / texPreview->desc.Width });
-}
-
 #undef I18N_KEY_PREFIX
 
-bool NdfManager::UpdateNdf(const NdfSettings& settings, TextureManager& textures)
+bool CloudWeatherManager::UpdateNoise(NoiseField& field, const WeatherNoiseParameters& parameters)
 {
-	std::array<std::string, 9> paths = {};
-	if (settings.type == NdfType::Texture) {
-		paths[0] = settings.texture.heightPath;
-		paths[1] = settings.texture.modelingPath;
-	}
-	{
-		for (uint32_t i = 0; i < 4; ++i)
-			paths[i + 2] = settings.procedural.noise[i].texturePath;
-		paths[6] = settings.procedural.local.heightPath;
-		paths[7] = settings.procedural.local.modelingPath;
-		paths[8] = settings.procedural.localMaskPath;
-	}
-	for (const auto& path : paths)
-		textures.EnsureLoaded(path);
-	sourcePaths = std::move(paths);
-	if (!generatorProgram || !noiseProgram || !generatorCb || !noiseCb || !sampler || !texHeight || !texModeling)
+	auto data = parameters;
+	data.type = std::min(data.type, 2u);
+	data.repetitions = std::clamp(data.repetitions, 1u, 8u);
+	const uint32_t maxFrequency = std::min(128u, kMapSize / (2u * data.repetitions));
+	data.frequency = std::clamp(data.frequency, 1u, maxFrequency);
+	data.frequencyY = std::min(data.frequencyY, maxFrequency);
+	data.octaves = std::clamp(data.octaves, 1u, 8u);
+	data.lacunarity = std::clamp(data.lacunarity, 1u, 4u);
+	data.persistence = FiniteClamp(data.persistence, 0.f, 1.f, 0.5f);
+	data.contrast = FiniteClamp(data.contrast, 0.1f, 8.f, 1.f);
+	data.bias = FiniteClamp(data.bias, -1.f, 1.f, 0.f);
+	data.responseExponent = FiniteClamp(data.responseExponent, 0.1f, 8.f, 1.f);
+	data.padding = 0.f;
+	if (field.valid && std::memcmp(&field.parameters, &data, sizeof(data)) == 0)
+		return false;
+	if (!field.texture)
+		field.texture = CreateWeatherTexture(kMapSize, DXGI_FORMAT_R16_FLOAT, "PhysicalSky::WeatherNoise", true);
+
+	auto* context = globals::d3d::context;
+	noiseCb->Update(data);
+	auto* cb = noiseCb->CB();
+	auto* uav = field.texture->uav.get();
+	context->CSSetConstantBuffers(1, 1, &cb);
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	context->CSSetShader(noiseProgram.get(), nullptr, 0);
+	context->Dispatch((kMapSize + 7u) >> 3, (kMapSize + 7u) >> 3, 1);
+	uav = nullptr;
+	cb = nullptr;
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	context->CSSetConstantBuffers(1, 1, &cb);
+	context->CSSetShader(nullptr, nullptr, 0);
+	context->GenerateMips(field.texture->srv.get());
+	field.parameters = data;
+	field.valid = true;
+	return true;
+}
+
+bool CloudWeatherManager::Update(const CloudWeatherSettings& settings, TextureManager& textures, double phase, float2 flow)
+{
+	if (!Ready() || !generatorCb || !noiseCb || !sampler)
 		return false;
 	auto* context = globals::d3d::context;
-	std::array<ID3D11ShaderResourceView*, 7> sources = {};
-	const auto& procedural = settings.procedural;
+	std::array<ID3D11ShaderResourceView*, 4> sources{};
+	for (const auto& input : settings.noise)
+		textures.EnsureLoaded(input.texturePath);
 	for (uint32_t i = 0; i < 4; ++i) {
-		const auto& input = procedural.noise[i];
-		if (auto* inputTexture = textures.Query(input.texturePath); IsTextureNdf(inputTexture, 1)) {
+		const auto& input = settings.noise[i];
+		if (auto* inputTexture = textures.Query(input.texturePath); IsLinearTexture(inputTexture, 1)) {
 			sources[i] = inputTexture;
 			continue;
 		}
-		auto data = input.parameters;
-		data.type = std::min(data.type, 2u);
-		data.repetitions = std::clamp(data.repetitions, 1u, 8u);
-		data.frequency = std::clamp(data.frequency, 1u, std::min(128u, kNdfDim / (2u * data.repetitions)));
-		data.octaves = std::clamp(data.octaves, 1u, 8u);
-		data.lacunarity = std::clamp(data.lacunarity, 1u, 4u);
-		data.persistence = FiniteClamp(data.persistence, 0.f, 1.f, 0.5f);
-		data.contrast = FiniteClamp(data.contrast, 0.1f, 8.f, 1.f);
-		data.bias = FiniteClamp(data.bias, -1.f, 1.f, 0.f);
-		data.responseExponent = FiniteClamp(data.responseExponent, 0.1f, 8.f, 1.f);
-		data.padding = {};
-		if (!noiseValid[i] || std::memcmp(&generatedNoise[i], &data, sizeof(data)) != 0) {
-			noiseCb->Update(data);
-			auto* cb = noiseCb->CB();
-			auto* uav = noiseTextures[i]->uav.get();
-			context->CSSetConstantBuffers(1, 1, &cb);
-			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-			context->CSSetShader(noiseProgram.get(), nullptr, 0);
-			context->Dispatch((kNdfDim + 7u) >> 3, (kNdfDim + 7u) >> 3, 1);
-			uav = nullptr;
-			cb = nullptr;
-			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-			context->CSSetConstantBuffers(1, 1, &cb);
-			context->CSSetShader(nullptr, nullptr, 0);
-			context->GenerateMips(noiseTextures[i]->srv.get());
+		const bool changed = UpdateNoise(sharedNoise[i], input.parameters);
+		if (changed) {
 			++weatherNoiseRevision;
 			if (i == 2u)
 				++noiseRevision;
-			generatedNoise[i] = data;
-			noiseValid[i] = true;
-			generatedValid = false;
 		}
-		sources[i] = noiseTextures[i]->srv.get();
+		sources[i] = sharedNoise[i].texture->srv.get();
 	}
-	const std::array<std::pair<const std::string*, uint32_t>, 3> localInputs = { { { &procedural.local.modelingPath, 3u }, { &procedural.local.heightPath, 2u }, { &procedural.localMaskPath, 1u } } };
-	for (uint32_t i = 0; i < 3; ++i) {
-		if (localInputs[i].first->empty())
-			continue;
-		sources[i + 4] = textures.Query(*localInputs[i].first);
-		if (!IsTextureNdf(sources[i + 4], localInputs[i].second))
-			sources[i + 4] = nullptr;
+
+	if (noiseInputs[2] != sources[2])
+		++noiseRevision;
+	if (sources != noiseInputs) {
+		++weatherNoiseRevision;
+		noiseInputs = sources;
+		for (size_t i = 0; i < noiseInputs.size(); ++i)
+			noiseInputResources[i].copy_from(noiseInputs[i]);
 	}
-	auto data = procedural.parameters;
-	data.imported = 0;
-	if (settings.type == NdfType::Texture) {
-		if (const auto maps = QueryTextures(settings.texture, textures)) {
-			sources[4] = maps.modeling;
-			sources[5] = maps.height;
-			data.imported = 1;
-		}
-	}
-	uint32_t width = kNdfDim, height = kNdfDim;
-	if (data.imported) {
-		winrt::com_ptr<ID3D11Resource> resource;
-		sources[5]->GetResource(resource.put());
-		D3D11_TEXTURE2D_DESC desc;
-		resource.as<ID3D11Texture2D>()->GetDesc(&desc);
-		D3D11_SHADER_RESOURCE_VIEW_DESC view;
-		sources[5]->GetDesc(&view);
-		width = std::max(desc.Width >> view.Texture2D.MostDetailedMip, 1u);
-		height = std::max(desc.Height >> view.Texture2D.MostDetailedMip, 1u);
-	}
-	if (texHeight->desc.Width != width || texHeight->desc.Height != height) {
-		texHeight = CreateNdfTexture(width, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::NdfHeight", false, height);
-		texModeling = CreateNdfTexture(width, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::NdfModeling", false, height);
-		texPreview = nullptr;
-		generatedValid = false;
-	}
-	data.preview = static_cast<uint32_t>(preview);
-	if (preview && !texPreview)
-		texPreview = CreateNdfTexture(width, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::NdfPreview", false, height);
-	for (auto* layer : { &data.primary, &data.secondary, &data.coverageGain, &data.modeling, &data.modelingGain, &data.heightVariation }) {
-		layer->noise = std::min(layer->noise, 4u);
-		layer->frequency = FiniteClamp(layer->frequency, 0.f, 64.f, 1.f);
-		layer->exponent = FiniteClamp(layer->exponent, 0.01f, 8.f, 1.f);
-		layer->offset.x = FiniteClamp(layer->offset.x, -10000.f, 10000.f, 0.f);
-		layer->offset.y = FiniteClamp(layer->offset.y, -10000.f, 10000.f, 0.f);
-		layer->padding0 = 0.f;
-		layer->padding1 = {};
-		SanitizeRange(layer->range);
-	}
-	SanitizeRange(data.bottomTypeRange);
-	SanitizeRange(data.heightAuxiliaryRange);
-	data.baseHeight.x = FiniteClamp(data.baseHeight.x, 0.f, 1.f, 0.f);
-	data.baseHeight.y = FiniteClamp(data.baseHeight.y, 0.f, 1.f, 0.95f);
-	data.bottomTypeExponent = FiniteClamp(data.bottomTypeExponent, 0.01f, 8.f, 1.f);
-	data.heightFromCoverage = data.heightFromCoverage != 0u ? 1u : 0u;
-	data.localBlendMode = data.localBlendMode != 0u ? 1u : 0u;
-	data.localModelingWeight = sources[4] ? FiniteClamp(data.localModelingWeight, 0.f, 1.f, 1.f) : 0.f;
-	data.localHeightWeight = sources[5] ? FiniteClamp(data.localHeightWeight, 0.f, 1.f, 1.f) : 0.f;
-	data.localWindScale = FiniteClamp(data.localWindScale, -4.f, 4.f, 1.f);
-	data.windOffset.x = FiniteClamp(data.windOffset.x, -1e7f, 1e7f, 0.f);
-	data.windOffset.y = FiniteClamp(data.windOffset.y, -1e7f, 1e7f, 0.f);
-	data.hasLocalMask = sources[6] ? 1u : 0u;
-	data.padding = {};
-	auto previousData = generatedData;
-	previousData.preview = data.preview;
-	const bool changed = !generatedValid || sources != generatedSources || textureRevision != textures.revision || std::memcmp(&previousData, &data, sizeof(data)) != 0;
-	if (!changed && generatedData.preview == data.preview)
+
+	const float4 weather{
+		FiniteClamp(settings.coverage, 0.f, 1.f, .58f),
+		FiniteClamp(settings.cloudType, -1.f, 1.f, .24f),
+		FiniteClamp(settings.typeVariation, 0.f, 1.f, .30f),
+		FiniteClamp(settings.convection, 0.f, 1.f, 0.f)
+	};
+	// The slow local moisture changes update roughly three times a second at the default speed.
+	const auto fieldPhase = static_cast<float>(std::floor(std::fmod(phase * 1.5, 4096.0) * 256.0) / 256.0);
+	if (generatedValid && generatedLayout == settings.layout.states && textureRevision == textures.revision &&
+		generatedNoiseRevision == weatherNoiseRevision &&
+		(!hasProceduralLayout || (generatedPhase == fieldPhase && generatedFlow.x == flow.x && generatedFlow.y == flow.y)) &&
+		std::memcmp(&weather, &generatedWeather, sizeof(weather)) == 0)
 		return false;
-	generatorCb->Update(data);
+
+	std::vector<std::pair<CloudWeatherLayout, float>> layouts;
+	float totalWeight = 0.f;
+	for (const auto& endpoint : settings.layout.states) {
+		try {
+			const float weight = endpoint.at("weight").get<float>();
+			if (!std::isfinite(weight) || weight <= 0.f)
+				continue;
+			auto layout = endpoint.at("value").get<CloudWeatherLayout>();
+			textures.EnsureLoaded(layout.paintedMap);
+			layouts.emplace_back(std::move(layout), weight);
+			totalWeight += weight;
+		} catch (const nlohmann::json::exception&) {
+		}
+	}
+	if (layouts.empty())
+		layouts.emplace_back(CloudWeatherLayout{}, 1.f);
+	else {
+		for (auto& [layout, weight] : layouts)
+			weight /= totalWeight;
+	}
+
+	const auto field = [](const std::array<int, 2>& cells, uint32_t seed) {
+		return std::array{ static_cast<uint32_t>(std::clamp(cells[0], 1, 64)),
+			static_cast<uint32_t>(std::clamp(cells[1], 1, 64)), seed, 0u };
+	};
+	layoutNoise.resize(layouts.size());
+	std::vector<std::array<ID3D11ShaderResourceView*, kWeatherNoiseFields>> layoutSources(layouts.size());
+	hasFiniteWeather = false;
+	for (size_t i = 0; i < layouts.size(); ++i) {
+		const auto& layout = layouts[i].first;
+		if (layout.paintedWeight >= 1.f && IsLinearTexture(textures.Query(layout.paintedMap), 4))
+			continue;
+		hasFiniteWeather |= weather.w > 0.f;
+		const auto base = field(layout.baseCells, layout.baseSeed);
+		const auto storm = field(layout.stormCells, layout.stormSeed);
+		const std::array<size_t, kWeatherNoiseFields> sharedInputs{ 0, 1, 3, 0 };
+		for (size_t channel = 0; channel < kWeatherNoiseFields; ++channel) {
+			const bool convective = channel == 3;
+			const auto& configuration = convective ? storm : base;
+			const auto slot = sharedInputs[channel];
+			const uint32_t referenceCells = convective ? 4u : 6u;
+			const uint32_t referenceSeed = convective ? 15373u : 1763u;
+			const auto& shared = sharedNoise[slot];
+			const bool imported = !shared.valid || shared.texture->srv.get() != sources[slot];
+			if (imported || (configuration[0] == referenceCells && configuration[1] == referenceCells && configuration[2] == referenceSeed)) {
+				layoutSources[i][channel] = sources[slot];
+				continue;
+			}
+			auto params = settings.noise[slot].parameters;
+			const uint32_t frequency = std::clamp(params.frequency, 1u, 128u);
+			params.frequency = std::max(1u, (frequency * configuration[0] + referenceCells / 2u) / referenceCells);
+			params.frequencyY = std::max(1u, (frequency * configuration[1] + referenceCells / 2u) / referenceCells);
+			params.seed ^= configuration[2] ^ referenceSeed;
+			auto& noise = layoutNoise[i][channel];
+			UpdateNoise(noise, params);
+			layoutSources[i][channel] = noise.texture->srv.get();
+		}
+	}
+	if (hasFiniteWeather && !finiteMaps[0]) {
+		// Keep the background available outside the convection footprint, including
+		// any painted contribution shared by both maps during a weather transition.
+		for (auto& map : finiteMaps)
+			map = CreateWeatherTexture(kMapSize, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::FiniteCloudWeather");
+	}
+
 	auto* cb = generatorCb->CB();
 	auto* samp = sampler.get();
 	winrt::com_ptr<ID3D11SamplerState> previousSampler;
 	context->CSGetSamplers(0, 1, previousSampler.put());
-	ID3D11UnorderedAccessView* uavs[3] = { texHeight->uav.get(), texModeling->uav.get(), preview ? texPreview->uav.get() : nullptr };
 	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetSamplers(0, 1, &samp);
-	context->CSSetShaderResources(0, static_cast<uint32_t>(sources.size()), sources.data());
-	context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
 	context->CSSetShader(generatorProgram.get(), nullptr, 0);
-	globals::profiler->BeginPass("PhysicalSky::CloudNdf");
-	context->Dispatch((width + 7u) >> 3, (height + 7u) >> 3, 1);
+	globals::profiler->BeginPass("PhysicalSky::CloudWeather");
+	ID3D11ShaderResourceView* previous = nullptr;
+	ID3D11ShaderResourceView* previousFinite = nullptr;
+	ID3D11ShaderResourceView* nullSrvs[3 + kWeatherNoiseFields] = {};
+	ID3D11UnorderedAccessView* nullUavs[2] = {};
+	uint32_t target = 0;
+	hasConvection = false;
+	hasProceduralLayout = false;
+	proceduralWeight = 0.f;
+	for (size_t i = 0; i < layouts.size(); ++i) {
+		const auto& [layout, weight] = layouts[i];
+		auto* painted = textures.Query(layout.paintedMap);
+		const float paintedWeight = IsLinearTexture(painted, 4) ? FiniteClamp(layout.paintedWeight, 0.f, 1.f, 1.f) : 0.f;
+		hasConvection |= paintedWeight > 0.f || weather.w > 0.f;
+		hasProceduralLayout |= paintedWeight < 1.f && (weather.x > 0.f || weather.w > 0.f);
+		proceduralWeight += weight * (1.f - paintedWeight);
+		const CloudWeatherLayout defaults;
+		std::array<float, 3> weights;
+		for (size_t channel = 0; channel < weights.size(); ++channel)
+			weights[channel] = FiniteClamp(layout.coverageWeights[channel], 0.f, 1.f, defaults.coverageWeights[channel]);
+		if (weights[0] + weights[1] + weights[2] <= 0.f)
+			weights = defaults.coverageWeights;
+		const GenerationParameters data{
+			.weather = weather,
+			.shape = { FiniteClamp(layout.baseEdge, .01f, 1.f, .18f), FiniteClamp(layout.stormEdge, .01f, 1.f, .24f),
+				FiniteClamp(layout.coreFraction, 0.f, 1.f, .35f), paintedWeight },
+			.base = field(layout.baseCells, layout.baseSeed),
+			.storm = field(layout.stormCells, layout.stormSeed),
+			.phase = fieldPhase,
+			.weight = weight,
+			.hasPrevious = previous ? 1u : 0u,
+			.resolve = i + 1 == layouts.size() ? 1u : 0u,
+			.organization = { flow.x, flow.y, FiniteClamp(layout.cellular, 0.f, 1.f, 0.f), FiniteClamp(layout.stormOutflow, 0.f, 1.f, .65f) },
+			.coverageMix = { weights[0], weights[1], weights[2], FiniteClamp(layout.secondaryCoverage, 0.f, 1.f, 0.f) },
+			.updraftOrganization = FiniteClamp(layout.updraftOrganization, 0.f, 1.f, defaults.updraftOrganization),
+			.regionalCoverageStrength = FiniteClamp(layout.regionalCoverageStrength, 0.f, 1.f, 0.f),
+			.regionalCells = static_cast<uint32_t>(std::clamp(layout.regionalCells, 2, 8)),
+			.writeFiniteWeather = hasFiniteWeather ? 1u : 0u,
+		};
+		generatorCb->Update(data);
+		std::array<ID3D11ShaderResourceView*, 3 + kWeatherNoiseFields> inputs{ paintedWeight > 0.f ? painted : nullptr, previous };
+		std::copy(layoutSources[i].begin(), layoutSources[i].end(), inputs.begin() + 2);
+		inputs.back() = previousFinite;
+		ID3D11UnorderedAccessView* outputs[]{ maps[target]->uav.get(), hasFiniteWeather ? finiteMaps[target]->uav.get() : nullptr };
+		context->CSSetShaderResources(0, static_cast<UINT>(inputs.size()), inputs.data());
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(outputs), outputs, nullptr);
+		context->Dispatch(kMapSize / 8u, kMapSize / 8u, 1);
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUavs), nullUavs, nullptr);
+		context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
+		previous = maps[target]->srv.get();
+		previousFinite = hasFiniteWeather ? finiteMaps[target]->srv.get() : nullptr;
+		outputIndex = target;
+		target ^= 1u;
+	}
 	globals::profiler->EndPass();
-	ID3D11ShaderResourceView* nullSrvs[7] = {};
-	ID3D11UnorderedAccessView* nullUavs[3] = {};
-	context->CSSetShaderResources(0, 7, nullSrvs);
-	context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 	cb = nullptr;
-	context->CSSetConstantBuffers(1, 1, &cb);
-	context->CSSetShader(nullptr, nullptr, 0);
 	samp = previousSampler.get();
+	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetSamplers(0, 1, &samp);
-	generatedData = data;
-	generatedSources = sources;
+	context->CSSetShader(nullptr, nullptr, 0);
+
 	textureRevision = textures.revision;
-	if (changed)
-		++generatedRevision;
-	if (noiseInputs[2] != sources[2])
-		++noiseRevision;
-	if (!std::equal(noiseInputs.begin(), noiseInputs.end(), sources.begin()))
-		++weatherNoiseRevision;
-	std::copy_n(sources.begin(), 4, noiseInputs.begin());
-	for (size_t i = 0; i < noiseInputs.size(); ++i)
-		noiseInputResources[i].copy_from(noiseInputs[i]);
+	generatedWeather = weather;
+	generatedLayout = settings.layout.states;
+	generatedPhase = fieldPhase;
+	generatedFlow = flow;
+	generatedNoiseRevision = weatherNoiseRevision;
 	generatedValid = true;
-	return changed;
+	return true;
 }
 
-bool NdfManager::IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels)
+bool CloudWeatherManager::IsLinearTexture(ID3D11ShaderResourceView* srv, uint32_t channels)
 {
 	if (!srv)
 		return false;
@@ -550,7 +481,7 @@ bool NdfManager::IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels)
 	return IsLinearFormat(desc.Format, channels);
 }
 
-bool NdfManager::IsLinearFormat(DXGI_FORMAT format, uint32_t channels)
+bool CloudWeatherManager::IsLinearFormat(DXGI_FORMAT format, uint32_t channels)
 {
 	switch (format) {
 	case DXGI_FORMAT_R8_UNORM:
@@ -583,9 +514,9 @@ bool NdfManager::IsLinearFormat(DXGI_FORMAT format, uint32_t channels)
 	}
 }
 
-bool NdfManager::IsTexturePair(NdfTextureSet maps)
+bool CloudWeatherManager::IsTexturePair(NdfTextureSet maps)
 {
-	if (!IsTextureNdf(maps.height, 2) || !IsTextureNdf(maps.modeling, 3))
+	if (!IsLinearTexture(maps.height, 2) || !IsLinearTexture(maps.modeling, 3))
 		return false;
 	auto dimensions = [](ID3D11ShaderResourceView* srv) {
 		D3D11_SHADER_RESOURCE_VIEW_DESC view;
@@ -597,24 +528,6 @@ bool NdfManager::IsTexturePair(NdfTextureSet maps)
 		return std::pair{ std::max(desc.Width >> view.Texture2D.MostDetailedMip, 1u), std::max(desc.Height >> view.Texture2D.MostDetailedMip, 1u) };
 	};
 	return dimensions(maps.height) == dimensions(maps.modeling);
-}
-
-NdfTextureSet NdfManager::QueryTextures(const TexNdfSettings& settings, TextureManager& textures)
-{
-	NdfTextureSet maps{ textures.Query(settings.heightPath), textures.Query(settings.modelingPath) };
-	return IsTexturePair(maps) ? maps : NdfTextureSet{};
-}
-
-NdfTextureSet NdfManager::GetNdf(const NdfSettings& settings, TextureManager& textures)
-{
-	if (!generatedValid || !texHeight || !texModeling)
-		return {};
-	if (settings.type == NdfType::Texture && generatedData.imported) {
-		if (const auto maps = QueryTextures(settings.texture, textures); maps && maps.height == generatedSources[5] && maps.modeling == generatedSources[4])
-			return { texHeight->srv.get(), maps.modeling };
-		return {};
-	}
-	return { texHeight->srv.get(), texModeling->srv.get() };
 }
 
 CirrusSettings::CirrusSettings()
@@ -639,7 +552,7 @@ void MidCloudMapManager::SetupResources()
 {
 	parameters = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<Parameters>(), "PhysicalSky::MiddleCloudWeatherConstants");
 	for (auto& map : maps)
-		map = CreateNdfTexture(512, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::MiddleCloudWeather");
+		map = CreateWeatherTexture(512, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::MiddleCloudWeather");
 	D3D11_SAMPLER_DESC desc{};
 	desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 	desc.AddressU = desc.AddressV = desc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
@@ -657,10 +570,10 @@ void MidCloudMapManager::CompileShaders(Util::AsyncShaderSet& a_shaders)
 	a_shaders.Add(shader, L"Data\\Shaders\\PhysicalSky\\MidCloudGenerate.cs.hlsl");
 }
 
-bool MidCloudMapManager::Update(const MidCloudSettings& settings, TextureManager& textures, const NdfManager& ndf)
+bool MidCloudMapManager::Update(const MidCloudSettings& settings, TextureManager& textures, const CloudWeatherManager& weatherMap)
 {
 	if (!shader || !parameters || !sampler || !maps[0] || !maps[1] ||
-		std::ranges::any_of(ndf.GetNoiseInputs(), [](auto* source) { return !source; })) {
+		std::ranges::any_of(weatherMap.GetNoiseInputs(), [](auto* source) { return !source; })) {
 		valid = false;
 		return false;
 	}
@@ -676,7 +589,7 @@ bool MidCloudMapManager::Update(const MidCloudSettings& settings, TextureManager
 		} catch (const nlohmann::json::exception&) {}
 	}
 	const auto nextKey = nlohmann::json{ settings.weather, settings.heightPower, settings.bands.displacement }.dump();
-	if (valid && key == nextKey && textureRevision == textures.revision && noiseRevision == ndf.GetWeatherNoiseRevision())
+	if (valid && key == nextKey && textureRevision == textures.revision && noiseRevision == weatherMap.GetWeatherNoiseRevision())
 		return false;
 	auto* context = globals::d3d::context;
 	winrt::com_ptr<ID3D11SamplerState> previousSampler;
@@ -691,7 +604,7 @@ bool MidCloudMapManager::Update(const MidCloudSettings& settings, TextureManager
 	uint32_t target = 0;
 	for (const auto& [state, weight] : states) {
 		auto* local = textures.Query(state.localMap);
-		if (!NdfManager::IsTextureNdf(local, 3))
+		if (!CloudWeatherManager::IsLinearTexture(local, 3))
 			local = nullptr;
 		Parameters data{
 			.weather = { state.layers[0], state.layers[1], state.secondaryCoverage, state.coverageGain, state.thicknessVariation },
@@ -710,7 +623,7 @@ bool MidCloudMapManager::Update(const MidCloudSettings& settings, TextureManager
 		}
 		parameters->Update(data);
 		std::array<ID3D11ShaderResourceView*, 6> sources{};
-		std::copy(ndf.GetNoiseInputs().begin(), ndf.GetNoiseInputs().end(), sources.begin());
+		std::copy(weatherMap.GetNoiseInputs().begin(), weatherMap.GetNoiseInputs().end(), sources.begin());
 		sources[4] = local;
 		sources[5] = previous;
 		auto* uav = maps[target]->uav.get();
@@ -736,7 +649,7 @@ bool MidCloudMapManager::Update(const MidCloudSettings& settings, TextureManager
 	output.copy_from(previous);
 	key = nextKey;
 	textureRevision = textures.revision;
-	noiseRevision = ndf.GetWeatherNoiseRevision();
+	noiseRevision = weatherMap.GetWeatherNoiseRevision();
 	valid = true;
 	return true;
 }
@@ -745,7 +658,7 @@ void CirrusMapManager::SetupResources()
 {
 	generationCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<GenerationParameters>());
 	for (auto& texture : texWeather)
-		texture = CreateNdfTexture(kDimension, DXGI_FORMAT_R16G16_FLOAT, "PhysicalSky::CirrusWeather", true);
+		texture = CreateWeatherTexture(kDimension, DXGI_FORMAT_R16G16_FLOAT, "PhysicalSky::CirrusWeather", true);
 	D3D11_SAMPLER_DESC desc{
 		.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
 		.AddressU = D3D11_TEXTURE_ADDRESS_WRAP,
@@ -778,7 +691,7 @@ CirrusTextureSet CirrusMapManager::GetTextures() const
 	return outputs;
 }
 
-bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& textures, const NdfManager& ndf)
+bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& textures, const CloudWeatherManager& weatherMap)
 {
 	if (!ShadersReady(settings))
 		return false;
@@ -800,21 +713,18 @@ bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& te
 	}
 	const float uvSize = settings.GetUvSize();
 	const auto key = nlohmann::json{ { "weather", settings.weather.states }, { "uvSize", uvSize } }.dump();
-	const auto weatherWind = ndf.GetWeatherOffset();
-	const float2 wind = { weatherWind.x / uvSize, weatherWind.y / uvSize };
-	if (generatedValid && generatedKey == key && generatedRevision == textures.revision && noiseRevision == ndf.GetRevision() &&
-		generatedWind.x == wind.x && generatedWind.y == wind.y)
+	if (generatedValid && generatedKey == key && generatedRevision == textures.revision && noiseRevision == weatherMap.GetWeatherNoiseRevision())
 		return false;
 	const bool hadOutputs = bool(outputs);
 	outputs = {};
 	for (auto& resource : outputResources)
 		resource = nullptr;
 	auto* patterns = textures.Query(patternPath);
-	if (!NdfManager::IsTextureNdf(patterns, 3)) {
+	if (!CloudWeatherManager::IsLinearTexture(patterns, 3)) {
 		generatedValid = false;
 		return hadOutputs;
 	}
-	if (std::ranges::any_of(ndf.GetNoiseInputs(), [](auto* input) { return !input; })) {
+	if (std::ranges::any_of(weatherMap.GetNoiseInputs(), [](auto* input) { return !input; })) {
 		generatedValid = false;
 		return hadOutputs;
 	}
@@ -832,11 +742,11 @@ bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& te
 	for (size_t i = 0; i < states.size(); ++i) {
 		const auto& state = states[i];
 		auto* local = textures.Query(state.localMap);
-		if (!NdfManager::IsTextureNdf(local, 3))
+		if (!CloudWeatherManager::IsLinearTexture(local, 3))
 			local = nullptr;
 		GenerationParameters data{
 			.weather = state.layers,
-			.windOffset = wind,
+			.windOffset = {},
 			.localWeight = local ? FiniteClamp(state.localWeight, 0.f, 1.f, 0.f) : 0.f,
 			.localWindScale = FiniteClamp(state.localWindScale, 0.f, 16.f, 1.f),
 			.localBlendMode = std::min(state.localBlendMode, 1u),
@@ -852,7 +762,7 @@ bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& te
 		}
 		generationCb->Update(data);
 		std::array<ID3D11ShaderResourceView*, 6> sources = {};
-		std::copy(ndf.GetNoiseInputs().begin(), ndf.GetNoiseInputs().end(), sources.begin());
+		std::copy(weatherMap.GetNoiseInputs().begin(), weatherMap.GetNoiseInputs().end(), sources.begin());
 		sources[4] = local;
 		sources[5] = previous;
 		context->CSSetShaderResources(0, 6, sources.data());
@@ -880,9 +790,9 @@ bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& te
 	outputResources[0].copy_from(outputs.weather);
 	outputResources[1].copy_from(outputs.patterns);
 	generatedKey = key;
-	generatedWind = wind;
+
 	generatedRevision = textures.revision;
-	noiseRevision = ndf.GetRevision();
+	noiseRevision = weatherMap.GetWeatherNoiseRevision();
 	generatedValid = true;
 	return true;
 }
@@ -907,22 +817,12 @@ static bool DrawWeatherNoise(const char* label, CirrusNoiseLayer& layer, bool no
 	return changed;
 }
 
-template <bool middle>
-static void DrawLayerWeatherState(SceneBlend& weather, TextureManager& textures)
+template <class WeatherState, class DrawState>
+static void DrawSceneWeatherState(SceneBlend& weather, const SceneSettingsManager::SettingIdentity& identity, const char* overrideLabel, DrawState draw)
 {
-	using WeatherState = std::conditional_t<middle, MidCloudWeatherState, CirrusWeatherState>;
-	if (!ImGui::TreeNode(middle ? T(TKEY("middle_weather"), "Middle cloud weather") : T(TKEY("cirrus_weather_settings"), "Cirrus weather")))
-		return;
-	if constexpr (middle)
-		globals::features::physicalSky.DrawCloudWeatherPreview(true);
-	if constexpr (!middle) {
-		ImGui::TextWrapped("%s", T(TKEY("cirrus_scene_hint"), "Each scene stores coverage, type and an optional local map. Weather and time transitions blend the generated maps, including changes of noise input or local texture."));
-		ImGui::TextWrapped("%s", T(TKEY("cirrus_shared_noise"), "Uses the four inputs under Shared Noise & Textures > Weather Noise."));
-	}
 	const auto* armed = SceneWidgetInterceptor::GetArmedContext();
 	const bool scene = armed && !armed->baseline;
 	auto* manager = SceneSettingsManager::GetSingleton();
-	const SceneSettingsManager::SettingIdentity identity{ "PhysicalSky", { "cloudLayer", middle ? "middle" : "cirrus" }, "weather" };
 	std::optional<size_t> entryIndex;
 	nlohmann::json value = weather;
 	bool editable = true;
@@ -934,17 +834,15 @@ static void DrawLayerWeatherState(SceneBlend& weather, TextureManager& textures)
 			value = entries[*entryIndex].value;
 			editable = !entries[*entryIndex].paused;
 		} else {
-			if (Util::Button(middle ? T(TKEY("middle_scene_override"), "Override middle cloud weather in this scene") : T(TKEY("cirrus_scene_override"), "Override cirrus weather in this scene"))) {
+			if (Util::Button(overrideLabel)) {
 				if (entryIndex)
 					manager->ClearContextTombstone(armed->contextId, identity.featureShortName, identity.settingPath, identity.settingKey);
 				manager->AddContextSetting(armed->contextId, identity.featureShortName, identity.settingPath, identity.settingKey);
 			}
-			ImGui::TreePop();
 			return;
 		}
 		if (Util::Button(T(TKEY("local_ndf_scene_inherit"), "Remove override / inherit"))) {
 			manager->RemoveContextSetting(armed->contextId, *entryIndex);
-			ImGui::TreePop();
 			return;
 		}
 	}
@@ -961,29 +859,8 @@ static void DrawLayerWeatherState(SceneBlend& weather, TextureManager& textures)
 			ImGui::TextWrapped("%s", T(TKEY("cirrus_edit_mixed"), "A transition is active. Editing captures the strongest endpoint as a single weather state."));
 	}
 	ImGui::BeginDisabled(!editable);
-	bool changed = DrawWeatherNoise(middle ? T(TKEY("ndf_primary_coverage"), "Primary coverage") : T(TKEY("cirrus_coverage"), "Cirrus Coverage"), state.layers[0], !middle);
-	if constexpr (middle) {
-		changed |= DrawWeatherNoise(T(TKEY("ndf_secondary_coverage"), "Secondary coverage"), state.secondaryCoverage, false);
-		changed |= DrawWeatherNoise(T(TKEY("ndf_coverage_gain"), "Coverage gain"), state.coverageGain, false);
-		changed |= DrawWeatherNoise(T(TKEY("middle_thickness_variation"), "Thickness variation (fraction of layer height)"), state.thicknessVariation, false);
-	}
-	changed |= DrawWeatherNoise(middle ? T(TKEY("middle_type"), "Cloud Type (As to Ac)") : T(TKEY("cirrus_type"), "Cirrus Type"), state.layers[1]);
-	changed |= ImGui::InputText(T(TKEY("cirrus_local_map"), "Local coverage / type / mask RGB"), &state.localMap);
-	if constexpr (!middle)
-		ImGui::TextWrapped("%s", T(TKEY("cirrus_local_hint"), "Optional linear RGB DDS: R coverage, G type, B blend mask. Repeats every 16384 m multiplied by Cirrus UV Size. Leave the path empty to use no local map."));
-	changed |= ImGui::SliderFloat(T(TKEY("cirrus_local_weight"), "Local map influence"), &state.localWeight, 0.f, 1.f);
-	if (!middle)
-		changed |= ImGui::SliderFloat(T(TKEY("cirrus_local_wind"), "Local map wind scale"), &state.localWindScale, 0.f, 16.f);
-	const char* modes[] = { T(TKEY("local_ndf_interpolate"), "Interpolate"), T(TKEY("local_ndf_maximum"), "Maximum") };
-	int mode = static_cast<int>(std::min(state.localBlendMode, 1u));
-	if (ImGui::Combo(T(TKEY("cirrus_local_blend"), "Local map blend"), &mode, modes, 2)) {
-		state.localBlendMode = static_cast<uint32_t>(mode);
-		changed = true;
-	}
+	const bool changed = draw(state);
 	ImGui::EndDisabled();
-	textures.EnsureLoaded(state.localMap);
-	if (!state.localMap.empty() && !NdfManager::IsTextureNdf(textures.Query(state.localMap), 3))
-		Util::Text::WrappedWarning("%s", T(TKEY("cirrus_local_missing"), "Missing or incompatible local map; using the generated coverage and type."));
 	if (changed && editable) {
 		SceneBlend selection;
 		selection.states.push_back({ { "value", state }, { "weight", 1.f } });
@@ -995,6 +872,92 @@ static void DrawLayerWeatherState(SceneBlend& weather, TextureManager& textures)
 			manager->RecordBaselineEdit(identity, selection);
 		}
 	}
+}
+
+void CloudWeatherManager::DrawLayout(CloudWeatherSettings& settings, TextureManager& textures)
+{
+	if (!ImGui::TreeNode(T(TKEY("weather_cloud_layout"), "Cloud distribution")))
+		return;
+	const SceneSettingsManager::SettingIdentity identity{ "PhysicalSky", { "cloudWeather" }, "layout" };
+	DrawSceneWeatherState<CloudWeatherLayout>(settings.layout, identity, T(TKEY("weather_cloud_layout_override"), "Override cloud distribution in this scene"),
+		[&](CloudWeatherLayout& layout) {
+			bool changed = ImGui::InputScalar(T(TKEY("weather_cloud_base_seed"), "Low cloud pattern seed"), ImGuiDataType_U32, &layout.baseSeed);
+			changed |= ImGui::SliderInt2(T(TKEY("weather_cloud_base_cells"), "Low cloud cells across map (X / Y)"), layout.baseCells.data(), 1, 64);
+			changed |= ImGui::SliderFloat(T(TKEY("weather_cloud_base_edge"), "Low cloud coverage transition"), &layout.baseEdge, .01f, 1.f);
+			if (ImGui::TreeNode(T(TKEY("weather_cloud_coverage_mix"), "Low cloud noise weights"))) {
+				changed |= ImGui::SliderFloat(T(TKEY("weather_cloud_system_weight"), "Weather systems"), &layout.coverageWeights[0], 0.f, 1.f);
+				changed |= ImGui::SliderFloat(T(TKEY("weather_cloud_cluster_weight"), "Cloud clusters"), &layout.coverageWeights[1], 0.f, 1.f);
+				changed |= ImGui::SliderFloat(T(TKEY("weather_cloud_fragment_weight"), "Small fragments"), &layout.coverageWeights[2], 0.f, 1.f);
+				changed |= ImGui::SliderFloat(T(TKEY("weather_cloud_secondary_coverage"), "Secondary cloud patches"), &layout.secondaryCoverage, 0.f, 1.f);
+				Util::Text::WrappedSecondary("%s", T(TKEY("weather_cloud_coverage_mix_hint"), "Relative weights for procedural noise inputs 0, 1 and 3. Secondary patches can fill gaps in the primary coverage."));
+				ImGui::TreePop();
+			}
+			changed |= ImGui::SliderFloat(T(TKEY("weather_cloud_regional_coverage"), "Regional coverage contrast"), &layout.regionalCoverageStrength, 0.f, 1.f);
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(T(TKEY("weather_cloud_regional_coverage_desc"), "Multiplies the generated low cloud coverage by a broad field. Clear regions lose cover and cloudy regions gain cover."));
+			changed |= ImGui::SliderInt(T(TKEY("weather_cloud_regional_cells"), "Cloud regions across map"), &layout.regionalCells, 2, 8);
+			changed |= ImGui::SliderFloat(T(TKEY("weather_cloud_updraft"), "Concentrate growth in updrafts"), &layout.updraftOrganization, 0.f, 1.f);
+			changed |= ImGui::SliderFloat(T(TKEY("weather_cloud_cellular"), "Stratocumulus organization"), &layout.cellular, 0.f, 1.f);
+			changed |= ImGui::InputScalar(T(TKEY("weather_cloud_storm_seed"), "Cumulonimbus pattern seed"), ImGuiDataType_U32, &layout.stormSeed);
+			changed |= ImGui::SliderInt2(T(TKEY("weather_cloud_storm_cells"), "Cumulonimbus cells across map (X / Y)"), layout.stormCells.data(), 1, 64);
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(T(TKEY("weather_cloud_storm_cells_desc"), "1 × 1 generates one main cell and lower clouds around it. Larger grids distribute storm candidates within the same finite weather region."));
+			changed |= ImGui::SliderFloat(T(TKEY("weather_cloud_storm_edge"), "Cumulonimbus coverage transition"), &layout.stormEdge, .01f, 1.f);
+			changed |= ImGui::SliderFloat(T(TKEY("weather_cloud_core_fraction"), "Cumulonimbus core width"), &layout.coreFraction, 0.f, 1.f);
+			changed |= ImGui::SliderFloat(T(TKEY("weather_cloud_storm_outflow"), "Anvil outflow reach"), &layout.stormOutflow, 0.f, 1.f);
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(T(TKEY("weather_cloud_storm_outflow_desc"), "Spreads the anvil along the upper wind relative to the low wind. Equal winds produce an outflow around the core."));
+			changed |= ImGui::InputText(T(TKEY("weather_cloud_painted_map"), "Painted weather map (DDS)"), &layout.paintedMap);
+			changed |= ImGui::SliderFloat(T(TKEY("weather_cloud_painted_weight"), "Painted map influence"), &layout.paintedWeight, 0.f, 1.f);
+			Util::Text::WrappedSecondary("%s", T(TKEY("weather_cloud_painted_map_hint"), "Linear RGBA DDS. Red and green are low cloud coverage and type. Use a floating-point DDS to paint negative green values for nimbostratus. Blue and alpha are cumulonimbus coverage and type. At full influence, the texture defines the entire map."));
+			textures.EnsureLoaded(layout.paintedMap);
+			if (!layout.paintedMap.empty() && !IsLinearTexture(textures.Query(layout.paintedMap), 4))
+				Util::Text::WrappedWarning("%s", T(TKEY("weather_cloud_painted_map_missing"), "Missing or incompatible RGBA DDS. Using procedural coverage and cloud types."));
+			return changed;
+		});
+	ImGui::TreePop();
+}
+
+template <bool middle>
+static void DrawLayerWeatherState(SceneBlend& weather, TextureManager& textures)
+{
+	using WeatherState = std::conditional_t<middle, MidCloudWeatherState, CirrusWeatherState>;
+	if (!ImGui::TreeNode(middle ? T(TKEY("middle_weather"), "Middle cloud weather") : T(TKEY("cirrus_weather_settings"), "Cirrus weather")))
+		return;
+	if constexpr (middle)
+		globals::features::physicalSky.DrawCloudWeatherPreview(true);
+	if constexpr (!middle) {
+		ImGui::TextWrapped("%s", T(TKEY("cirrus_scene_hint"), "Each scene stores coverage, type and an optional local map. Weather and time transitions blend the generated maps, including changes of noise input or local texture."));
+		ImGui::TextWrapped("%s", T(TKEY("cirrus_shared_noise"), "Uses the four inputs under Shared Noise & Textures > Weather Noise."));
+	}
+	const SceneSettingsManager::SettingIdentity identity{ "PhysicalSky", { "cloudLayer", middle ? "middle" : "cirrus" }, "weather" };
+	DrawSceneWeatherState<WeatherState>(weather, identity,
+		middle ? T(TKEY("middle_scene_override"), "Override middle cloud weather in this scene") : T(TKEY("cirrus_scene_override"), "Override cirrus weather in this scene"),
+		[&](WeatherState& state) {
+			bool changed = DrawWeatherNoise(middle ? T(TKEY("ndf_primary_coverage"), "Primary coverage") : T(TKEY("cirrus_coverage"), "Cirrus Coverage"), state.layers[0], !middle);
+			if constexpr (middle) {
+				changed |= DrawWeatherNoise(T(TKEY("ndf_secondary_coverage"), "Secondary coverage"), state.secondaryCoverage, false);
+				changed |= DrawWeatherNoise(T(TKEY("ndf_coverage_gain"), "Coverage gain"), state.coverageGain, false);
+				changed |= DrawWeatherNoise(T(TKEY("middle_thickness_variation"), "Thickness variation (fraction of layer height)"), state.thicknessVariation, false);
+			}
+			changed |= DrawWeatherNoise(middle ? T(TKEY("middle_type"), "Cloud Type (As to Ac)") : T(TKEY("cirrus_type"), "Cirrus Type"), state.layers[1]);
+			changed |= ImGui::InputText(T(TKEY("cirrus_local_map"), "Local coverage / type / mask RGB"), &state.localMap);
+			if constexpr (!middle)
+				ImGui::TextWrapped("%s", T(TKEY("cirrus_local_hint"), "Optional linear RGB DDS: R coverage, G type, B blend mask. Repeats every 16384 m multiplied by Cirrus UV Size. Leave the path empty to use no local map."));
+			changed |= ImGui::SliderFloat(T(TKEY("cirrus_local_weight"), "Local map influence"), &state.localWeight, 0.f, 1.f);
+			if (!middle)
+				changed |= ImGui::SliderFloat(T(TKEY("cirrus_local_wind"), "Local map wind scale"), &state.localWindScale, 0.f, 16.f);
+			const char* modes[] = { T(TKEY("local_ndf_interpolate"), "Interpolate"), T(TKEY("local_ndf_maximum"), "Maximum") };
+			int mode = static_cast<int>(std::min(state.localBlendMode, 1u));
+			if (ImGui::Combo(T(TKEY("cirrus_local_blend"), "Local map blend"), &mode, modes, 2)) {
+				state.localBlendMode = static_cast<uint32_t>(mode);
+				changed = true;
+			}
+			textures.EnsureLoaded(state.localMap);
+			if (!state.localMap.empty() && !CloudWeatherManager::IsLinearTexture(textures.Query(state.localMap), 3))
+				Util::Text::WrappedWarning("%s", T(TKEY("cirrus_local_missing"), "Missing or incompatible local map; using the generated coverage and type."));
+			return changed;
+		});
 	ImGui::TreePop();
 }
 
@@ -1009,7 +972,7 @@ void CirrusMapManager::DrawSettings(CirrusSettings& cirrus, CloudLightingSetting
 		ImGui::TextWrapped("%s", T(TKEY("cirrus_altitude_hint"), "Height controls the cloud sheet and its atmospheric lighting. It does not extend the low-cloud ray march."));
 	if (!SceneWidgetInterceptor::IsArmed()) {
 		textures.EnsureLoaded("Data/Textures/PhysicalSky/cirrus.dds");
-		if (!NdfManager::IsTextureNdf(textures.Query("Data/Textures/PhysicalSky/cirrus.dds"), 3))
+		if (!CloudWeatherManager::IsLinearTexture(textures.Query("Data/Textures/PhysicalSky/cirrus.dds"), 3))
 			Util::Text::WrappedWarning("%s", T(TKEY("cirrus_patterns_missing"), "Cirrus requires a linear RGB cirrus.dds. If it is missing or incompatible, only cirrus is disabled."));
 	}
 	DrawLayerWeatherState<false>(cirrus.weather, textures);

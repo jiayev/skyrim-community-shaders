@@ -17,23 +17,24 @@ cbuffer CB : register(b1)
 	float bias;
 	uint repetitions;
 	float responseExponent;
-	float2 padding;
+	uint frequencyY;
+	float padding;
 };
 RWTexture2D<float> Output : register(u0);
 
-float3 CellHash(int3 cell, uint period, uint salt)
+float3 CellHash(int3 cell, uint2 period, uint salt)
 {
-	cell.xy = (cell.xy % int(period) + int(period)) % int(period);
+	cell.xy = (cell.xy % int2(period) + int2(period)) % int2(period);
 	return float3(Random::pcg3d(asuint(cell) + uint3(seed, salt, seed ^ salt)) >> 8u) / 16777216.0;
 }
 
-float Gradient(int2 cell, float2 delta, uint period)
+float Gradient(int2 cell, float2 delta, uint2 period)
 {
 	const float angle = CellHash(int3(cell, 0), period, 17u).x * 6.28318530718;
 	return dot(float2(cos(angle), sin(angle)), delta);
 }
 
-float Perlin(float2 uv, uint period)
+float Perlin(float2 uv, uint2 period)
 {
 	const float2 p = frac(uv) * period;
 	const int2 cell = int2(floor(p));
@@ -43,7 +44,7 @@ float Perlin(float2 uv, uint period)
 		lerp(Gradient(cell + int2(0, 1), f - float2(0, 1), period), Gradient(cell + 1, f - 1.0, period), w.x), w.y);
 }
 
-float Worley(float2 uv, uint period)
+float Worley(float2 uv, uint2 period)
 {
 	const float3 p = float3(frac(uv) * period, 0.5);
 	const int3 cell = int3(floor(p));
@@ -69,14 +70,14 @@ float Worley(float2 uv, uint period)
 	float sum = 0.0;
 	float weight = 1.0;
 	float normalization = 0.0;
-	uint period = frequency;
+	uint2 period = uint2(frequency, frequencyY == 0u ? frequency : frequencyY);
 	[loop] for (uint octave = 0u; octave < octaves; ++octave)
 	{
-		if (period > min(size.x, size.y) / (2u * repetitions))
+		if (any(period > size / (2u * repetitions)))
 			break;
 		float value;
 		if (noiseType == 0u)
-			value = saturate(AlligatorNoise::Sample(float3(frac(uv) * period, 0.5), uint3(period, period, 0u), seed, 31u) * 2.0);
+			value = saturate(AlligatorNoise::Sample(float3(frac(uv) * period, 0.5), uint3(period, 0u), seed, 31u) * 2.0);
 		else {
 			const float perlin = saturate(0.5 + Perlin(uv, period));
 			if (noiseType == 2u) {

@@ -29,10 +29,10 @@ bool MiddleIntervalEmpty(float3 start, float3 end)
 	const float2 altitude = lerp(info.middleLayer.x, info.middleLayer.y, bounds) + float2(-1.0, 1.0) * abs(MiddleCloudBandShape.y);
 	const float3 delta = end - start;
 	const float curve = dot(delta.xy, delta.xy) / info.cloudCurvatureRadius;
-	const float slope = delta.z + 2.0 * dot(start.xy - FrameBuffer::CameraPosAdjust.xy, delta.xy) / info.cloudCurvatureRadius;
+	const float slope = delta.z + 2.0 * dot(start.xy, delta.xy) / info.cloudCurvatureRadius;
 	const float vertex = saturate(-slope / max(2.0 * curve, 1e-20));
-	const float h0 = CloudProfileAltitude(start, FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
-	const float h1 = CloudProfileAltitude(end, FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
+	const float h0 = CloudProfileAltitude(start, info.cloudCurvatureRadius);
+	const float h1 = CloudProfileAltitude(end, info.cloudCurvatureRadius);
 	const float minimum = min(min(h0, h1), h0 + vertex * (slope + vertex * curve));
 	return max(h0, h1) < altitude.x || minimum > altitude.y;
 #endif

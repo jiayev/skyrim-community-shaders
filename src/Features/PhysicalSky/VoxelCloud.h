@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Ndf.h"
+#include "CloudWeather.h"
 
 // Scene endpoints hold placements, rather than interpolating the volume transform.
 struct VoxelCloudPlacement

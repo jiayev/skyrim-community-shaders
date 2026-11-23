@@ -22,8 +22,8 @@ float UpperSunTransmission(float3 position)
 	[branch] if (info.middleLayer.z <= 0.0 && info.cirrusEnabled == 0u) return 1.0;
 	const float2 uv = (position.xy - UpperSunGridCenter()) / (2.0 * info.rayMarchRange) + 0.5;
 	const float2 depth = TexUpperSunDepth.SampleLevel(TransmittanceSampler, uv, 0);
-	const float altitude = CloudProfileAltitude(position, FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
-	const float height = saturate((altitude - info.lowCloudTraceBottomAltitude) / max(info.lowCloudTraceTopAltitude - info.lowCloudTraceBottomAltitude, 1.0));
+	const float altitude = WeatherCloudAltitude(position, info.cloudCurvatureRadius);
+	const float height = saturate((altitude - info.lowCloudBaseAltitude) / max(info.lowCloudTopAltitude - info.lowCloudBaseAltitude, 1.0));
 	return exp(-lerp(depth.x, depth.y, height) * info.sunExtinction);
 }
 
@@ -153,7 +153,7 @@ float4 MiddleShapeNoise(float3 position, float footprint, float dimensionalProfi
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const float frequency = info.middleShape.z;
 	const float altitude = info.middleShape.w > 0.5 ?
-	                           CloudProfileAltitude(position, FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius) :
+	                           CloudProfileAltitude(position, info.cloudCurvatureRadius) :
 	                           0.5 * (info.middleLayer.x + info.middleLayer.y);
 	const float3 uv = float3(position.xy - info.cirrusWindOffset, altitude) * frequency;
 	// Low NDF clouds suppress fine interior noise with profile * 3. Interpolate
@@ -249,8 +249,8 @@ MiddleInterval MiddleDensityInterval(float4 column0, float4 column1, float3 star
 	if (column1.z <= 0.0)
 		column1.xyw = column0.xyw;
 	interval.heights = float2(
-		(CloudProfileAltitude(start, FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius) - column0.x) / max(column0.y - column0.x, 1e-5),
-		(CloudProfileAltitude(end, FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius) - column1.x) / max(column1.y - column1.x, 1e-5));
+		(CloudProfileAltitude(start, info.cloudCurvatureRadius) - column0.x) / max(column0.y - column0.x, 1e-5),
+		(CloudProfileAltitude(end, info.cloudCurvatureRadius) - column1.x) / max(column1.y - column1.x, 1e-5));
 	if (max(interval.heights.x, interval.heights.y) <= 0.0 || min(interval.heights.x, interval.heights.y) >= 1.0)
 		return interval;
 	interval.masses = float2(MiddleProfileIntegral(interval.heights.x, info.middleShape.x),
@@ -336,7 +336,7 @@ float MiddleRatioMass(float2 samples, float fraction)
 float2 MiddleColumnDepths(float4 column, float3 position, float footprint = 0.0)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float curve = CloudCurvatureOffset(position.xy - FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
+	const float curve = CloudCurvatureOffset(position.xy, info.cloudCurvatureRadius);
 	const float width = max(column.y - column.x, 1e-5);
 	const float h = saturate((position.z + curve - column.x) / width);
 	const float soft = info.middleShape.x;
@@ -374,7 +374,7 @@ float MiddleCloudDensity(float3 position, out float4 model, out float2 opticalDe
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	if (info.middleLayer.z <= 0.0)
 		return 0.0;
-	const float altitude = CloudProfileAltitude(position, FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
+	const float altitude = CloudProfileAltitude(position, info.cloudCurvatureRadius);
 	const float4 column = MiddleCloudColumn(position.xy, footprint, 0.0, true, altitude);
 	if (column.z <= 0.0 || altitude <= column.x || altitude >= column.y)
 		return 0.0;
@@ -446,8 +446,7 @@ float MiddleSelfShadowDepth(float3 position, float3 direction)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	[branch] if (info.middleLayer.z <= 0.0) return 0.0;
-	const float3 origin = float3(position.xy - FrameBuffer::CameraPosAdjust.xy, position.z);
-	const float2 interval = IntersectCloudBelow(origin, direction, info.middleLayer.y, info.cloudCurvatureRadius);
+	const float2 interval = IntersectCloudBelow(position, direction, info.middleLayer.y, info.cloudCurvatureRadius);
 	const float distance = clamp(interval.y, 0.0, 3000.0 * GAME_UNITS_PER_METER);
 	if (distance <= 0.0)
 		return 0.0;
@@ -491,13 +490,12 @@ float2 MiddleRayDepth(float3 position, float3 direction)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	[branch] if (info.middleLayer.z <= 0.0) return 0.0;
-	const float3 origin = float3(position.xy - FrameBuffer::CameraPosAdjust.xy, position.z);
-	const float2 center = IntersectCloudBelow(origin, direction, 0.5 * (info.middleLayer.x + info.middleLayer.y), info.cloudCurvatureRadius);
+	const float2 center = IntersectCloudBelow(position, direction, 0.5 * (info.middleLayer.x + info.middleLayer.y), info.cloudCurvatureRadius);
 	const float distance = max(center.x > 0.0 ? center.x : center.y, 0.0);
 	const float4 column = MiddleCloudColumn(position.xy + direction.xy * min(distance, 1e8), info.rayMarchRange / 128.0);
 	const float inset = 0.5 * info.middleShape.x * (column.y - column.x);
-	const float2 outer = max(IntersectCloudBelow(origin, direction, column.y - inset, info.cloudCurvatureRadius), 0.0);
-	const float2 inner = clamp(IntersectCloudBelow(origin, direction, column.x + inset, info.cloudCurvatureRadius), outer.x, outer.y);
+	const float2 outer = max(IntersectCloudBelow(position, direction, column.y - inset, info.cloudCurvatureRadius), 0.0);
+	const float2 inner = clamp(IntersectCloudBelow(position, direction, column.x + inset, info.cloudCurvatureRadius), outer.x, outer.y);
 	const float length = max((inner.x - outer.x) + (outer.y - inner.y), 0.0);
 	const float3 hit = position + direction * min(distance, 1e8);
 	const float2 vertical = MiddleColumnDepths(column, hit, info.rayMarchRange / 128.0);
@@ -515,10 +513,9 @@ float2 MiddleAmbientResponse(float2 depth)
 float3 MiddleCloudDisplacement(float3 position)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float2 relative = position.xy - FrameBuffer::CameraPosAdjust.xy;
-	const float2 previous = relative + FrameBuffer::CameraPosAdjust.xy - info.previousCamera.xy - info.cirrusWindDelta;
+	const float2 previous = position.xy - info.cirrusWindDelta;
 	const float previousRadius = info.noisePadding.x > 0.0 ? info.noisePadding.x : info.cloudCurvatureRadius;
-	const float curveDelta = dot(previous - relative, previous + relative) / info.cloudCurvatureRadius +
+	const float curveDelta = dot(previous - position.xy, previous + position.xy) / info.cloudCurvatureRadius +
 	                         dot(previous, previous) / previousRadius * ((info.cloudCurvatureRadius - previousRadius) / info.cloudCurvatureRadius);
 	return float3(info.cirrusWindDelta, curveDelta);
 }

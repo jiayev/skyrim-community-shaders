@@ -735,6 +735,11 @@ public:
 	/// Entries stored for one context, unfiltered by period. Empty when the context holds none.
 	std::span<const SettingEntry> GetContextEntries(const SceneContextId& context) const;
 
+	/// Value to start editing on this page, including inherited values when it has no entry of its own.
+	std::optional<json> GetContextValueForEdit(const SceneContextId& context, const SettingIdentity& setting);
+	/// Applies a parameter preset to one page. Validate the whole set before creating or replacing user entries.
+	bool ApplyContextPreset(const SceneContextId& context, const std::map<SettingIdentity, json>& values);
+
 	/** @brief The feature's own value at an address the scene layer is applied over, or null when the
 	 *  layer leaves it alone and the live member already holds it. */
 	const json* FindAppliedBaseline(const SettingIdentity& setting) const;

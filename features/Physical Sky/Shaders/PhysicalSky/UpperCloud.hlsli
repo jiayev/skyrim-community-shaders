@@ -24,53 +24,20 @@ RWTexture2D<float2> RWUpperSunDepth : register(u0);
 [numthreads(8, 8, 1)] void buildUpperSunDepth(uint2 pixel : SV_DispatchThreadID) {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const float2 xy = UpperSunGridCenter() + ((float2(pixel) + 0.5) / 256.0 - 0.5) * (2.0 * info.rayMarchRange);
-	const float curve = CloudCurvatureOffset(xy - FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
-	const float3 bottom = float3(xy, info.lowCloudTraceBottomAltitude - curve);
-	const float3 top = float3(xy, info.lowCloudTraceTopAltitude - curve);
+	const float3 bottom = float3(xy, WeatherCloudWorldHeight(xy, info.lowCloudBaseAltitude, info.cloudCurvatureRadius));
+	const float3 top = float3(xy, WeatherCloudWorldHeight(xy, info.lowCloudTopAltitude, info.cloudCurvatureRadius));
 	RWUpperSunDepth[pixel] = min(float2(MiddleRayDepth(bottom, info.dirlightDir).x + CirrusSunDepth(bottom),
 									 MiddleRayDepth(top, info.dirlightDir).x + CirrusSunDepth(top)),
 		80.0);
 }
 
-// Incident light and the view use the same cirrus source and wind anchoring.
-float3 CirrusBoundaryRadiance(float3 position, float3 direction, float3 incoming)
-{
-	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	if (info.cirrusEnabled == 0u)
-		return incoming;
-	const float3 origin = position + float3(-FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
-	const float2 roots = IntersectSpherePair(origin, direction, info.cloudCurvatureRadius + info.cirrusAltitude);
-	const float distance = roots.x >= 0.0 ? roots.x : roots.y;
-	if (distance <= 0.0)
-		return incoming;
-	const float2 ground = IntersectSpherePair(origin, direction, info.cloudCurvatureRadius);
-	if (ground.x >= 0.0 && ground.x < distance)
-		return incoming;
-	float3 radiance = 0.0;
-	float transmission = 1.0, transport = 1.0, depth = 0.0, weight = 0.0, cirrus = 0.0;
-	IntegrateCirrus(position + direction * distance, direction, distance, CloudCirrusPhase(direction), MakeCloudAmbient(),
-		radiance, transmission, transport, depth, weight, cirrus);
-	return radiance + transmission * incoming;
-}
-
 // Lighting consumes optical properties, not weather textures or shape noises.
 // Keep the phase, solar spectrum and scattering calibration shared with low cloud.
-float3 MiddleDirectSource(float3 position, float3 direction, float extinction, float height, float lightDepth, float viewDepth, float opacity)
-{
-	NDFInfo material;
-	initNDFInfo(material);
-	material.height_fraction = height;
-	material.altitude = VolumetricCloudBuffer[0].middleLayer.xy;
-	return ShadeCloudLighting(position, material, extinction, viewDepth, opacity,
-		CloudLowPhase(direction), lightDepth, CloudMultipleScattering(extinction, material),
-		exp(-CirrusSunDepth(position) * VolumetricCloudBuffer[0].sunExtinction));
-}
-
 float3 MiddleDirectSource(float3 position, float3 direction, float4 materialSamples, float lightDepth, float viewDepth, float opacity)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	NDFInfo material;
-	initNDFInfo(material);
+	CloudMaterialSample material;
+	initCloudMaterialSample(material);
 	material.altitude = info.middleLayer.xy;
 	const CloudMsProfile calibration = PrepareCloudMsProfile(material);
 	const float phase = CloudLowPhase(direction);
@@ -84,15 +51,6 @@ float3 MiddleDirectSource(float3 position, float3 direction, float4 materialSamp
 			phase, lightDepth, CloudMultipleScattering(extinction, material, calibration), cirrus);
 	}
 	return 0.5 * source;
-}
-
-float3 MiddleBoundaryRadiance(float3 position, float3 direction, float2 opticalDepth)
-{
-	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float lightDepth = MiddleSelfShadowDepth(position, info.dirlightDir) * info.sunExtinction;
-	const float height = direction.z > 0.0 ? 0.0 : 1.0;
-	const float3 solar = MiddleDirectSource(position, direction, info.middleLayer.z, height, lightDepth, 32.0, 1.0);
-	return solar + info.cloudLightingScale * info.ambientStrength * CloudAmbientPhase.y * CloudAmbientTransport::MiddleSource(position, opticalDepth);
 }
 
 float MiddleViewStepSize(float3 direction, float3 origin, float2 interval)
@@ -109,17 +67,16 @@ float MiddleViewStepSize(float3 direction, float3 origin, float2 interval)
 float UpperCloudFirstDistance(float3 eye, float3 direction, float sceneDistance)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float3 origin = float3(eye.xy - FrameBuffer::CameraPosAdjust.xy, eye.z);
 	CloudRaySegments segments = (CloudRaySegments)0;
 	bool middle = false;
 	float first = 1e30;
 	if (info.middleLayer.z > 0.0) {
 		VolumetricCloudData middleInfo = info;
 		middleInfo.rayMarchRange = sceneDistance > 0.0 ? sceneDistance : 1e30;
-		const float2 ground = IntersectSpherePair(origin + float3(0, 0, info.planetRadius), direction, info.planetRadius);
+		const float2 ground = IntersectSpherePair(eye + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), direction, info.planetRadius);
 		if (ground.x >= 0.0 && ground.y > 0.0)
 			middleInfo.rayMarchRange = min(middleInfo.rayMarchRange, ground.x);
-		segments = GetCloudRaySegments(origin, direction, info.middleLayer.x, info.middleLayer.y, middleInfo);
+		segments = GetCloudRaySegments(eye, direction, info.middleLayer.x, info.middleLayer.y, middleInfo);
 		if (segments.nearSegment.y > segments.nearSegment.x && !MiddleIntervalEmpty(eye + direction * segments.nearSegment.x, eye + direction * segments.nearSegment.y)) {
 			middle = true;
 			first = min(first, segments.nearSegment.x);
@@ -131,7 +88,7 @@ float UpperCloudFirstDistance(float3 eye, float3 direction, float sceneDistance)
 	}
 	bool cirrus = false;
 	if (info.cirrusEnabled != 0u) {
-		const float2 roots = IntersectSpherePair(origin + float3(0, 0, info.cloudCurvatureRadius), direction, info.cloudCurvatureRadius + info.cirrusAltitude);
+		const float2 roots = IntersectSpherePair(eye + float3(-FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius), direction, info.cloudCurvatureRadius + info.cirrusAltitude);
 		const float sheet = roots.x >= 0.0 ? roots.x : roots.y;
 		cirrus = sheet >= 0.0 && (sceneDistance <= 0.0 || sheet < sceneDistance);
 		if (cirrus)
@@ -157,21 +114,20 @@ VolumetricCloudResult RenderUpperCloudRay(float3 direction, float3 eye, float sc
 #ifdef CLOUD_REFLECTION
 	result.rawTransmission = 1.0;
 #endif
-	const float3 origin = float3(eye.xy - FrameBuffer::CameraPosAdjust.xy, eye.z);
 	CloudRaySegments segments = (CloudRaySegments)0;
 	if (info.middleLayer.z > 0.0) {
 		// Middle clouds can first enter the ray beyond the entire low-cloud
 		// range. Trace their own shell, stopping at scene/planet occlusion.
 		VolumetricCloudData middleInfo = info;
 		middleInfo.rayMarchRange = sceneDistance > 0.0 ? sceneDistance : 1e30;
-		const float2 ground = IntersectSpherePair(origin + float3(0, 0, info.planetRadius), direction, info.planetRadius);
+		const float2 ground = IntersectSpherePair(eye + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), direction, info.planetRadius);
 		if (ground.x >= 0.0 && ground.y > 0.0)
 			middleInfo.rayMarchRange = min(middleInfo.rayMarchRange, ground.x);
-		segments = GetCloudRaySegments(origin, direction, info.middleLayer.x, info.middleLayer.y, middleInfo);
+		segments = GetCloudRaySegments(eye, direction, info.middleLayer.x, info.middleLayer.y, middleInfo);
 	}
 	float sheetDistance = -1.0;
 	if (info.cirrusEnabled != 0u) {
-		const float2 roots = IntersectSpherePair(origin + float3(0, 0, info.cloudCurvatureRadius), direction, info.cloudCurvatureRadius + info.cirrusAltitude);
+		const float2 roots = IntersectSpherePair(eye + float3(-FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius), direction, info.cloudCurvatureRadius + info.cirrusAltitude);
 		sheetDistance = roots.x >= 0.0 ? roots.x : roots.y;
 		if (sceneDistance > 0.0 && sheetDistance >= sceneDistance)
 			sheetDistance = -1.0;
@@ -179,7 +135,7 @@ VolumetricCloudResult RenderUpperCloudRay(float3 direction, float3 eye, float sc
 #ifdef CLOUD_REFLECTION
 	// Distribute the existing macro steps, rather than giving every lane a new
 	// full march. Keep the near and far shell pieces in front-to-back order.
-	const float2 steps = float2(MiddleViewStepSize(direction, origin, segments.nearSegment), MiddleViewStepSize(direction, origin, segments.farSegment));
+	const float2 steps = float2(MiddleViewStepSize(direction, eye, segments.nearSegment), MiddleViewStepSize(direction, eye, segments.farSegment));
 	const float2 counts = ceil(max(float2(segments.nearSegment.y - segments.nearSegment.x, segments.farSegment.y - segments.farSegment.x), 0.0) / steps);
 	const float2 indices = floor(raySegment * (counts.x + counts.y));
 	const float2 mapped = indices <= counts.x ? min(segments.nearSegment.xx + indices * steps.x, segments.nearSegment.yy) :
@@ -192,6 +148,9 @@ VolumetricCloudResult RenderUpperCloudRay(float3 direction, float3 eye, float sc
 #endif
 	const CloudAmbient ambient = MakeCloudAmbient();
 	const float cirrusPhase = CloudCirrusPhase(direction);
+#ifndef CLOUD_REFLECTION
+	const CloudAerialRay air = MakeCloudAerialRay(direction);
+#endif
 	float transmission = 1.0, transport = 1.0;
 	float depthSum = 0.0, weightSum = 0.0, cirrusWeight = 0.0;
 	[loop] for (uint piece = 0u; piece < 2u; ++piece)
@@ -207,12 +166,12 @@ VolumetricCloudResult RenderUpperCloudRay(float3 direction, float3 eye, float sc
 		const float2 ownedSteps = clamp(indices - firstIndex, 0.0, counts[piece]);
 		uint remainingSteps = uint(ownedSteps.y - ownedSteps.x);
 #else
-		const float stepSize = MiddleViewStepSize(direction, origin, interval);
+		const float stepSize = MiddleViewStepSize(direction, eye, interval);
 #endif
 		float4 startColumn = 0.0;
 		if (distance < end)
 			startColumn = MiddleCloudColumn((eye + direction * distance).xy, distance * angularFootprint, 0.5 * stepSize * length(direction.xy));
-		[loop] while (distance < end && max(transmission, info.ambientStrength > 0.0 ? transport : transmission) > 0.1)
+		[loop] while (distance < end && max(transmission, info.ambientStrength > 0.0 ? transport : transmission) > CloudViewTransmissionCutoff)
 		{
 			if (sheetDistance >= 0.0 && sheetDistance <= distance) {
 #ifdef CLOUD_REFLECTION
@@ -220,7 +179,7 @@ VolumetricCloudResult RenderUpperCloudRay(float3 direction, float3 eye, float sc
 					result, transmission, transport, depthSum, weightSum, cirrusWeight);
 #else
 				IntegrateCirrus(eye + direction * sheetDistance, direction, sheetDistance, cirrusPhase, ambient,
-					result.lum, transmission, transport, depthSum, weightSum, cirrusWeight);
+					result.lum, transmission, transport, depthSum, weightSum, cirrusWeight, air);
 #endif
 				sheetDistance = -1.0;
 			}
@@ -245,20 +204,30 @@ VolumetricCloudResult RenderUpperCloudRay(float3 direction, float3 eye, float sc
 				const float viewDepth = density * stepSizeHere * GAME_UNIT_TO_M * info.viewExtinction;
 				const float opacity = CloudOpacity(viewDepth);
 				const float lightDepth = MiddleSelfShadowDepth(position, info.dirlightDir) * info.sunExtinction;
-				result.lum += transmission * MiddleDirectSource(position, direction, materialSamples, lightDepth, viewDepth, opacity);
+#ifdef CLOUD_REFLECTION
+				const ViewAtmosphere::Medium perspective = ViewAtmosphere::Identity();
+#else
+				const ViewAtmosphere::Medium perspective = SampleCloudAerialPerspective(air, sampleDistance);
+				const float backgroundBefore = CloudBackgroundTransmittance(transmission, info.ambientStrength > 0.0 ? transport : transmission);
+#endif
+				result.lum += (transmission * perspective.transmittance) * MiddleDirectSource(position, direction, materialSamples, lightDepth, viewDepth, opacity);
 				const float reducedDepth = viewDepth * CloudAmbientPhase.x;
 				if (info.ambientStrength > 0.0)
 #ifdef CLOUD_REFLECTION
-					result.transportLum += transport * CloudOpacity(reducedDepth) * CloudAmbientPhase.y * info.ambientStrength * info.cloudLightingScale * CloudAmbientTransport::MiddleSource(position, depth);
+					result.transportLum += transport * CloudOpacity(reducedDepth) * CloudAmbientPhase.y * info.ambientStrength * info.cloudLightingScale * CloudAmbientLight::MiddleSource(depth);
 #else
-					result.lum += transport * CloudOpacity(reducedDepth) * CloudAmbientPhase.y * info.ambientStrength * info.cloudLightingScale * CloudAmbientTransport::MiddleSource(position, depth);
+					result.lum += (transport * perspective.transmittance) * CloudOpacity(reducedDepth) * CloudAmbientPhase.y * info.ambientStrength * info.cloudLightingScale * CloudAmbientLight::MiddleSource(depth);
 #endif
-				const float weight = CloudDepthWeight(transmission, density, sampleDistance);
+				const float weight = transmission * opacity;
 				depthSum += weight * sampleDistance;
 				weightSum += weight;
 				result.stormMotion += weight * float4(MiddleCloudDisplacement(position), 1.0);
 				transmission *= exp(-viewDepth);
 				transport *= exp(-reducedDepth);
+#ifndef CLOUD_REFLECTION
+				const float backgroundAfter = CloudBackgroundTransmittance(transmission, info.ambientStrength > 0.0 ? transport : transmission);
+				result.lum += (backgroundBefore - backgroundAfter) * perspective.luminance;
+#endif
 			}
 #ifdef CLOUD_REFLECTION
 			distance = splitAtSheet ? sheetDistance : (remainingSteps == 1u ? end : distance + stepSizeHere);
@@ -276,18 +245,12 @@ VolumetricCloudResult RenderUpperCloudRay(float3 direction, float3 eye, float sc
 	result.integralWeights = float4(depthSum, weightSum, cirrusWeight, 0.0);
 #else
 		IntegrateCirrus(eye + direction * sheetDistance, direction, sheetDistance, cirrusPhase, ambient,
-			result.lum, transmission, transport, depthSum, weightSum, cirrusWeight);
-	const float raw = CloudBackgroundTransmittance(transmission, info.ambientStrength > 0.0 ? transport : transmission);
-	result.transmittance = saturate((raw - 0.1) / 0.9);
-	result.lum /= 1.0 - min(raw, 0.1);
+			result.lum, transmission, transport, depthSum, weightSum, cirrusWeight, air);
+	result.transmittance = CloudBackgroundTransmittance(transmission, info.ambientStrength > 0.0 ? transport : transmission);
 	if (weightSum > 0.0) {
 		result.cloud_depth = depthSum / weightSum;
 		result.stormMotion *= (1.0 - result.transmittance.x) / weightSum;
 		result.motionMetadata.x = saturate(cirrusWeight / weightSum);
-		if (!ViewAtmosphere::Enabled()) {
-			const float4 air = SampleCloudAerialPerspective(direction, result.cloud_depth, 0.0);
-			result.lum = result.lum * air.a + air.rgb * (1.0 - result.transmittance);
-		}
 	}
 #endif
 	return result;

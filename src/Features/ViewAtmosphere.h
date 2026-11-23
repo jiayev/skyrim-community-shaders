@@ -71,8 +71,8 @@ public:
 	ID3D11ShaderResourceView* Luminance() const { return integratedLum ? integratedLum->srv.get() : nullptr; }
 	ID3D11ShaderResourceView* Transmittance() const { return integratedTr ? integratedTr->srv.get() : nullptr; }
 	ID3D11ShaderResourceView* Source() const { return ready && history ? history->srv.get() : nullptr; }
-	/** @brief Cloud/clear diffuse transport from the last completed reflection sky update. */
-	ID3D11ShaderResourceView* CloudDiffuseTransport() const { return ready && settings.enabled && reflectionSkySH ? reflectionSkySH->srv.get() : nullptr; }
+	/** @brief Cloud/clear diffuse transport from the last reflection sky update, available before volume integration. */
+	ID3D11ShaderResourceView* CloudDiffuseTransport() const { return prepared && settings.enabled && reflectionSkySH ? reflectionSkySH->srv.get() : nullptr; }
 
 private:
 	struct Grid

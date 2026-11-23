@@ -205,10 +205,12 @@ void rayMarch(
 
 #if LUTGEN == 1  // multiscatter
 	if (tGround > 0) {
-		float3 hit_pos = pos + tGround * rayDir;
-		if (dot(pos, sunDir) > 0) {
-			hit_pos = normalize(hit_pos) * data.rPlanet;
-			lum += tr * data.groundAlbedo * SampleAtmosphereLightTr(TexTrLut, SampTr, hit_pos, sunDir, data.diskAngularRadius.x);
+		const float3 groundNormal = normalize(pos + tGround * rayDir);
+		const float cosIncident = saturate(dot(groundNormal, sunDir));
+		if (cosIncident > 0.0) {
+			const float3 groundPosition = groundNormal * data.rPlanet;
+			const float3 sunlightTr = SampleAtmosphereLightTr(TexTrLut, SampTr, groundPosition, sunDir, data.diskAngularRadius.x);
+			lum += tr * data.groundAlbedo * (cosIncident * RCP_PI) * sunlightTr;
 		}
 	}
 #endif

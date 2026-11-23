@@ -15,7 +15,8 @@ Community Shaders is GPL-3.0 (see COPYING.txt) WITH the Modding Exception and GP
 
 ## Inspired by
 
-| Community Shaders code                           | Mod                                                                                         | Author |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------- | ------ |
-| `src/EngineFixes/SunOcclusionPollFix.cpp`        | [Hitch Hunter and Fixes - SKSE](https://www.nexusmods.com/skyrimspecialedition/mods/194231) | Zzyxzz |
-| `src/EngineFixes/ShadowmapCascadeCullingFix.cpp` | [Shadow Fixes - SKSE](https://www.nexusmods.com/skyrimspecialedition/mods/195345)           | Zzyxzz |
+| Community Shaders code                               | Mod                                                                                              | Author                                                                                         |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `src/EngineFixes/SunOcclusionPollFix.cpp`            | [Hitch Hunter and Fixes - SKSE](https://www.nexusmods.com/skyrimspecialedition/mods/194231)      | Zzyxzz                                                                                         |
+| `src/EngineFixes/ShadowmapCascadeCullingFix.cpp`     | [Shadow Fixes - SKSE](https://www.nexusmods.com/skyrimspecialedition/mods/195345)                | Zzyxzz                                                                                         |
+| Weather cloud profiles, stepping and shared lighting | [Environmental Visual Enhancements](https://github.com/LGhassen/EnvironmentalVisualEnhancements) | Ryan Bray, Warwick Allison, Blackrack. [Public-source notice](LICENSE-Cloud-Reference-MIT.txt) |

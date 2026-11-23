@@ -1,13 +1,6 @@
 #ifndef PHYSICAL_SKY_CLOUD_LIGHTING_HLSLI
 #define PHYSICAL_SKY_CLOUD_LIGHTING_HLSLI
 
-float CloudLightProbeJitter(float2 positionMeters)
-{
-	const float2 seed = frac(positionMeters * 0.1031);
-	const float scramble = dot(seed.xyx, seed.yxx + 19.19);
-	return frac((seed.y + seed.x + scramble * 2.0) * (scramble + seed.x));
-}
-
 // Jendersie and d'Eon, An Approximate Mie Scattering Function (2023).
 float CloudLowPhase(float3 viewDir)
 {
@@ -122,14 +115,28 @@ float CloudOpacity(float depth)
 	return depth < 0.001 ? depth * (1.0 - 0.5 * depth) : 1.0 - exp(-depth);
 }
 
-float TraceNdfLighting(float3 pos, float3 viewDir, NDFInfo ndf, float extinction, float viewDistance, float minimumMip, float transportExtinction)
+static const float WeatherLocalLightDistance = 1200.0;  // V5 base-layer source metres
+
+bool IsWeatherMaterial(CloudMaterialSample material)
+{
+#ifdef CLOUD_VOXELS
+	if (material.voxelBlend > 0.0)
+		return false;
+#endif
+	return !material.stormVolume;
+}
+
+float TraceNdfLighting(float3 pos, float3 viewDir, CloudMaterialSample ndf, float extinction, float viewDistance, float minimumMip, float transportExtinction)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	float localOpticalDepth = 0.0;
 	float previousDistance = 0.0;
 	float previousExtinction = extinction;
-	const uint count = uint(10.0 - saturate((viewDistance - 512.0) * 0.00040192925) * 6.0);
-	const float extentMeters = 240.0 - saturate(ndf.height_fraction * 3.3333333) * 120.0;
+	const bool weatherCloud = !ndf.stormVolume;
+	const uint budget = uint(10.0 - saturate((viewDistance - 512.0) * 0.00040192925) * 6.0);
+	const uint count = weatherCloud ? max(budget, 6u) : budget;
+	const float extentMeters = weatherCloud ? WeatherLocalLightDistance * info.weatherWorldScale :
+	                                          240.0 - saturate(ndf.height_fraction * 3.3333333) * 120.0;
 	const float spacingMeters = extentMeters / count;
 	const float cosine = dot(viewDir, info.dirlightDir);
 	const float angularOffset = -0.25 * cosine;
@@ -143,14 +150,18 @@ float TraceNdfLighting(float3 pos, float3 viewDir, NDFInfo ndf, float extinction
 		// Resolve the ash billows near the surface before widening the probe cone.
 		// Uniform 30 m spacing plus a full-cell jitter skipped these lobes entirely.
 		const float nearFraction = (index + jitter * 0.5) / count;
-		const float distanceMeters = eruption ? nearFraction * nearFraction * nearFraction * extentMeters :
-		                                        (fraction * extentMeters + jitter * spacingMeters) * angularScale;
+		// Keep short intervals at the illuminated edge and integrate the full
+		// requested path through the much thicker weather cloud behind it.
+		const float weatherFraction = float(i + 1u) / count;
+		const float distanceMeters = weatherCloud ? weatherFraction * weatherFraction * extentMeters :
+		                             eruption     ? nearFraction * nearFraction * nearFraction * extentMeters :
+		                                            (fraction * extentMeters + jitter * spacingMeters) * angularScale;
 		const float3 samplePos = pos + info.dirlightDir * (distanceMeters * GAME_UNITS_PER_METER);
 		CloudDensityContext context;
 		// Filter the light probes separately from the detailed view density.
-		const float mipBias = 2.0;
+		const float mipBias = weatherCloud ? smoothstep(40.0, 250.0, distanceMeters) : 2.0;
 #ifdef CLOUD_VOXELS
-		sampleNdfCloudDensity(samplePos, GetCloudLayer(info), mipBias, viewDistance, minimumMip, context);
+		sampleNonVoxelCloudDensity(samplePos, GetCloudLayer(info), mipBias, viewDistance, minimumMip, context);
 #else
 		sampleCloudDensity(samplePos, GetCloudLayer(info), mipBias, viewDistance, minimumMip, context);
 #endif
@@ -171,7 +182,7 @@ float TraceNdfLighting(float3 pos, float3 viewDir, NDFInfo ndf, float extinction
 	return localOpticalDepth;
 }
 
-float TraceCloudLighting(float3 pos, float3 viewDir, NDFInfo ndf, float extinction, float viewDistance, float minimumMip, float transportExtinction)
+float TraceCloudLighting(float3 pos, float3 viewDir, CloudMaterialSample ndf, float extinction, float viewDistance, float minimumMip, float transportExtinction)
 {
 #ifdef CLOUD_VOXELS
 	float voxelDepth = 0.0;
@@ -199,7 +210,7 @@ float CloudScatteringSeries(float opticalDepth, float albedo)
 
 // Material transitions follow the extinction contribution, rather than the
 // density winner, so partial storm replacement does not pop between two albedos.
-float CloudMaterialAlbedo(NDFInfo ndf)
+float CloudMaterialAlbedo(CloudMaterialSample ndf)
 {
 	const float weather = VolumetricCloudBuffer[0].msAlbedo;
 #if !defined(NO_CLOUD_STORMS) && !defined(VOLCANIC_STORMS_ONLY)
@@ -209,9 +220,8 @@ float CloudMaterialAlbedo(NDFInfo ndf)
 #endif
 }
 
-float2 CloudMaterialAmbient(NDFInfo ndf)
+float2 CloudMaterialAmbient(CloudMaterialSample ndf, float2 result)
 {
-	float2 result = CloudAmbientPhase.xy;
 	if (ndf.stormVolume) {
 #if !defined(NO_CLOUD_STORMS) && !defined(VOLCANIC_STORMS_ONLY)
 		const float2 storm = ndf.stormAmbientPhase;
@@ -225,6 +235,11 @@ float2 CloudMaterialAmbient(NDFInfo ndf)
 	return result;
 }
 
+float2 CloudMaterialAmbient(CloudMaterialSample ndf)
+{
+	return CloudMaterialAmbient(ndf, CloudAmbientPhase.xy);
+}
+
 struct CloudMsProfile
 {
 	float densityScale;
@@ -232,17 +247,18 @@ struct CloudMsProfile
 	float4 coefficients;
 };
 
-CloudMsProfile PrepareCloudMsProfile(NDFInfo ndf)
+CloudMsProfile PrepareCloudMsProfile(CloudMaterialSample ndf)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const float width = min(info.msBoundaryWidth, max(ndf.altitude.y - ndf.altitude.x, 0.0) * (0.25 * GAME_UNIT_TO_M));
+	const float weatherDensity = ndf.referenceExtinction > 0.0 ? ndf.referenceExtinction : info.cumulusExtinction;
 #if !defined(NO_CLOUD_STORMS) && !defined(VOLCANIC_STORMS_ONLY)
-	float densityScale = ndf.stormVolume ? lerp(info.lowDensityScale, ndf.stormDensity, ndf.stormBlend) : info.lowDensityScale;
+	float densityScale = ndf.stormVolume ? lerp(weatherDensity, ndf.stormDensity, ndf.stormBlend) : weatherDensity;
 #else
-	float densityScale = ndf.stormVolume ? lerp(info.lowDensityScale, CloudStorms[ndf.stormIndex].driftDensity.z, ndf.stormBlend) : info.lowDensityScale;
+	float densityScale = ndf.stormVolume ? lerp(weatherDensity, CloudStorms[ndf.stormIndex].driftDensity.z, ndf.stormBlend) : weatherDensity;
 #endif
 #ifdef CLOUD_VOXELS
-	densityScale += ndf.voxelBlend * (ndf.voxelDensityScale - info.lowDensityScale);
+	densityScale += ndf.voxelBlend * (ndf.voxelDensityScale - weatherDensity);
 #endif
 	const float referenceDepth = densityScale * width;
 	CloudMsProfile result = (CloudMsProfile)0;
@@ -270,7 +286,7 @@ CloudMsProfile PrepareCloudMsProfile(NDFInfo ndf)
 	return result;
 }
 
-float CloudMultipleScattering(float extinction, NDFInfo ndf, CloudMsProfile calibration)
+float CloudMultipleScattering(float extinction, CloudMaterialSample ndf, CloudMsProfile calibration)
 {
 	const float referenceDepth = calibration.referenceDepth;
 	const float densityScale = calibration.densityScale;
@@ -288,12 +304,12 @@ float CloudMultipleScattering(float extinction, NDFInfo ndf, CloudMsProfile cali
 	return CloudScatteringSeries(coefficient * extinction / densityScale, CloudMaterialAlbedo(ndf));
 }
 
-float CloudMultipleScattering(float extinction, NDFInfo ndf)
+float CloudMultipleScattering(float extinction, CloudMaterialSample ndf)
 {
 	return CloudMultipleScattering(extinction, ndf, PrepareCloudMsProfile(ndf));
 }
 
-float CloudTransportExtinction(NDFInfo ndf)
+float CloudTransportExtinction(CloudMaterialSample ndf)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const float4 fit = info.lowCloudPhase;
@@ -302,30 +318,43 @@ float CloudTransportExtinction(NDFInfo ndf)
 	return ndf.stormVolume ? 1.0 - CloudMaterialAlbedo(ndf) * meanCosine : info.msTransportExtinction;
 }
 
-float CloudLightOpticalDepth(float3 pos, float3 viewDir, NDFInfo ndf, float extinction, float viewDistance, float minimumMip)
+// Local volumes retain their authored solar sampling. Weather samples use WeatherCloudLightDepth.
+float CloudLightOpticalDepth(float3 pos, float3 viewDir, CloudMaterialSample ndf, float extinction, float viewDistance, float minimumMip)
 {
 	return TraceCloudLighting(pos, viewDir, ndf, extinction, viewDistance, minimumMip, CloudTransportExtinction(ndf)) * VolumetricCloudBuffer[0].sunExtinction;
 }
 
-float3 ShadeCloudLighting(float3 pos, NDFInfo ndf, float extinction, float viewDepth, float viewOpacity, float phase, float opticalDepth, float multipleScattering, float externalSunTransmission)
+float3 CloudIncidentSunlight(float3 pos)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float3 planetPosition = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
+	return SampleAtmosphereLightTr(TexTransmittance, TransmittanceSampler, planetPosition, info.dirlightDir, SharedData::physSkyData.diskAngularRadius[CloudDiskIndex()]) * GetCloudDirectionalLightColor();
+}
+
+float CloudDirectScatterAmount(float extinction, float viewDepth)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	float densityGate = saturate(extinction / info.scatterDensityThreshold);
+	[branch] if (info.scatterDensityPower != 1.0)
+		densityGate = pow(densityGate, info.scatterDensityPower);
+	return CloudOpacity(viewDepth * densityGate);
+}
+
+float3 ShadeCloudLighting(float3 pos, CloudMaterialSample ndf, float extinction, float viewDepth, float viewOpacity, float phase, float opticalDepth, float multipleScattering, float externalSunTransmission)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const float albedo = CloudMaterialAlbedo(ndf);
 	const float transportExtinction = CloudTransportExtinction(ndf);
 	const float directional = albedo * phase * exp(-opticalDepth);
-	const float3 planetPosition = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
-	const float3 sunlight = SampleAtmosphereLightTr(TexTransmittance, TransmittanceSampler, planetPosition, info.dirlightDir, SharedData::physSkyData.diskAngularRadius[CloudDiskIndex()]) * GetCloudDirectionalLightColor();
-	float densityGate = saturate(extinction / info.scatterDensityThreshold);
-	[branch] if (info.scatterDensityPower != 1.0)
-		densityGate = pow(densityGate, info.scatterDensityPower);
-	const float scatterAmount = CloudOpacity(viewDepth * densityGate);
+	const float3 sunlight = CloudIncidentSunlight(pos);
+	const float scatterAmount = CloudDirectScatterAmount(extinction, viewDepth);
 	float multiple = 0.0;
 	[branch] if (info.msStrength > 0.0 && albedo > 0.0)
 		multiple = info.msStrength * albedo * multipleScattering * exp(-opticalDepth * transportExtinction);
 	return info.cloudLightingScale * sunlight * externalSunTransmission * (directional * scatterAmount + multiple * viewOpacity);
 }
 
-float3 ShadeCloudLighting(float3 pos, NDFInfo ndf, float extinction, float viewDepth, float viewOpacity, float phase, float opticalDepth, float multipleScattering)
+float CloudExternalSunTransmission(float3 pos)
 {
 	float sunTransmission = UpperSunTransmission(pos);
 #ifdef CLOUD_AP_SHADOW
@@ -340,10 +369,15 @@ float3 ShadeCloudLighting(float3 pos, NDFInfo ndf, float extinction, float viewD
 			sunTransmission *= AtmosphereShadow::SampleCascadeShadow(worldPos - FrameBuffer::CameraPosAdjust.xyz);
 	}
 #endif
-	return ShadeCloudLighting(pos, ndf, extinction, viewDepth, viewOpacity, phase, opticalDepth, multipleScattering, sunTransmission);
+	return sunTransmission;
 }
 
-float3 ShadeCloudLighting(float3 pos, NDFInfo ndf, float extinction, float viewDepth, float viewOpacity, float phase, float opticalDepth)
+float3 ShadeCloudLighting(float3 pos, CloudMaterialSample ndf, float extinction, float viewDepth, float viewOpacity, float phase, float opticalDepth, float multipleScattering)
+{
+	return ShadeCloudLighting(pos, ndf, extinction, viewDepth, viewOpacity, phase, opticalDepth, multipleScattering, CloudExternalSunTransmission(pos));
+}
+
+float3 ShadeCloudLighting(float3 pos, CloudMaterialSample ndf, float extinction, float viewDepth, float viewOpacity, float phase, float opticalDepth)
 {
 	float multipleScattering = 0.0;
 	[branch] if (VolumetricCloudBuffer[0].msStrength > 0.0 && CloudMaterialAlbedo(ndf) > 0.0)
@@ -351,7 +385,52 @@ float3 ShadeCloudLighting(float3 pos, NDFInfo ndf, float extinction, float viewD
 	return ShadeCloudLighting(pos, ndf, extinction, viewDepth, viewOpacity, phase, opticalDepth, multipleScattering);
 }
 
-float3 CloudLighting(float3 pos, float3 viewDir, NDFInfo ndf, float extinction, float viewDepth, float viewOpacity,
+// Ambient reflectance for water clouds.
+static const float CloudAmbientReflectance = 120.0 / 255.0;
+
+float2 WeatherScatteringWeights(CloudMaterialSample material, float referenceExtinction, float extinction, float viewDepth, float opacity)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	// At the UI minimum the droplets scatter their full albedo even in a dilute fringe.
+	const float gateDensity = max(extinction, 0.001);
+	const float direct = gateDensity >= info.scatterDensityThreshold ? 1.0 :
+	                                                                   CloudDirectScatterAmount(gateDensity, viewDepth) / max(opacity, 1e-12);
+	material.referenceExtinction = referenceExtinction;
+	const float multiple = info.msStrength > 0.0 && info.msAlbedo > 0.0 ? CloudMultipleScattering(extinction, material) : 0.0;
+	return float2(direct, multiple);
+}
+
+float3 ShadeWeatherScattering(float3 pos, float2 scattering, float phase, float2 sunTransmission)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float source = scattering.x * phase * sunTransmission.x + info.msStrength * scattering.y * sunTransmission.y;
+	return source * info.msAlbedo * info.cloudLightingScale * CloudIncidentSunlight(pos) * CloudExternalSunTransmission(pos);
+}
+
+#ifdef WEATHER_VIEW
+// Within a homogeneous interval absorption is proportional to exp(-tau * x).
+float WeatherAbsorptionCentroid(float tau, float transmission, float opacity)
+{
+	if (tau < 0.25)
+		return 0.5 - tau / 12.0;
+	return rcp(tau) - transmission / opacity;
+}
+
+float3 WeatherViewSource(float3 pos, float2 scattering, float ambient, float phase, float2 sunTransmission)
+{
+	float3 radiance = ShadeWeatherScattering(pos, scattering, phase, sunTransmission);
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	[branch] if (ambient > 0.0 && info.ambientStrength > 0.0 && info.msAlbedo > 0.0)
+	{
+		const float3 sky = CloudAmbientLight::SkySource(pos);
+		radiance += ambient * CloudAmbientPhase.y * info.ambientStrength * info.cloudLightingScale * sky;
+	}
+	return radiance;
+}
+
+#endif
+
+float3 CloudLighting(float3 pos, float3 viewDir, CloudMaterialSample ndf, float extinction, float viewDepth, float viewOpacity,
 	float viewDistance, float minimumMip, float phase)
 {
 	const float opticalDepth = CloudLightOpticalDepth(pos, viewDir, ndf, extinction, viewDistance, minimumMip);
